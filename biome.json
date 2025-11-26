@@ -18,9 +18,9 @@
   "files": {
     "includes": [
       "**",
-      "!!dist/**",
-      "!!data/**",
-      "!!node_modules/**"
+      "!!dist",
+      "!!data",
+      "!!node_modules"
     ]
   }
 }
