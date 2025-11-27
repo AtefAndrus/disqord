@@ -1,0 +1,141 @@
+name: パフォーマンス問題
+description: パフォーマンスに関する問題はこちら
+title: '[Performance]: '
+labels: ['performance']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        発生している問題について、以下の項目にできるだけ詳しく記入してください。
+
+  - type: textarea
+    id: current_measurement
+    attributes:
+      label: 現状の計測
+      description: 現在のパフォーマンス状況を具体的な数値で記載してください
+      placeholder: |
+        - 応答時間: 平均○○ms、最大○○ms
+        - スループット: ○○ requests/sec
+        - メモリ使用量: ○○MB
+        - CPU使用率: ○○%
+        - データ処理速度: ○○ records/sec
+        - ファイルサイズ: ○○MB
+
+        計測方法や使用したツールも記載してください
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_performance
+    attributes:
+      label: 期待する状態
+      description: 目標とするパフォーマンス値を記載してください
+      placeholder: |
+        - 応答時間: ○○ms以下
+        - スループット: ○○ requests/sec以上
+        - メモリ使用量: ○○MB以下
+        - CPU使用率: ○○%以下
+        - データ処理速度: ○○ records/sec以上
+
+        期待値の根拠も記載してください（業界標準、ユーザー要求など）
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction_conditions
+    attributes:
+      label: 再現条件
+      description: パフォーマンス問題を再現するための条件を記載してください
+      placeholder: |
+        - データサイズ: ○○件のレコード
+        - 同時接続数: ○○ユーザー
+        - 実行環境: 本番/ステージング/ローカル
+        - 特定の操作手順: ...
+        - 時間帯や条件: ピーク時、特定のデータ処理時など
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact_scope
+    attributes:
+      label: 影響範囲
+      description: パフォーマンス問題が与える影響を記載してください
+      placeholder: |
+        - 影響を受ける機能: ...
+        - 影響を受けるユーザー: 全ユーザー/特定ユーザー
+        - ビジネスへの影響: タイムアウト、ユーザー体験低下など
+        - システムへの影響: サーバー負荷、リソース枯渇など
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: パフォーマンス問題が発生する環境の詳細を記載してください
+      placeholder: |
+        - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
+        - CPU: [e.g. Intel i7-12700K, Apple M2]
+        - メモリ: [e.g. 16GB RAM]
+        - ストレージ: [e.g. SSD 1TB]
+        - Python バージョン: [e.g. 3.11.0]
+        - Node.js バージョン: [e.g. 18.17.0]
+        - データベース: [e.g. PostgreSQL 15.0]
+        - ネットワーク: [e.g. 1Gbps LAN, WiFi]
+    validations:
+      required: true
+
+  - type: textarea
+    id: profiling_data
+    attributes:
+      label: 調査・プロファイリング結果
+      description: プロファイリングツールの結果があれば添付してください
+      placeholder: |
+        - プロファイラー名: [e.g. cProfile, Node.js Inspector]
+        - ホットスポット: 最も処理時間を消費している関数
+        - メモリリーク: メモリ使用量の推移
+        - データベースクエリ: 遅いクエリのログ
+
+        ```
+        プロファイリング結果をここに貼り付け
+        ```
+
+  - type: dropdown
+    id: performance_type
+    attributes:
+      label: パフォーマンス問題の種類
+      description: 該当するパフォーマンス問題の種類を選択してください
+      options:
+        - 応答時間が遅い
+        - スループットが低い
+        - メモリ使用量が多い
+        - CPU使用率が高い
+        - ディスクI/Oが遅い
+        - ネットワーク通信が遅い
+        - データベースクエリが遅い
+        - その他
+      default: 0
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 重要度
+      description: パフォーマンス問題の重要度を選択してください
+      options:
+        - 低（軽微な遅延）
+        - 中（明らかな遅延）
+        - 高（業務に支障あり）
+        - 緊急（システム停止レベル）
+      default: 1
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 確認事項
+      description: 以下の項目を確認してください
+      options:
+        - label: 類似のパフォーマンス問題が既に報告されていないか確認しました
+          required: true
+        - label: 可能な範囲でパフォーマンスの計測を実施しました
+          required: true

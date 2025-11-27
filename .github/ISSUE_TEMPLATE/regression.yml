@@ -1,0 +1,153 @@
+name: 劣化報告
+description: 以前は動作していた機能が壊れた場合はこちら
+title: '[Regression]: '
+labels: ['regression', 'bug', 'needs-triage']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        劣化の説明を以下の項目にできるだけ詳しく記入してください。
+
+  - type: textarea
+    id: last_working_version
+    attributes:
+      label: 直前の正常バージョン・タイミング
+      description: 最後に正常に動作していたバージョンやいつまで動作していたかを記載してください
+      placeholder: |
+        - バージョン: v1.2.3
+        - コミットハッシュ: abc123def
+        - 日時: 2024年1月15日
+        - ブランチ: main
+        - タグ: release-v1.2.3
+
+        可能な限り具体的に記載してください
+    validations:
+      required: true
+
+  - type: textarea
+    id: suspected_change
+    attributes:
+      label: 影響した変更（PR/コミット等）
+      description: 問題を引き起こしたと思われる変更があれば記載してください
+      placeholder: |
+        - PR番号: #
+        - コミットハッシュ: abc123def
+        - 変更内容: データベース接続の変更
+        - マージ日時: 2024年1月20日
+
+        不明な場合は「不明」と記載してください
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: 再現手順
+      description: 劣化を再現するための手順を記載してください
+      placeholder: |
+        1. アプリケーションを起動
+        2. '...'ページにアクセス
+        3. '...'ボタンをクリック
+        4. '...'が表示される
+
+        できるだけ詳細に記載してください
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: 期待される動作（以前の正常動作）
+      description: 以前の正常バージョンではどのように動作していたかを記載してください
+      placeholder: |
+        以前のバージョンでは...
+        - 期待される結果や画面表示
+        - 正常な処理フロー
+        - 得られるべき出力
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: 実際の動作（現在の問題）
+      description: 現在どのような問題が発生しているかを記載してください
+      placeholder: |
+        現在のバージョンでは...
+        - エラーメッセージ
+        - 異常な動作
+        - 想定外の結果
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      description: 問題が発生した環境の詳細を記載してください
+      placeholder: |
+        - OS: [e.g. Windows 11, macOS 14, Ubuntu 22.04]
+        - Python バージョン: [e.g. 3.11.0]
+        - Node.js バージョン: [e.g. 18.17.0]
+        - ブラウザ: [e.g. Chrome 118, Firefox 119]
+        - データベース: [e.g. PostgreSQL 15.0]
+        - その他関連する環境情報
+    validations:
+      required: true
+
+  - type: textarea
+    id: error_logs
+    attributes:
+      label: エラーログ
+      description: 関連するエラーログやスタックトレースがあれば記載してください
+      placeholder: |
+        ```
+        エラーログをここに貼り付け
+        ```
+
+  - type: textarea
+    id: impact_assessment
+    attributes:
+      label: 影響範囲
+      description: この劣化が与える影響を記載してください
+      placeholder: |
+        - 影響を受ける機能: ...
+        - 影響を受けるユーザー: 全ユーザー/特定ユーザー
+        - ビジネスへの影響: ...
+        - 回避方法: あり/なし（ありの場合は詳細を記載）
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 重要度
+      description: この劣化の重要度を選択してください
+      options:
+        - 軽微（機能の一部が正常に動作しない）
+        - 中（主要機能が正常に動作しない）
+        - 高（システムの基本機能が使用できない）
+        - 緊急（システム全体が停止）
+      default: 1
+
+  - type: textarea
+    id: bisect_info
+    attributes:
+      label: Git Bisect結果
+      description: git bisectを実行した場合はその結果を記載してください
+      placeholder: |
+        git bisectの結果:
+        - 初回の不具合コミット: abc123def
+        - 二分探索の履歴: ...
+
+        実行していない場合は「未実施」と記載してください
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 確認事項
+      description: 以下の項目を確認してください
+      options:
+        - label: 以前のバージョンで正常に動作していたことを確認しました
+          required: true
+        - label: 類似の劣化報告が既に提出されていないか確認しました
+          required: true
+        - label: 可能な範囲で最初に問題が発生したバージョンを調査しました
+          required: true

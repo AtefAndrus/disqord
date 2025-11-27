@@ -1,0 +1,113 @@
+name: ドキュメント改善
+description: ドキュメントの改善提案はこちら
+title: '[Docs]: '
+labels: ['documentation']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        改善提案を以下の項目にできるだけ詳しく記入してください。
+
+  - type: textarea
+    id: target
+    attributes:
+      label: 提案対象
+      description: 改善したいドキュメントを具体的に指定してください
+      placeholder: |
+        - ファイル名: README.md, docs/api.md など
+        - セクション: 特定のセクションがある場合
+        - URL: オンラインドキュメントの場合
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_issue
+    attributes:
+      label: 問題
+      description: 現在のドキュメントの問題点や不足している内容を説明してください
+      placeholder: |
+        - 情報が古い
+        - 説明が不十分
+        - 例が不足している
+        - 構成が分かりにくい
+        - 翻訳が必要
+        など
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案内容
+      description: 具体的な改善内容を記載してください
+      placeholder: |
+        - 追加したい内容
+        - 修正したい部分
+        - 新しい構成案
+        - 図表やサンプルコードの追加
+        - 翻訳対象言語
+        など
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_effect
+    attributes:
+      label: 期待される効果
+      description: この改善によって期待される効果を記載してください
+      placeholder: |
+        - ユーザーの理解度向上
+        - セットアップ時間の短縮
+        - 問い合わせ減少
+        - 新規参加者の参入障壁低下
+        など
+    validations:
+      required: true
+
+  - type: dropdown
+    id: doc_type
+    attributes:
+      label: ドキュメントの種類
+      description: 改善対象のドキュメントの種類を選択してください
+      options:
+        - README
+        - API ドキュメント
+        - セットアップガイド
+        - 開発者ガイド
+        - ユーザーマニュアル
+        - FAQ
+        - トラブルシューティング
+        - その他
+      default: 0
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 優先度
+      description: この改善の優先度を選択してください
+      options:
+        - 低（時間のあるときに対応）
+        - 中（できるだけ早く対応）
+        - 高（すぐに対応が必要）
+      default: 0
+
+  - type: textarea
+    id: additional_info
+    attributes:
+      label: 追加情報
+      description: その他参考になる情報があれば記載してください
+      placeholder: |
+        - 参考となるドキュメントのURL
+        - 関連するIssueやPR
+        - スクリーンショット
+        など
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 確認事項
+      description: 以下の項目を確認してください
+      options:
+        - label: 類似の改善提案が既に提出されていないか確認しました
+          required: true

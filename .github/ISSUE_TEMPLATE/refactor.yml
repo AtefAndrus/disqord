@@ -1,0 +1,145 @@
+name: メンテナンス/リファクタリング提案
+description: メンテナンスやリファクタリング提案はこちら
+title: '[Refactor]: '
+labels: ['refactor']
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提案事項を以下の項目にできるだけ詳しく記入してください。
+
+  - type: textarea
+    id: purpose
+    attributes:
+      label: 目的
+      description: この作業を行う目的や背景を記載してください
+      placeholder: |
+        - コードの可読性向上
+        - 技術的負債の解消
+        - 依存関係の更新
+        - 開発効率の向上
+        - セキュリティ対策
+        - パフォーマンス改善の準備
+        など
+    validations:
+      required: true
+
+  - type: textarea
+    id: work_items
+    attributes:
+      label: 作業項目
+      description: 具体的に実施する作業内容を項目別に記載してください
+      placeholder: |
+        - [ ] 不要なコードの削除
+        - [ ] 関数名の統一・リネーム
+        - [ ] ディレクトリ構成の整理
+        - [ ] 依存関係の更新（package.json, requirements.txt）
+        - [ ] 設定ファイルの統一
+        - [ ] コメントの追加・修正
+        - [ ] テストコードの整理
+        - [ ] ドキュメントの更新
+    validations:
+      required: true
+
+  - type: textarea
+    id: completion_criteria
+    attributes:
+      label: 完了条件
+      description: この作業が完了したと判断するための基準を記載してください
+      placeholder: |
+        - [ ] 全てのテストが通る
+        - [ ] Lintエラーが解消される
+        - [ ] ビルドが成功する
+        - [ ] 既存機能の動作に変更がない
+        - [ ] パフォーマンスの劣化がない
+        - [ ] ドキュメントが更新される
+        - [ ] レビューが完了する
+    validations:
+      required: true
+
+  - type: dropdown
+    id: chore_type
+    attributes:
+      label: 作業の種類
+      description: 該当する作業の種類を選択してください
+      options:
+        - リファクタリング
+        - 依存関係の更新
+        - コードクリーンアップ
+        - 設定の整理
+        - ドキュメント整備
+        - テストコードの改善
+        - 開発ツールの改善
+        - セキュリティ対策
+        - その他
+      default: 0
+
+  - type: dropdown
+    id: impact_level
+    attributes:
+      label: 影響レベル
+      description: この作業の影響範囲を選択してください
+      options:
+        - 小（単一ファイルや機能）
+        - 中（複数ファイルや機能）
+        - 大（システム全体に影響）
+      default: 0
+
+  - type: textarea
+    id: breaking_changes
+    attributes:
+      label: 破壊的変更
+      description: API変更や設定変更など、他の開発者に影響する変更があれば記載してください
+      placeholder: |
+        破壊的変更がある場合：
+        - 変更内容: ...
+        - 移行手順: ...
+        - 影響を受ける箇所: ...
+
+        破壊的変更がない場合は「なし」と記載してください
+
+  - type: textarea
+    id: testing_plan
+    attributes:
+      label: テスト計画
+      description: この作業の品質を確認するためのテスト方法を記載してください
+      placeholder: |
+        - 既存テストの実行
+        - 手動テスト項目
+        - パフォーマンステスト
+        - セキュリティテスト
+        - 特定の動作確認項目
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 優先度
+      description: この作業の優先度を選択してください
+      options:
+        - 低（時間があるときに実施）
+        - 中（計画的に実施）
+        - 高（早急に実施が必要）
+      default: 0
+
+  - type: textarea
+    id: additional_notes
+    attributes:
+      label: 補足情報
+      description: その他参考になる情報があれば記載してください
+      placeholder: |
+        - 関連するIssueやPR
+        - 参考資料のURL
+        - 実装時の注意点
+        - レビュー時の確認ポイント
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: 確認事項
+      description: 以下の項目を確認してください
+      options:
+        - label: 類似の作業が既に提案されていないか確認しました
+          required: true
+        - label: この作業が既存機能に悪影響を与えないことを確認しました
+          required: true
