@@ -4,9 +4,7 @@ export const modelCommand = new SlashCommandBuilder()
   .setName("disqord-model")
   .setDescription("Manage DisQord model settings")
   .addSubcommand((sub) =>
-    sub
-      .setName("current")
-      .setDescription("Show the current default model for this guild")
+    sub.setName("current").setDescription("Show the current default model for this guild"),
   )
   .addSubcommand((sub) =>
     sub
@@ -16,6 +14,6 @@ export const modelCommand = new SlashCommandBuilder()
         option
           .setName("model")
           .setDescription("Model identifier as provided by OpenRouter")
-          .setRequired(true)
-      )
+          .setRequired(true),
+      ),
   );

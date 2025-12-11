@@ -3,9 +3,7 @@ type LogLevel = "debug" | "info" | "warn" | "error";
 function log(level: LogLevel, message: string, meta?: unknown) {
   const timestamp = new Date().toISOString();
   const serialized = meta ? ` ${JSON.stringify(meta)}` : "";
-  console[level](
-    `[${timestamp}] [${level.toUpperCase()}] ${message}${serialized}`
-  );
+  console[level](`[${timestamp}] [${level.toUpperCase()}] ${message}${serialized}`);
 }
 
 export const logger = {
