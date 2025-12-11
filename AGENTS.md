@@ -2,6 +2,16 @@
 
 A Discord Bot that communicates with LLMs through OpenRouter.
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | Project overview, features, setup instructions |
+| [Functional Requirements](docs/disqord-functional-requirements.md) | Bot features, commands, response behavior |
+| [Non-Functional Requirements](docs/disqord-non-functional-requirements.md) | Tech stack, deployment, hosting |
+| [Design Document](docs/disqord-design.md) | Architecture, DB schema, interfaces |
+| [PR Template](.github/pull_request_template.md) | Pull request template |
+
 ## Tech Stack
 
 - Runtime: Bun 1.3+
