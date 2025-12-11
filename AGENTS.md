@@ -1,100 +1,100 @@
 # DisQord
 
-OpenRouterを通じてLLMと会話するDiscord Bot。
+A Discord Bot that communicates with LLMs through OpenRouter.
 
-## 技術スタック
+## Tech Stack
 
-- ランタイム: Bun 1.3+
-- 言語: TypeScript (ESNext, strict mode)
-- フレームワーク: discord.js v14
+- Runtime: Bun 1.3+
+- Language: TypeScript (ESNext, strict mode)
+- Framework: discord.js v14
 - LLM API: OpenRouter
-- データベース: SQLite (Bun組み込み)
-- リンター/フォーマッター: Biome
-- バリデーション: Zod
+- Database: SQLite (Bun built-in)
+- Linter/Formatter: Biome
+- Validation: Zod
 
-## ディレクトリ構造
+## Directory Structure
 
 ```text
 src/
-├── index.ts              # エントリーポイント
-├── config/               # 環境変数ロード (Zod検証)
+├── index.ts              # Entry point
+├── config/               # Environment variable loading (Zod validation)
 ├── bot/
-│   ├── client.ts         # Discordクライアント生成
-│   ├── commands/         # スラッシュコマンド定義
-│   └── events/           # イベントハンドラ
+│   ├── client.ts         # Discord client creation
+│   ├── commands/         # Slash command definitions
+│   └── events/           # Event handlers
 ├── db/
-│   ├── index.ts          # DB接続 (シングルトン)
-│   ├── schema.ts         # マイグレーション
-│   └── repositories/     # データアクセス層
-├── llm/                  # LLMクライアント
-├── services/             # ビジネスロジック
-├── types/                # 型定義
-└── utils/                # ユーティリティ
+│   ├── index.ts          # DB connection (singleton)
+│   ├── schema.ts         # Migrations
+│   └── repositories/     # Data access layer
+├── llm/                  # LLM client
+├── services/             # Business logic
+├── types/                # Type definitions
+└── utils/                # Utilities
 ```
 
-## コマンド
+## Commands
 
 ```bash
-bun start          # 本番起動
-bun dev            # 開発モード (--watch)
-bun test           # テスト実行 (typecheck + test)
-bun typecheck      # 型チェック
-bun lint           # Biomeによるリント
-bun format         # Biomeによるフォーマット
+bun start          # Production start
+bun dev            # Development mode (--watch)
+bun test           # Run tests (typecheck + test)
+bun typecheck      # Type checking
+bun lint           # Lint with Biome
+bun format         # Format with Biome
 ```
 
-## 環境変数
+## Environment Variables
 
-| 変数名 | 必須 | 説明 |
-|--------|------|------|
-| DISCORD_TOKEN | Yes | Discord Botトークン |
-| DISCORD_APPLICATION_ID | Yes | DiscordアプリケーションID |
-| OPENROUTER_API_KEY | Yes | OpenRouter APIキー |
-| DATABASE_PATH | No | SQLiteファイルパス (default: data/disqord.db) |
-| NODE_ENV | No | 実行環境 (default: development) |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| DISCORD_TOKEN | Yes | Discord Bot token |
+| DISCORD_APPLICATION_ID | Yes | Discord application ID |
+| OPENROUTER_API_KEY | Yes | OpenRouter API key |
+| DATABASE_PATH | No | SQLite file path (default: data/disqord.db) |
+| NODE_ENV | No | Execution environment (default: development) |
 
-## コーディング規約
+## Coding Conventions
 
 ### TypeScript
 
-- `import type` を型のみのインポートに使用する
-- 明示的な戻り値の型を関数に付与する
-- `any` の使用を避け、適切な型定義を行う
-- インターフェースは `I` プレフィックスを付ける (例: `ILLMClient`)
+- Use `import type` for type-only imports
+- Add explicit return types to functions
+- Avoid using `any`, define proper types
+- Prefix interfaces with `I` (e.g., `ILLMClient`)
 
-### Biome設定
+### Biome Configuration
 
-- インデント: 2スペース
-- 行幅: 100文字
-- import自動整理: 有効
+- Indentation: 2 spaces
+- Line width: 100 characters
+- Auto-organize imports: enabled
 
-### アーキテクチャパターン
+### Architecture Patterns
 
-- Repository パターン: データアクセスを抽象化
-- Service パターン: ビジネスロジックをカプセル化
-- 依存性注入: コンストラクタインジェクションを使用
+- Repository pattern: Abstract data access
+- Service pattern: Encapsulate business logic
+- Dependency injection: Use constructor injection
 
-### 命名規則
+### Naming Conventions
 
-- ファイル名: camelCase (例: `chatService.ts`)
-- クラス名: PascalCase (例: `ChatService`)
-- インターフェース: `I` + PascalCase (例: `IChatService`)
-- 型エイリアス: PascalCase (例: `GuildId`)
-- 定数: UPPER_SNAKE_CASE (例: `DISCORD_MESSAGE_LIMIT`)
+- File names: camelCase (e.g., `chatService.ts`)
+- Class names: PascalCase (e.g., `ChatService`)
+- Interfaces: `I` + PascalCase (e.g., `IChatService`)
+- Type aliases: PascalCase (e.g., `GuildId`)
+- Constants: UPPER_SNAKE_CASE (e.g., `DISCORD_MESSAGE_LIMIT`)
 
-## テスト
+## Testing
 
-- テストフレームワーク: Bun test
-- テストファイル: `tests/` ディレクトリに配置
-- ファイル命名: `*.test.ts`
+- Test framework: Bun test
+- Test files: Place in `tests/` directory
+- File naming: `*.test.ts`
 
 ## Git
 
-- コミットメッセージ: 日本語可
-- ブランチ: main
+- Commit messages: Japanese allowed
+- Branch: main
 
-## 注意事項
+## Notes
 
-- Discord メッセージ上限: 2000文字 (分割送信が必要)
-- デフォルトLLMモデル: `x-ai/grok-4.1-fast:free`
-- SQLite WALモード有効
+- Discord message limit: 2000 characters (requires split sending)
+- Default LLM model: `x-ai/grok-4.1-fast:free`
+- SQLite WAL mode enabled
