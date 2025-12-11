@@ -90,7 +90,7 @@ bun format         # Format with Biome
 
 ## Git
 
-- Commit messages: Japanese allowed
+- Commit messages: English only
 - Branch: main
 
 ## Notes
