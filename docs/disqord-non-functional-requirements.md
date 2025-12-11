@@ -39,23 +39,21 @@
 
 ### 2.3 環境構成
 
-2つの環境を用意し、ブランチごとに自動デプロイを行う。
-
-| 環境 | ブランチ | 用途 | デプロイトリガー |
-|------|----------|------|------------------|
-| Production | main | 本番（開発チーム向けリリース） | mainへのコミット時 |
-| Staging | develop | 開発・テスト | developへのコミット時 |
+| 環境 | ブランチ | 用途 | 実行場所 |
+|------|----------|------|----------|
+| Production | main | 本番（開発チーム向けリリース） | Coolify（自動デプロイ） |
+| Development | develop | 開発・動作確認 | ローカル（手動起動） |
 
 ### 2.4 環境分離
 
 以下のリソースは環境ごとに分離する。
 
-| リソース | 説明 |
-|----------|------|
-| Discord Bot | 本番用・開発用で別々のBotを作成 |
-| Coolifyリソース | 環境ごとに別リソースとして管理 |
-| 環境変数 | Discord Token、OpenRouter API Key等を環境ごとに設定 |
-| SQLiteファイル | 環境ごとに独立したDBファイル |
+| リソース | Production | Development |
+|----------|------------|-------------|
+| Discord Bot | 本番用Bot | 開発用Bot（開発者ごとに作成） |
+| 実行環境 | Coolify | ローカル（`bun dev`） |
+| 環境変数 | Coolifyで管理 | `.env`ファイル |
+| SQLiteファイル | Dockerボリューム | `data/disqord.db` |
 
 ---
 
@@ -89,9 +87,10 @@ Coolifyの環境変数機能で管理する。
 | 変数名 | 説明 | 必須 |
 |--------|------|------|
 | DISCORD_TOKEN | Discord Bot Token | Yes |
+| DISCORD_APPLICATION_ID | Discord Application ID | Yes |
 | OPENROUTER_API_KEY | OpenRouter API Key | Yes |
-| NODE_ENV | 環境識別（production / development） | Yes |
-| DATABASE_PATH | SQLiteファイルパス | No（デフォルト値あり） |
+| NODE_ENV | 環境識別（production / development） | No（デフォルト: development） |
+| DATABASE_PATH | SQLiteファイルパス | No（デフォルト: data/disqord.db） |
 
 ### 4.3 将来追加予定
 
@@ -162,3 +161,4 @@ Coolifyの環境変数機能で管理する。
 | 日付 | バージョン | 内容 |
 |------|------------|------|
 | 2025-11-26 | 1.0 | 初版作成 |
+| 2025-12-11 | 1.1 | デプロイ方針変更（developブランチはローカル開発用に）、DISCORD_APPLICATION_ID追加 |

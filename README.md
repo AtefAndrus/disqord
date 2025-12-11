@@ -18,7 +18,7 @@
 - 言語/ランタイム: TypeScript + Bun
 - Discordライブラリ: discord.js
 - DB: SQLite（`data/disqord.db`。コンテナではボリューム永続化を想定）
-- ホスティング: DockerfileをCoolifyでデプロイ。main=Production、develop=Staging。
+- ホスティング: DockerfileをCoolifyでデプロイ（mainブランチのみ）。developブランチはローカル開発用。
 
 ## 開発環境構築手順
 
@@ -46,4 +46,6 @@
 
 ## 現状
 
-- ディレクトリ構成と設計の骨組みを用意済み。実装はこれから。
+- 設計・基盤実装は完了。Bot Layer（イベントハンドラ、コマンド登録）とLLM Layer（OpenRouterクライアント）が未実装。
+- 完了: config, db, services, utils, types
+- 未完了: bot/events実装、bot/client配線、llm/openrouter実装、テスト
