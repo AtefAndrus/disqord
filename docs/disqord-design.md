@@ -42,16 +42,26 @@ disqord/
 │   └── types/
 │       └── index.ts              # 共通型定義
 ├── tests/                        # テストディレクトリ（bun:test）
+│   ├── helpers/                  # テストヘルパー
+│   │   └── mockFactories.ts      # 共通モックファクトリ
 │   ├── unit/                     # ユニットテスト
+│   │   ├── utils/
+│   │   │   ├── logger.test.ts
+│   │   │   └── message.test.ts
 │   │   ├── services/
-│   │   ├── llm/
-│   │   ├── db/
-│   │   └── utils/
+│   │   │   ├── chatService.test.ts
+│   │   │   └── settingsService.test.ts
+│   │   └── llm/
+│   │       └── openrouter.test.ts
 │   └── integration/              # 統合テスト
+│       └── db/
+│           └── guildSettingsRepository.test.ts
 ├── docs/                         # ドキュメント
 │   ├── disqord-functional-requirements.md  # 機能要件
 │   ├── disqord-non-functional-requirements.md # 非機能要件
-│   └── disqord-design.md         # 設計書（本ドキュメント）
+│   ├── disqord-design.md         # 設計書（本ドキュメント）
+│   ├── disqord-progress.md       # 進捗チェックリスト
+│   └── disqord-test-plan.md      # テスト計画
 ├── tmp/                          # 一時スクリプト・ユーティリティ
 ├── data/                         # SQLiteファイル格納（.gitignore）
 ├── mise.toml                     # ツールバージョン固定・タスク定義
@@ -372,3 +382,4 @@ describe('SettingsService', () => {
 | 日付 | バージョン | 内容 |
 |------|------------|------|
 | 2025-11-26 | 1.0 | 初版作成 |
+| 2025-12-12 | 1.1 | テストディレクトリ構成を実装に合わせて更新 |

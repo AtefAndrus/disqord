@@ -46,6 +46,9 @@
 
 ## 現状
 
-- 設計・基盤実装は完了。Bot Layer（イベントハンドラ、コマンド登録）とLLM Layer（OpenRouterクライアント）が未実装。
-- 完了: config, db, services, utils, types
-- 未完了: bot/events実装、bot/client配線、llm/openrouter実装、テスト
+v1.0 コード実装完了。デプロイ・動作確認待ち。
+
+- 完了: config, db, services, utils, types, bot, llm, テスト（54件）
+- 未完了: Coolifyデプロイ、本番動作確認
+
+詳細は [進捗チェックリスト](docs/disqord-progress.md) を参照。

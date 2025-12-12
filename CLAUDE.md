@@ -11,6 +11,7 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 | [Non-Functional Requirements](docs/disqord-non-functional-requirements.md) | Tech stack, deployment, hosting |
 | [Design Document](docs/disqord-design.md) | Architecture, DB schema, interfaces |
 | [Progress Checklist](docs/disqord-progress.md) | Implementation progress tracking |
+| [Test Plan](docs/disqord-test-plan.md) | Test strategy, cases, and coverage |
 | [PR Template](.github/pull_request_template.md) | Pull request template |
 
 ## Tech Stack
@@ -98,6 +99,33 @@ bun format         # Format with Biome
 - Test framework: Bun test
 - Test files: Place in `tests/` directory
 - File naming: `*.test.ts`
+
+### Test Directory Structure
+
+```text
+tests/
+├── helpers/
+│   └── mockFactories.ts    # Shared mock factories
+├── unit/
+│   ├── utils/              # Utility function tests
+│   ├── services/           # Service layer tests
+│   └── llm/                # LLM client tests
+└── integration/
+    └── db/                 # Database integration tests (in-memory)
+```
+
+### Running Tests
+
+```bash
+bun test                    # Run all tests
+bun test --coverage         # Run with coverage report
+bun test --watch            # Watch mode
+bun test --grep "pattern"   # Run specific tests
+```
+
+### Coverage
+
+Current coverage: **98.55% lines**, **93.27% functions** (src/ only)
 
 ## Git
 

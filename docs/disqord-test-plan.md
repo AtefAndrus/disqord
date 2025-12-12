@@ -260,13 +260,13 @@ bun test --grep "splitIntoChunks"
 
 ## 8. 実装チェックリスト
 
-- [ ] `tests/helpers/mockFactories.ts` - 共通モックファクトリ
-- [ ] `tests/unit/utils/message.test.ts` - 優先度1
-- [ ] `tests/unit/services/chatService.test.ts` - 優先度2
-- [ ] `tests/unit/services/settingsService.test.ts` - 優先度3
-- [ ] `tests/unit/llm/openrouter.test.ts` - 優先度4
-- [ ] `tests/integration/db/guildSettingsRepository.test.ts` - 優先度5
-- [ ] `tests/unit/utils/logger.test.ts` - 優先度6
+- [x] `tests/helpers/mockFactories.ts` - 共通モックファクトリ
+- [x] `tests/unit/utils/message.test.ts` - 優先度1
+- [x] `tests/unit/services/chatService.test.ts` - 優先度2
+- [x] `tests/unit/services/settingsService.test.ts` - 優先度3
+- [x] `tests/unit/llm/openrouter.test.ts` - 優先度4
+- [x] `tests/integration/db/guildSettingsRepository.test.ts` - 優先度5
+- [x] `tests/unit/utils/logger.test.ts` - 優先度6
 
 ---
 
@@ -291,3 +291,4 @@ Repository/Serviceメソッドは全て `Promise` を返すため、`await` を�
 | 日付 | 内容 |
 |------|------|
 | 2025-12-12 | 初版作成 |
+| 2025-12-12 | 全テスト実装完了（54テスト） |

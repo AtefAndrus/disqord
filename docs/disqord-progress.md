@@ -140,19 +140,18 @@
 
 #### ユニットテスト
 
-- [ ] utils/
-  - [ ] logger.test.ts
-  - [ ] message.test.ts
-- [ ] db/
-  - [ ] guildSettings.test.ts
-- [ ] services/
-  - [ ] settingsService.test.ts
-  - [ ] chatService.test.ts
-- [ ] llm/
-  - [ ] openrouter.test.ts
+- [x] utils/
+  - [x] logger.test.ts
+  - [x] message.test.ts
+- [x] services/
+  - [x] settingsService.test.ts
+  - [x] chatService.test.ts
+- [x] llm/
+  - [x] openrouter.test.ts
 
 #### 統合テスト
 
+- [x] guildSettingsRepository.test.ts（インメモリDB使用）
 - [ ] Bot起動テスト
 - [ ] コマンド実行テスト
 
@@ -228,10 +227,10 @@
 | サービス層 | 6 | 0 | 100% |
 | LLM層 | 8 | 0 | 100% |
 | Bot層 | 20 | 0 | 100% |
-| テスト | 0 | 8 | 0% |
+| テスト | 6 | 2 | 75% |
 | デプロイ | 2 | 2 | 50% |
 | ドキュメント | 5 | 0 | 100% |
-| **合計** | **56** | **10** | **85%** |
+| **合計** | **62** | **4** | **94%** |
 
 ---
 
@@ -241,3 +240,4 @@
 |------|------|
 | 2025-12-11 | 初版作成 |
 | 2025-12-12 | v1.0コード実装完了（LLM層、Bot層、エントリーポイント） |
+| 2025-12-12 | ユニットテスト・統合テスト実装完了（54テスト） |
