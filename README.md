@@ -20,6 +20,43 @@
 - DB: SQLite（`data/disqord.db`。コンテナではボリューム永続化を想定）
 - ホスティング: DockerfileをCoolifyでデプロイ（mainブランチのみ）。developブランチはローカル開発用。
 
+## デプロイ
+
+### Docker
+
+```bash
+# ビルド
+docker build -t disqord .
+
+# 実行（ボリュームマウントでSQLite永続化）
+docker run -d \
+  -e DISCORD_TOKEN=your_token \
+  -e DISCORD_APPLICATION_ID=your_app_id \
+  -e OPENROUTER_API_KEY=your_api_key \
+  -e NODE_ENV=production \
+  -v disqord-data:/app/data \
+  --name disqord \
+  disqord
+```
+
+### Coolify
+
+1. GitHubリポジトリを接続
+2. ビルド設定: Dockerfile（自動検出）
+3. 環境変数を設定:
+   - `DISCORD_TOKEN`
+   - `DISCORD_APPLICATION_ID`
+   - `OPENROUTER_API_KEY`
+   - `NODE_ENV=production`
+4. ストレージ: `/app/data` にボリュームをマウント（SQLite永続化）
+5. デプロイ実行
+
+### 注意事項
+
+- SQLiteファイルは `/app/data/disqord.db` に保存される
+- コンテナ再起動でデータが消えないよう、必ずボリュームをマウントすること
+- コンテナはnon-rootユーザー（bun）で実行される
+
 ## 開発環境構築手順
 
 1. 開発環境セットアップ `mise run setup`

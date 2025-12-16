@@ -65,7 +65,8 @@ disqord/
 ├── tmp/                          # 一時スクリプト・ユーティリティ
 ├── data/                         # SQLiteファイル格納（.gitignore）
 ├── mise.toml                     # ツールバージョン固定・タスク定義
-├── Dockerfile
+├── Dockerfile                    # マルチステージビルド、non-root実行
+├── .dockerignore                 # ビルドコンテキスト除外設定
 ├── .env.example
 ├── LICENSE
 ├── .gitignore
@@ -383,3 +384,4 @@ describe('SettingsService', () => {
 |------|------------|------|
 | 2025-11-26 | 1.0 | 初版作成 |
 | 2025-12-12 | 1.1 | テストディレクトリ構成を実装に合わせて更新 |
+| 2025-12-16 | 1.2 | ディレクトリ構成に.dockerignore追加、Dockerfile説明更新 |
