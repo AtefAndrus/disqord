@@ -10,7 +10,7 @@ export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
     upsert: mock((guildId: string, settings: Partial<GuildSettings>) =>
       Promise.resolve({
         guildId,
-        defaultModel: settings.defaultModel ?? "x-ai/grok-4.1-fast:free",
+        defaultModel: settings.defaultModel ?? "google/gemini-2.0-flash-exp:free",
         createdAt: settings.createdAt ?? new Date().toISOString(),
         updatedAt: settings.updatedAt ?? new Date().toISOString(),
       }),
@@ -45,7 +45,7 @@ export function createMockSettingsService(): ISettingsService {
     getGuildSettings: mock((guildId: string) =>
       Promise.resolve({
         guildId,
-        defaultModel: "x-ai/grok-4.1-fast:free",
+        defaultModel: "google/gemini-2.0-flash-exp:free",
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -64,7 +64,7 @@ export function createMockSettingsService(): ISettingsService {
 export function createMockGuildSettings(overrides?: Partial<GuildSettings>): GuildSettings {
   return {
     guildId: "test-guild-id",
-    defaultModel: "x-ai/grok-4.1-fast:free",
+    defaultModel: "google/gemini-2.0-flash-exp:free",
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

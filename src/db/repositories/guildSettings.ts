@@ -20,7 +20,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
   async upsert(guildId: GuildId, settings: Partial<GuildSettings>): Promise<GuildSettings> {
     const defaults: GuildSettings = {
       guildId,
-      defaultModel: settings.defaultModel ?? "x-ai/grok-4.1-fast:free",
+      defaultModel: settings.defaultModel ?? "google/gemini-2.0-flash-exp:free",
       createdAt: settings.createdAt ?? new Date().toISOString(),
       updatedAt: settings.updatedAt ?? new Date().toISOString(),
     };

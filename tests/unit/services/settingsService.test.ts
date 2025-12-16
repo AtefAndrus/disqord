@@ -42,7 +42,7 @@ describe("SettingsService", () => {
 
       const result = await settingsService.getGuildSettings("guild-789");
 
-      expect(result.defaultModel).toBe("x-ai/grok-4.1-fast:free");
+      expect(result.defaultModel).toBe("google/gemini-2.0-flash-exp:free");
     });
   });
 

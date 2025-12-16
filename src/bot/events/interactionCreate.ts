@@ -50,7 +50,7 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
         interaction.replied || interaction.deferred
           ? interaction.followUp.bind(interaction)
           : interaction.reply.bind(interaction);
-      await reply({ content: "コマンドの実行中にエラーが発生しました。", ephemeral: true });
+      await reply("コマンドの実行中にエラーが発生しました。");
     }
   };
 }

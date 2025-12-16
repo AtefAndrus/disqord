@@ -22,31 +22,22 @@ export function createCommandHandlers(
 - \`/disqord-models\` - 利用可能なモデル一覧
 - \`/disqord-status\` - Bot状態（残高等）を表示`;
 
-      await interaction.reply({ content: helpText, ephemeral: true });
+      await interaction.reply(helpText);
     },
 
     async modelCurrent(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply({
-          content: "このコマンドはサーバー内でのみ使用できます。",
-          ephemeral: true,
-        });
+        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
         return;
       }
 
       const settings = await settingsService.getGuildSettings(interaction.guildId);
-      await interaction.reply({
-        content: `現在のモデル: \`${settings.defaultModel}\``,
-        ephemeral: true,
-      });
+      await interaction.reply(`現在のモデル: \`${settings.defaultModel}\``);
     },
 
     async modelSet(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply({
-          content: "このコマンドはサーバー内でのみ使用できます。",
-          ephemeral: true,
-        });
+        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
         return;
       }
 
@@ -54,22 +45,18 @@ export function createCommandHandlers(
 
       const availableModels = await llmClient.listModels();
       if (availableModels.length > 0 && !availableModels.includes(model)) {
-        await interaction.reply({
-          content: `モデル \`${model}\` は見つかりませんでした。\`/disqord-models\` で利用可能なモデルを確認してください。`,
-          ephemeral: true,
-        });
+        await interaction.reply(
+          `モデル \`${model}\` は見つかりませんでした。\`/disqord-models\` で利用可能なモデルを確認してください。`,
+        );
         return;
       }
 
       await settingsService.setGuildModel(interaction.guildId, model);
-      await interaction.reply({
-        content: `モデルを \`${model}\` に変更しました。`,
-        ephemeral: true,
-      });
+      await interaction.reply(`モデルを \`${model}\` に変更しました。`);
     },
 
     async models(interaction: ChatInputCommandInteraction): Promise<void> {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply();
 
       const models = await llmClient.listModels();
       if (models.length === 0) {
@@ -85,7 +72,7 @@ export function createCommandHandlers(
     },
 
     async status(interaction: ChatInputCommandInteraction): Promise<void> {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply();
 
       const credits = await llmClient.getCredits();
       const rateLimited = llmClient.isRateLimited();

@@ -118,7 +118,7 @@ export function createMockSettingsService(): ISettingsService;
 |---|----------|----------|
 | 1 | getGuildSettings: 既存の設定がある場合はそれを返す | 既存設定返却 |
 | 2 | getGuildSettings: 設定が存在しない場合はデフォルト設定を作成 | upsert呼び出し |
-| 3 | getGuildSettings: デフォルトモデルが正しい値 | `x-ai/grok-4.1-fast:free` |
+| 3 | getGuildSettings: デフォルトモデルが正しい値 | `google/gemini-2.0-flash-exp:free` |
 | 4 | setGuildModel: 指定したモデルでupsertを呼び出す | 正しいパラメータ |
 | 5 | setGuildModel: 更新後の設定を返す | 更新済み設定 |
 | 6 | setGuildModel: updatedAtが含まれる | タイムスタンプ存在 |

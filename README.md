@@ -3,7 +3,7 @@
 ## 概要
 
 - Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び出す単発応答型。
-- デフォルトモデルは `x-ai/grok-4.1-fast:free`（Guild単位で変更可）。
+- デフォルトモデルは `google/gemini-2.0-flash-exp:free`（Guild単位で変更可）。
 - Bun + discord.js + SQLite による軽量構成。
 
 ## 主な機能 (v1)

@@ -153,7 +153,7 @@ const chatService = new ChatService(llmClient, settingsService);
 -- Guild設定テーブル
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'x-ai/grok-4.1-fast:free',
+    default_model TEXT NOT NULL DEFAULT 'google/gemini-2.0-flash-exp:free',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -165,7 +165,7 @@ CREATE TABLE guild_settings (
 -- Guild設定テーブル（拡張版）
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'x-ai/grok-4.1-fast:free',
+    default_model TEXT NOT NULL DEFAULT 'google/gemini-2.0-flash-exp:free',
     custom_prompt TEXT,
     release_notify_enabled INTEGER NOT NULL DEFAULT 1,
     release_notify_channel_id TEXT,
@@ -218,7 +218,7 @@ CREATE INDEX idx_conversation_user ON conversation_history(user_id, created_at);
 |------|------|
 | Discord ID | TEXT型で保存（JavaScriptのNumber精度問題を回避） |
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
-| 初期モデル | `x-ai/grok-4.1-fast:free` |
+| 初期モデル | `google/gemini-2.0-flash-exp:free` |
 
 ---
 
@@ -371,7 +371,7 @@ describe('SettingsService', () => {
 
   test('getGuildSettings returns default when not found', () => {
     const result = service.getGuildSettings('123');
-    expect(result.defaultModel).toBe('x-ai/grok-4.1-fast:free');
+    expect(result.defaultModel).toBe('google/gemini-2.0-flash-exp:free');
   });
 });
 ```

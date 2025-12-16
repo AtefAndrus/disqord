@@ -33,7 +33,9 @@ export function createMessageCreateHandler(chatService: IChatService) {
 
       const chunks = splitIntoChunks(response);
       for (const chunk of chunks) {
-        await message.reply(chunk);
+        if ("send" in message.channel) {
+          await message.channel.send(chunk);
+        }
       }
     } catch (error) {
       logger.error("Failed to generate response", { error, guildId: message.guild.id });

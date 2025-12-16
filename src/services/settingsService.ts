@@ -17,7 +17,7 @@ export class SettingsService implements ISettingsService {
 
     const fallback: GuildSettings = {
       guildId,
-      defaultModel: "x-ai/grok-4.1-fast:free",
+      defaultModel: "google/gemini-2.0-flash-exp:free",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

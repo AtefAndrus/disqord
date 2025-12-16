@@ -72,7 +72,7 @@ describe("GuildSettingsRepository", () => {
     test("defaultModelが未指定の場合はデフォルト値を使用", async () => {
       const result = await repo.upsert("guild-default", {});
 
-      expect(result.defaultModel).toBe("x-ai/grok-4.1-fast:free");
+      expect(result.defaultModel).toBe("google/gemini-2.0-flash-exp:free");
     });
 
     test("createdAtとupdatedAtが設定される", async () => {

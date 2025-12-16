@@ -135,5 +135,5 @@ Current coverage: **98.55% lines**, **93.27% functions** (src/ only)
 ## Notes
 
 - Discord message limit: 2000 characters (requires split sending)
-- Default LLM model: `x-ai/grok-4.1-fast:free`
+- Default LLM model: `google/gemini-2.0-flash-exp:free`
 - SQLite WAL mode enabled
