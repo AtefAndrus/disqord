@@ -1,0 +1,17 @@
+node_modules
+.git
+.gitignore
+tests
+tmp
+docs
+*.md
+.env*
+.vscode
+coverage
+Dockerfile*
+docker-compose*
+.dockerignore
+biome.json
+tsconfig.json
+mise.toml
+data
