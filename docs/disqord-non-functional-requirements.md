@@ -13,7 +13,7 @@
 | 言語 | TypeScript | 型安全性を重視 |
 | Discordライブラリ | [discord.js](https://discord.js.org/docs/) | Node.js向け公式推奨ライブラリ |
 | ランタイム | [Bun](https://bun.com/docs/llms.txt) | 高速なTypeScriptランタイム |
-| ツール/タスク | [mise](https://mise.jdx.dev/getting-started.html) + [Biome](https://biomejs.dev/guides/getting-started/) | Bun 1.3.x固定とタスク実行統一、Biome 2.3.8でLint/Format |
+| ツール/タスク | [mise](https://mise.jdx.dev/getting-started.html) + [Biome](https://biomejs.dev/guides/getting-started/) | Bun 1.3.x固定とタスク実行統一、BiomeでLint/Format |
 | データ永続化 | SQLite | 軽量、ファイルベース |
 
 ---
