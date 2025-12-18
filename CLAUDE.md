@@ -9,7 +9,7 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 ## Documentation
 
 | Document | Description |
-|----------|-------------|
+| -------- | ----------- |
 | [README.md](README.md) | Project overview, features, setup instructions |
 | [Functional Requirements](docs/disqord-functional-requirements.md) | Bot features, commands, response behavior |
 | [Non-Functional Requirements](docs/disqord-non-functional-requirements.md) | Tech stack, deployment, hosting |
@@ -64,7 +64,7 @@ bun format         # Format with Biome
 ## Environment Variables
 
 | Variable | Required | Description |
-|----------|----------|-------------|
+| -------- | -------- | ----------- |
 | DISCORD_TOKEN | Yes | Discord Bot token |
 | DISCORD_APPLICATION_ID | Yes | Discord application ID |
 | OPENROUTER_API_KEY | Yes | OpenRouter API key |

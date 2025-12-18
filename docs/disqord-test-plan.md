@@ -11,7 +11,7 @@
 
 ## 2. ディレクトリ構造
 
-```
+```text
 tests/
 ├── unit/
 │   ├── utils/
@@ -34,7 +34,7 @@ tests/
 ## 3. モック戦略
 
 | 依存 | モック方法 | 理由 |
-|------|-----------|------|
+| ---- | ---------- | ---- |
 | `console.*` | `spyOn(console, "log")` | 出力検証、副作用抑制 |
 | `fetch` | `mock()` でグローバル置換 | 外部API呼び出し抑制 |
 | `bun:sqlite` | インメモリDB (`:memory:`) | 高速・分離された統合テスト |
@@ -46,7 +46,7 @@ tests/
 ## 4. テスト優先順位
 
 | 優先度 | ファイル | 理由 |
-|--------|----------|------|
+| ------ | -------- | ---- |
 | 1 | `message.test.ts` | 境界条件が多く、バグが発生しやすい |
 | 2 | `chatService.test.ts` | コアビジネスロジック |
 | 3 | `settingsService.test.ts` | コアビジネスロジック |
@@ -81,7 +81,7 @@ export function createMockSettingsService(): ISettingsService;
 **テストケース:**
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 空文字列は単一要素の配列を返す | `[""]` |
 | 2 | 制限以下の文字列は分割しない | 1要素 |
 | 3 | 制限ちょうどの文字列は分割しない | 1要素 |
@@ -99,7 +99,7 @@ export function createMockSettingsService(): ISettingsService;
 **テストケース:**
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | debug: メッセージのみでconsole.debugを呼び出す | `[DEBUG]`含む |
 | 2 | debug: メタデータ付きでJSON形式で出力する | JSON含む |
 | 3 | info: INFOレベルでconsole.infoを呼び出す | `[INFO]`含む |
@@ -115,7 +115,7 @@ export function createMockSettingsService(): ISettingsService;
 **テストケース:**
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | getGuildSettings: 既存の設定がある場合はそれを返す | 既存設定返却 |
 | 2 | getGuildSettings: 設定が存在しない場合はデフォルト設定を作成 | upsert呼び出し |
 | 3 | getGuildSettings: デフォルトモデルが正しい値 | `google/gemini-2.0-flash-exp:free` |
@@ -130,7 +130,7 @@ export function createMockSettingsService(): ISettingsService;
 **テストケース:**
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | SettingsServiceからギルド設定を取得する | getGuildSettings呼び出し |
 | 2 | LLMClientにギルドのデフォルトモデルを使用してリクエスト | 正しいmodel値 |
 | 3 | LLMClientからのレスポンスを返す | content返却 |
@@ -148,7 +148,7 @@ export function createMockSettingsService(): ISettingsService;
 #### chat メソッド
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 正常なレスポンスを返す | ChatCompletionResponse |
 | 2 | 正しいエンドポイントとヘッダーでfetchを呼び出す | URL・ヘッダー検証 |
 | 3 | リクエストボディが正しくJSONシリアライズされる | body検証 |
@@ -161,14 +161,14 @@ export function createMockSettingsService(): ISettingsService;
 #### listModels メソッド
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | モデルIDの配列を返す | `string[]` |
 | 2 | エラー時は空配列を返す | `[]` |
 
 #### getCredits メソッド
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 残高を返す | `{ remaining: number }` |
 | 2 | limit_remainingがnullの場合はInfinityを返す | `Infinity` |
 | 3 | エラー時は残高0を返す | `{ remaining: 0 }` |
@@ -176,7 +176,7 @@ export function createMockSettingsService(): ISettingsService;
 #### isRateLimited メソッド
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 初期状態ではfalseを返す | `false` |
 
 ---
@@ -190,7 +190,7 @@ export function createMockSettingsService(): ISettingsService;
 #### findByGuildId
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 存在しないギルドIDはnullを返す | `null` |
 | 2 | 存在するギルドの設定を返す | GuildSettings |
 | 3 | カラムマッピングが正しい（snake_case → camelCase） | プロパティ名変換 |
@@ -198,7 +198,7 @@ export function createMockSettingsService(): ISettingsService;
 #### upsert
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 新規レコードを挿入する | INSERT |
 | 2 | 既存レコードを更新する | UPDATE |
 | 3 | defaultModelが未指定の場合はデフォルト値を使用 | デフォルトモデル |
@@ -208,14 +208,14 @@ export function createMockSettingsService(): ISettingsService;
 #### delete
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 存在するレコードを削除してtrueを返す | `true` |
 | 2 | 存在しないレコードの削除はfalseを返す | `false` |
 
 #### 並行操作
 
 | # | テスト名 | 期待動作 |
-|---|----------|----------|
+| - | -------- | -------- |
 | 1 | 複数の異なるギルドを同時に操作できる | 全て成功 |
 
 ---
@@ -225,13 +225,13 @@ export function createMockSettingsService(): ISettingsService;
 ### 対象
 
 | テスト | 範囲 | 使用リソース |
-|--------|------|-------------|
+| ------ | ---- | ------------ |
 | DB統合テスト | Repository + SQLite | インメモリDB |
 
 ### 対象外（将来検討）
 
 | テスト | 理由 |
-|--------|------|
+| ------ | ---- |
 | Discord.js統合 | Botトークンが必要、E2Eに近い |
 | OpenRouter実API | 課金発生、レート制限リスク |
 
@@ -289,6 +289,6 @@ Repository/Serviceメソッドは全て `Promise` を返すため、`await` を�
 ## 更新履歴
 
 | 日付 | 内容 |
-|------|------|
+| ---- | ---- |
 | 2025-12-12 | 初版作成 |
 | 2025-12-12 | 全テスト実装完了（54テスト） |

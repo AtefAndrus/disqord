@@ -56,6 +56,7 @@ docker run -d \
 GitHub Releaseを作成すると、GitHub Actions経由でCoolifyへ自動デプロイされる。
 
 **必要なGitHubシークレット:**
+
 - `COOLIFY_TOKEN`: CoolifyのAPIトークン
 - `COOLIFY_WEBHOOK`: CoolifyのWebhook URL
 
@@ -81,7 +82,7 @@ gh release create v1.0.0 --title "v1.0.0" --notes "Release notes here"
 ### 環境変数
 
 | 変数名 | 必須 | 説明 |
-|--------|------|------|
+| ------ | ---- | ---- |
 | DISCORD_TOKEN | Yes | Discord Bot Token |
 | DISCORD_APPLICATION_ID | Yes | アプリケーションID |
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |

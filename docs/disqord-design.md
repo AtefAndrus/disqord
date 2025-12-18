@@ -145,7 +145,7 @@ const chatService = new ChatService(llmClient, settingsService);
 
 ## 3. DBスキーマ
 
-### 3.1 v1 スキーマ
+### 3.1 v1.0 スキーマ
 
 ```sql
 -- Guild設定テーブル
@@ -157,7 +157,15 @@ CREATE TABLE guild_settings (
 );
 ```
 
-### 3.2 将来拡張スキーマ（v2以降）
+### 3.2 v1.1.0 スキーマ（マイグレーション）
+
+```sql
+-- 無料モデル限定フラグを追加
+ALTER TABLE guild_settings ADD COLUMN free_models_only INTEGER NOT NULL DEFAULT 0;
+-- 0: 全モデル利用可, 1: 無料モデルのみ
+```
+
+### 3.3 将来拡張スキーマ（v2以降）
 
 ```sql
 -- Guild設定テーブル（拡張版）
@@ -215,7 +223,7 @@ CREATE INDEX idx_conversation_user ON conversation_history(user_id, created_at);
 ### 3.3 設計方針
 
 | 項目 | 方針 |
-|------|------|
+| ------ | ------ |
 | Discord ID | TEXT型で保存（JavaScriptのNumber精度問題を回避） |
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
 | 初期モデル | `deepseek/deepseek-r1-0528:free`（環境変数 `DEFAULT_MODEL` で変更可） |
@@ -330,7 +338,7 @@ export interface ILLMClient {
 ### 5.1 使用する組み込み機能
 
 | 機能 | モジュール | 説明 |
-|------|------------|------|
+| ------ | ------------ | ------ |
 | SQLite | [`bun:sqlite`](https://bun.com/docs/runtime/sqlite.md) | 高性能SQLite3ドライバー（better-sqlite3の3-6倍高速） |
 | テスト | [`bun:test`](https://bun.com/docs/test.md) | Jest互換テストランナー |
 
@@ -384,8 +392,9 @@ describe('SettingsService', () => {
 ## 更新履歴
 
 | 日付 | バージョン | 内容 |
-|------|------------|------|
+| ------ | ------------ | ------ |
 | 2025-11-26 | 1.0 | 初版作成 |
 | 2025-12-12 | 1.1 | テストディレクトリ構成を実装に合わせて更新 |
 | 2025-12-16 | 1.2 | ディレクトリ構成に.dockerignore追加、Dockerfile説明更新 |
 | 2025-12-18 | 1.3 | デフォルトモデルを環境変数化、DI例・スキーマ・テスト例を更新 |
+| 2025-12-19 | 1.4 | v1.1.0スキーマ（free_models_only）追加 |
