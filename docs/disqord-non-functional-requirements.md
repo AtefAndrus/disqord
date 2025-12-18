@@ -117,11 +117,21 @@ Coolifyの環境変数機能で管理する。
 | 項目 | 内容 |
 |------|------|
 | CI | なし（v1） |
-| CD | Coolify自動デプロイ（GitHub連携） |
+| CD | GitHub Actions → Coolify Webhook |
 | 初回セットアップ | `mise run setup` |
 | 開発コマンド | `bun dev` `bun start` `bun test` `bun typecheck` `bun lint` `bun format` |
 
-### 6.1 将来検討事項
+### 6.1 自動デプロイ
+
+GitHub Releaseを作成すると、GitHub ActionsがCoolify Webhookをトリガーし自動デプロイが実行される。
+
+| 項目 | 内容 |
+|------|------|
+| ワークフロー | `.github/workflows/deploy.yml` |
+| トリガー | `release: [published]` |
+| 必要なシークレット | `COOLIFY_TOKEN`, `COOLIFY_WEBHOOK` |
+
+### 6.2 将来検討事項
 
 - Lint / Format チェック（Biome等）
 - テスト実行
@@ -172,3 +182,4 @@ Coolifyの環境変数機能で管理する。
 | 2025-12-11 | 1.1 | デプロイ方針変更（developブランチはローカル開発用に）、DISCORD_APPLICATION_ID追加 |
 | 2025-12-16 | 1.2 | コンテナセキュリティ要件を追加（non-rootユーザー実行、.dockerignore） |
 | 2025-12-18 | 1.3 | DEFAULT_MODEL環境変数を追加 |
+| 2025-12-19 | 1.4 | GitHub Actions自動デプロイ（Release→Coolify）を追加、v1.0.0リリース |

@@ -168,6 +168,10 @@
 - [x] .env.example
 - [x] Coolifyデプロイ設定
 - [x] 動作確認（本番環境）
+- [x] GitHub Actions自動デプロイ（`.github/workflows/deploy.yml`）
+  - [x] Release作成時にCoolify Webhookをトリガー
+  - [x] GitHubシークレット設定（COOLIFY_TOKEN, COOLIFY_WEBHOOK）
+- [x] v1.0.0リリース（GitHub Releases）
 
 ---
 
@@ -266,9 +270,9 @@
 | LLM層 | 8 | 0 | 100% |
 | Bot層 | 20 | 0 | 100% |
 | テスト | 6 | 2 | 75% |
-| デプロイ | 9 | 0 | 100% |
+| デプロイ | 13 | 0 | 100% |
 | ドキュメント | 5 | 0 | 100% |
-| **合計** | **69** | **2** | **97%** |
+| **合計** | **73** | **2** | **97%** |
 
 ---
 
@@ -286,4 +290,6 @@
 | 2025-12-18 | ドキュメント整合性修正: functional-requirements.mdにモデル選択UI改善・コード品質追加、design.mdスキーマにチャンネル制限・管理権限ロール追加 |
 | 2025-12-18 | デフォルトモデルの環境変数化（DEFAULT_MODEL）、デフォルト値を openai/gpt-oss-120b:free に変更 |
 | 2025-12-18 | Embed化をv2以降に延期、discord.js v15対応を評価（今すぐの対応不要と判断） |
-| 2025-12-19 | Coolifyデプロイ完了、本番環境動作確認完了 - v1.0リリース |
+| 2025-12-19 | Coolifyデプロイ完了、本番環境動作確認完了 |
+| 2025-12-19 | GitHub Actions自動デプロイ設定（Release→Coolify Webhook） |
+| 2025-12-19 | v1.0.0リリース完了 |

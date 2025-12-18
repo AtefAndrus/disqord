@@ -51,6 +51,19 @@ docker run -d \
 4. ストレージ: `/app/data` にボリュームをマウント（SQLite永続化）
 5. デプロイ実行
 
+### 自動デプロイ（GitHub Release）
+
+GitHub Releaseを作成すると、GitHub Actions経由でCoolifyへ自動デプロイされる。
+
+**必要なGitHubシークレット:**
+- `COOLIFY_TOKEN`: CoolifyのAPIトークン
+- `COOLIFY_WEBHOOK`: CoolifyのWebhook URL
+
+```bash
+# リリース作成例
+gh release create v1.0.0 --title "v1.0.0" --notes "Release notes here"
+```
+
 ### 注意事項
 
 - SQLiteファイルは `/app/data/disqord.db` に保存される
@@ -86,9 +99,10 @@ docker run -d \
 
 ## 現状
 
-v1.0 コード実装完了。デプロイ・動作確認待ち。
+**v1.0.0 リリース済み** (2025-12-19)
 
-- 完了: config, db, services, utils, types, bot, llm, テスト（54件）
-- 未完了: Coolifyデプロイ、本番動作確認
+- 全機能実装完了
+- Coolifyデプロイ完了
+- GitHub Release自動デプロイ設定済み
 
 詳細は [進捗チェックリスト](docs/disqord-progress.md) を参照。
