@@ -2,6 +2,10 @@
 
 A Discord Bot that communicates with LLMs through OpenRouter.
 
+## Repository
+
+- GitHub: [AtefAndrus/disqord](https://github.com/AtefAndrus/disqord)
+
 ## Documentation
 
 | Document | Description |
