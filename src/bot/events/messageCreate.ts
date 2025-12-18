@@ -20,7 +20,10 @@ export function createMessageCreateHandler(chatService: IChatService) {
 
     const content = message.content.replace(/<@!?\d+>/g, "").trim();
     if (!content) {
-      await message.reply("メッセージを入力してください。");
+      await message.reply({
+        content: "メッセージを入力してください。",
+        allowedMentions: { repliedUser: false },
+      });
       return;
     }
 
@@ -39,7 +42,10 @@ export function createMessageCreateHandler(chatService: IChatService) {
       }
     } catch (error) {
       logger.error("Failed to generate response", { error, guildId: message.guild.id });
-      await message.reply("エラーが発生しました。しばらくしてから再度お試しください。");
+      await message.reply({
+        content: "エラーが発生しました。しばらくしてから再度お試しください。",
+        allowedMentions: { repliedUser: false },
+      });
     }
   };
 }

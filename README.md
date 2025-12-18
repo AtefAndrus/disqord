@@ -3,7 +3,7 @@
 ## 概要
 
 - Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び出す単発応答型。
-- デフォルトモデルは `openai/gpt-oss-120b:free`（環境変数・Guild単位で変更可）。
+- デフォルトモデルは `deepseek/deepseek-r1-0528:free`（環境変数・Guild単位で変更可）。
 - Bun + discord.js + SQLite による軽量構成。
 
 ## 主な機能 (v1)
@@ -74,7 +74,7 @@ docker run -d \
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |
 | NODE_ENV | No | production / development（デフォルト: development） |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: data/disqord.db） |
-| DEFAULT_MODEL | No | デフォルトLLMモデル（デフォルト: openai/gpt-oss-120b:free） |
+| DEFAULT_MODEL | No | デフォルトLLMモデル（デフォルト: deepseek/deepseek-r1-0528:free） |
 
 ## ディレクトリ
 

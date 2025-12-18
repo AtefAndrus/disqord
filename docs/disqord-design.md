@@ -151,7 +151,7 @@ const chatService = new ChatService(llmClient, settingsService);
 -- Guild設定テーブル
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b:free',
+    default_model TEXT NOT NULL DEFAULT 'deepseek/deepseek-r1-0528:free',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -163,7 +163,7 @@ CREATE TABLE guild_settings (
 -- Guild設定テーブル（拡張版）
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b:free',
+    default_model TEXT NOT NULL DEFAULT 'deepseek/deepseek-r1-0528:free',
     custom_prompt TEXT,
     admin_role_ids TEXT,                              -- JSON配列: 設定変更権限を持つロールID
     release_notify_enabled INTEGER NOT NULL DEFAULT 1,
@@ -218,7 +218,7 @@ CREATE INDEX idx_conversation_user ON conversation_history(user_id, created_at);
 |------|------|
 | Discord ID | TEXT型で保存（JavaScriptのNumber精度問題を回避） |
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
-| 初期モデル | `openai/gpt-oss-120b:free`（環境変数 `DEFAULT_MODEL` で変更可） |
+| 初期モデル | `deepseek/deepseek-r1-0528:free`（環境変数 `DEFAULT_MODEL` で変更可） |
 
 ---
 
@@ -361,7 +361,7 @@ const result = stmt.get(guildId);
 ```typescript
 import { describe, test, expect, beforeEach } from 'bun:test';
 
-const DEFAULT_MODEL = 'openai/gpt-oss-120b:free';
+const DEFAULT_MODEL = 'deepseek/deepseek-r1-0528:free';
 
 describe('SettingsService', () => {
   let service: SettingsService;

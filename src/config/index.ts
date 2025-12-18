@@ -53,7 +53,7 @@ const configSchema = z.object({
   nodeEnv: z.enum(["development", "production"]).default("development"),
   databasePath: z.string().default("data/disqord.db"),
   applicationId: z.string().min(1),
-  defaultModel: z.string().default("openai/gpt-oss-120b:free"),
+  defaultModel: z.string().default("deepseek/deepseek-r1-0528:free"),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

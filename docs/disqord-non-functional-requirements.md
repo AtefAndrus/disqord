@@ -91,7 +91,7 @@ Coolifyの環境変数機能で管理する。
 | OPENROUTER_API_KEY | OpenRouter API Key | Yes |
 | NODE_ENV | 環境識別（production / development） | No（デフォルト: development） |
 | DATABASE_PATH | SQLiteファイルパス | No（デフォルト: data/disqord.db） |
-| DEFAULT_MODEL | デフォルトLLMモデル | No（デフォルト: openai/gpt-oss-120b:free） |
+| DEFAULT_MODEL | デフォルトLLMモデル | No（デフォルト: deepseek/deepseek-r1-0528:free） |
 
 ### 4.3 将来追加予定
 
