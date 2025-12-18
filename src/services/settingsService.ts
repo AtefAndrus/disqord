@@ -7,7 +7,10 @@ export interface ISettingsService {
 }
 
 export class SettingsService implements ISettingsService {
-  constructor(private readonly repo: IGuildSettingsRepository) {}
+  constructor(
+    private readonly repo: IGuildSettingsRepository,
+    private readonly defaultModel: string,
+  ) {}
 
   async getGuildSettings(guildId: string): Promise<GuildSettings> {
     const existing = await this.repo.findByGuildId(guildId);
@@ -17,7 +20,7 @@ export class SettingsService implements ISettingsService {
 
     const fallback: GuildSettings = {
       guildId,
-      defaultModel: "google/gemini-2.0-flash-exp:free",
+      defaultModel: this.defaultModel,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

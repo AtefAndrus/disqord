@@ -19,10 +19,10 @@ async function bootstrap(): Promise<void> {
   const db = getDatabase();
   logger.info("Database initialized");
 
-  const guildSettingsRepo = new GuildSettingsRepository(db);
+  const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
 
   const llmClient = OpenRouterClient.fromConfig(config);
-  const settingsService = new SettingsService(guildSettingsRepo);
+  const settingsService = new SettingsService(guildSettingsRepo, config.defaultModel);
   const chatService = new ChatService(llmClient, settingsService);
 
   const commandHandlers = createCommandHandlers(llmClient, settingsService);

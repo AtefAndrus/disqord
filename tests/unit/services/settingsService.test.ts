@@ -6,13 +6,15 @@ import {
   createMockGuildSettingsRepository,
 } from "../../helpers/mockFactories";
 
+const TEST_DEFAULT_MODEL = "test/default-model";
+
 describe("SettingsService", () => {
   let settingsService: SettingsService;
   let mockRepo: IGuildSettingsRepository;
 
   beforeEach(() => {
     mockRepo = createMockGuildSettingsRepository();
-    settingsService = new SettingsService(mockRepo);
+    settingsService = new SettingsService(mockRepo, TEST_DEFAULT_MODEL);
   });
 
   describe("getGuildSettings", () => {
@@ -42,7 +44,7 @@ describe("SettingsService", () => {
 
       const result = await settingsService.getGuildSettings("guild-789");
 
-      expect(result.defaultModel).toBe("google/gemini-2.0-flash-exp:free");
+      expect(result.defaultModel).toBe(TEST_DEFAULT_MODEL);
     });
   });
 

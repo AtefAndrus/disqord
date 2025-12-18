@@ -3,7 +3,7 @@
 ## 概要
 
 - Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び出す単発応答型。
-- デフォルトモデルは `google/gemini-2.0-flash-exp:free`（Guild単位で変更可）。
+- デフォルトモデルは `openai/gpt-oss-120b:free`（環境変数・Guild単位で変更可）。
 - Bun + discord.js + SQLite による軽量構成。
 
 ## 主な機能 (v1)
@@ -65,13 +65,16 @@ docker run -d \
 4. テスト: `bun test`（ウォッチ: `bun test:watch`、カバレッジ: `bun test:coverage`）
 5. Lint/整形: `bun lint` / `bun format`
 
-### 必須環境変数
+### 環境変数
 
-- DISCORD_TOKEN: Discord Bot Token
-- DISCORD_APPLICATION_ID: アプリケーションID
-- OPENROUTER_API_KEY: OpenRouter API Key
-- NODE_ENV: production / development
-- DATABASE_PATH: SQLiteパス（未設定時は `data/disqord.db`）
+| 変数名 | 必須 | 説明 |
+|--------|------|------|
+| DISCORD_TOKEN | Yes | Discord Bot Token |
+| DISCORD_APPLICATION_ID | Yes | アプリケーションID |
+| OPENROUTER_API_KEY | Yes | OpenRouter API Key |
+| NODE_ENV | No | production / development（デフォルト: development） |
+| DATABASE_PATH | No | SQLiteパス（デフォルト: data/disqord.db） |
+| DEFAULT_MODEL | No | デフォルトLLMモデル（デフォルト: openai/gpt-oss-120b:free） |
 
 ## ディレクトリ
 

@@ -53,6 +53,7 @@ const configSchema = z.object({
   nodeEnv: z.enum(["development", "production"]).default("development"),
   databasePath: z.string().default("data/disqord.db"),
   applicationId: z.string().min(1),
+  defaultModel: z.string().default("openai/gpt-oss-120b:free"),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -64,6 +65,7 @@ export function loadConfig(): AppConfig {
     nodeEnv: process.env.NODE_ENV ?? "development",
     databasePath: process.env.DATABASE_PATH ?? "data/disqord.db",
     applicationId: process.env.DISCORD_APPLICATION_ID,
+    defaultModel: process.env.DEFAULT_MODEL,
   });
 
   return parsed;

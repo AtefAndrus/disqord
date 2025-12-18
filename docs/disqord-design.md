@@ -136,8 +136,8 @@ disqord/
 ```typescript
 // 例: ChatServiceの初期化
 const llmClient = new OpenRouterClient(config);
-const settingsRepo = new GuildSettingsRepository(db);
-const settingsService = new SettingsService(settingsRepo);
+const settingsRepo = new GuildSettingsRepository(db, config.defaultModel);
+const settingsService = new SettingsService(settingsRepo, config.defaultModel);
 const chatService = new ChatService(llmClient, settingsService);
 ```
 
@@ -151,7 +151,7 @@ const chatService = new ChatService(llmClient, settingsService);
 -- Guild設定テーブル
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'google/gemini-2.0-flash-exp:free',
+    default_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b:free',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -163,7 +163,7 @@ CREATE TABLE guild_settings (
 -- Guild設定テーブル（拡張版）
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
-    default_model TEXT NOT NULL DEFAULT 'google/gemini-2.0-flash-exp:free',
+    default_model TEXT NOT NULL DEFAULT 'openai/gpt-oss-120b:free',
     custom_prompt TEXT,
     admin_role_ids TEXT,                              -- JSON配列: 設定変更権限を持つロールID
     release_notify_enabled INTEGER NOT NULL DEFAULT 1,
@@ -218,7 +218,7 @@ CREATE INDEX idx_conversation_user ON conversation_history(user_id, created_at);
 |------|------|
 | Discord ID | TEXT型で保存（JavaScriptのNumber精度問題を回避） |
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
-| 初期モデル | `google/gemini-2.0-flash-exp:free` |
+| 初期モデル | `openai/gpt-oss-120b:free`（環境変数 `DEFAULT_MODEL` で変更可） |
 
 ---
 
@@ -361,18 +361,20 @@ const result = stmt.get(guildId);
 ```typescript
 import { describe, test, expect, beforeEach } from 'bun:test';
 
+const DEFAULT_MODEL = 'openai/gpt-oss-120b:free';
+
 describe('SettingsService', () => {
   let service: SettingsService;
   let mockRepo: IGuildSettingsRepository;
 
   beforeEach(() => {
     mockRepo = createMockRepository();
-    service = new SettingsService(mockRepo);
+    service = new SettingsService(mockRepo, DEFAULT_MODEL);
   });
 
   test('getGuildSettings returns default when not found', () => {
     const result = service.getGuildSettings('123');
-    expect(result.defaultModel).toBe('google/gemini-2.0-flash-exp:free');
+    expect(result.defaultModel).toBe(DEFAULT_MODEL);
   });
 });
 ```
@@ -386,3 +388,4 @@ describe('SettingsService', () => {
 | 2025-11-26 | 1.0 | 初版作成 |
 | 2025-12-12 | 1.1 | テストディレクトリ構成を実装に合わせて更新 |
 | 2025-12-16 | 1.2 | ディレクトリ構成に.dockerignore追加、Dockerfile説明更新 |
+| 2025-12-18 | 1.3 | デフォルトモデルを環境変数化、DI例・スキーマ・テスト例を更新 |

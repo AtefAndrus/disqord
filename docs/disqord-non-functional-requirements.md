@@ -91,6 +91,7 @@ Coolifyの環境変数機能で管理する。
 | OPENROUTER_API_KEY | OpenRouter API Key | Yes |
 | NODE_ENV | 環境識別（production / development） | No（デフォルト: development） |
 | DATABASE_PATH | SQLiteファイルパス | No（デフォルト: data/disqord.db） |
+| DEFAULT_MODEL | デフォルトLLMモデル | No（デフォルト: openai/gpt-oss-120b:free） |
 
 ### 4.3 将来追加予定
 
@@ -170,3 +171,4 @@ Coolifyの環境変数機能で管理する。
 | 2025-11-26 | 1.0 | 初版作成 |
 | 2025-12-11 | 1.1 | デプロイ方針変更（developブランチはローカル開発用に）、DISCORD_APPLICATION_ID追加 |
 | 2025-12-16 | 1.2 | コンテナセキュリティ要件を追加（non-rootユーザー実行、.dockerignore） |
+| 2025-12-18 | 1.3 | DEFAULT_MODEL環境変数を追加 |

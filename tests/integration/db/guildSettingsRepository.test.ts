@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../src/db/schema";
 
+const TEST_DEFAULT_MODEL = "test/default-model";
+
 describe("GuildSettingsRepository", () => {
   let db: Database;
   let repo: GuildSettingsRepository;
@@ -10,7 +12,7 @@ describe("GuildSettingsRepository", () => {
   beforeEach(() => {
     db = new Database(":memory:");
     applyMigrations(db);
-    repo = new GuildSettingsRepository(db);
+    repo = new GuildSettingsRepository(db, TEST_DEFAULT_MODEL);
   });
 
   afterEach(() => {
@@ -72,7 +74,7 @@ describe("GuildSettingsRepository", () => {
     test("defaultModelが未指定の場合はデフォルト値を使用", async () => {
       const result = await repo.upsert("guild-default", {});
 
-      expect(result.defaultModel).toBe("google/gemini-2.0-flash-exp:free");
+      expect(result.defaultModel).toBe(TEST_DEFAULT_MODEL);
     });
 
     test("createdAtとupdatedAtが設定される", async () => {

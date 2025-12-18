@@ -66,6 +66,7 @@ bun format         # Format with Biome
 | OPENROUTER_API_KEY | Yes | OpenRouter API key |
 | DATABASE_PATH | No | SQLite file path (default: data/disqord.db) |
 | NODE_ENV | No | Execution environment (default: development) |
+| DEFAULT_MODEL | No | Default LLM model (default: openai/gpt-oss-120b:free) |
 
 ## Coding Conventions
 
@@ -137,5 +138,5 @@ Current coverage: **98.55% lines**, **93.27% functions** (src/ only)
 ## Notes
 
 - Discord message limit: 2000 characters (requires split sending)
-- Default LLM model: `google/gemini-2.0-flash-exp:free`
+- Default LLM model: `openai/gpt-oss-120b:free`
 - SQLite WAL mode enabled

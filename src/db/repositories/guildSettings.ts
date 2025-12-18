@@ -8,7 +8,10 @@ export interface IGuildSettingsRepository {
 }
 
 export class GuildSettingsRepository implements IGuildSettingsRepository {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly defaultModel: string,
+  ) {}
 
   async findByGuildId(guildId: GuildId): Promise<GuildSettings | null> {
     const stmt = this.db.query<GuildSettings, [string]>(
@@ -20,7 +23,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
   async upsert(guildId: GuildId, settings: Partial<GuildSettings>): Promise<GuildSettings> {
     const defaults: GuildSettings = {
       guildId,
-      defaultModel: settings.defaultModel ?? "google/gemini-2.0-flash-exp:free",
+      defaultModel: settings.defaultModel ?? this.defaultModel,
       createdAt: settings.createdAt ?? new Date().toISOString(),
       updatedAt: settings.updatedAt ?? new Date().toISOString(),
     };
