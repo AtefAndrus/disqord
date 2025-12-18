@@ -20,7 +20,7 @@ export function createCommandHandlers(
 - \`/disqord status\` - Bot状態（残高等）を表示
 - \`/disqord model current\` - 現在のモデルを表示
 - \`/disqord model set <model>\` - モデルを変更
-- \`/disqord model list\` - 利用可能なモデル一覧`;
+- \`/disqord model list\` - OpenRouterのモデル一覧ページへ`;
 
       await interaction.reply(helpText);
     },
@@ -56,19 +56,12 @@ export function createCommandHandlers(
     },
 
     async modelList(interaction: ChatInputCommandInteraction): Promise<void> {
-      await interaction.deferReply();
+      const message = `モデル一覧はOpenRouterのサイトで確認できます:
+https://openrouter.ai/models
 
-      const models = await llmClient.listModels();
-      if (models.length === 0) {
-        await interaction.editReply("モデル一覧を取得できませんでした。");
-        return;
-      }
+モデルを変更するには \`/disqord model set <model>\` を使用してください。`;
 
-      const displayModels = models.slice(0, 20);
-      const modelList = displayModels.map((m) => `- \`${m}\``).join("\n");
-      const suffix = models.length > 20 ? `\n\n...他 ${models.length - 20} 件` : "";
-
-      await interaction.editReply(`**利用可能なモデル:**\n${modelList}${suffix}`);
+      await interaction.reply(message);
     },
 
     async status(interaction: ChatInputCommandInteraction): Promise<void> {

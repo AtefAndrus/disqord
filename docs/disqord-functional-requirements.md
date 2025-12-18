@@ -72,7 +72,7 @@ DisQordは、Discord上でLLMと会話できるBotである。Twitter/XのGrok�
 | `/disqord status` | Botのステータス（OpenRouter残高等）を表示 |
 | `/disqord model current` | 現在設定されているモデルを表示 |
 | `/disqord model set <model>` | Guildのデフォルトモデルを変更 |
-| `/disqord model list` | 利用可能なモデル一覧を表示 |
+| `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
 
 ---
 
