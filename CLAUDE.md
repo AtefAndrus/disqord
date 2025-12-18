@@ -33,6 +33,7 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 ```text
 src/
 ├── index.ts              # Entry point
+├── health.ts             # Health check HTTP server
 ├── config/               # Environment variable loading (Zod validation)
 ├── bot/
 │   ├── client.ts         # Discord client creation
@@ -71,6 +72,7 @@ bun format         # Format with Biome
 | DATABASE_PATH | No | SQLite file path (default: data/disqord.db) |
 | NODE_ENV | No | Execution environment (default: development) |
 | DEFAULT_MODEL | No | Default LLM model (default: deepseek/deepseek-r1-0528:free) |
+| HEALTH_PORT | No | Health check HTTP port (default: 3000) |
 
 ## Coding Conventions
 
@@ -132,7 +134,7 @@ bun test --grep "pattern"   # Run specific tests
 
 ### Coverage
 
-Current coverage: **98.55% lines**, **93.27% functions** (src/ only)
+Current coverage: **98.71% lines**, **94.02% functions** (src/ only)
 
 ## Git
 

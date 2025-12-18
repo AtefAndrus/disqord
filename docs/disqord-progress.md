@@ -148,12 +148,13 @@
   - [x] chatService.test.ts
 - [x] llm/
   - [x] openrouter.test.ts
+- [x] health.test.ts（v1.0.1で追加）
 
 #### 統合テスト
 
 - [x] guildSettingsRepository.test.ts（インメモリDB使用）
-- [ ] Bot起動テスト
-- [ ] コマンド実行テスト
+- [x] Bot起動テスト（本番環境動作確認で完了）
+- [x] コマンド実行テスト（本番環境動作確認で完了）
 
 ---
 
@@ -223,13 +224,22 @@
 
 ## v1.0.1 実装チェックリスト
 
+### v1.0.1 運用改善
+
+- [x] Health Check対応（Coolify）
+  - [x] HTTPヘルスエンドポイント追加（`Bun.serve()`で`/health`を公開）
+  - [x] Discordクライアント接続状態の確認ロジック
+  - [x] ヘルスレスポンス: 200 OK（正常）/ 503 Service Unavailable（異常）
+  - [x] Dockerfileに`HEALTHCHECK`命令追加
+  - [x] 環境変数`HEALTH_PORT`追加（デフォルト: 3000）
+
 ### v1.0.1 UX改善
 
-- [ ] Typing Indicator継続表示
-  - [ ] LLM応答待機中に`sendTyping()`を定期的に呼び出し（8秒間隔）
-  - [ ] 応答完了時に`clearInterval`で停止
-- [ ] `/disqord model list`のURL埋め込み抑制
-  - [ ] `hideLinkEmbed()`または`<URL>`形式でプレビュー非表示
+- [x] Typing Indicator継続表示
+  - [x] LLM応答待機中に`sendTyping()`を定期的に呼び出し（8秒間隔）
+  - [x] 応答完了時に`clearInterval`で停止
+- [x] `/disqord model list`のURL埋め込み抑制
+  - [x] `<URL>`形式でプレビュー非表示
 
 ---
 
@@ -306,10 +316,10 @@
 | サービス層 | 6 | 0 | 100% |
 | LLM層 | 8 | 0 | 100% |
 | Bot層 | 20 | 0 | 100% |
-| テスト | 6 | 2 | 75% |
+| テスト | 9 | 0 | 100% |
 | デプロイ | 13 | 0 | 100% |
 | ドキュメント | 5 | 0 | 100% |
-| **合計** | **73** | **2** | **97%** |
+| **合計** | **76** | **0** | **100%** |
 
 ---
 
@@ -331,3 +341,5 @@
 | 2025-12-19 | GitHub Actions自動デプロイ設定（Release→Coolify Webhook） |
 | 2025-12-19 | v1.0.0リリース完了 |
 | 2025-12-19 | v1.0.1/v1.1.0/v2.0ロードマップ追加（Typing Indicator、無料モデル限定、Web Search等） |
+| 2025-12-19 | v1.0.1実装完了（Health Check、Typing Indicator、URL埋め込み抑制） |
+| 2025-12-19 | health.test.ts追加、Bot起動・コマンド実行テストを完了扱いに更新、v1.0進捗100%達成 |

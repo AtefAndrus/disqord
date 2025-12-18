@@ -12,6 +12,7 @@
 disqord/
 ├── src/
 │   ├── index.ts                  # エントリーポイント
+│   ├── health.ts                 # ヘルスチェックHTTPサーバー
 │   ├── bot/
 │   │   ├── client.ts             # Discord Client 初期化
 │   │   ├── events/               # イベントハンドラ
@@ -398,3 +399,4 @@ describe('SettingsService', () => {
 | 2025-12-16 | 1.2 | ディレクトリ構成に.dockerignore追加、Dockerfile説明更新 |
 | 2025-12-18 | 1.3 | デフォルトモデルを環境変数化、DI例・スキーマ・テスト例を更新 |
 | 2025-12-19 | 1.4 | v1.1.0スキーマ（free_models_only）追加 |
+| 2025-12-19 | 1.5 | ディレクトリ構成にhealth.ts追加 |

@@ -92,6 +92,7 @@ Coolifyの環境変数機能で管理する。
 | NODE_ENV | 環境識別（production / development） | No（デフォルト: development） |
 | DATABASE_PATH | SQLiteファイルパス | No（デフォルト: data/disqord.db） |
 | DEFAULT_MODEL | デフォルトLLMモデル | No（デフォルト: deepseek/deepseek-r1-0528:free） |
+| HEALTH_PORT | ヘルスチェック用HTTPポート | No（デフォルト: 3000） |
 
 ### 4.3 将来追加予定
 
@@ -167,7 +168,31 @@ GitHub Releaseを作成すると、GitHub ActionsがCoolify Webhookをトリガ�
 | 死活監視 | Coolifyのヘルスチェック |
 | エラー通知 | なし（v1） |
 
-### 8.1 将来検討事項
+### 8.1 ヘルスチェックエンドポイント
+
+v1.0.1でHTTPヘルスエンドポイントを追加。
+
+| 項目 | 内容 |
+| ---- | ---- |
+| エンドポイント | `GET /health` |
+| ポート | 環境変数 `HEALTH_PORT`（デフォルト: 3000） |
+| 正常時 | 200 OK（Discordクライアント接続中） |
+| 異常時 | 503 Service Unavailable（Discord未接続） |
+
+**レスポンス例:**
+
+```json
+{
+  "status": "ok",
+  "discord": {
+    "connected": true,
+    "ping": 42
+  },
+  "uptime": 3600
+}
+```
+
+### 8.2 将来検討事項
 
 - Discordへのエラー通知（管理者向けチャンネル）
 - 外部監視サービス連携
@@ -183,3 +208,4 @@ GitHub Releaseを作成すると、GitHub ActionsがCoolify Webhookをトリガ�
 | 2025-12-16 | 1.2 | コンテナセキュリティ要件を追加（non-rootユーザー実行、.dockerignore） |
 | 2025-12-18 | 1.3 | DEFAULT_MODEL環境変数を追加 |
 | 2025-12-19 | 1.4 | GitHub Actions自動デプロイ（Release→Coolify）を追加、v1.0.0リリース |
+| 2025-12-19 | 1.5 | HEALTH_PORT環境変数追加、ヘルスチェックエンドポイント仕様追加 |

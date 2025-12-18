@@ -7,6 +7,7 @@ import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
+import { startHealthServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { ChatService } from "./services/chatService";
 import { SettingsService } from "./services/settingsService";
@@ -41,8 +42,11 @@ async function bootstrap(): Promise<void> {
   await client.login(config.discordToken);
   logger.info("Bot logged in");
 
+  const healthServer = startHealthServer(client, config.healthPort);
+
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+    healthServer.stop();
     client.destroy();
     db.close();
     logger.info("Shutdown complete");

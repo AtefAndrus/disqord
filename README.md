@@ -89,6 +89,7 @@ gh release create v1.0.0 --title "v1.0.0" --notes "Release notes here"
 | NODE_ENV | No | production / development（デフォルト: development） |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: data/disqord.db） |
 | DEFAULT_MODEL | No | デフォルトLLMモデル（デフォルト: deepseek/deepseek-r1-0528:free） |
+| HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: 3000） |
 
 ## ディレクトリ
 
@@ -100,10 +101,9 @@ gh release create v1.0.0 --title "v1.0.0" --notes "Release notes here"
 
 ## 現状
 
-**v1.0.0 リリース済み** (2025-12-19)
+**v1.0.1 実装完了** (2025-12-19)
 
-- 全機能実装完了
-- Coolifyデプロイ完了
-- GitHub Release自動デプロイ設定済み
+- v1.0.0: 全機能実装完了、Coolifyデプロイ完了、GitHub Release自動デプロイ設定済み
+- v1.0.1: Health Check対応、Typing Indicator継続表示、URL埋め込み抑制
 
 詳細は [進捗チェックリスト](docs/disqord-progress.md) を参照。

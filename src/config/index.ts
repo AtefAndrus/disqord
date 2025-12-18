@@ -54,6 +54,7 @@ const configSchema = z.object({
   databasePath: z.string().default("data/disqord.db"),
   applicationId: z.string().min(1),
   defaultModel: z.string().default("deepseek/deepseek-r1-0528:free"),
+  healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -66,6 +67,7 @@ export function loadConfig(): AppConfig {
     databasePath: process.env.DATABASE_PATH ?? "data/disqord.db",
     applicationId: process.env.DISCORD_APPLICATION_ID,
     defaultModel: process.env.DEFAULT_MODEL,
+    healthPort: process.env.HEALTH_PORT,
   });
 
   return parsed;

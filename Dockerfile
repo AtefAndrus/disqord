@@ -21,6 +21,13 @@ RUN mkdir -p /app/data && chown -R bun:bun /app/data
 # Environment configuration
 ENV NODE_ENV=production
 
+# Expose health check port
+EXPOSE 3000
+
+# Health check using Bun
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD bun -e "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+
 # Security: run as non-root user
 USER bun
 

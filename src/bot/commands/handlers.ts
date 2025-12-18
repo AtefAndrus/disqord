@@ -57,7 +57,7 @@ export function createCommandHandlers(
 
     async modelList(interaction: ChatInputCommandInteraction): Promise<void> {
       const message = `モデル一覧はOpenRouterのサイトで確認できます:
-https://openrouter.ai/models
+<https://openrouter.ai/models>
 
 モデルを変更するには \`/disqord model set <model>\` を使用してください。`;
 

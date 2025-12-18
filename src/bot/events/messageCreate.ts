@@ -27,9 +27,17 @@ export function createMessageCreateHandler(chatService: IChatService) {
       return;
     }
 
+    let typingInterval: ReturnType<typeof setInterval> | undefined;
+
     try {
       if ("sendTyping" in message.channel) {
         await message.channel.sendTyping();
+        // 8秒間隔でTyping継続（Discordは約10秒で表示が消えるため）
+        typingInterval = setInterval(() => {
+          if ("sendTyping" in message.channel) {
+            message.channel.sendTyping().catch(() => {});
+          }
+        }, 8000);
       }
 
       const response = await chatService.generateResponse(message.guild.id, content);
@@ -46,6 +54,10 @@ export function createMessageCreateHandler(chatService: IChatService) {
         content: "エラーが発生しました。しばらくしてから再度お試しください。",
         allowedMentions: { repliedUser: false },
       });
+    } finally {
+      if (typingInterval) {
+        clearInterval(typingInterval);
+      }
     }
   };
 }

@@ -20,8 +20,9 @@ tests/
 │   ├── services/
 │   │   ├── settingsService.test.ts
 │   │   └── chatService.test.ts
-│   └── llm/
-│       └── openrouter.test.ts
+│   ├── llm/
+│   │   └── openrouter.test.ts
+│   └── health.test.ts
 ├── integration/
 │   └── db/
 │       └── guildSettingsRepository.test.ts
@@ -181,7 +182,28 @@ export function createMockSettingsService(): ISettingsService;
 
 ---
 
-### 5.7 tests/integration/db/guildSettingsRepository.test.ts
+### 5.7 tests/unit/health.test.ts
+
+**テストケース:**
+
+#### GET /health
+
+| # | テスト名 | 期待動作 |
+| - | -------- | -------- |
+| 1 | Discord接続時は200 OKを返す | status=200, status="ok" |
+| 2 | Discord未接続時は503を返す | status=503, status="unhealthy" |
+| 3 | ping負値の場合はnullを返す | ping=null |
+
+#### Other endpoints
+
+| # | テスト名 | 期待動作 |
+| - | -------- | -------- |
+| 1 | 未知のパスは404を返す | status=404 |
+| 2 | ルートパスは404を返す | status=404 |
+
+---
+
+### 5.8 tests/integration/db/guildSettingsRepository.test.ts
 
 **使用リソース:** インメモリDB (`:memory:`)
 
@@ -267,6 +289,7 @@ bun test --grep "splitIntoChunks"
 - [x] `tests/unit/llm/openrouter.test.ts` - 優先度4
 - [x] `tests/integration/db/guildSettingsRepository.test.ts` - 優先度5
 - [x] `tests/unit/utils/logger.test.ts` - 優先度6
+- [x] `tests/unit/health.test.ts` - v1.0.1追加
 
 ---
 
@@ -292,3 +315,4 @@ Repository/Serviceメソッドは全て `Promise` を返すため、`await` を�
 | ---- | ---- |
 | 2025-12-12 | 初版作成 |
 | 2025-12-12 | 全テスト実装完了（54テスト） |
+| 2025-12-19 | health.test.ts追加（59テスト） |
