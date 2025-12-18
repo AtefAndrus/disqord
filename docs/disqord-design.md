@@ -165,6 +165,7 @@ CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
     default_model TEXT NOT NULL DEFAULT 'google/gemini-2.0-flash-exp:free',
     custom_prompt TEXT,
+    admin_role_ids TEXT,                              -- JSON配列: 設定変更権限を持つロールID
     release_notify_enabled INTEGER NOT NULL DEFAULT 1,
     release_notify_channel_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -175,6 +176,7 @@ CREATE TABLE guild_settings (
 CREATE TABLE channel_settings (
     channel_id TEXT PRIMARY KEY,
     guild_id TEXT NOT NULL,
+    bot_enabled INTEGER NOT NULL DEFAULT 1,           -- 0: Bot無効, 1: Bot有効（チャンネル制限用）
     default_model TEXT,
     custom_prompt TEXT,
     response_mode TEXT NOT NULL DEFAULT 'mention_only',
