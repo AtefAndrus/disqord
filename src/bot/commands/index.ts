@@ -1,10 +1,7 @@
 import { REST, Routes } from "discord.js";
-import { helpCommand } from "./help";
-import { modelCommand } from "./model";
-import { modelsCommand } from "./models";
-import { statusCommand } from "./status";
+import { disqordCommand } from "./disqord";
 
-export const commandDefinitions = [helpCommand, modelCommand, modelsCommand, statusCommand];
+export const commandDefinitions = [disqordCommand];
 
 export async function registerCommands(applicationId: string, token: string) {
   const rest = new REST({ version: "10" }).setToken(token);

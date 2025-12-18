@@ -20,10 +20,8 @@ disqord/
 │   │   │   └── ready.ts
 │   │   └── commands/             # スラッシュコマンド
 │   │       ├── index.ts          # コマンド登録
-│   │       ├── help.ts
-│   │       ├── model.ts
-│   │       ├── models.ts
-│   │       └── status.ts
+│   │       ├── disqord.ts        # 統合コマンド定義
+│   │       └── handlers.ts       # コマンドハンドラ
 │   ├── services/                 # サービス層
 │   │   ├── chatService.ts        # LLM呼び出し・応答生成
 │   │   └── settingsService.ts    # 設定管理

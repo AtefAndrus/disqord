@@ -17,10 +17,10 @@ export function createCommandHandlers(
 
 **コマンド:**
 - \`/disqord help\` - このヘルプを表示
-- \`/disqord-model current\` - 現在のモデルを表示
-- \`/disqord-model set <model>\` - モデルを変更
-- \`/disqord-models\` - 利用可能なモデル一覧
-- \`/disqord-status\` - Bot状態（残高等）を表示`;
+- \`/disqord status\` - Bot状態（残高等）を表示
+- \`/disqord model current\` - 現在のモデルを表示
+- \`/disqord model set <model>\` - モデルを変更
+- \`/disqord model list\` - 利用可能なモデル一覧`;
 
       await interaction.reply(helpText);
     },
@@ -46,7 +46,7 @@ export function createCommandHandlers(
       const availableModels = await llmClient.listModels();
       if (availableModels.length > 0 && !availableModels.includes(model)) {
         await interaction.reply(
-          `モデル \`${model}\` は見つかりませんでした。\`/disqord-models\` で利用可能なモデルを確認してください。`,
+          `モデル \`${model}\` は見つかりませんでした。\`/disqord model list\` で利用可能なモデルを確認してください。`,
         );
         return;
       }
@@ -55,7 +55,7 @@ export function createCommandHandlers(
       await interaction.reply(`モデルを \`${model}\` に変更しました。`);
     },
 
-    async models(interaction: ChatInputCommandInteraction): Promise<void> {
+    async modelList(interaction: ChatInputCommandInteraction): Promise<void> {
       await interaction.deferReply();
 
       const models = await llmClient.listModels();

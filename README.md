@@ -9,7 +9,7 @@
 ## 主な機能 (v1)
 
 - 呼び出し: ギルド内メンションに対応。DMは非対応。会話履歴は保持せず毎回リセット。
-- コマンド: `/disqord help` `/disqord model` `/disqord model set <model>` `/disqord models` `/disqord status`
+- コマンド: `/disqord help` `/disqord status` `/disqord model current` `/disqord model set <model>` `/disqord model list`
 - 応答: 2000文字超は分割送信。エラー時は種別を明示（レート制限、モデル、接続など）。
 - レート制限: OpenRouterの429レスポンスに含まれる `X-RateLimit-*` を確認し、Reset時刻まで送信を抑制。
 

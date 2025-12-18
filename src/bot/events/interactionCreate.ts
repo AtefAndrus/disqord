@@ -5,7 +5,7 @@ export interface CommandHandlers {
   help: (interaction: ChatInputCommandInteraction) => Promise<void>;
   modelCurrent: (interaction: ChatInputCommandInteraction) => Promise<void>;
   modelSet: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  models: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  modelList: (interaction: ChatInputCommandInteraction) => Promise<void>;
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
@@ -18,31 +18,35 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
     try {
       const { commandName } = interaction;
 
-      switch (commandName) {
-        case "disqord": {
-          const subcommand = interaction.options.getSubcommand();
-          if (subcommand === "help") {
-            await handlers.help(interaction);
-          }
-          break;
-        }
-        case "disqord-model": {
-          const subcommand = interaction.options.getSubcommand();
-          if (subcommand === "current") {
+      if (commandName !== "disqord") {
+        logger.warn("Unknown command", { commandName });
+        return;
+      }
+
+      const subcommandGroup = interaction.options.getSubcommandGroup(false);
+      const subcommand = interaction.options.getSubcommand();
+
+      if (subcommandGroup === "model") {
+        switch (subcommand) {
+          case "current":
             await handlers.modelCurrent(interaction);
-          } else if (subcommand === "set") {
+            break;
+          case "set":
             await handlers.modelSet(interaction);
-          }
-          break;
+            break;
+          case "list":
+            await handlers.modelList(interaction);
+            break;
         }
-        case "disqord-models":
-          await handlers.models(interaction);
-          break;
-        case "disqord-status":
-          await handlers.status(interaction);
-          break;
-        default:
-          logger.warn("Unknown command", { commandName });
+      } else {
+        switch (subcommand) {
+          case "help":
+            await handlers.help(interaction);
+            break;
+          case "status":
+            await handlers.status(interaction);
+            break;
+        }
       }
     } catch (error) {
       logger.error("Command execution failed", { error });
