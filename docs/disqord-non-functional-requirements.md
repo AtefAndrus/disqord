@@ -117,7 +117,8 @@ Coolifyの環境変数機能で管理する。
 |------|------|
 | CI | なし（v1） |
 | CD | Coolify自動デプロイ（GitHub連携） |
-| ローカル標準タスク | `mise run install` `mise run dev` `mise run start` `mise run typecheck` `mise run lint` `mise run format` `mise run test` |
+| 初回セットアップ | `mise run setup` |
+| 開発コマンド | `bun dev` `bun start` `bun test` `bun typecheck` `bun lint` `bun format` |
 
 ### 6.1 将来検討事項
 

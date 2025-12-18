@@ -50,6 +50,8 @@ src/
 bun start          # Production start
 bun dev            # Development mode (--watch)
 bun test           # Run tests (typecheck + test)
+bun test:watch     # Run tests in watch mode
+bun test:coverage  # Run tests with coverage report
 bun typecheck      # Type checking
 bun lint           # Lint with Biome
 bun format         # Format with Biome

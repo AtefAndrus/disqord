@@ -59,11 +59,11 @@ docker run -d \
 
 ## 開発環境構築手順
 
-1. 開発環境セットアップ `mise run setup`
-2. 起動: `mise run dev`（本番相当は `mise run start`）
-3. 型チェック: `mise run typecheck`
-4. テスト: `mise run test`
-5. Lint/整形: `mise run lint` / `mise run format`
+1. 初回セットアップ: `mise run setup`
+2. 起動: `bun dev`（本番: `bun start`）
+3. 型チェック: `bun typecheck`
+4. テスト: `bun test`（ウォッチ: `bun test:watch`、カバレッジ: `bun test:coverage`）
+5. Lint/整形: `bun lint` / `bun format`
 
 ### 必須環境変数
 

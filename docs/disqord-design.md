@@ -334,11 +334,12 @@ export interface ILLMClient {
 | SQLite | [`bun:sqlite`](https://bun.com/docs/runtime/sqlite.md) | 高性能SQLite3ドライバー（better-sqlite3の3-6倍高速） |
 | テスト | [`bun:test`](https://bun.com/docs/test.md) | Jest互換テストランナー |
 
-### 5.1.1 mise によるバージョン固定とタスク
+### 5.1.1 mise によるバージョン固定
 
-- `mise.toml` で Bun を 1.3.x に固定し、`install` / `dev` / `start` / `typecheck` / `test` / `test:watch` / `test:coverage` を定義。
-- Lint/Format は Biome (`lint` = `bun biome check .`, `format` = `bun biome format --write .`) を標準タスクとして追加。
-- 開発時は `mise run dev`、CI/運用も `mise run <task>` で統一。
+- `mise.toml` で Bun を 1.3.x に固定。
+- 初回セットアップは `mise run setup`（依存関係インストール + .env初期化）。
+- 開発コマンドは `bun` を直接使用（`bun dev`, `bun test` 等）。
+- Lint/Format は Biome（`bun lint`, `bun format`）。
 
 ### 5.2 bun:sqlite使用例
 

@@ -4,20 +4,6 @@ bun = "1.3"
 [settings]
 env_file = ".env"
 
-[tasks]
-install = "bun install"
-start = "bun run start"
-dev = "bun run dev"
-test = "bun run test"
-typecheck = "tsc --noEmit"
-lint = "bun run lint"
-format = "bun run format"
-[tasks."test:watch"]
-run = "bun run test:watch"
-
-[tasks."test:coverage"]
-run = "bun run test:coverage"
-
 [tasks.setup]
-description = "依存関係をインストールし、環境ファイルを初期化"
+description = "Install dependencies and initialize environment file"
 run = ["bun install", "if [ ! -f .env ]; then cp .env.example .env; fi"]
