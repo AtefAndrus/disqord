@@ -258,6 +258,49 @@
   - [ ] `freeModelsOnly`有効時は無料モデルのみ許可
 - [ ] `/disqord config free-only <on|off>`コマンド追加
 
+### ユーザ向けエラー表示
+
+- [ ] カスタムエラークラス導入（`src/errors/index.ts`）
+  - [ ] `AppError`基底クラス（`userMessage`プロパティ）
+  - [ ] `RateLimitError`（リトライ秒数表示）
+  - [ ] `ModelUnavailableError`
+  - [ ] `AuthenticationError`（401/403）
+  - [ ] `ServiceUnavailableError`（5xx）
+  - [ ] `InputTooLongError`
+  - [ ] `UnknownError`（フォールバック）
+- [ ] OpenRouterClient更新
+  - [ ] `handleErrorResponse`でエラー種別判定
+  - [ ] 適切なカスタムエラーをthrow
+  - [ ] レート制限時に`retryAfterSeconds`を計算
+- [ ] イベントハンドラ更新
+  - [ ] `messageCreate.ts`: `AppError`判定、`userMessage`表示
+  - [ ] `interactionCreate.ts`: 同上
+- [ ] テスト追加
+  - [ ] `errors/index.test.ts`: エラークラスのuserMessage検証
+  - [ ] `openrouter.test.ts`: エラー種別ごとのthrow検証
+
+### リリースノート配信
+
+- [ ] GitHub Webhook受信
+  - [ ] HTTPサーバー拡張（`/webhook/github`エンドポイント）
+  - [ ] 署名検証（`X-Hub-Signature-256`、HMAC-SHA256）
+  - [ ] `release`イベント（`action: published`）のみ処理
+  - [ ] 環境変数`GITHUB_WEBHOOK_SECRET`追加
+- [ ] DBスキーマ変更
+  - [ ] `guild_settings`に`release_channel_id TEXT`追加
+  - [ ] マイグレーション実装
+  - [ ] Repository更新（findByGuildId, upsert）
+- [ ] リリース通知サービス
+  - [ ] 登録済み全チャンネル取得
+  - [ ] Embed形式でリリースノート配信
+  - [ ] 配信失敗時のエラーハンドリング
+- [ ] コマンド追加
+  - [ ] `/disqord config release-channel <channel>` - 通知先設定
+  - [ ] `/disqord config release-channel off` - 通知解除
+- [ ] インフラ設定
+  - [ ] Cloudflare TunnelでBot公開
+  - [ ] GitHubリポジトリにWebhook設定（`release`イベント）
+
 ---
 
 ## v2.0以降 将来機能（参考）
@@ -279,7 +322,9 @@
 
 ### UX・表示改善
 
-- [ ] ステータス・ヘルプ等にEmbed使用
+- [ ] Embed化
+  - [ ] ステータス・ヘルプ等にEmbed使用
+  - [ ] エラー表示にEmbed使用（赤色で視認性向上）
 - [ ] メッセージ文字列の分離（i18n対応の土台、Embed化と同時に検討）
 
 ### モデル選択UI改善
@@ -300,11 +345,6 @@
 
 - [ ] チャンネル: 全発言反応モード
 - [ ] スレッド: メンションのみ反応モード
-
-### 運用
-
-- [ ] リリースノート配信（GitHub Releases連携）
-- [ ] 簡略エラー表示（一般ユーザー向け）
 
 ---
 
@@ -343,3 +383,4 @@
 | 2025-12-19 | v1.0.1/v1.1.0/v2.0ロードマップ追加（Typing Indicator、無料モデル限定、Web Search等） |
 | 2025-12-19 | v1.0.1実装完了（Health Check、Typing Indicator、URL埋め込み抑制） |
 | 2025-12-19 | health.test.ts追加、Bot起動・コマンド実行テストを完了扱いに更新、v1.0進捗100%達成 |
+| 2025-12-21 | v1.1.0にユーザ向けエラー表示・リリースノート配信機能を追加（GitHub Webhook + Cloudflare Tunnel方式） |

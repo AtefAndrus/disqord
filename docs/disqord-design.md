@@ -23,9 +23,12 @@ disqord/
 │   │       ├── index.ts          # コマンド登録
 │   │       ├── disqord.ts        # 統合コマンド定義
 │   │       └── handlers.ts       # コマンドハンドラ
+│   ├── errors/
+│   │   └── index.ts              # カスタムエラークラス
 │   ├── services/                 # サービス層
 │   │   ├── chatService.ts        # LLM呼び出し・応答生成
-│   │   └── settingsService.ts    # 設定管理
+│   │   ├── settingsService.ts    # 設定管理
+│   │   └── releaseNotificationService.ts  # リリース通知
 │   ├── llm/
 │   │   └── openrouter.ts         # OpenRouter API クライアント
 │   ├── db/
@@ -229,11 +232,231 @@ CREATE INDEX idx_conversation_user ON conversation_history(user_id, created_at);
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
 | 初期モデル | `deepseek/deepseek-r1-0528:free`（環境変数 `DEFAULT_MODEL` で変更可） |
 
+### 3.4 v1.1.0 スキーマ（マイグレーション追加）
+
+```sql
+-- リリースノート配信チャンネルを追加
+ALTER TABLE guild_settings ADD COLUMN release_channel_id TEXT;
+```
+
 ---
 
-## 4. インターフェース設計
+## 4. エラーハンドリング設計
 
-### 4.1 型定義
+### 4.1 エラークラス階層
+
+```text
+src/errors/
+└── index.ts    # カスタムエラークラス定義
+```
+
+```typescript
+// 基底クラス
+abstract class AppError extends Error {
+  abstract readonly code: string;
+  abstract readonly userMessage: string;
+}
+
+// OpenRouter APIエラー
+class RateLimitError extends AppError {
+  code = "RATE_LIMIT";
+  constructor(public readonly retryAfterSeconds: number) {
+    super(`Rate limited. Retry after ${retryAfterSeconds} seconds.`);
+  }
+  get userMessage() {
+    return `リクエスト制限に達しました。${this.retryAfterSeconds}秒後に再度お試しください。`;
+  }
+}
+
+class InsufficientCreditsError extends AppError {
+  code = "INSUFFICIENT_CREDITS";
+  userMessage = "API残高が不足しています。管理者にお問い合わせください。";
+}
+
+class ModerationError extends AppError {
+  code = "MODERATION";
+  userMessage = "入力内容が制限されました。表現を変えてお試しください。";
+}
+
+class ModelUnavailableError extends AppError {
+  code = "MODEL_UNAVAILABLE";
+  userMessage = "モデルが一時的に利用できません。しばらくしてから再度お試しください。";
+}
+
+class AuthenticationError extends AppError {
+  code = "AUTHENTICATION";
+  userMessage = "Botの設定に問題があります。管理者にお問い合わせください。";
+}
+
+class RequestTimeoutError extends AppError {
+  code = "TIMEOUT";
+  userMessage = "応答に時間がかかりすぎています。短いメッセージでお試しください。";
+}
+
+class InvalidRequestError extends AppError {
+  code = "INVALID_REQUEST";
+  userMessage = "リクエストに問題があります。入力内容を確認してください。";
+}
+
+class UnknownError extends AppError {
+  code = "UNKNOWN";
+  userMessage = "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
+}
+```
+
+### 4.2 エラーフロー
+
+```text
+OpenRouterClient.handleErrorResponse()
+  ├─ 429 → throw RateLimitError(retryAfterSeconds)
+  ├─ 402 → throw InsufficientCreditsError()
+  ├─ 403 → throw ModerationError()
+  ├─ 401 → throw AuthenticationError()
+  ├─ 408 → throw RequestTimeoutError()
+  ├─ 502/503 → throw ModelUnavailableError()
+  └─ 400/other → throw InvalidRequestError(message)
+  ↓
+ChatService (パススルー)
+  ↓
+messageCreate / interactionCreate
+  catch (error) {
+    logger.error(..., serializeError(error));
+    const userMessage = error instanceof AppError
+      ? error.userMessage
+      : "予期しないエラーが発生しました。";
+    reply(userMessage);
+  }
+```
+
+### 4.3 ログ出力改善
+
+```typescript
+// Errorオブジェクトの適切なシリアライズ
+function serializeError(error: unknown): Record<string, unknown> {
+  if (error instanceof AppError) {
+    return {
+      name: error.name,
+      code: error.code,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+  return { error };
+}
+```
+
+---
+
+## 5. Webhook受信設計
+
+### 5.1 アーキテクチャ
+
+```text
+GitHub Release (published)
+    ↓ POST + X-Hub-Signature-256
+https://<tunnel>.cloudflare.com/webhook/github
+    ↓ Cloudflare Tunnel
+Bot HTTPサーバー (localhost:3000)
+    ↓ 署名検証 → リリース通知サービス
+    ↓
+全登録Guild (release_channel_idが設定されているGuild)
+```
+
+### 5.2 HTTPサーバー拡張
+
+```typescript
+// src/health.ts を拡張（または src/server.ts に改名）
+
+Bun.serve({
+  port,
+  async fetch(req) {
+    const url = new URL(req.url);
+
+    // 既存のヘルスチェック
+    if (url.pathname === "/health") {
+      // ...
+    }
+
+    // GitHub Webhookエンドポイント
+    if (url.pathname === "/webhook/github" && req.method === "POST") {
+      const rawBody = await req.text();
+      const signature = req.headers.get("X-Hub-Signature-256");
+
+      // 署名検証
+      if (!verifyGitHubSignature(rawBody, signature, webhookSecret)) {
+        return new Response("Invalid signature", { status: 401 });
+      }
+
+      const event = req.headers.get("X-GitHub-Event");
+      if (event !== "release") {
+        return new Response("OK", { status: 200 });
+      }
+
+      const payload = JSON.parse(rawBody);
+      if (payload.action === "published") {
+        await releaseNotificationService.notifyAll(payload.release);
+      }
+
+      return new Response("OK", { status: 200 });
+    }
+
+    return new Response("Not Found", { status: 404 });
+  },
+});
+```
+
+### 5.3 署名検証
+
+```typescript
+import { createHmac, timingSafeEqual } from "crypto";
+
+function verifyGitHubSignature(
+  payload: string,
+  signature: string | null,
+  secret: string
+): boolean {
+  if (!signature) return false;
+
+  const expected =
+    "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
+
+  try {
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+```
+
+### 5.4 リリース通知サービス
+
+```typescript
+// src/services/releaseNotificationService.ts
+
+export interface IReleaseNotificationService {
+  notifyAll(release: GitHubRelease): Promise<void>;
+}
+
+interface GitHubRelease {
+  tag_name: string;
+  name: string;
+  body: string;
+  html_url: string;
+}
+```
+
+---
+
+## 6. インターフェース設計
+
+### 6.1 型定義
 
 ```typescript
 // src/types/index.ts
@@ -287,7 +510,7 @@ export interface OpenRouterError {
 }
 ```
 
-### 4.2 Repository インターフェース
+### 6.2 Repository インターフェース
 
 ```typescript
 // src/db/repositories/guildSettings.ts
@@ -299,7 +522,7 @@ export interface IGuildSettingsRepository {
 }
 ```
 
-### 4.3 Service インターフェース
+### 6.3 Service インターフェース
 
 ```typescript
 // src/services/chatService.ts
@@ -319,7 +542,7 @@ export interface ISettingsService {
 }
 ```
 
-### 4.4 LLM Client インターフェース
+### 6.4 LLM Client インターフェース
 
 ```typescript
 // src/llm/openrouter.ts
@@ -334,23 +557,23 @@ export interface ILLMClient {
 
 ---
 
-## 5. Bunエコシステム活用
+## 7. Bunエコシステム活用
 
-### 5.1 使用する組み込み機能
+### 7.1 使用する組み込み機能
 
 | 機能 | モジュール | 説明 |
 | ------ | ------------ | ------ |
 | SQLite | [`bun:sqlite`](https://bun.com/docs/runtime/sqlite.md) | 高性能SQLite3ドライバー（better-sqlite3の3-6倍高速） |
 | テスト | [`bun:test`](https://bun.com/docs/test.md) | Jest互換テストランナー |
 
-### 5.1.1 mise によるバージョン固定
+### 7.1.1 mise によるバージョン固定
 
 - `mise.toml` で Bun を 1.3.x に固定。
 - 初回セットアップは `mise run setup`（依存関係インストール + .env初期化）。
 - 開発コマンドは `bun` を直接使用（`bun dev`, `bun test` 等）。
 - Lint/Format は Biome（`bun lint`, `bun format`）。
 
-### 5.2 bun:sqlite使用例
+### 7.2 bun:sqlite使用例
 
 ```typescript
 import { Database } from 'bun:sqlite';
@@ -365,7 +588,7 @@ const stmt = db.query('SELECT * FROM guild_settings WHERE guild_id = ?');
 const result = stmt.get(guildId);
 ```
 
-### 5.3 bun:test使用例
+### 7.3 bun:test使用例
 
 ```typescript
 import { describe, test, expect, beforeEach } from 'bun:test';
@@ -390,6 +613,20 @@ describe('SettingsService', () => {
 
 ---
 
+## 8. 参考情報
+
+### 8.1 公式ドキュメント
+
+| 項目 | URL |
+| ------ | ------ |
+| OpenRouter APIエラー | <https://openrouter.ai/docs/api/reference/errors-and-debugging> |
+| GitHub Webhook Events | <https://docs.github.com/en/webhooks/webhook-events-and-payloads> |
+| GitHub Webhook署名検証 | <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries> |
+| discord.js RESTJSONErrorCodes | <https://discord.js.org/docs/packages/discord.js/main/RESTJSONErrorCodes:Enum> |
+| Bun HTTP Server | <https://bun.sh/docs/api/http> |
+
+---
+
 ## 更新履歴
 
 | 日付 | バージョン | 内容 |
@@ -400,3 +637,4 @@ describe('SettingsService', () => {
 | 2025-12-18 | 1.3 | デフォルトモデルを環境変数化、DI例・スキーマ・テスト例を更新 |
 | 2025-12-19 | 1.4 | v1.1.0スキーマ（free_models_only）追加 |
 | 2025-12-19 | 1.5 | ディレクトリ構成にhealth.ts追加 |
+| 2025-12-21 | 1.6 | エラーハンドリング設計（セクション4）、Webhook受信設計（セクション5）、参考情報（セクション8）を追加 |

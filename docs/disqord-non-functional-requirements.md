@@ -37,14 +37,45 @@
 | 公開設定 | Public |
 | バージョン管理 | GitHub Releases |
 
-### 2.3 環境構成
+### 2.3 外部公開（v1.1.0）
+
+リリースノート配信機能でGitHub Webhookを受信するため、BotのHTTPエンドポイントを外部公開する。
+
+| 項目 | 内容 |
+| ---- | ---- |
+| 方式 | Cloudflare Tunnel |
+| 公開エンドポイント | `/webhook/github`（POST） |
+| 認証 | GitHub Webhook署名検証（`X-Hub-Signature-256`） |
+
+**Cloudflare Tunnel設定:**
+
+```bash
+# トンネル作成
+cloudflared tunnel create disqord
+
+# ルーティング設定（config.yml）
+tunnel: <tunnel-id>
+credentials-file: ~/.cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: disqord.<domain>
+    service: http://localhost:3000
+  - service: http_status:404
+
+# DNS設定
+cloudflared tunnel route dns disqord disqord.<domain>
+
+# トンネル起動
+cloudflared tunnel run disqord
+```
+
+### 2.4 環境構成
 
 | 環境 | ブランチ | 用途 | 実行場所 |
 | ---- | -------- | ---- | -------- |
 | Production | main | 本番（開発チーム向けリリース） | Coolify（自動デプロイ） |
 | Development | develop | 開発・動作確認 | ローカル（手動起動） |
 
-### 2.4 環境分離
+### 2.5 環境分離
 
 以下のリソースは環境ごとに分離する。
 
@@ -94,11 +125,11 @@ Coolifyの環境変数機能で管理する。
 | DEFAULT_MODEL | デフォルトLLMモデル | No（デフォルト: deepseek/deepseek-r1-0528:free） |
 | HEALTH_PORT | ヘルスチェック用HTTPポート | No（デフォルト: 3000） |
 
-### 4.3 将来追加予定
+### 4.3 v1.1.0 追加予定
 
-| 変数名 | 説明 | 用途 |
+| 変数名 | 説明 | 必須 |
 | ------ | ---- | ---- |
-| GITHUB_TOKEN | GitHub API Token | リリースノート配信機能 |
+| GITHUB_WEBHOOK_SECRET | GitHub Webhook署名検証用シークレット | Yes（リリースノート配信使用時） |
 
 ---
 
@@ -209,3 +240,4 @@ v1.0.1でHTTPヘルスエンドポイントを追加。
 | 2025-12-18 | 1.3 | DEFAULT_MODEL環境変数を追加 |
 | 2025-12-19 | 1.4 | GitHub Actions自動デプロイ（Release→Coolify）を追加、v1.0.0リリース |
 | 2025-12-19 | 1.5 | HEALTH_PORT環境変数追加、ヘルスチェックエンドポイント仕様追加 |
+| 2025-12-21 | 1.6 | Cloudflare Tunnel設定（セクション2.3）、GITHUB_WEBHOOK_SECRET環境変数を追加 |
