@@ -1,6 +1,6 @@
 # DisQord
 
-A Discord Bot that communicates with LLMs through OpenRouter.
+Discord Bot that communicates with LLMs through OpenRouter.
 
 ## Repository
 
@@ -8,15 +8,14 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 
 ## Documentation
 
+詳細は [docs/](docs/) を参照:
+
 | Document | Description |
 | -------- | ----------- |
-| [README.md](README.md) | Project overview, features, setup instructions |
-| [Functional Requirements](docs/disqord-functional-requirements.md) | Bot features, commands, response behavior |
-| [Non-Functional Requirements](docs/disqord-non-functional-requirements.md) | Tech stack, deployment, hosting |
-| [Design Document](docs/disqord-design.md) | Architecture, DB schema, interfaces |
-| [Progress Checklist](docs/disqord-progress.md) | Implementation progress tracking |
-| [Test Plan](docs/disqord-test-plan.md) | Test strategy, cases, and coverage |
-| [PR Template](.github/pull_request_template.md) | Pull request template |
+| [requirements.md](docs/requirements.md) | 機能・非機能要件 |
+| [design.md](docs/design.md) | アーキテクチャ、DBスキーマ |
+| [progress.md](docs/progress.md) | 実装進捗（未完了タスク優先） |
+| [test-plan.md](docs/test-plan.md) | テスト戦略 |
 
 ## Tech Stack
 
@@ -26,7 +25,6 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 - LLM API: OpenRouter
 - Database: SQLite (Bun built-in)
 - Linter/Formatter: Biome
-- Validation: Zod
 
 ## Directory Structure
 
@@ -34,13 +32,13 @@ A Discord Bot that communicates with LLMs through OpenRouter.
 src/
 ├── index.ts              # Entry point
 ├── health.ts             # Health check HTTP server
-├── config/               # Environment variable loading (Zod validation)
+├── config/               # Environment variable loading
 ├── bot/
-│   ├── client.ts         # Discord client creation
-│   ├── commands/         # Slash command definitions
+│   ├── client.ts         # Discord client
+│   ├── commands/         # Slash commands
 │   └── events/           # Event handlers
 ├── db/
-│   ├── index.ts          # DB connection (singleton)
+│   ├── index.ts          # DB connection
 │   ├── schema.ts         # Migrations
 │   └── repositories/     # Data access layer
 ├── llm/                  # LLM client
@@ -52,27 +50,13 @@ src/
 ## Commands
 
 ```bash
+bun dev            # Development mode
 bun start          # Production start
-bun dev            # Development mode (--watch)
-bun test           # Run tests (typecheck + test)
-bun test:watch     # Run tests in watch mode
-bun test:coverage  # Run tests with coverage report
+bun test           # Run tests
 bun typecheck      # Type checking
 bun lint           # Lint with Biome
 bun format         # Format with Biome
 ```
-
-## Environment Variables
-
-| Variable | Required | Description |
-| -------- | -------- | ----------- |
-| DISCORD_TOKEN | Yes | Discord Bot token |
-| DISCORD_APPLICATION_ID | Yes | Discord application ID |
-| OPENROUTER_API_KEY | Yes | OpenRouter API key |
-| DATABASE_PATH | No | SQLite file path (default: data/disqord.db) |
-| NODE_ENV | No | Execution environment (default: development) |
-| DEFAULT_MODEL | No | Default LLM model (default: deepseek/deepseek-r1-0528:free) |
-| HEALTH_PORT | No | Health check HTTP port (default: 3000) |
 
 ## Coding Conventions
 
@@ -80,69 +64,41 @@ bun format         # Format with Biome
 
 - Use `import type` for type-only imports
 - Add explicit return types to functions
-- Avoid using `any`, define proper types
+- Avoid `any`, define proper types
 - Prefix interfaces with `I` (e.g., `ILLMClient`)
 
-### Biome Configuration
+### Biome
 
 - Indentation: 2 spaces
 - Line width: 100 characters
-- Auto-organize imports: enabled
+- Auto-organize imports
 
 ### Architecture Patterns
 
-- Repository pattern: Abstract data access
-- Service pattern: Encapsulate business logic
-- Dependency injection: Use constructor injection
+- Repository pattern for data access
+- Service pattern for business logic
+- Constructor injection for DI
 
-### Naming Conventions
+### Naming
 
-- File names: camelCase (e.g., `chatService.ts`)
-- Class names: PascalCase (e.g., `ChatService`)
+- Files: camelCase (e.g., `chatService.ts`)
+- Classes: PascalCase (e.g., `ChatService`)
 - Interfaces: `I` + PascalCase (e.g., `IChatService`)
-- Type aliases: PascalCase (e.g., `GuildId`)
-- Constants: UPPER_SNAKE_CASE (e.g., `DISCORD_MESSAGE_LIMIT`)
+- Constants: UPPER_SNAKE_CASE
 
 ## Testing
 
-- Test framework: Bun test
-- Test files: Place in `tests/` directory
-- File naming: `*.test.ts`
-
-### Test Directory Structure
-
-```text
-tests/
-├── helpers/
-│   └── mockFactories.ts    # Shared mock factories
-├── unit/
-│   ├── utils/              # Utility function tests
-│   ├── services/           # Service layer tests
-│   └── llm/                # LLM client tests
-└── integration/
-    └── db/                 # Database integration tests (in-memory)
-```
-
-### Running Tests
-
-```bash
-bun test                    # Run all tests
-bun test --coverage         # Run with coverage report
-bun test --watch            # Watch mode
-bun test --grep "pattern"   # Run specific tests
-```
-
-### Coverage
-
-Current coverage: **98.71% lines**, **94.02% functions** (src/ only)
+- Framework: bun:test
+- Directory: `tests/`
+- Coverage: 98.71% lines, 94.02% functions
 
 ## Git
 
-- Commit messages: English only
+- Commit messages: English
 - Branch: main
 
 ## Notes
 
-- Discord message limit: 2000 characters (requires split sending)
-- Default LLM model: `deepseek/deepseek-r1-0528:free`
+- Discord message limit: 2000 characters (split required)
+- Default model: `deepseek/deepseek-r1-0528:free`
 - SQLite WAL mode enabled
