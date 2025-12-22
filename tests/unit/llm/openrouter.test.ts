@@ -184,8 +184,18 @@ describe("OpenRouterClient", () => {
         json: () =>
           Promise.resolve({
             data: [
-              { id: "model-1", name: "Model 1", context_length: 4096 },
-              { id: "model-2", name: "Model 2", context_length: 8192 },
+              {
+                id: "model-1",
+                name: "Model 1",
+                context_length: 4096,
+                pricing: { prompt: "0", completion: "0" },
+              },
+              {
+                id: "model-2",
+                name: "Model 2",
+                context_length: 8192,
+                pricing: { prompt: "0.001", completion: "0.002" },
+              },
             ],
           }),
       });
@@ -197,11 +207,70 @@ describe("OpenRouterClient", () => {
 
     test("エラー時は空配列を返す", async () => {
       mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [] }),
+      });
+      mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
       });
 
+      // First call to populate, second to test error
+      await client.listModels();
       const result = await client.listModels();
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("listModelsWithPricing", () => {
+    test("pricing情報付きのモデル一覧を返す", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                id: "model-1",
+                name: "Model 1",
+                context_length: 4096,
+                pricing: { prompt: "0", completion: "0" },
+              },
+              {
+                id: "model-2",
+                name: "Model 2",
+                context_length: 8192,
+                pricing: { prompt: "0.001", completion: "0.002" },
+              },
+            ],
+          }),
+      });
+
+      const result = await client.listModelsWithPricing();
+
+      expect(result).toEqual([
+        {
+          id: "model-1",
+          name: "Model 1",
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+        },
+        {
+          id: "model-2",
+          name: "Model 2",
+          contextLength: 8192,
+          pricing: { prompt: "0.001", completion: "0.002" },
+        },
+      ]);
+    });
+
+    test("エラー時は空配列を返す", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+      });
+
+      const result = await client.listModelsWithPricing();
 
       expect(result).toEqual([]);
     });

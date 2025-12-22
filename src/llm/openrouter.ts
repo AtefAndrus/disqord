@@ -1,5 +1,5 @@
 import type { AppConfig } from "../config";
-import type { ChatCompletionRequest, ChatCompletionResponse } from "../types";
+import type { ChatCompletionRequest, ChatCompletionResponse, OpenRouterModel } from "../types";
 import { logger } from "../utils/logger";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -7,6 +7,7 @@ const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 export interface ILLMClient {
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
   listModels(): Promise<string[]>;
+  listModelsWithPricing(): Promise<OpenRouterModel[]>;
   getCredits(): Promise<{ remaining: number }>;
   isRateLimited(): boolean;
 }
@@ -16,6 +17,10 @@ interface OpenRouterModelResponse {
     id: string;
     name: string;
     context_length: number;
+    pricing: {
+      prompt: string;
+      completion: string;
+    };
   }[];
 }
 
@@ -79,6 +84,11 @@ export class OpenRouterClient implements ILLMClient {
   }
 
   async listModels(): Promise<string[]> {
+    const models = await this.listModelsWithPricing();
+    return models.map((model) => model.id);
+  }
+
+  async listModelsWithPricing(): Promise<OpenRouterModel[]> {
     const response = await fetch(`${OPENROUTER_BASE_URL}/models`, {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -91,7 +101,12 @@ export class OpenRouterClient implements ILLMClient {
     }
 
     const data = (await response.json()) as OpenRouterModelResponse;
-    return data.data.map((model) => model.id);
+    return data.data.map((model) => ({
+      id: model.id,
+      name: model.name,
+      contextLength: model.context_length,
+      pricing: model.pricing,
+    }));
   }
 
   async getCredits(): Promise<{ remaining: number }> {

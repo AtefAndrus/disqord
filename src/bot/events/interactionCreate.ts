@@ -6,7 +6,9 @@ export interface CommandHandlers {
   modelCurrent: (interaction: ChatInputCommandInteraction) => Promise<void>;
   modelSet: (interaction: ChatInputCommandInteraction) => Promise<void>;
   modelList: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  modelRefresh: (interaction: ChatInputCommandInteraction) => Promise<void>;
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
 export function createInteractionCreateHandler(handlers: CommandHandlers) {
@@ -36,6 +38,15 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
             break;
           case "list":
             await handlers.modelList(interaction);
+            break;
+          case "refresh":
+            await handlers.modelRefresh(interaction);
+            break;
+        }
+      } else if (subcommandGroup === "config") {
+        switch (subcommand) {
+          case "free-only":
+            await handlers.configFreeOnly(interaction);
             break;
         }
       } else {

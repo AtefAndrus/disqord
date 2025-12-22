@@ -29,5 +29,23 @@ export const disqordCommand = new SlashCommandBuilder()
       )
       .addSubcommand((sub) =>
         sub.setName("list").setDescription("List available OpenRouter models"),
+      )
+      .addSubcommand((sub) => sub.setName("refresh").setDescription("Refresh the model cache")),
+  )
+  .addSubcommandGroup((group) =>
+    group
+      .setName("config")
+      .setDescription("Guild configuration commands")
+      .addSubcommand((sub) =>
+        sub
+          .setName("free-only")
+          .setDescription("Restrict to free models only")
+          .addStringOption((option) =>
+            option
+              .setName("enabled")
+              .setDescription("Enable or disable free models only restriction")
+              .setRequired(true)
+              .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+          ),
       ),
   );

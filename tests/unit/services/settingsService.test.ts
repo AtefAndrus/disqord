@@ -84,4 +84,59 @@ describe("SettingsService", () => {
       );
     });
   });
+
+  describe("setFreeModelsOnly", () => {
+    test("freeModelsOnlyを有効化する", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        freeModelsOnly: false,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.setFreeModelsOnly("guild-123", true);
+
+      expect(mockRepo.upsert).toHaveBeenCalledWith(
+        "guild-123",
+        expect.objectContaining({
+          freeModelsOnly: true,
+        }),
+      );
+    });
+
+    test("freeModelsOnlyを無効化する", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        freeModelsOnly: true,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.setFreeModelsOnly("guild-123", false);
+
+      expect(mockRepo.upsert).toHaveBeenCalledWith(
+        "guild-123",
+        expect.objectContaining({
+          freeModelsOnly: false,
+        }),
+      );
+    });
+
+    test("既存設定を維持しつつfreeModelsOnlyを更新", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        defaultModel: "specific-model",
+        freeModelsOnly: false,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.setFreeModelsOnly("guild-123", true);
+
+      expect(mockRepo.upsert).toHaveBeenCalledWith(
+        "guild-123",
+        expect.objectContaining({
+          defaultModel: "specific-model",
+          freeModelsOnly: true,
+        }),
+      );
+    });
+  });
 });

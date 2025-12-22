@@ -8,14 +8,6 @@
 
 ### v1.1.0
 
-#### 無料モデル限定機能
-
-- [ ] OpenRouterモデル一覧取得の拡張（`pricing`フィールドで無料判定）
-- [ ] 無料モデル一覧のキャッシュ機構（TTL: 5-10分）
-- [ ] Guild設定に`freeModelsOnly`フラグ追加（DBスキーマ変更）
-- [ ] `/disqord model set`時のバリデーション
-- [ ] `/disqord config free-only <on|off>`コマンド追加
-
 #### ユーザ向けエラー表示
 
 - [ ] カスタムエラークラス導入（`src/errors/index.ts`）
@@ -53,6 +45,16 @@
 
 ## 完了済み
 
+### v1.1.0 (2025-12-23) - 無料モデル限定機能
+
+- OpenRouterモデル一覧取得の拡張（`listModelsWithPricing()`）
+- 無料モデル一覧のキャッシュ機構（TTL: 1時間、`noCache`オプション対応）
+- Guild設定に`freeModelsOnly`フラグ追加（DBマイグレーション対応）
+- `/disqord model set`時のバリデーション（無料制限時は無料モデルのみ許可）
+- `/disqord config free-only <on|off>`コマンド追加
+- ModelService新規作成（キャッシュ + 無料判定ロジック）
+- テスト追加（79テスト、カバレッジ97.50%）
+
 ### v1.0.0 (2025-12-19)
 
 全機能実装完了。Coolifyデプロイ、GitHub Actions自動デプロイ設定済み。
@@ -77,4 +79,5 @@
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-23 | 無料モデル限定機能実装完了 |
 | 2025-12-23 | ドキュメント整理: 未完了を先頭に、完了済みを縮小 |

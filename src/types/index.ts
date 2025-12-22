@@ -6,8 +6,19 @@ export type MessageId = string;
 export interface GuildSettings {
   guildId: GuildId;
   defaultModel: string;
+  freeModelsOnly: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface OpenRouterModel {
+  id: string;
+  name: string;
+  contextLength: number;
+  pricing: {
+    prompt: string;
+    completion: string;
+  };
 }
 
 export interface ChatMessage {

@@ -10,6 +10,7 @@ import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { startHealthServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { ChatService } from "./services/chatService";
+import { ModelService } from "./services/modelService";
 import { SettingsService } from "./services/settingsService";
 import { logger } from "./utils/logger";
 
@@ -24,9 +25,10 @@ async function bootstrap(): Promise<void> {
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo, config.defaultModel);
+  const modelService = new ModelService(llmClient);
   const chatService = new ChatService(llmClient, settingsService);
 
-  const commandHandlers = createCommandHandlers(llmClient, settingsService);
+  const commandHandlers = createCommandHandlers(llmClient, settingsService, modelService);
 
   const messageCreateHandler = createMessageCreateHandler(chatService);
   const interactionCreateHandler = createInteractionCreateHandler(commandHandlers);

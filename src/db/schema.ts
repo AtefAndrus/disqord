@@ -9,4 +9,14 @@ export function applyMigrations(db: Database) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+
+  // Migration: Add free_models_only column
+  const columns = db.query<{ name: string }, []>("PRAGMA table_info(guild_settings)").all();
+  const hasFreeModelsOnly = columns.some((c) => c.name === "free_models_only");
+  if (!hasFreeModelsOnly) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN free_models_only INTEGER NOT NULL DEFAULT 0
+    `);
+  }
 }
