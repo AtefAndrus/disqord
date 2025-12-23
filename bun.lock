@@ -6,7 +6,7 @@
       "name": "disqord",
       "dependencies": {
         "discord.js": "^14.16.3",
-        "zod": "^4.2.0",
+        "zod": "^4.2.1",
       },
       "devDependencies": {
         "@biomejs/biome": "2.3.10",
