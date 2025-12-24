@@ -453,7 +453,109 @@ export function toDiscordTimestamp(date: Date | string, format: 'R' | 'd' | 'f' 
 
 ---
 
-## 8. Bunエコシステム活用
+## 8. モデル選択UI設計（v1.3.0）
+
+### 8.1 Autocomplete方式
+
+ユーザーが入力中にリアルタイムでモデル候補を表示:
+
+```text
+/disqord model select model:[deep          ]
+                            ↓ 入力中にリアルタイム表示
+                            ┌───────────────────────────────────────────┐
+                            │ DeepSeek R1 (deepseek/deepseek-r1-0528:free)   │
+                            │ DeepSeek V3 (deepseek/deepseek-v3-0324:free)   │
+                            │ DeepSeek Chat (deepseek/deepseek-chat:free)    │
+                            └───────────────────────────────────────────┘
+                                         ↓ 選択
+✅ モデルを deepseek/deepseek-r1-0528:free に変更しました
+```
+
+### 8.2 設計仕様
+
+| 項目 | 値 | 備考 |
+|------|-----|------|
+| コマンド | `/disqord model select` | 新規追加 |
+| 入力オプション | `model` (String, Autocomplete) | 必須 |
+| 候補表示形式 | `モデル名 (モデルコード)` | 例: DeepSeek R1 (deepseek/...) |
+| 候補上限 | 25件 | Discord API制限 |
+| フィルタリング | モデル名・IDの部分一致 | 大文字小文字区別なし |
+
+### 8.3 無料モデル制限時の動作
+
+| `freeModelsOnly` | 候補に表示されるモデル |
+|------------------|------------------------|
+| `false` | 全モデル |
+| `true` | 無料モデルのみ |
+
+### 8.4 Autocompleteフロー
+
+```text
+ユーザー入力
+    ↓
+interactionCreate (isAutocomplete)
+    ↓
+ModelService.getAllModels() / getFreeModels()
+    ↓
+入力値で部分一致フィルタリング
+    ↓
+上位25件を respond() で返却
+```
+
+### 8.5 実装例
+
+```typescript
+// コマンド定義
+.addSubcommand((sub) =>
+  sub
+    .setName("select")
+    .setDescription("Select a model from the list")
+    .addStringOption((option) =>
+      option
+        .setName("model")
+        .setDescription("Model to use")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+)
+
+// Autocompleteハンドラー
+async modelSelectAutocomplete(
+  interaction: AutocompleteInteraction,
+  modelService: IModelService,
+  freeModelsOnly: boolean
+): Promise<void> {
+  const focusedValue = interaction.options.getFocused().toLowerCase();
+  const models = freeModelsOnly
+    ? await modelService.getFreeModels()
+    : await modelService.getAllModels();
+
+  const filtered = models
+    .filter((m) =>
+      m.name.toLowerCase().includes(focusedValue) ||
+      m.id.toLowerCase().includes(focusedValue)
+    )
+    .slice(0, 25)
+    .map((m) => ({
+      name: `${m.name} (${m.id})`,
+      value: m.id,
+    }));
+
+  await interaction.respond(filtered);
+}
+```
+
+### 8.6 変更対象ファイル
+
+| ファイル | 変更内容 |
+|----------|----------|
+| `src/bot/commands/disqord.ts` | `select`サブコマンド追加、`setAutocomplete(true)` |
+| `src/bot/events/interactionCreate.ts` | `isAutocomplete()`処理追加 |
+| `src/bot/commands/handlers.ts` | `modelSelectAutocomplete`、`modelSelect`ハンドラー追加 |
+
+---
+
+## 9. Bunエコシステム活用
 
 | 機能 | モジュール | 説明 |
 | ---- | ---------- | ---- |
@@ -463,7 +565,7 @@ export function toDiscordTimestamp(date: Date | string, format: 'R' | 'd' | 'f' 
 
 ---
 
-## 9. 参考情報
+## 10. 参考情報
 
 | 項目 | URL |
 | ---- | --- |
@@ -478,6 +580,7 @@ export function toDiscordTimestamp(date: Date | string, format: 'R' | 'd' | 'f' 
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-25 | v1.3.0 モデル選択UI設計追加（Autocomplete方式） |
 | 2025-12-25 | v1.2.0 Embed設計追加 |
 | 2025-12-25 | 将来のスキーマ計画追加（v1.4.0〜v1.6.0） |
 | 2025-12-24 | レート制限設計追加（ユーザー/プロバイダーレベルの区別） |
