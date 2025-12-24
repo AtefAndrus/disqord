@@ -7,10 +7,11 @@ import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
-import { startHealthServer } from "./health";
+import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { ChatService } from "./services/chatService";
 import { ModelService } from "./services/modelService";
+import { ReleaseNotificationService } from "./services/releaseNotificationService";
 import { SettingsService } from "./services/settingsService";
 import { logger } from "./utils/logger";
 
@@ -44,11 +45,18 @@ async function bootstrap(): Promise<void> {
   await client.login(config.discordToken);
   logger.info("Bot logged in");
 
-  const healthServer = startHealthServer(client, config.healthPort);
+  const releaseNotificationService = new ReleaseNotificationService(client, settingsService);
+
+  const httpServer = startHttpServer({
+    client,
+    port: config.healthPort,
+    githubWebhookSecret: config.githubWebhookSecret,
+    releaseNotificationService,
+  });
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
-    healthServer.stop();
+    httpServer.stop();
     client.destroy();
     db.close();
     logger.info("Shutdown complete");

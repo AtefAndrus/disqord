@@ -55,6 +55,7 @@ const configSchema = z.object({
   applicationId: z.string().min(1),
   defaultModel: z.string().default("deepseek/deepseek-r1-0528:free"),
   healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
+  githubWebhookSecret: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -68,6 +69,7 @@ export function loadConfig(): AppConfig {
     applicationId: process.env.DISCORD_APPLICATION_ID,
     defaultModel: process.env.DEFAULT_MODEL,
     healthPort: process.env.HEALTH_PORT,
+    githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
   });
 
   return parsed;

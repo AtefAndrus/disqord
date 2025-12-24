@@ -7,6 +7,7 @@ export interface GuildSettings {
   guildId: GuildId;
   defaultModel: string;
   freeModelsOnly: boolean;
+  releaseChannelId: ChannelId | null;
   createdAt: string;
   updatedAt: string;
 }

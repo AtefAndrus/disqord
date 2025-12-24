@@ -24,7 +24,8 @@ export function createCommandHandlers(
 - \`/disqord model set <model>\` - モデルを変更
 - \`/disqord model list\` - OpenRouterのモデル一覧ページへ
 - \`/disqord model refresh\` - モデルキャッシュを更新
-- \`/disqord config free-only <on|off>\` - 無料モデル限定の切り替え`;
+- \`/disqord config free-only <on|off>\` - 無料モデル限定の切り替え
+- \`/disqord config release-channel [channel]\` - リリース通知チャンネルを設定（省略で無効化）`;
 
       await interaction.reply(helpText);
     },
@@ -106,10 +107,22 @@ export function createCommandHandlers(
         cacheText = "未取得";
       }
 
+      let guildStatusText = "";
+      if (interaction.guildId) {
+        const settings = await settingsService.getGuildSettings(interaction.guildId);
+        const releaseChannelText = settings.releaseChannelId
+          ? `<#${settings.releaseChannelId}>`
+          : "未設定";
+        guildStatusText = `\n\n**Guild設定**
+- デフォルトモデル: \`${settings.defaultModel}\`
+- 無料モデル限定: ${settings.freeModelsOnly ? "有効" : "無効"}
+- リリース通知先: ${releaseChannelText}`;
+      }
+
       const statusText = `**DisQord Status**
 - OpenRouter残高: ${remainingText}
 - レート制限: ${rateLimited ? "制限中" : "正常"}
-- モデルキャッシュ: ${cacheText}`;
+- モデルキャッシュ: ${cacheText}${guildStatusText}`;
 
       await interaction.editReply(statusText);
     },
@@ -137,6 +150,24 @@ export function createCommandHandlers(
       await interaction.reply(
         enabled ? "無料モデル限定を有効にしました。" : "無料モデル限定を無効にしました。",
       );
+    },
+
+    async configReleaseChannel(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
+        return;
+      }
+
+      const channel = interaction.options.getChannel("channel");
+
+      if (!channel) {
+        await settingsService.setReleaseChannel(interaction.guildId, null);
+        await interaction.reply("リリース通知を無効にしました。");
+        return;
+      }
+
+      await settingsService.setReleaseChannel(interaction.guildId, channel.id);
+      await interaction.reply(`リリース通知を <#${channel.id}> に設定しました。`);
     },
   };
 }

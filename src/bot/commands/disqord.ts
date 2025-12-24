@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from "discord.js";
+import { ChannelType, SlashCommandBuilder } from "discord.js";
 
 export const disqordCommand = new SlashCommandBuilder()
   .setName("disqord")
@@ -46,6 +46,17 @@ export const disqordCommand = new SlashCommandBuilder()
               .setDescription("Enable or disable free models only restriction")
               .setRequired(true)
               .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("release-channel")
+          .setDescription("Set or disable release notification channel")
+          .addChannelOption((option) =>
+            option
+              .setName("channel")
+              .setDescription("Channel to receive release notifications (omit to disable)")
+              .addChannelTypes(ChannelType.GuildText),
           ),
       ),
   );

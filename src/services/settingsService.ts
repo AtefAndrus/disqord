@@ -5,6 +5,8 @@ export interface ISettingsService {
   getGuildSettings(guildId: string): Promise<GuildSettings>;
   setGuildModel(guildId: string, model: string): Promise<GuildSettings>;
   setFreeModelsOnly(guildId: string, freeModelsOnly: boolean): Promise<GuildSettings>;
+  setReleaseChannel(guildId: string, channelId: string | null): Promise<GuildSettings>;
+  getGuildsWithReleaseChannel(): Promise<GuildSettings[]>;
 }
 
 export class SettingsService implements ISettingsService {
@@ -23,6 +25,7 @@ export class SettingsService implements ISettingsService {
       guildId,
       defaultModel: this.defaultModel,
       freeModelsOnly: false,
+      releaseChannelId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -46,5 +49,18 @@ export class SettingsService implements ISettingsService {
       freeModelsOnly,
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  async setReleaseChannel(guildId: string, channelId: string | null): Promise<GuildSettings> {
+    const existing = await this.getGuildSettings(guildId);
+    return this.repo.upsert(guildId, {
+      ...existing,
+      releaseChannelId: channelId,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async getGuildsWithReleaseChannel(): Promise<GuildSettings[]> {
+    return this.repo.findAllWithReleaseChannel();
   }
 }

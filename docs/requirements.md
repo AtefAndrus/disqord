@@ -122,8 +122,8 @@ GitHub Releaseの公開をトリガーに、登録済みの全Guildへリリー�
 | ---- | ---- |
 | 通知方式 | GitHub Webhook → Bot HTTPエンドポイント（Cloudflare Tunnel経由） |
 | 配信対象 | `release_channel_id`が設定されている全Guild |
-| 配信形式 | Embed形式（タイトル、バージョン、リリースノート本文、GitHubリンク） |
-| イベント | `release`イベントの`published`アクションのみ |
+| 配信形式 | プレーンテキスト（v2以降でEmbed化予定） |
+| イベント | `release`イベントの`released`アクションのみ（pre-release除外） |
 | 署名検証 | `X-Hub-Signature-256`ヘッダーでHMAC-SHA256検証 |
 
 #### 追加コマンド

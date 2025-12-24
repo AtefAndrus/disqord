@@ -19,4 +19,16 @@ export function applyMigrations(db: Database) {
       ADD COLUMN free_models_only INTEGER NOT NULL DEFAULT 0
     `);
   }
+
+  // Migration: Add release_channel_id column
+  const columnsAfterFreeModels = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasReleaseChannelId = columnsAfterFreeModels.some((c) => c.name === "release_channel_id");
+  if (!hasReleaseChannelId) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN release_channel_id TEXT DEFAULT NULL
+    `);
+  }
 }

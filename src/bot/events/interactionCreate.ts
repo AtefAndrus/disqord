@@ -9,6 +9,7 @@ export interface CommandHandlers {
   modelRefresh: (interaction: ChatInputCommandInteraction) => Promise<void>;
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configReleaseChannel: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
 export function createInteractionCreateHandler(handlers: CommandHandlers) {
@@ -47,6 +48,9 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
         switch (subcommand) {
           case "free-only":
             await handlers.configFreeOnly(interaction);
+            break;
+          case "release-channel":
+            await handlers.configReleaseChannel(interaction);
             break;
         }
       } else {

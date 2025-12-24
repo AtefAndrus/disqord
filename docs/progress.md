@@ -6,20 +6,6 @@
 
 ## 未完了タスク
 
-### v1.1.0
-
-#### リリースノート配信
-
-- [ ] HTTPサーバー拡張（`/webhook/github`エンドポイント）
-- [ ] GitHub Webhook署名検証（`X-Hub-Signature-256`）
-- [ ] DBスキーマ変更（`release_channel_id`追加）
-- [ ] リリース通知サービス実装
-- [ ] `/disqord config release-channel`コマンド追加
-- [ ] Cloudflare Tunnel設定
-- [ ] GitHubリポジトリにWebhook設定
-
----
-
 ### v2以降（将来）
 
 - [ ] リプライ継続対話
@@ -32,10 +18,22 @@
 - [ ] 複数モデル並列回答
 - [ ] Embed化
 - [ ] Select Menu/Modalでモデル選択
+- [ ] 時刻表記をDiscord Snowflakeタイムスタンプ形式に統一（`<t:UNIX:R>` など）
 
 ---
 
 ## 完了済み
+
+### v1.1.0 (2025-12-25) - リリースノート配信
+
+- HTTPサーバー拡張（`/webhook/github`エンドポイント）
+- GitHub Webhook署名検証（`X-Hub-Signature-256`、HMAC-SHA256）
+- DBスキーマ変更（`release_channel_id`追加）
+- リリース通知サービス実装（`ReleaseNotificationService`）
+- `/disqord config release-channel [channel]`コマンド追加
+- 型定義追加（`src/types/github.ts`）
+- テスト追加（135テスト）
+- インフラ設定完了（Coolify、Cloudflare Tunnel、GitHub Webhook）
 
 ### v1.1.0 (2025-12-24) - ユーザ向けエラー表示
 
@@ -84,6 +82,9 @@
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-25 | インフラ設定完了（Coolify、Cloudflare Tunnel、GitHub Webhook） |
+| 2025-12-25 | インフラ設定ドキュメント更新（Coolify向け）、ローカルテスト手順追加 |
+| 2025-12-25 | リリースノート配信機能実装完了（インフラ設定除く） |
 | 2025-12-24 | InvalidModelError追加、レート制限設計改善 |
 | 2025-12-24 | ユーザ向けエラー表示機能実装完了 |
 | 2025-12-23 | 無料モデル限定機能実装完了 |
