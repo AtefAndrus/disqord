@@ -8,15 +8,6 @@
 
 ### v1.1.0
 
-#### ユーザ向けエラー表示
-
-- [ ] カスタムエラークラス導入（`src/errors/index.ts`）
-  - `AppError`基底クラス
-  - `RateLimitError`, `InsufficientCreditsError`, `ModerationError`等
-- [ ] OpenRouterClient更新（`handleErrorResponse`でエラー種別判定）
-- [ ] イベントハンドラ更新（`AppError`判定、`userMessage`表示）
-- [ ] テスト追加
-
 #### リリースノート配信
 
 - [ ] HTTPサーバー拡張（`/webhook/github`エンドポイント）
@@ -45,6 +36,19 @@
 ---
 
 ## 完了済み
+
+### v1.1.0 (2025-12-24) - ユーザ向けエラー表示
+
+- カスタムエラークラス導入（`src/errors/index.ts`）
+  - `AppError`基底クラス + 9種類の派生クラス
+  - `InvalidModelError`追加（400 + "is not a valid model ID"パターン）
+  - `ModelUnavailableError`が500/502/503に対応
+- OpenRouterClient更新（`handleErrorResponse`でエラー種別判定）
+- レート制限設計改善
+  - ユーザーレベル制限（`X-RateLimit-Reset`ヘッダーあり）→ グローバルフラグ
+  - プロバイダーレベル制限（ヘッダーなし）→ フラグセットなし、他モデル即時使用可
+- イベントハンドラ更新（`AppError`判定、`userMessage`表示）
+- テスト追加（117テスト）
 
 ### v1.1.0 (2025-12-23) - 無料モデル限定機能
 
@@ -80,5 +84,7 @@
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-24 | InvalidModelError追加、レート制限設計改善 |
+| 2025-12-24 | ユーザ向けエラー表示機能実装完了 |
 | 2025-12-23 | 無料モデル限定機能実装完了 |
 | 2025-12-23 | ドキュメント整理: 未完了を先頭に、完了済みを縮小 |

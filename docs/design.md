@@ -178,16 +178,18 @@ type ProviderErrorMetadata = {
 };
 ```
 
-### 5.3 エラーコード一覧（OpenRouter公式）
+### 5.3 エラーコード一覧（OpenRouter公式 + 実測）
 
 | ステータス | 説明 |
 |-----------|------|
 | 400 | Bad Request（無効なパラメータ、CORS） |
+| 400 | Invalid model ID（`is not a valid model ID`を含む場合） |
 | 401 | Invalid credentials（無効なAPIキー、セッション切れ） |
 | 402 | Insufficient credits |
 | 403 | Moderation（入力がフラグされた） |
 | 408 | Request timed out |
 | 429 | Rate limited |
+| 500 | Internal Server Error（モデル一時障害） |
 | 502 | Model down / invalid response |
 | 503 | No available provider |
 
@@ -199,18 +201,32 @@ Error
        ├─ RateLimitError (429)
        ├─ InsufficientCreditsError (402)
        ├─ ModerationError (403)
-       ├─ ModelUnavailableError (502, 503)
+       ├─ InvalidModelError (400 + message pattern)
+       ├─ ModelUnavailableError (500, 502, 503)
        ├─ AuthenticationError (401)
        ├─ TimeoutError (408)
        ├─ BadRequestError (400)
        └─ UnknownApiError (その他)
 ```
 
-### 5.5 エラーフロー
+### 5.5 エラー判定ロジック
+
+400エラーは複数のケースがあるため、メッセージ内容で判定:
+
+```typescript
+if (status === 400) {
+  if (message.includes("is not a valid model ID")) {
+    throw new InvalidModelError(message);
+  }
+  throw new BadRequestError(message);
+}
+```
+
+### 5.6 エラーフロー
 
 ```text
 OpenRouterClient
-  └─ HTTPステータスに応じてカスタムエラーをthrow
+  └─ HTTPステータス・メッセージに応じてカスタムエラーをthrow
       ↓
 ChatService（パススルー）
       ↓
@@ -219,6 +235,57 @@ ChatService（パススルー）
 ```
 
 エラー種別とユーザー向けメッセージの対応は `docs/requirements.md` を参照。
+
+### 5.7 レート制限の設計
+
+#### 429エラーの種別
+
+OpenRouterの429エラーには2種類がある:
+
+| 種別 | 説明 | X-RateLimit-Reset |
+|------|------|-------------------|
+| ユーザーレベル | APIキーに対する制限 | あり |
+| プロバイダーレベル | 特定モデル/プロバイダーのアップストリーム制限 | なし |
+
+プロバイダーレベルの例:
+```json
+{
+  "status": 429,
+  "message": "Provider returned error",
+  "metadata": {
+    "raw": "qwen/qwen3-coder:free is temporarily rate-limited upstream...",
+    "provider_name": "Venice"
+  }
+}
+```
+
+#### 設計方針
+
+- **ユーザーレベル制限**（ヘッダーあり）: グローバルフラグをセットし、全モデルへのリクエストを一時停止
+- **プロバイダーレベル制限**（ヘッダーなし）: フラグをセットせず、他モデルは即座に使用可能
+
+```typescript
+case 429: {
+  const resetHeader = response.headers.get("X-RateLimit-Reset");
+  let retryAfterSeconds: number | undefined;
+  if (resetHeader) {
+    // ユーザーレベル制限 → グローバルフラグセット
+    const resetAt = Number.parseInt(resetHeader, 10);
+    this.rateLimitResetAt = resetAt;
+    retryAfterSeconds = Math.max(0, Math.ceil((resetAt - Date.now()) / 1000));
+  }
+  // ヘッダーなし → フラグセットしない（プロバイダー制限）
+  throw new RateLimitError(message, retryAfterSeconds);
+}
+```
+
+#### 動作フロー
+
+```text
+429受信
+  ├─ X-RateLimit-Resetあり → rateLimitResetAtセット → 全モデルブロック
+  └─ ヘッダーなし → フラグセットなし → 他モデルは使用可能
+```
 
 ---
 
@@ -271,5 +338,6 @@ ReleaseNotificationService
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-24 | レート制限設計追加（ユーザー/プロバイダーレベルの区別） |
 | 2025-12-24 | エラーハンドリング設計の詳細化（OpenRouterエラー形式、クラス階層） |
 | 2025-12-23 | 実装コード例を削減、src/へのリンクに変更 |

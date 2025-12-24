@@ -1,4 +1,15 @@
 import type { AppConfig } from "../config";
+import {
+  AuthenticationError,
+  BadRequestError,
+  InsufficientCreditsError,
+  InvalidModelError,
+  ModelUnavailableError,
+  ModerationError,
+  RateLimitError,
+  TimeoutError,
+  UnknownApiError,
+} from "../errors";
 import type { ChatCompletionRequest, ChatCompletionResponse, OpenRouterModel } from "../types";
 import { logger } from "../utils/logger";
 
@@ -38,6 +49,7 @@ interface OpenRouterErrorResponse {
   error?: {
     code: number;
     message: string;
+    metadata?: Record<string, unknown>;
   };
 }
 
@@ -63,7 +75,10 @@ export class OpenRouterClient implements ILLMClient {
 
   async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     if (this.isRateLimited()) {
-      throw new Error("Rate limited. Please try again later.");
+      const retryAfterSeconds = this.rateLimitResetAt
+        ? Math.max(0, Math.ceil((this.rateLimitResetAt - Date.now()) / 1000))
+        : undefined;
+      throw new RateLimitError("Rate limited. Please try again later.", retryAfterSeconds);
     }
 
     const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
@@ -126,20 +141,60 @@ export class OpenRouterClient implements ILLMClient {
   }
 
   private async handleErrorResponse(response: Response): Promise<never> {
-    if (response.status === 429) {
-      const resetHeader = response.headers.get("X-RateLimit-Reset");
-      if (resetHeader) {
-        this.rateLimitResetAt = Number.parseInt(resetHeader, 10);
-      } else {
-        this.rateLimitResetAt = Date.now() + 60_000;
-      }
-      logger.warn("Rate limited by OpenRouter", { resetAt: this.rateLimitResetAt });
-      throw new Error("Rate limited by OpenRouter. Please try again later.");
-    }
-
     const errorBody = (await response.json().catch(() => ({}))) as OpenRouterErrorResponse;
     const message = errorBody.error?.message ?? `HTTP ${response.status}`;
-    logger.error("OpenRouter API error", { status: response.status, message });
-    throw new Error(`OpenRouter API error: ${message}`);
+    const metadata = errorBody.error?.metadata;
+
+    // Log error with metadata if available
+    logger.error("OpenRouter API error", {
+      status: response.status,
+      message,
+      ...(metadata && { metadata }),
+    });
+
+    switch (response.status) {
+      case 400:
+        if (message.includes("is not a valid model ID")) {
+          throw new InvalidModelError(message);
+        }
+        throw new BadRequestError(message);
+
+      case 401:
+        throw new AuthenticationError(message);
+
+      case 402:
+        throw new InsufficientCreditsError(message);
+
+      case 403:
+        throw new ModerationError(message);
+
+      case 408:
+        throw new TimeoutError(message);
+
+      case 429: {
+        const resetHeader = response.headers.get("X-RateLimit-Reset");
+        let retryAfterSeconds: number | undefined;
+        if (resetHeader) {
+          // ユーザーレベル制限 → グローバルフラグセット
+          const resetAt = Number.parseInt(resetHeader, 10);
+          this.rateLimitResetAt = resetAt;
+          retryAfterSeconds = Math.max(0, Math.ceil((resetAt - Date.now()) / 1000));
+        }
+        // ヘッダーなし（プロバイダー制限）→ フラグセットしない
+        throw new RateLimitError(message, retryAfterSeconds);
+      }
+
+      case 500:
+        throw new ModelUnavailableError(message, 500);
+
+      case 502:
+        throw new ModelUnavailableError(message, 502);
+
+      case 503:
+        throw new ModelUnavailableError(message, 503);
+
+      default:
+        throw new UnknownApiError(message, response.status);
+    }
   }
 }

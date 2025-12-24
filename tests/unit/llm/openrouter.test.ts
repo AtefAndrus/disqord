@@ -1,4 +1,15 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import {
+  AuthenticationError,
+  BadRequestError,
+  InsufficientCreditsError,
+  InvalidModelError,
+  ModelUnavailableError,
+  ModerationError,
+  RateLimitError,
+  TimeoutError,
+  UnknownApiError,
+} from "../../../src/errors";
 import { OpenRouterClient } from "../../../src/llm/openrouter";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "../../../src/types";
 
@@ -84,12 +95,12 @@ describe("OpenRouterClient", () => {
       expect(JSON.parse(options.body as string)).toEqual(request);
     });
 
-    test("レート制限時はエラーをスローする", async () => {
+    test("レート制限時はRateLimitErrorをスローする", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 429,
         headers: new Headers({ "X-RateLimit-Reset": String(Date.now() + 60000) }),
-        json: () => Promise.resolve({}),
+        json: () => Promise.resolve({ error: { message: "Rate limit exceeded" } }),
       });
 
       const request: ChatCompletionRequest = {
@@ -97,7 +108,7 @@ describe("OpenRouterClient", () => {
         messages: [{ role: "user", content: "Hi" }],
       };
 
-      await expect(client.chat(request)).rejects.toThrow("Rate limited");
+      await expect(client.chat(request)).rejects.toBeInstanceOf(RateLimitError);
     });
 
     test("429エラーでレート制限状態になる", async () => {
@@ -122,12 +133,12 @@ describe("OpenRouterClient", () => {
       expect(client.isRateLimited()).toBe(true);
     });
 
-    test("429エラーでX-RateLimit-Resetヘッダーがない場合はデフォルト60秒", async () => {
+    test("429エラーでX-RateLimit-Resetヘッダーがない場合はレート制限フラグをセットしない", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 429,
         headers: new Headers(),
-        json: () => Promise.resolve({}),
+        json: () => Promise.resolve({ error: { message: "Provider returned error" } }),
       });
 
       const request: ChatCompletionRequest = {
@@ -141,10 +152,34 @@ describe("OpenRouterClient", () => {
         // Expected error
       }
 
-      expect(client.isRateLimited()).toBe(true);
+      // プロバイダー制限の場合はグローバルフラグをセットしない
+      expect(client.isRateLimited()).toBe(false);
     });
 
-    test("その他のHTTPエラーはメッセージ付きでスローする", async () => {
+    test("429エラーでヘッダーがない場合のuserMessageにリトライ秒数が含まれない", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Provider returned error" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      try {
+        await client.chat(request);
+      } catch (error) {
+        expect(error).toBeInstanceOf(RateLimitError);
+        expect((error as RateLimitError).userMessage).toBe(
+          "リクエスト制限に達しました。しばらくしてから再度お試しください。",
+        );
+      }
+    });
+
+    test("500エラーはModelUnavailableErrorをスローする", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -157,10 +192,26 @@ describe("OpenRouterClient", () => {
         messages: [{ role: "user", content: "Hi" }],
       };
 
-      await expect(client.chat(request)).rejects.toThrow("Internal server error");
+      await expect(client.chat(request)).rejects.toBeInstanceOf(ModelUnavailableError);
     });
 
-    test("エラーレスポンスがパースできない場合はステータスコードを含む", async () => {
+    test("その他のHTTPエラーはUnknownApiErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 599,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Unknown error" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(UnknownApiError);
+    });
+
+    test("エラーレスポンスがパースできない場合はModelUnavailableErrorをスローする", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 502,
@@ -173,7 +224,153 @@ describe("OpenRouterClient", () => {
         messages: [{ role: "user", content: "Hi" }],
       };
 
-      await expect(client.chat(request)).rejects.toThrow("HTTP 502");
+      await expect(client.chat(request)).rejects.toBeInstanceOf(ModelUnavailableError);
+    });
+
+    test("400エラーはBadRequestErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Invalid parameters" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(BadRequestError);
+    });
+
+    test("400エラーで無効なモデルIDの場合はInvalidModelErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        json: () =>
+          Promise.resolve({
+            error: { message: "nonexistent/model is not a valid model ID" },
+          }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "nonexistent/model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(InvalidModelError);
+    });
+
+    test("401エラーはAuthenticationErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Invalid API key" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(AuthenticationError);
+    });
+
+    test("402エラーはInsufficientCreditsErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 402,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Insufficient credits" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(InsufficientCreditsError);
+    });
+
+    test("403エラーはModerationErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        headers: new Headers(),
+        json: () =>
+          Promise.resolve({
+            error: {
+              message: "Content flagged",
+              metadata: { reasons: ["violence"], flagged_input: "test" },
+            },
+          }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(ModerationError);
+    });
+
+    test("408エラーはTimeoutErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 408,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "Request timed out" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(TimeoutError);
+    });
+
+    test("503エラーはModelUnavailableErrorをスローする", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        json: () => Promise.resolve({ error: { message: "No provider available" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      await expect(client.chat(request)).rejects.toBeInstanceOf(ModelUnavailableError);
+    });
+
+    test("レート制限状態でchatを呼び出すとRateLimitErrorをスローする", async () => {
+      // First, trigger rate limit
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ "X-RateLimit-Reset": String(Date.now() + 60000) }),
+        json: () => Promise.resolve({ error: { message: "Rate limited" } }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+
+      try {
+        await client.chat(request);
+      } catch {
+        // Expected
+      }
+
+      // Second call should throw RateLimitError without making a fetch
+      await expect(client.chat(request)).rejects.toBeInstanceOf(RateLimitError);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
   });
 

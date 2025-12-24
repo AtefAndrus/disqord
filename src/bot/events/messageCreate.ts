@@ -1,4 +1,5 @@
 import type { Message } from "discord.js";
+import { AppError } from "../../errors";
 import type { IChatService } from "../../services/chatService";
 import { logger } from "../../utils/logger";
 import { splitIntoChunks } from "../../utils/message";
@@ -50,8 +51,14 @@ export function createMessageCreateHandler(chatService: IChatService) {
       }
     } catch (error) {
       logger.error("Failed to generate response", { error, guildId: message.guild.id });
+
+      const userMessage =
+        error instanceof AppError
+          ? error.userMessage
+          : "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
+
       await message.reply({
-        content: "エラーが発生しました。しばらくしてから再度お試しください。",
+        content: userMessage,
         allowedMentions: { repliedUser: false },
       });
     } finally {
