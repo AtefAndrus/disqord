@@ -149,7 +149,64 @@ ALTER TABLE guild_settings ADD COLUMN release_channel_id TEXT;
 - `userMessage` プロパティでユーザー向けメッセージを提供
 - 技術的詳細はログのみに出力
 
-### 5.2 エラーフロー
+### 5.2 OpenRouterエラーレスポンス形式
+
+参照: <https://openrouter.ai/docs/api/reference/errors-and-debugging>
+
+```typescript
+// 基本形式
+type ErrorResponse = {
+  error: {
+    code: number;
+    message: string;
+    metadata?: Record<string, unknown>;
+  };
+};
+
+// 403 Moderation エラーのmetadata
+type ModerationErrorMetadata = {
+  reasons: string[];
+  flagged_input: string;  // 最大100文字
+  provider_name: string;
+  model_slug: string;
+};
+
+// 502 Provider エラーのmetadata
+type ProviderErrorMetadata = {
+  provider_name: string;
+  raw: unknown;
+};
+```
+
+### 5.3 エラーコード一覧（OpenRouter公式）
+
+| ステータス | 説明 |
+|-----------|------|
+| 400 | Bad Request（無効なパラメータ、CORS） |
+| 401 | Invalid credentials（無効なAPIキー、セッション切れ） |
+| 402 | Insufficient credits |
+| 403 | Moderation（入力がフラグされた） |
+| 408 | Request timed out |
+| 429 | Rate limited |
+| 502 | Model down / invalid response |
+| 503 | No available provider |
+
+### 5.4 エラークラス階層
+
+```text
+Error
+  └─ AppError (base)
+       ├─ RateLimitError (429)
+       ├─ InsufficientCreditsError (402)
+       ├─ ModerationError (403)
+       ├─ ModelUnavailableError (502, 503)
+       ├─ AuthenticationError (401)
+       ├─ TimeoutError (408)
+       ├─ BadRequestError (400)
+       └─ UnknownApiError (その他)
+```
+
+### 5.5 エラーフロー
 
 ```text
 OpenRouterClient
@@ -161,7 +218,7 @@ ChatService（パススルー）
   └─ AppErrorならuserMessage、それ以外は汎用メッセージを返信
 ```
 
-エラー種別とメッセージの対応は `docs/requirements.md` を参照。
+エラー種別とユーザー向けメッセージの対応は `docs/requirements.md` を参照。
 
 ---
 
@@ -214,4 +271,5 @@ ReleaseNotificationService
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-24 | エラーハンドリング設計の詳細化（OpenRouterエラー形式、クラス階層） |
 | 2025-12-23 | 実装コード例を削減、src/へのリンクに変更 |
