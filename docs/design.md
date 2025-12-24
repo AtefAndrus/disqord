@@ -122,6 +122,7 @@ ALTER TABLE guild_settings ADD COLUMN release_channel_id TEXT;
 #### v1.4.0 - コンテキスト対話
 
 ```sql
+-- 会話履歴テーブル
 CREATE TABLE conversation_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     channel_id TEXT NOT NULL,
@@ -132,6 +133,10 @@ CREATE TABLE conversation_history (
     UNIQUE(message_id)
 );
 CREATE INDEX idx_conversation_channel ON conversation_history(channel_id, created_at);
+
+-- Guild設定に追加
+ALTER TABLE guild_settings ADD COLUMN context_limit INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE guild_settings ADD COLUMN context_ttl_hours INTEGER DEFAULT 24;  -- NULL = 無期限
 ```
 
 #### v1.5.0 - 設定階層化
@@ -555,7 +560,88 @@ async modelSelectAutocomplete(
 
 ---
 
-## 9. Bunエコシステム活用
+## 9. コンテキスト対話設計（v1.4.0）
+
+### 9.1 概要
+
+直近n件の会話履歴をLLMに送信し、文脈を保持した対話を実現する。
+
+### 9.2 設計仕様
+
+| 項目 | 値 | 備考 |
+|------|-----|------|
+| コンテキスト範囲 | 直近n件 | チャンネル/スレッド共通 |
+| デフォルト件数 | 5件 | |
+| 設定可能範囲 | 0-20件 | 0=コンテキストなし |
+| システムプロンプト | "You are a Discord bot. Be concise and helpful." | 全会話に付与 |
+| 自動期限切れ | デフォルト24時間 | 期間指定可能、on/off可能 |
+
+### 9.3 メッセージ構造
+
+```text
+messages: [
+  { role: "system", content: "You are a Discord bot..." },  ← システムプロンプト
+  { role: "user", content: "過去のメッセージ1" },           ← 履歴
+  { role: "assistant", content: "過去の応答1" },
+  { role: "user", content: "過去のメッセージ2" },
+  { role: "assistant", content: "過去の応答2" },
+  { role: "user", content: "現在のメッセージ" }             ← 今回の入力
+]
+```
+
+### 9.4 新規コマンド
+
+| コマンド | 説明 |
+|----------|------|
+| `/disqord context clear` | チャンネルの会話履歴をクリア |
+| `/disqord config context-limit <n>` | 履歴件数を設定（0-20） |
+| `/disqord config context-ttl <hours>` | 期限を設定（時間） |
+| `/disqord config context-ttl off` | 期限切れを無効化 |
+
+### 9.5 処理フロー
+
+```text
+メンション受信
+    ↓
+channelId, messageId 取得
+    ↓
+ConversationHistoryRepository.getChannelHistory(channelId, limit)
+    ↓
+TTLでフィルタリング（context_ttl_hours以内）
+    ↓
+messages配列構築（system + history + current）
+    ↓
+OpenRouter.chat(messages)
+    ↓
+応答をDBに保存
+    ↓
+ユーザーに返信
+```
+
+### 9.6 変更対象ファイル
+
+| ファイル | 変更内容 |
+|----------|----------|
+| `src/db/schema.ts` | `conversation_history`テーブル、guild_settings拡張 |
+| `src/db/repositories/conversationHistory.ts` | 新規作成 |
+| `src/services/chatService.ts` | 複数メッセージ対応、履歴取得・保存 |
+| `src/bot/events/messageCreate.ts` | channelId/messageId抽出 |
+| `src/bot/commands/disqord.ts` | contextサブコマンドグループ追加 |
+| `src/bot/commands/handlers.ts` | contextClear、configContextLimit等追加 |
+
+### 9.7 将来の拡張（v1.4.1以降）
+
+| 機能 | 説明 | バージョン |
+|------|------|------------|
+| リプライ元取得 | リプライ時に元メッセージもコンテキストに含める | v1.4.1 |
+| メッセージリンク | 同一サーバ内リンクからコンテキスト取得 | v1.4.2 |
+| スレッド全件 | スレッド内は全メッセージを保持 | 将来 |
+| 画像対応 | マルチモーダル対応 | 将来 |
+| Reranker | クエリ関連メッセージのみ取得（Open Provence等） | 将来 |
+
+---
+
+## 10. Bunエコシステム活用
 
 | 機能 | モジュール | 説明 |
 | ---- | ---------- | ---- |
@@ -565,7 +651,7 @@ async modelSelectAutocomplete(
 
 ---
 
-## 10. 参考情報
+## 11. 参考情報
 
 | 項目 | URL |
 | ---- | --- |
@@ -580,6 +666,7 @@ async modelSelectAutocomplete(
 
 | 日付 | 内容 |
 | ---- | ---- |
+| 2025-12-25 | v1.4.0 コンテキスト対話設計追加 |
 | 2025-12-25 | v1.3.0 モデル選択UI設計追加（Autocomplete方式） |
 | 2025-12-25 | v1.2.0 Embed設計追加 |
 | 2025-12-25 | 将来のスキーマ計画追加（v1.4.0〜v1.6.0） |
