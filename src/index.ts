@@ -65,6 +65,15 @@ async function bootstrap(): Promise<void> {
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+  process.on("unhandledRejection", (reason: unknown) => {
+    logger.error("Unhandled rejection", { reason });
+  });
+
+  process.on("uncaughtException", (error: Error) => {
+    logger.error("Uncaught exception, shutting down", { error });
+    shutdown("uncaughtException");
+  });
 }
 
 bootstrap().catch((error) => {

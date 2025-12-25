@@ -54,6 +54,14 @@
 
 ## 完了済み
 
+### v1.1.1 (2025-12-26) - レジリエンス強化
+
+- グローバルエラーハンドラー追加（`unhandledRejection`、`uncaughtException`）
+- イベントハンドラのcatchブロック内エラーハンドリング追加
+  - `messageCreate.ts`: エラー応答失敗時のフォールバック
+  - `interactionCreate.ts`: 同上
+- ドキュメント更新（design.md 5.8/5.9、requirements.md レジリエンス要件）
+
 ### v1.1.0 (2025-12-25) - リリースノート配信
 
 - HTTPサーバー拡張（`/webhook/github`エンドポイント）

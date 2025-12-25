@@ -65,11 +65,15 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
       }
     } catch (error) {
       logger.error("Command execution failed", { error });
-      const reply =
-        interaction.replied || interaction.deferred
-          ? interaction.followUp.bind(interaction)
-          : interaction.reply.bind(interaction);
-      await reply("コマンドの実行中にエラーが発生しました。");
+      try {
+        const reply =
+          interaction.replied || interaction.deferred
+            ? interaction.followUp.bind(interaction)
+            : interaction.reply.bind(interaction);
+        await reply("コマンドの実行中にエラーが発生しました。");
+      } catch (replyError) {
+        logger.error("Failed to send error message", { replyError });
+      }
     }
   };
 }

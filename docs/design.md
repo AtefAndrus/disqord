@@ -336,6 +336,49 @@ case 429: {
   └─ ヘッダーなし → フラグセットなし → 他モデルは使用可能
 ```
 
+### 5.8 エラー応答のフォールバック設計（v1.1.1）
+
+エラー発生時のDiscord API呼び出しも失敗する可能性がある（権限不足、チャンネル削除等）。
+二重障害でもプロセスをクラッシュさせない設計とする。
+
+#### フォールバック階層
+
+| 優先度 | 動作 | 条件 |
+|--------|------|------|
+| 1 | message.reply() | エラー応答を返信 |
+| 2 | ログ出力のみ | reply失敗時 |
+
+#### 実装パターン
+
+```typescript
+} catch (error) {
+  logger.error("Failed to generate response", { error });
+  try {
+    await message.reply({ content: userMessage });
+  } catch (replyError) {
+    logger.error("Failed to send error message", { replyError });
+    // プロセスは継続
+  }
+}
+```
+
+### 5.9 グローバルエラーハンドラー（v1.1.1）
+
+未処理例外のフォールバックとして、プロセスレベルでエラーをキャッチする。
+
+#### 設計方針
+
+| イベント | 動作 |
+|----------|------|
+| `unhandledRejection` | ログ出力、プロセス継続 |
+| `uncaughtException` | ログ出力、graceful shutdown |
+
+#### 理由
+
+- Botは長時間稼働するプロセスであり、1リクエストの失敗で全体を停止させるべきではない
+- 権限エラー等の回復可能なエラーでクラッシュしない
+- `uncaughtException`は状態が不整合になる可能性があるため、安全のためshutdown
+
 ---
 
 ## 6. Webhook受信設計（v1.1.0）

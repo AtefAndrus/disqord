@@ -57,10 +57,14 @@ export function createMessageCreateHandler(chatService: IChatService) {
           ? error.userMessage
           : "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
 
-      await message.reply({
-        content: userMessage,
-        allowedMentions: { repliedUser: false },
-      });
+      try {
+        await message.reply({
+          content: userMessage,
+          allowedMentions: { repliedUser: false },
+        });
+      } catch (replyError) {
+        logger.error("Failed to send error message", { replyError, guildId: message.guild.id });
+      }
     } finally {
       if (typingInterval) {
         clearInterval(typingInterval);
