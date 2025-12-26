@@ -1,16 +1,52 @@
 # DisQord 設計書
 
-## 概要
+本ドキュメントでは、DisQordのアーキテクチャ、仕様、設計判断を定義する。
 
-本ドキュメントでは、DisQordのアーキテクチャ、設計判断、DBスキーマを定義する。
-
-実装詳細は `src/` 配下のコードを参照。
+実装の進捗・ロードマップは [progress.md](progress.md) を参照。
 
 ---
 
-## 1. アーキテクチャ
+## 1. 仕様概要
 
-### 1.1 レイヤー構成
+### 1.1 呼び出し方法
+
+| 方式 | 対応状況 | 備考 |
+| ---- | -------- | ---- |
+| メンション | 対応 | `@DisQord 質問` で呼び出し |
+| スラッシュコマンド | 対応 | 設定・ヘルプ用途 |
+| DM | 非対応 | Guild内のみで動作 |
+
+### 1.2 会話コンテキスト
+
+- **方式**: 単発応答（毎回リセット）
+- 過去の会話履歴は保持しない（v1.4.0で対応予定）
+
+### 1.3 スラッシュコマンド一覧
+
+| コマンド | 説明 |
+| -------- | ---- |
+| `/disqord help` | 使い方を表示 |
+| `/disqord status` | Botのステータス（OpenRouter残高等）を表示 |
+| `/disqord model current` | 現在設定されているモデルを表示 |
+| `/disqord model set <model>` | Guildのデフォルトモデルを変更 |
+| `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
+| `/disqord model refresh` | モデルキャッシュを更新 |
+| `/disqord config free-only <on\|off>` | Guildの無料モデル限定設定を切り替え |
+| `/disqord config release-channel [channel]` | リリースノート配信先チャンネルを設定（省略で無効化） |
+
+### 1.4 応答形式
+
+| 項目 | 仕様 |
+| ---- | ---- |
+| 送信方式 | 一括送信 |
+| 長文対応 | 2000文字を超える場合は複数メッセージに分割 |
+| Typing表示 | LLM応答待機中、8秒間隔で継続表示 |
+
+---
+
+## 2. アーキテクチャ
+
+### 2.1 レイヤー構成
 
 ```text
 ┌─────────────────────────────────────────────────────┐
@@ -42,19 +78,7 @@
 └─────────────────────┘ └──────────────────────────────┘
 ```
 
-### 1.2 依存関係
-
-```text
-Discord Client
-      │ uses
-      ▼
-ChatService ───▶ ILLMClient (OpenRouter)
-      │ uses
-      ▼
-SettingsService ───▶ IGuildSettingsRepository (SQLite)
-```
-
-### 1.3 設計パターン
+### 2.2 設計パターン
 
 | パターン | 適用箇所 | 目的 |
 | -------- | -------- | ---- |
@@ -66,40 +90,16 @@ SettingsService ───▶ IGuildSettingsRepository (SQLite)
 
 ---
 
-## 2. ディレクトリ構成
-
-```text
-disqord/
-├── src/
-│   ├── index.ts              # エントリーポイント
-│   ├── health.ts             # ヘルスチェックHTTPサーバー
-│   ├── bot/
-│   │   ├── client.ts         # Discord Client 初期化
-│   │   ├── events/           # イベントハンドラ
-│   │   └── commands/         # スラッシュコマンド
-│   ├── services/             # サービス層
-│   ├── llm/                  # OpenRouter APIクライアント
-│   ├── db/                   # DB接続、スキーマ、Repository
-│   ├── config/               # 環境変数読み込み
-│   ├── utils/                # ユーティリティ
-│   └── types/                # 型定義
-├── tests/                    # テスト（bun:test）
-├── docs/                     # ドキュメント
-└── data/                     # SQLiteファイル（.gitignore）
-```
-
-詳細なファイル構成は実際のコードを参照。
-
----
-
 ## 3. DBスキーマ
 
-### 3.1 現行スキーマ（v1.0）
+### 3.1 現行スキーマ
 
 ```sql
 CREATE TABLE guild_settings (
     guild_id TEXT PRIMARY KEY,
     default_model TEXT NOT NULL DEFAULT 'deepseek/deepseek-r1-0528:free',
+    free_models_only INTEGER NOT NULL DEFAULT 0,
+    release_channel_id TEXT DEFAULT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -107,70 +107,13 @@ CREATE TABLE guild_settings (
 
 実装: `src/db/schema.ts`
 
-### 3.2 v1.1.0 マイグレーション（計画）
-
-```sql
--- 無料モデル限定フラグ
-ALTER TABLE guild_settings ADD COLUMN free_models_only INTEGER NOT NULL DEFAULT 0;
-
--- リリースノート配信チャンネル
-ALTER TABLE guild_settings ADD COLUMN release_channel_id TEXT;
-```
-
-### 3.3 将来のスキーマ計画
-
-#### v1.4.0 - コンテキスト対話
-
-```sql
--- 会話履歴テーブル
-CREATE TABLE conversation_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    role TEXT NOT NULL,  -- 'user' | 'assistant'
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(message_id)
-);
-CREATE INDEX idx_conversation_channel ON conversation_history(channel_id, created_at);
-
--- Guild設定に追加
-ALTER TABLE guild_settings ADD COLUMN context_limit INTEGER NOT NULL DEFAULT 5;
-ALTER TABLE guild_settings ADD COLUMN context_ttl_hours INTEGER DEFAULT 24;  -- NULL = 無期限
-```
-
-#### v1.5.0 - 設定階層化
-
-```sql
-CREATE TABLE channel_settings (
-    channel_id TEXT PRIMARY KEY,
-    guild_id TEXT NOT NULL,
-    model TEXT,
-    system_prompt TEXT,
-    error_verbosity TEXT DEFAULT 'normal',  -- 'minimal' | 'normal' | 'verbose'
-    FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
-);
-
-CREATE TABLE user_settings (
-    user_id TEXT PRIMARY KEY,
-    model TEXT,
-    system_prompt TEXT
-);
-```
-
-#### v1.6.0 - 権限管理
-
-```sql
-ALTER TABLE guild_settings ADD COLUMN allowed_channels TEXT;  -- JSON array
-ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
-```
-
-### 3.4 設計方針
+### 3.2 設計方針
 
 | 項目 | 方針 |
 | ---- | ---- |
 | Discord ID | TEXT型で保存（JavaScriptのNumber精度問題を回避） |
 | タイムスタンプ | ISO 8601文字列（`datetime('now')`） |
+| Boolean | INTEGER型（0/1）で保存 |
 | WALモード | 有効（パフォーマンス向上） |
 
 ---
@@ -185,11 +128,12 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 | IGuildSettingsRepository | `src/db/repositories/guildSettings.ts` |
 | ISettingsService | `src/services/settingsService.ts` |
 | IChatService | `src/services/chatService.ts` |
+| IModelService | `src/services/modelService.ts` |
 | ILLMClient | `src/llm/openrouter.ts` |
 
 ---
 
-## 5. エラーハンドリング設計（v1.1.0）
+## 5. エラーハンドリング設計
 
 ### 5.1 設計方針
 
@@ -197,51 +141,7 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 - `userMessage` プロパティでユーザー向けメッセージを提供
 - 技術的詳細はログのみに出力
 
-### 5.2 OpenRouterエラーレスポンス形式
-
-参照: <https://openrouter.ai/docs/api/reference/errors-and-debugging>
-
-```typescript
-// 基本形式
-type ErrorResponse = {
-  error: {
-    code: number;
-    message: string;
-    metadata?: Record<string, unknown>;
-  };
-};
-
-// 403 Moderation エラーのmetadata
-type ModerationErrorMetadata = {
-  reasons: string[];
-  flagged_input: string;  // 最大100文字
-  provider_name: string;
-  model_slug: string;
-};
-
-// 502 Provider エラーのmetadata
-type ProviderErrorMetadata = {
-  provider_name: string;
-  raw: unknown;
-};
-```
-
-### 5.3 エラーコード一覧（OpenRouter公式 + 実測）
-
-| ステータス | 説明 |
-|-----------|------|
-| 400 | Bad Request（無効なパラメータ、CORS） |
-| 400 | Invalid model ID（`is not a valid model ID`を含む場合） |
-| 401 | Invalid credentials（無効なAPIキー、セッション切れ） |
-| 402 | Insufficient credits |
-| 403 | Moderation（入力がフラグされた） |
-| 408 | Request timed out |
-| 429 | Rate limited |
-| 500 | Internal Server Error（モデル一時障害） |
-| 502 | Model down / invalid response |
-| 503 | No available provider |
-
-### 5.4 エラークラス階層
+### 5.2 エラークラス階層
 
 ```text
 Error
@@ -257,131 +157,42 @@ Error
        └─ UnknownApiError (その他)
 ```
 
-### 5.5 エラー判定ロジック
+実装: `src/errors/index.ts`
 
-400エラーは複数のケースがあるため、メッセージ内容で判定:
+### 5.3 ユーザー向けエラーメッセージ
 
-```typescript
-if (status === 400) {
-  if (message.includes("is not a valid model ID")) {
-    throw new InvalidModelError(message);
-  }
-  throw new BadRequestError(message);
-}
-```
+| エラー種別 | ユーザー向けメッセージ |
+| ---------- | ---------------------- |
+| レート制限 | リクエスト制限に達しました。{N}秒後に再度お試しください。 |
+| クレジット不足 | API残高が不足しています。管理者にお問い合わせください。 |
+| コンテンツモデレーション | 入力内容が制限されました。表現を変えてお試しください。 |
+| 無効なモデル | 指定されたモデルは存在しません。 |
+| モデル利用不可 | モデルが一時的に利用できません。 |
+| 認証エラー | Botの設定に問題があります。管理者にお問い合わせください。 |
+| タイムアウト | 応答に時間がかかりすぎています。短いメッセージでお試しください。 |
+| 不明エラー | 予期しないエラーが発生しました。 |
 
-### 5.6 エラーフロー
-
-```text
-OpenRouterClient
-  └─ HTTPステータス・メッセージに応じてカスタムエラーをthrow
-      ↓
-ChatService（パススルー）
-      ↓
-イベントハンドラ
-  └─ AppErrorならuserMessage、それ以外は汎用メッセージを返信
-```
-
-エラー種別とユーザー向けメッセージの対応は `docs/requirements.md` を参照。
-
-### 5.7 レート制限の設計
-
-#### 429エラーの種別
+### 5.4 レート制限の設計
 
 OpenRouterの429エラーには2種類がある:
 
-| 種別 | 説明 | X-RateLimit-Reset |
-|------|------|-------------------|
-| ユーザーレベル | APIキーに対する制限 | あり |
-| プロバイダーレベル | 特定モデル/プロバイダーのアップストリーム制限 | なし |
+| 種別 | 説明 | 動作 |
+|------|------|------|
+| ユーザーレベル | APIキーに対する制限（`X-RateLimit-Reset`あり） | グローバルフラグで全モデルブロック |
+| プロバイダーレベル | 特定モデルのアップストリーム制限（ヘッダーなし） | フラグセットなし、他モデル使用可 |
 
-プロバイダーレベルの例:
+### 5.5 レジリエンス設計
 
-```json
-{
-  "status": 429,
-  "message": "Provider returned error",
-  "metadata": {
-    "raw": "qwen/qwen3-coder:free is temporarily rate-limited upstream...",
-    "provider_name": "Venice"
-  }
-}
-```
-
-#### 設計方針
-
-- **ユーザーレベル制限**（ヘッダーあり）: グローバルフラグをセットし、全モデルへのリクエストを一時停止
-- **プロバイダーレベル制限**（ヘッダーなし）: フラグをセットせず、他モデルは即座に使用可能
-
-```typescript
-case 429: {
-  const resetHeader = response.headers.get("X-RateLimit-Reset");
-  let retryAfterSeconds: number | undefined;
-  if (resetHeader) {
-    // ユーザーレベル制限 → グローバルフラグセット
-    const resetAt = Number.parseInt(resetHeader, 10);
-    this.rateLimitResetAt = resetAt;
-    retryAfterSeconds = Math.max(0, Math.ceil((resetAt - Date.now()) / 1000));
-  }
-  // ヘッダーなし → フラグセットしない（プロバイダー制限）
-  throw new RateLimitError(message, retryAfterSeconds);
-}
-```
-
-#### 動作フロー
-
-```text
-429受信
-  ├─ X-RateLimit-Resetあり → rateLimitResetAtセット → 全モデルブロック
-  └─ ヘッダーなし → フラグセットなし → 他モデルは使用可能
-```
-
-### 5.8 エラー応答のフォールバック設計（v1.1.1）
-
-エラー発生時のDiscord API呼び出しも失敗する可能性がある（権限不足、チャンネル削除等）。
-二重障害でもプロセスをクラッシュさせない設計とする。
-
-#### フォールバック階層
-
-| 優先度 | 動作 | 条件 |
-|--------|------|------|
-| 1 | message.reply() | エラー応答を返信 |
-| 2 | ログ出力のみ | reply失敗時 |
-
-#### 実装パターン
-
-```typescript
-} catch (error) {
-  logger.error("Failed to generate response", { error });
-  try {
-    await message.reply({ content: userMessage });
-  } catch (replyError) {
-    logger.error("Failed to send error message", { replyError });
-    // プロセスは継続
-  }
-}
-```
-
-### 5.9 グローバルエラーハンドラー（v1.1.1）
-
-未処理例外のフォールバックとして、プロセスレベルでエラーをキャッチする。
-
-#### 設計方針
-
-| イベント | 動作 |
-|----------|------|
+| 項目 | 動作 |
+|------|------|
+| 単一リクエスト障害 | 他リクエストに影響を与えない |
+| エラー応答失敗 | フォールバックでログのみ出力 |
 | `unhandledRejection` | ログ出力、プロセス継続 |
 | `uncaughtException` | ログ出力、graceful shutdown |
 
-#### 理由
-
-- Botは長時間稼働するプロセスであり、1リクエストの失敗で全体を停止させるべきではない
-- 権限エラー等の回復可能なエラーでクラッシュしない
-- `uncaughtException`は状態が不整合になる可能性があるため、安全のためshutdown
-
 ---
 
-## 6. Webhook受信設計（v1.1.0）
+## 6. Webhook受信設計
 
 ### 6.1 アーキテクチャ
 
@@ -400,319 +211,203 @@ ReleaseNotificationService
 ### 6.2 設計方針
 
 - 署名検証: HMAC-SHA256、timing-safe比較
-- 処理対象: `release`イベントの`published`アクションのみ
-- 配信形式: Embed
+- 処理対象: `release`イベントの`released`アクションのみ
+- インフラ設定: [infrastructure-setup.md](infrastructure-setup.md) を参照
 
 ---
 
-## 7. Embed設計（v1.2.0）
+## 7. 将来計画（設計骨子）
 
-### 7.1 LLM応答Embed
+詳細設計は実装時に本セクションへ追記する。
 
-```text
-┌─────────────────────────────────────────┐
-│ 🤖 deepseek/deepseek-r1-0528:free      │  ← Author (モデル名)
-├─────────────────────────────────────────┤
-│                                         │
-│ LLM応答本文...                          │  ← Description (最大4096文字)
-│                                         │
-├─────────────────────────────────────────┤
-│ 3分前                                   │  ← Timestamp (相対表記)
-└─────────────────────────────────────────┘
-  ↑ 色: Discord Blurple (#5865F2)
-```
+### v1.2.0 Embed化
 
-#### 設計仕様
+**目的**: LLM応答・エラー・リリース通知をEmbed形式で表示し、視認性を向上
 
-| 項目 | 値 | 備考 |
-|------|-----|------|
-| 色（通常） | `#5865F2` | Discord Blurple |
-| 色（エラー） | `#ED4245` | Discord Red |
-| Author | モデル名 | アイコン: 🤖 |
-| Description | LLM応答本文 | 最大4096文字 |
-| Timestamp | 応答時刻 | `<t:UNIX:R>` 相対表記 |
+**変更対象**:
 
-#### 分割ロジック
+- `src/bot/events/messageCreate.ts` - EmbedBuilder使用
+- `src/utils/message.ts` - 4096文字分割対応（現在2000文字）
+- `src/services/releaseNotificationService.ts` - Embed形式
 
-```text
-LLM応答
-  ├─ ≤4096文字 → 1つのEmbed
-  ├─ 4097-8192文字 → 2つのEmbed
-  └─ >8192文字 → 3つ以上のEmbed
-```
+**設計メモ**:
 
-実装: `src/utils/message.ts` の `splitIntoChunks()` を拡張
+- 色: 通常=`#5865F2`（Discord Blurple）、エラー=`#ED4245`
+- Description上限: 4096文字
+- タイムスタンプ: `<t:UNIX:R>` 形式（相対表記）
 
-### 7.2 エラーEmbed
+**参照**:
 
-```text
-┌─────────────────────────────────────────┐  ← 赤色バー (#ED4245)
-│ ⚠️ エラー                               │  ← Author
-├─────────────────────────────────────────┤
-│ レート制限中です。30秒後に再試行...      │  ← Description (userMessage)
-└─────────────────────────────────────────┘
-```
-
-### 7.3 リリース通知Embed
-
-```text
-┌─────────────────────────────────────────┐
-│ 📦 DisQord                              │  ← Author (リポジトリ名)
-├─────────────────────────────────────────┤
-│ v1.2.0 がリリースされました             │  ← Title
-│                                         │
-│ ## What's New                           │  ← Description (リリースノート)
-│ - Embed化                               │
-│ - 時刻表記統一                          │
-├─────────────────────────────────────────┤
-│ 🔗 詳細を見る                           │  ← URL (html_url)
-│ 3分前                                   │  ← Timestamp
-└─────────────────────────────────────────┘
-  ↑ 色: Discord Blurple (#5865F2)
-```
-
-### 7.4 時刻表記
-
-Discord Snowflakeタイムスタンプ形式を使用:
-
-| 形式 | 表示例 | 用途 |
-|------|--------|------|
-| `<t:UNIX:R>` | 3分前 | 応答時刻、リリース時刻 |
-| `<t:UNIX:f>` | 2025年12月25日 15:30 | 必要に応じて |
-
-実装: `src/utils/timestamp.ts` (新規)
-
-```typescript
-export function toDiscordTimestamp(date: Date | string, format: 'R' | 'd' | 'f' = 'R'): string {
-  const unix = Math.floor(new Date(date).getTime() / 1000);
-  return `<t:${unix}:${format}>`;
-}
-```
-
-### 7.5 変更対象ファイル
-
-| ファイル | 変更内容 |
-|----------|----------|
-| `src/bot/events/messageCreate.ts` | EmbedBuilder使用、エラーEmbed対応 |
-| `src/utils/message.ts` | Embed向け分割（4096文字）対応 |
-| `src/utils/timestamp.ts` | 新規作成 |
-| `src/services/releaseNotificationService.ts` | Embed形式に変更 |
-| `src/bot/commands/handlers.ts` | 時刻表記をDiscord形式に |
+- [discord.js EmbedBuilder](https://discord.js.org/docs/packages/builders/main/EmbedBuilder:Class)
+- [Discord Embed Limits](https://discord.com/developers/docs/resources/message#embed-object-embed-limits)
 
 ---
 
-## 8. モデル選択UI設計（v1.3.0）
+### v1.3.0 モデル選択UI
 
-### 8.1 Autocomplete方式
+**目的**: Autocompleteでモデル選択を直感的に
 
-ユーザーが入力中にリアルタイムでモデル候補を表示:
+**変更対象**:
 
-```text
-/disqord model select model:[deep          ]
-                            ↓ 入力中にリアルタイム表示
-                            ┌───────────────────────────────────────────┐
-                            │ DeepSeek R1 (deepseek/deepseek-r1-0528:free)   │
-                            │ DeepSeek V3 (deepseek/deepseek-v3-0324:free)   │
-                            │ DeepSeek Chat (deepseek/deepseek-chat:free)    │
-                            └───────────────────────────────────────────┘
-                                         ↓ 選択
-✅ モデルを deepseek/deepseek-r1-0528:free に変更しました
-```
+- `src/bot/commands/disqord.ts` - `select`サブコマンド追加、`setAutocomplete(true)`
+- `src/bot/events/interactionCreate.ts` - `isAutocomplete()`処理追加
+- `src/bot/commands/handlers.ts` - Autocompleteハンドラー追加
 
-### 8.2 設計仕様
+**設計メモ**:
 
-| 項目 | 値 | 備考 |
-|------|-----|------|
-| コマンド | `/disqord model select` | 新規追加 |
-| 入力オプション | `model` (String, Autocomplete) | 必須 |
-| 候補表示形式 | `モデル名 (モデルコード)` | 例: DeepSeek R1 (deepseek/...) |
-| 候補上限 | 25件 | Discord API制限 |
-| フィルタリング | モデル名・IDの部分一致 | 大文字小文字区別なし |
+- 候補上限: 25件（Discord API制限）
+- フィルタリング: モデル名・IDの部分一致（大文字小文字区別なし）
+- `freeModelsOnly=true` の場合は無料モデルのみ表示
 
-### 8.3 無料モデル制限時の動作
+**参照**:
 
-| `freeModelsOnly` | 候補に表示されるモデル |
-|------------------|------------------------|
-| `false` | 全モデル |
-| `true` | 無料モデルのみ |
-
-### 8.4 Autocompleteフロー
-
-```text
-ユーザー入力
-    ↓
-interactionCreate (isAutocomplete)
-    ↓
-ModelService.getAllModels() / getFreeModels()
-    ↓
-入力値で部分一致フィルタリング
-    ↓
-上位25件を respond() で返却
-```
-
-### 8.5 実装例
-
-```typescript
-// コマンド定義
-.addSubcommand((sub) =>
-  sub
-    .setName("select")
-    .setDescription("Select a model from the list")
-    .addStringOption((option) =>
-      option
-        .setName("model")
-        .setDescription("Model to use")
-        .setRequired(true)
-        .setAutocomplete(true)
-    )
-)
-
-// Autocompleteハンドラー
-async modelSelectAutocomplete(
-  interaction: AutocompleteInteraction,
-  modelService: IModelService,
-  freeModelsOnly: boolean
-): Promise<void> {
-  const focusedValue = interaction.options.getFocused().toLowerCase();
-  const models = freeModelsOnly
-    ? await modelService.getFreeModels()
-    : await modelService.getAllModels();
-
-  const filtered = models
-    .filter((m) =>
-      m.name.toLowerCase().includes(focusedValue) ||
-      m.id.toLowerCase().includes(focusedValue)
-    )
-    .slice(0, 25)
-    .map((m) => ({
-      name: `${m.name} (${m.id})`,
-      value: m.id,
-    }));
-
-  await interaction.respond(filtered);
-}
-```
-
-### 8.6 変更対象ファイル
-
-| ファイル | 変更内容 |
-|----------|----------|
-| `src/bot/commands/disqord.ts` | `select`サブコマンド追加、`setAutocomplete(true)` |
-| `src/bot/events/interactionCreate.ts` | `isAutocomplete()`処理追加 |
-| `src/bot/commands/handlers.ts` | `modelSelectAutocomplete`、`modelSelect`ハンドラー追加 |
+- [discord.js Autocomplete](https://discord.js.org/docs/packages/discord.js/main/AutocompleteInteraction:Class)
+- [Discord Autocomplete](https://discord.com/developers/docs/interactions/application-commands#autocomplete)
 
 ---
 
-## 9. コンテキスト対話設計（v1.4.0）
+### v1.4.0 コンテキスト対話
 
-### 9.1 概要
+**目的**: 直近n件の会話履歴をLLMに送信し、文脈を保持した対話を実現
 
-直近n件の会話履歴をLLMに送信し、文脈を保持した対話を実現する。
+**変更対象**:
 
-### 9.2 設計仕様
+- `src/db/schema.ts` - `conversation_history`テーブル追加、guild_settings拡張
+- `src/db/repositories/conversationHistory.ts` - 新規作成
+- `src/services/chatService.ts` - 複数メッセージ対応、履歴取得・保存
+- `src/bot/events/messageCreate.ts` - channelId/messageId抽出
+- `src/bot/commands/disqord.ts` - contextサブコマンド追加
 
-| 項目 | 値 | 備考 |
-|------|-----|------|
-| コンテキスト範囲 | 直近n件 | チャンネル/スレッド共通 |
-| デフォルト件数 | 5件 | |
-| 設定可能範囲 | 0-20件 | 0=コンテキストなし |
-| システムプロンプト | "You are a Discord bot. Be concise and helpful." | 全会話に付与 |
-| 自動期限切れ | デフォルト24時間 | 期間指定可能、on/off可能 |
+**DBスキーマ変更**:
 
-### 9.3 メッセージ構造
+```sql
+CREATE TABLE conversation_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    message_id TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL,  -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_conversation_channel ON conversation_history(channel_id, created_at);
 
-```text
-messages: [
-  { role: "system", content: "You are a Discord bot..." },  ← システムプロンプト
-  { role: "user", content: "過去のメッセージ1" },           ← 履歴
-  { role: "assistant", content: "過去の応答1" },
-  { role: "user", content: "過去のメッセージ2" },
-  { role: "assistant", content: "過去の応答2" },
-  { role: "user", content: "現在のメッセージ" }             ← 今回の入力
-]
+ALTER TABLE guild_settings ADD COLUMN context_limit INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE guild_settings ADD COLUMN context_ttl_hours INTEGER DEFAULT 24;
 ```
 
-### 9.4 新規コマンド
+**設計メモ**:
 
-| コマンド | 説明 |
-|----------|------|
-| `/disqord context clear` | チャンネルの会話履歴をクリア |
-| `/disqord config context-limit <n>` | 履歴件数を設定（0-20） |
-| `/disqord config context-ttl <hours>` | 期限を設定（時間） |
-| `/disqord config context-ttl off` | 期限切れを無効化 |
+- デフォルト: 5件、0-20件設定可能
+- TTL: デフォルト24時間、無効化可能
+- システムプロンプト: 全会話に付与
 
-### 9.5 処理フロー
+**参照**:
 
-```text
-メンション受信
-    ↓
-channelId, messageId 取得
-    ↓
-ConversationHistoryRepository.getChannelHistory(channelId, limit)
-    ↓
-TTLでフィルタリング（context_ttl_hours以内）
-    ↓
-messages配列構築（system + history + current）
-    ↓
-OpenRouter.chat(messages)
-    ↓
-応答をDBに保存
-    ↓
-ユーザーに返信
+- [OpenRouter Chat API](https://openrouter.ai/docs/api-reference/chat-completion)
+
+---
+
+### v1.5.0 設定階層化
+
+**目的**: Guild/Channel/User単位で設定を上書き可能に
+
+**変更対象**:
+
+- `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加
+- `src/db/repositories/` - 新規Repository追加
+- `src/services/settingsService.ts` - 階層解決ロジック
+
+**DBスキーマ変更**:
+
+```sql
+CREATE TABLE channel_settings (
+    channel_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    model TEXT,
+    system_prompt TEXT,
+    FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
+);
+
+CREATE TABLE user_settings (
+    user_id TEXT PRIMARY KEY,
+    model TEXT,
+    system_prompt TEXT
+);
 ```
 
-### 9.6 変更対象ファイル
+**設計メモ**:
 
-| ファイル | 変更内容 |
-|----------|----------|
-| `src/db/schema.ts` | `conversation_history`テーブル、guild_settings拡張 |
-| `src/db/repositories/conversationHistory.ts` | 新規作成 |
-| `src/services/chatService.ts` | 複数メッセージ対応、履歴取得・保存 |
-| `src/bot/events/messageCreate.ts` | channelId/messageId抽出 |
-| `src/bot/commands/disqord.ts` | contextサブコマンドグループ追加 |
-| `src/bot/commands/handlers.ts` | contextClear、configContextLimit等追加 |
-
-### 9.7 将来の拡張（v1.4.1以降）
-
-| 機能 | 説明 | バージョン |
-|------|------|------------|
-| リプライ元取得 | リプライ時に元メッセージもコンテキストに含める | v1.4.1 |
-| メッセージリンク | 同一サーバ内リンクからコンテキスト取得 | v1.4.2 |
-| スレッド全件 | スレッド内は全メッセージを保持 | 将来 |
-| 画像対応 | マルチモーダル対応 | 将来 |
-| Reranker | クエリ関連メッセージのみ取得（Open Provence等） | 将来 |
+- 優先順位: User > Channel > Guild > Default
+- NULL値は上位設定を継承
 
 ---
 
-## 10. Bunエコシステム活用
+### v1.6.0 権限管理
 
-| 機能 | モジュール | 説明 |
-| ---- | ---------- | ---- |
-| SQLite | `bun:sqlite` | 高性能SQLite3ドライバー |
-| テスト | `bun:test` | Jest互換テストランナー |
-| HTTPサーバー | `Bun.serve()` | ヘルスチェック、Webhook受信 |
+**目的**: Bot利用を特定チャンネル/ロールに制限
+
+**変更対象**:
+
+- `src/db/schema.ts` - guild_settings拡張
+- `src/bot/events/messageCreate.ts` - 権限チェック追加
+- `src/bot/commands/disqord.ts` - configサブコマンド追加
+
+**DBスキーマ変更**:
+
+```sql
+ALTER TABLE guild_settings ADD COLUMN allowed_channels TEXT;  -- JSON array
+ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
+```
+
+**設計メモ**:
+
+- `allowed_channels`: NULL=全チャンネル許可、配列=指定チャンネルのみ
+- `admin_role_id`: 設定変更権限を持つロール
+
+**参照**:
+
+- [discord.js Permissions](https://discord.js.org/docs/packages/discord.js/main/PermissionsBitField:Class)
 
 ---
 
-## 11. 参考情報
+### v1.7.0 Web Search
 
-| 項目 | URL |
-| ---- | --- |
-| OpenRouter APIエラー | <https://openrouter.ai/docs/api/reference/errors-and-debugging> |
-| GitHub Webhook Events | <https://docs.github.com/en/webhooks/webhook-events-and-payloads> |
-| GitHub Webhook署名検証 | <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries> |
-| Bun HTTP Server | <https://bun.sh/docs/api/http> |
+**目的**: LLMにWeb検索機能を付与
+
+**変更対象**:
+
+- `src/services/chatService.ts` - モデルIDに`:online`サフィックス付与
+- `src/bot/commands/disqord.ts` - 検索モード切り替えコマンド
+
+**設計メモ**:
+
+- OpenRouter `:online` サフィックスで有効化
+- 追加費用発生（要注意）
+
+**参照**:
+
+- [OpenRouter Web Search](https://openrouter.ai/docs/features/web-search)
 
 ---
 
-## 更新履歴
+### v1.8.0 複数モデル並列
 
-| 日付 | 内容 |
-| ---- | ---- |
-| 2025-12-25 | v1.4.0 コンテキスト対話設計追加 |
-| 2025-12-25 | v1.3.0 モデル選択UI設計追加（Autocomplete方式） |
-| 2025-12-25 | v1.2.0 Embed設計追加 |
-| 2025-12-25 | 将来のスキーマ計画追加（v1.4.0〜v1.6.0） |
-| 2025-12-24 | レート制限設計追加（ユーザー/プロバイダーレベルの区別） |
-| 2025-12-24 | エラーハンドリング設計の詳細化（OpenRouterエラー形式、クラス階層） |
-| 2025-12-23 | 実装コード例を削減、src/へのリンクに変更 |
+**目的**: 同じ質問を複数モデルに投げて比較
+
+**変更対象**:
+
+- `src/services/chatService.ts` - 並列リクエスト
+- `src/bot/events/messageCreate.ts` - 複数Embed送信
+
+**設計メモ**:
+
+- `Promise.allSettled()` で並列実行
+- 各モデルの応答を別々のEmbedで表示
+
+---
+
+## 8. 参考情報
+
+- [OpenRouter APIエラー](https://openrouter.ai/docs/api/reference/errors-and-debugging)
+- [GitHub Webhook Events](https://docs.github.com/en/webhooks/webhook-events-and-payloads)
+- [Bun HTTP Server](https://bun.sh/docs/api/http)

@@ -8,14 +8,19 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 ## Documentation
 
-詳細は [docs/](docs/) を参照:
+### ドキュメント方針
 
-| Document | Description |
-| -------- | ----------- |
-| [requirements.md](docs/requirements.md) | 機能・非機能要件 |
-| [design.md](docs/design.md) | アーキテクチャ、DBスキーマ |
-| [progress.md](docs/progress.md) | 実装進捗（未完了タスク優先） |
-| [test-plan.md](docs/test-plan.md) | テスト戦略 |
+| Document | 役割 | 参照タイミング |
+| -------- | ---- | -------------- |
+| [progress.md](docs/progress.md) | 進捗・ロードマップ | **最初に参照**。未完了タスクと完了済み機能を把握 |
+| [design.md](docs/design.md) | 仕様・アーキテクチャ・設計判断 | 実装時に参照。DBスキーマ、エラー設計など |
+| [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
+
+### 更新ルール
+
+- 機能実装完了時: progress.md の該当タスクを「完了済み」へ移動
+- 設計変更時: design.md を更新（将来計画の詳細は実装時に追記）
+- 新機能追加時: design.md に仕様・設計を追記
 
 ## Tech Stack
 
@@ -30,8 +35,8 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 ```text
 src/
-├── index.ts              # Entry point
-├── health.ts             # Health check HTTP server
+├── index.ts              # Entry point + DI setup
+├── health.ts             # HTTP server (health check + webhook)
 ├── config/               # Environment variable loading
 ├── bot/
 │   ├── client.ts         # Discord client
@@ -41,8 +46,10 @@ src/
 │   ├── index.ts          # DB connection
 │   ├── schema.ts         # Migrations
 │   └── repositories/     # Data access layer
-├── llm/                  # LLM client
+├── llm/                  # OpenRouter client
 ├── services/             # Business logic
+├── errors/               # Custom error classes
+├── http/                 # Webhook signature verification
 ├── types/                # Type definitions
 └── utils/                # Utilities
 ```
@@ -90,7 +97,16 @@ bun format         # Format with Biome
 
 - Framework: bun:test
 - Directory: `tests/`
-- Coverage: 98.71% lines, 94.02% functions
+- Run: `bun test` (includes typecheck)
+
+### Mock Strategy
+
+| 依存 | モック方法 |
+| ---- | ---------- |
+| `fetch` | `mock()` でグローバル置換 |
+| `bun:sqlite` | インメモリDB (`:memory:`) |
+| Repository/Service | `mock()` でインターフェース実装 |
+| `console.*` | `spyOn()` で出力検証 |
 
 ## Git
 
