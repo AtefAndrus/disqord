@@ -220,91 +220,9 @@ ReleaseNotificationService
 
 詳細設計は実装時に本セクションへ追記する。
 
-### v1.2.0 Embed化
+### v1.2.1 クイックウィン
 
-**目的**: LLM応答・エラー・リリース通知をEmbed形式で表示し、視認性を向上
-
-**変更対象**:
-
-- `src/bot/events/messageCreate.ts` - EmbedBuilder使用
-- `src/utils/message.ts` - 4096文字分割対応（現在2000文字）
-- `src/services/releaseNotificationService.ts` - Embed形式
-
-**設計メモ**:
-
-- 色: 通常=`#5865F2`（Discord Blurple）、エラー=`#ED4245`
-- Description上限: 4096文字
-- タイムスタンプ: `<t:UNIX:R>` 形式（相対表記）
-
-**参照**:
-
-- [discord.js EmbedBuilder](https://discord.js.org/docs/packages/builders/main/EmbedBuilder:Class)
-- [Discord Embed Limits](https://discord.com/developers/docs/resources/message#embed-object-embed-limits)
-
----
-
-### v1.3.0 モデル選択UI + ストリーミング + `/stop`コマンド
-
-#### モデル選択UI（Autocomplete）
-
-**目的**: Autocompleteでモデル選択を直感的に
-
-**変更対象**:
-
-- `src/bot/commands/disqord.ts` - `select`サブコマンド追加、`setAutocomplete(true)`
-- `src/bot/events/interactionCreate.ts` - `isAutocomplete()`処理追加
-- `src/bot/commands/handlers.ts` - Autocompleteハンドラー追加
-
-**設計メモ**:
-
-- 候補上限: 25件（Discord API制限）
-- フィルタリング: モデル名・IDの部分一致（大文字小文字区別なし）
-- `freeModelsOnly=true` の場合は無料モデルのみ表示
-
-**参照**:
-
-- [discord.js Autocomplete](https://discord.js.org/docs/packages/discord.js/main/AutocompleteInteraction:Class)
-- [Discord Autocomplete](https://discord.com/developers/docs/interactions/application-commands#autocomplete)
-
----
-
-#### ストリーミング対応
-
-**目的**: リアルタイムでLLM応答を表示し、`/stop`コマンドでキャンセル可能に
-
-**変更対象**:
-
-- `src/llm/openrouter.ts` - `stream: true`対応、SSE処理
-- `src/services/chatService.ts` - ストリーミングレスポンス処理、進行中リクエスト追跡
-- `src/bot/events/messageCreate.ts` - メッセージ更新ロジック
-- `src/bot/commands/handlers.ts` - `/disqord stop`ハンドラー追加
-
-**設計メモ**:
-
-**キャンセルと課金**:
-
-- **非ストリーミングリクエスト**: クライアント側でキャンセルしてもサーバー側で処理継続、フル課金
-- **ストリーミングリクエスト（対応プロバイダー）**: 接続中断で即座に処理・課金停止
-- **対応プロバイダー**: OpenAI、Anthropic、Fireworks、Cohere、DeepInfra等20+
-- **非対応プロバイダー**: Google、AWS Bedrock、Groq、Mistral等20+
-
-**実装方式**:
-
-1. `Map<messageId, AbortController>` で進行中リクエストを追跡
-2. SSEストリーミングでトークンを受信
-3. 2秒ごとにDiscordメッセージを更新（レート制限: 5回/5秒 = 1回/秒、余裕を持って2秒間隔）
-4. `/disqord stop` でAbortController.abort()を呼び出し
-5. 完了/キャンセル時にMapから削除
-
-**エラーハンドリング**:
-
-- プロバイダーが非対応の場合、キャンセル警告を表示
-- 既に完了したリクエストへのキャンセルはエラー応答
-
-**参照**:
-
-- [OpenRouter Streaming](https://openrouter.ai/docs/api/reference/streaming)
-- [OpenRouter Streaming Cancellation](https://openrouter.ai/docs/api/reference/streaming#cancellation)
+**目的**: 簡単に実装できるUX改善を先行リリース
 
 ---
 
@@ -327,7 +245,179 @@ ReleaseNotificationService
 
 ---
 
-### v1.4.0 コンテキスト対話
+#### Discord.js v15対応
+
+**目的**: 非推奨警告を解消し、将来のアップグレードに備える
+
+**変更対象**:
+
+- `src/bot/client.ts` または `src/index.ts` - イベント名変更
+
+**設計メモ**:
+
+- `Events.ClientReady` を使用（`Events.Ready` は非推奨）
+- discord.js v14で動作、v15でも互換性維持
+
+**参照**:
+
+- [discord.js v14.16.0 Changelog](https://github.com/discordjs/discord.js/releases/tag/14.16.0)
+
+---
+
+#### snowflake時間表示
+
+**目的**: `/disqord status`のBot起動時刻をDiscord相対表記で表示
+
+**変更対象**:
+
+- `src/bot/commands/handlers.ts` - statusハンドラー
+- `src/bot/client.ts` - `readyTimestamp`保存
+
+**設計メモ**:
+
+- Discord snowflakeから起動時刻を計算
+- フォーマット: `<t:UNIX:R>` (例: "2時間前")
+- `client.readyTimestamp`をUNIXタイムスタンプ（秒）に変換
+
+**参照**:
+
+- [Discord Timestamp Formatting](https://discord.com/developers/docs/reference#message-formatting-timestamp-styles)
+
+---
+
+### v1.3.0 モデル選択UI + UX改善
+
+**目的**: モデル選択体験とUI視認性を向上
+
+---
+
+#### Embedの色をモデルごとにランダム化
+
+**目的**: 複数モデル並列実行時に視覚的に区別しやすく
+
+**変更対象**:
+
+- `src/utils/color.ts` - `modelNameToColor()`関数新規作成
+- `src/bot/events/messageCreate.ts` - Embed色を動的設定
+
+**設計メモ**:
+
+- モデル名をハッシュ化して色を決定（同じモデルは常に同じ色）
+- 彩度・明度を調整して可読性を確保
+- エラー時は引き続き`#ED4245`（Red）
+
+**参照**:
+
+- [EmbedBuilder.setColor()](https://discord.js.org/docs/packages/builders/main/EmbedBuilder:Class#setColor)
+
+---
+
+#### モデル選択UI（Autocomplete）
+
+**目的**: Autocompleteでモデル選択を直感的に
+
+**変更対象**:
+
+- `src/bot/commands/disqord.ts` - `model set`サブコマンドに`setAutocomplete(true)`
+- `src/bot/events/interactionCreate.ts` - `isAutocomplete()`処理追加
+- `src/bot/commands/handlers.ts` - Autocompleteハンドラー追加
+
+**設計メモ**:
+
+- 候補上限: 25件（Discord API制限）
+- フィルタリング: モデル名・IDの部分一致（大文字小文字区別なし）
+- `freeModelsOnly=true` の場合は無料モデルのみ表示
+- 表示形式: `{name} ({id})`
+
+**参照**:
+
+- [discord.js Autocomplete](https://discord.js.org/docs/packages/discord.js/main/AutocompleteInteraction:Class)
+- [Discord Autocomplete](https://discord.com/developers/docs/interactions/application-commands#autocomplete)
+
+---
+
+#### LLM詳細情報表示モード
+
+**目的**: tokens、latency、cost等の詳細情報をオプション表示
+
+**変更対象**:
+
+- `src/bot/events/messageCreate.ts` - Embedフッターに情報追加
+- `src/llm/openrouter.ts` - レスポンスヘッダーからメタデータ取得
+- `src/db/schema.ts` - `guild_settings.show_llm_details` カラム追加（任意）
+
+**設計メモ**:
+
+- フッターに表示: `Tokens: 123 | Latency: 1.2s | Cost: $0.0001`
+- OpenRouter レスポンスヘッダー:
+  - `x-ratelimit-limit-tokens`
+  - `x-ratelimit-remaining-tokens`
+- コスト計算: `input_tokens * pricing.prompt + output_tokens * pricing.completion`
+
+**参照**:
+
+- [OpenRouter Response Headers](https://openrouter.ai/docs/api/reference/response-headers)
+
+---
+
+### v1.4.0 ストリーミング対応
+
+**目的**: リアルタイムでLLM応答を表示し、`/stop`コマンドでキャンセル可能に
+
+---
+
+#### ストリーミング対応
+
+**変更対象**:
+
+- `src/llm/openrouter.ts` - `stream: true`対応、SSE処理
+- `src/services/chatService.ts` - ストリーミングレスポンス処理、進行中リクエスト追跡
+- `src/bot/events/messageCreate.ts` - メッセージ更新ロジック
+
+**設計メモ**:
+
+**キャンセルと課金**:
+
+- **非ストリーミングリクエスト**: クライアント側でキャンセルしてもサーバー側で処理継続、フル課金
+- **ストリーミングリクエスト（対応プロバイダー）**: 接続中断で即座に処理・課金停止
+- **対応プロバイダー**: OpenAI、Anthropic、Fireworks、Cohere、DeepInfra等20+
+- **非対応プロバイダー**: Google、AWS Bedrock、Groq、Mistral等20+
+
+**実装方式**:
+
+1. `Map<messageId, AbortController>` で進行中リクエストを追跡
+2. SSEストリーミングでトークンを受信
+3. 2秒ごとにDiscordメッセージを更新（レート制限: 5回/5秒 = 1回/秒、余裕を持って2秒間隔）
+4. 完了時にMapから削除
+
+**参照**:
+
+- [OpenRouter Streaming](https://openrouter.ai/docs/api/reference/streaming)
+
+---
+
+#### `/disqord stop`コマンド
+
+**変更対象**:
+
+- `src/bot/commands/disqord.ts` - `stop`サブコマンド追加
+- `src/bot/commands/handlers.ts` - stopハンドラー追加
+- `src/services/chatService.ts` - AbortController.abort()呼び出し
+
+**設計メモ**:
+
+- `AbortController.abort()`でストリーミング中断
+- エラーハンドリング:
+  - プロバイダーが非対応の場合、キャンセル警告を表示
+  - 既に完了したリクエストへのキャンセルはエラー応答
+
+**参照**:
+
+- [OpenRouter Streaming Cancellation](https://openrouter.ai/docs/api/reference/streaming#cancellation)
+
+---
+
+### v1.5.0 コンテキスト対話
 
 **目的**: 直近n件の会話履歴をLLMに送信し、文脈を保持した対話を実現
 
@@ -368,7 +458,7 @@ ALTER TABLE guild_settings ADD COLUMN context_ttl_hours INTEGER DEFAULT 24;
 
 ---
 
-### v1.5.0 設定階層化 + LLMパラメータ設定
+### v1.6.0 設定階層化 + LLMパラメータ設定
 
 **目的**: Guild/Channel/User単位で設定を上書き可能に、LLMパラメータをモデルごとに最適化
 
@@ -437,7 +527,7 @@ ALTER TABLE guild_settings ADD COLUMN llm_params TEXT;
 
 ---
 
-### v1.6.0 権限管理
+### v1.7.0 権限管理
 
 **目的**: Bot利用を特定チャンネル/ロールに制限
 
@@ -465,7 +555,7 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 
 ---
 
-### v1.7.0 Web Search
+### v1.8.0 Web Search
 
 **目的**: LLMにWeb検索機能を付与
 
@@ -485,7 +575,7 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 
 ---
 
-### v1.8.0 複数モデル並列
+### v1.9.0 複数モデル並列
 
 **目的**: 同じ質問を複数モデルに投げて比較
 
