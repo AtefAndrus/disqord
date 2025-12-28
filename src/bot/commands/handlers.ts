@@ -3,7 +3,8 @@ import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import { EmbedColors } from "../../types/embed";
+import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import type { CommandHandlers } from "../events/interactionCreate";
@@ -77,11 +78,41 @@ export function createCommandHandlers(
       }
 
       await settingsService.setGuildModel(interaction.guildId, model);
-      const successEmbed = createSuccessEmbed(
-        `モデルを \`${model}\` に変更しました。`,
-        "モデル変更",
-      );
-      await interaction.reply({ embeds: [successEmbed] });
+
+      // モデル詳細情報を取得して表示
+      const details = await modelService.getModelDetails(model);
+
+      if (details) {
+        const { formatContextLength, formatPrice } = await import(
+          "../../utils/modelDetailsFormatter"
+        );
+
+        const successEmbed = createEmbed({
+          color: EmbedColors.BLURPLE,
+          title: "モデル変更",
+          description: `モデルを \`${model}\` に変更しました。`,
+          fields: [
+            { name: "モデル名", value: details.name, inline: true },
+            {
+              name: "コンテキスト長",
+              value: formatContextLength(details.contextLength),
+              inline: true,
+            },
+            { name: "無料モデル", value: details.isFree ? "はい" : "いいえ", inline: true },
+            { name: "入力価格", value: formatPrice(details.pricing.prompt), inline: true },
+            { name: "出力価格", value: formatPrice(details.pricing.completion), inline: true },
+          ],
+          timestamp: null,
+        });
+        await interaction.reply({ embeds: [successEmbed] });
+      } else {
+        // フォールバック（詳細取得失敗時）
+        const successEmbed = createSuccessEmbed(
+          `モデルを \`${model}\` に変更しました。`,
+          "モデル変更",
+        );
+        await interaction.reply({ embeds: [successEmbed] });
+      }
     },
 
     async modelList(interaction: ChatInputCommandInteraction): Promise<void> {

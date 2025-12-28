@@ -59,6 +59,7 @@ describe("createMessageCreateHandler", () => {
       isFreeModel: mock(() => Promise.resolve(true)),
       validateModelSelection: mock(() => Promise.resolve({ valid: true })),
       getModelName: mock(() => Promise.resolve("DeepSeek R1 0528 (free)")),
+      getModelDetails: mock(() => Promise.resolve(null)),
       refreshCache: mock(() => Promise.resolve()),
       getCacheStatus: mock(() => ({
         lastUpdatedAt: new Date(),

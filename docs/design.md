@@ -28,7 +28,7 @@
 | `/disqord help` | 使い方を表示 |
 | `/disqord status` | Botのステータス（OpenRouter残高等）を表示、ボタンで設定切り替え可能 |
 | `/disqord model current` | 現在設定されているモデルを表示 |
-| `/disqord model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート） |
+| `/disqord model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート、変更時にモデル詳細情報を表示） |
 | `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
 | `/disqord model refresh` | モデルキャッシュを更新 |
 | `/disqord config free-only <on\|off>` | Guildの無料モデル限定設定を切り替え |

@@ -113,6 +113,40 @@ bun format         # Format with Biome
 - Commit messages: English
 - Branch: main
 
+## Release Process
+
+When creating a new release:
+
+1. **Update documentation**:
+   - Move completed tasks in `docs/progress.md` to "完了済み" section
+   - Update `docs/design.md` and `README.md` (if needed)
+
+2. **Commit and push changes**:
+
+   ```bash
+   git add .
+   git commit -m "[feat] implement vX.X.X ..."
+   git push
+   ```
+
+3. **Create and push tag**:
+
+   ```bash
+   git tag vX.X.X
+   git push --tags
+   ```
+
+4. **Create GitHub release**:
+
+   ```bash
+   gh release create vX.X.X --title "vX.X.X" --notes "..."
+   ```
+
+   - Release title: `vX.X.X`
+   - Release notes should include:
+     - Summary of changes (bullet points)
+     - At the end: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v{current}`
+
 ## Notes
 
 - Discord message limit: 2000 characters (split required)

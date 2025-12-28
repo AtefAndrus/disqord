@@ -43,6 +43,16 @@
 
 ## 完了済み
 
+### v1.3.2 (2025-12-29)
+
+UX改善（言語統一 + ボタン + モデル詳細）
+
+- `/disqord status`表示の言語統一（"ON/OFF" → "有効/無効"）
+- statusボタンのUX改善（トグル形式: `設定名: 現在値 → 切替後値`）
+- `/disqord model set`でモデル詳細情報を表示（名前、コンテキスト長、価格）
+- `ModelService.getModelDetails()`メソッド追加
+- フォーマット関数追加（`formatContextLength`, `formatPrice`）
+
 ### v1.3.1 (2025-12-29)
 
 UX改善

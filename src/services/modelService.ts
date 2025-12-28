@@ -12,6 +12,17 @@ export interface CacheStatus {
   isExpired: boolean;
 }
 
+export interface ModelDetails {
+  id: string;
+  name: string;
+  contextLength: number;
+  pricing: {
+    prompt: string;
+    completion: string;
+  };
+  isFree: boolean;
+}
+
 export interface IModelService {
   getAllModels(options?: { noCache?: boolean }): Promise<OpenRouterModel[]>;
   getFreeModels(options?: { noCache?: boolean }): Promise<OpenRouterModel[]>;
@@ -19,6 +30,7 @@ export interface IModelService {
   isFreeModel(modelId: string): Promise<boolean>;
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
   getModelName(modelId: string): Promise<string | null>;
+  getModelDetails(modelId: string): Promise<ModelDetails | null>;
   refreshCache(): Promise<void>;
   getCacheStatus(): CacheStatus;
 }
@@ -88,6 +100,28 @@ export class ModelService implements IModelService {
     const models = await this.getAllModels();
     const model = models.find((m) => m.id === modelId);
     return model?.name ?? null;
+  }
+
+  async getModelDetails(modelId: string): Promise<ModelDetails | null> {
+    const models = await this.getAllModels();
+    const model = models.find((m) => m.id === modelId);
+
+    if (!model) {
+      return null;
+    }
+
+    const isFree = model.pricing.prompt === "0" && model.pricing.completion === "0";
+
+    return {
+      id: model.id,
+      name: model.name,
+      contextLength: model.contextLength,
+      pricing: {
+        prompt: model.pricing.prompt,
+        completion: model.pricing.completion,
+      },
+      isFree,
+    };
   }
 
   async refreshCache(): Promise<void> {

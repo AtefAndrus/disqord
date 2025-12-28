@@ -48,7 +48,7 @@ export function buildStatusMessage(data: StatusMessageData): {
         value: data.settings.freeModelsOnly ? "有効" : "無効",
         inline: true,
       },
-      { name: "LLM詳細表示", value: data.settings.showLlmDetails ? "ON" : "OFF", inline: true },
+      { name: "LLM詳細表示", value: data.settings.showLlmDetails ? "有効" : "無効", inline: true },
       { name: "リリース通知先", value: releaseChannelText, inline: true },
     );
   }
@@ -65,12 +65,16 @@ export function buildStatusMessage(data: StatusMessageData): {
   if (data.settings) {
     const freeOnlyButton = new ButtonBuilder()
       .setCustomId("status_toggle_free_only")
-      .setLabel(`無料モデル限定: ${data.settings.freeModelsOnly ? "ON" : "OFF"}`)
+      .setLabel(
+        `無料モデル限定: ${data.settings.freeModelsOnly ? "有効" : "無効"} → ${data.settings.freeModelsOnly ? "無効" : "有効"}`,
+      )
       .setStyle(data.settings.freeModelsOnly ? ButtonStyle.Success : ButtonStyle.Secondary);
 
     const llmDetailsButton = new ButtonBuilder()
       .setCustomId("status_toggle_llm_details")
-      .setLabel(`LLM詳細: ${data.settings.showLlmDetails ? "ON" : "OFF"}`)
+      .setLabel(
+        `LLM詳細表示: ${data.settings.showLlmDetails ? "有効" : "無効"} → ${data.settings.showLlmDetails ? "無効" : "有効"}`,
+      )
       .setStyle(data.settings.showLlmDetails ? ButtonStyle.Success : ButtonStyle.Secondary);
 
     const refreshButton = new ButtonBuilder()

@@ -171,4 +171,30 @@ describe("ModelService", () => {
       expect(status.modelCount).toBe(4); // All models are cached, not just free ones
     });
   });
+
+  describe("getModelDetails", () => {
+    test("returns model details for existing model", async () => {
+      const details = await modelService.getModelDetails("paid-model-1");
+
+      expect(details).toEqual({
+        id: "paid-model-1",
+        name: "Paid Model 1",
+        contextLength: 16384,
+        pricing: { prompt: "0.001", completion: "0.002" },
+        isFree: false,
+      });
+    });
+
+    test("returns isFree=true for free model", async () => {
+      const details = await modelService.getModelDetails("free-model-1");
+
+      expect(details?.isFree).toBe(true);
+    });
+
+    test("returns null for non-existing model", async () => {
+      const details = await modelService.getModelDetails("non-existing-model");
+
+      expect(details).toBeNull();
+    });
+  });
 });
