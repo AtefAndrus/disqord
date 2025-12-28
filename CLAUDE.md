@@ -18,9 +18,22 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 ### 更新ルール
 
-- 機能実装完了時: progress.md の該当タスクを「完了済み」へ移動
-- 設計変更時: design.md を更新（将来計画の詳細は実装時に追記）
-- 新機能追加時: design.md に仕様・設計を追記
+#### progress.md
+
+- **新機能検討時**: ロードマップ（未完了タスク）に追加
+  - バージョン番号、機能概要、主要タスクを記載
+  - 詳細設計はこの時点では不要（design.mdで後述）
+- **実装完了時（commit前）**: 該当タスクを「完了済み」セクションへ移動
+  - 実装日、主な変更内容を記載
+
+#### design.md
+
+- **Planning完了時（実装前）**: 詳細設計をdesign.mdに追記
+  - 変更ファイル、実装方針、技術的決定事項、制約条件などを記載
+  - ロードマップの概要レベルから実装可能な詳細レベルに展開
+- **実装完了時（commit前）**: design.mdを「実装済み」扱いに更新
+  - 将来計画セクションから該当バージョンを削除
+  - 実装済み機能の参照箇所を更新（コマンド説明、アーキテクチャ図など）
 
 ## Tech Stack
 
@@ -121,7 +134,14 @@ When creating a new release:
    - Move completed tasks in `docs/progress.md` to "完了済み" section
    - Update `docs/design.md` and `README.md` (if needed)
 
-2. **Commit and push changes**:
+2. **Update package.json version**:
+
+   ```bash
+   # Edit package.json to update version field to vX.X.X
+   # Example: "version": "1.3.2"
+   ```
+
+3. **Commit and push changes**:
 
    ```bash
    git add .
@@ -129,14 +149,14 @@ When creating a new release:
    git push
    ```
 
-3. **Create and push tag**:
+4. **Create and push tag**:
 
    ```bash
    git tag vX.X.X
    git push --tags
    ```
 
-4. **Create GitHub release**:
+5. **Create GitHub release**:
 
    ```bash
    gh release create vX.X.X --title "vX.X.X" --notes "..."
