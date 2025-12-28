@@ -5,6 +5,7 @@ import type { ISettingsService } from "../../services/settingsService";
 import { EmbedColors } from "../../types/embed";
 import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import type { CommandHandlers } from "../events/interactionCreate";
+import packageJson from "../../../package.json";
 
 export function createCommandHandlers(
   llmClient: ILLMClient,
@@ -117,15 +118,14 @@ export function createCommandHandlers(
 
       let cacheText: string;
       if (cacheStatus.lastUpdatedAt) {
-        const elapsed = Date.now() - cacheStatus.lastUpdatedAt.getTime();
-        const minutes = Math.floor(elapsed / 60000);
-        const timeAgo = minutes < 1 ? "1分未満前" : `${minutes}分前`;
-        cacheText = `${timeAgo} (${cacheStatus.modelCount}件)`;
+        const unixSeconds = Math.floor(cacheStatus.lastUpdatedAt.getTime() / 1000);
+        cacheText = `<t:${unixSeconds}:R> (${cacheStatus.modelCount}件)`;
       } else {
         cacheText = "未取得";
       }
 
       const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+        { name: "バージョン", value: `v${packageJson.version}`, inline: true },
         { name: "OpenRouter残高", value: remainingText, inline: true },
         { name: "レート制限", value: rateLimited ? "制限中" : "正常", inline: true },
         { name: "モデルキャッシュ", value: cacheText, inline: true },

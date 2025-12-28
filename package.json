@@ -1,6 +1,6 @@
 {
   "name": "disqord",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Discord bot that connects to OpenRouter for LLM conversations",
   "license": "MIT",
   "type": "module",

@@ -1,3 +1,4 @@
+import { Events } from "discord.js";
 import { createBotClient } from "./bot/client";
 import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
@@ -39,7 +40,7 @@ async function bootstrap(): Promise<void> {
   const interactionCreateHandler = createInteractionCreateHandler(commandHandlers);
 
   const client = await createBotClient();
-  client.once("ready", () => onReady(client));
+  client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
 
