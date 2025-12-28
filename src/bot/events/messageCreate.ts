@@ -1,10 +1,17 @@
 import type { Message } from "discord.js";
 import { AppError } from "../../errors";
 import type { IChatService } from "../../services/chatService";
+import type { IModelService } from "../../services/modelService";
+import type { ISettingsService } from "../../services/settingsService";
+import { EmbedColors } from "../../types/embed";
+import { createErrorEmbed, splitTextToMultipleMessages } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
-import { splitIntoChunks } from "../../utils/message";
 
-export function createMessageCreateHandler(chatService: IChatService) {
+export function createMessageCreateHandler(
+  chatService: IChatService,
+  settingsService: ISettingsService,
+  modelService: IModelService,
+) {
   return async function onMessageCreate(message: Message): Promise<void> {
     if (message.author.bot) {
       return;
@@ -21,8 +28,9 @@ export function createMessageCreateHandler(chatService: IChatService) {
 
     const content = message.content.replace(/<@!?\d+>/g, "").trim();
     if (!content) {
+      const errorEmbed = createErrorEmbed("メッセージを入力してください。", "入力エラー");
       await message.reply({
-        content: "メッセージを入力してください。",
+        embeds: [errorEmbed],
         allowedMentions: { repliedUser: false },
       });
       return;
@@ -43,10 +51,20 @@ export function createMessageCreateHandler(chatService: IChatService) {
 
       const response = await chatService.generateResponse(message.guild.id, content);
 
-      const chunks = splitIntoChunks(response);
-      for (const chunk of chunks) {
-        if ("send" in message.channel) {
-          await message.channel.send(chunk);
+      const settings = await settingsService.getGuildSettings(message.guild.id);
+      const modelName =
+        (await modelService.getModelName(settings.defaultModel)) ?? settings.defaultModel;
+      const messageGroups = splitTextToMultipleMessages(response, {
+        color: EmbedColors.BLURPLE,
+        timestamp: new Date(),
+        author: {
+          name: modelName,
+        },
+      });
+
+      if ("send" in message.channel) {
+        for (const embeds of messageGroups) {
+          await message.channel.send({ embeds });
         }
       }
     } catch (error) {
@@ -58,8 +76,9 @@ export function createMessageCreateHandler(chatService: IChatService) {
           : "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
 
       try {
+        const errorEmbed = createErrorEmbed(userMessage);
         await message.reply({
-          content: userMessage,
+          embeds: [errorEmbed],
           allowedMentions: { repliedUser: false },
         });
       } catch (replyError) {

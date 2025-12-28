@@ -2,6 +2,8 @@ import type { ChatInputCommandInteraction } from "discord.js";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
+import { EmbedColors } from "../../types/embed";
+import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import type { CommandHandlers } from "../events/interactionCreate";
 
 export function createCommandHandlers(
@@ -11,9 +13,7 @@ export function createCommandHandlers(
 ): CommandHandlers {
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
-      const helpText = `**DisQord - LLM会話Bot**
-
-**使い方:**
+      const helpText = `**使い方:**
 - Botにメンションして話しかけると、LLMが応答します
 - 例: \`@DisQord こんにちは\`
 
@@ -27,22 +27,29 @@ export function createCommandHandlers(
 - \`/disqord config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/disqord config release-channel [channel]\` - リリース通知チャンネルを設定（省略で無効化）`;
 
-      await interaction.reply(helpText);
+      const embed = createSuccessEmbed(helpText, "DisQord ヘルプ");
+      await interaction.reply({ embeds: [embed] });
     },
 
     async modelCurrent(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
       const settings = await settingsService.getGuildSettings(interaction.guildId);
-      await interaction.reply(`現在のモデル: \`${settings.defaultModel}\``);
+      const embed = createSuccessEmbed(
+        `現在のモデル: \`${settings.defaultModel}\``,
+        "現在のモデル",
+      );
+      await interaction.reply({ embeds: [embed] });
     },
 
     async modelSet(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
@@ -52,19 +59,27 @@ export function createCommandHandlers(
       const validation = await modelService.validateModelSelection(model, settings.freeModelsOnly);
       if (!validation.valid) {
         if (validation.error === "MODEL_NOT_FOUND") {
-          await interaction.reply(
+          const errorEmbed = createErrorEmbed(
             `モデル \`${model}\` は見つかりませんでした。\`/disqord model list\` で利用可能なモデルを確認してください。`,
+            "モデル設定エラー",
           );
+          await interaction.reply({ embeds: [errorEmbed] });
         } else if (validation.error === "MODEL_NOT_FREE") {
-          await interaction.reply(
+          const errorEmbed = createErrorEmbed(
             `このサーバーは無料モデル限定に設定されています。モデル \`${model}\` は無料モデルではありません。`,
+            "モデル設定エラー",
           );
+          await interaction.reply({ embeds: [errorEmbed] });
         }
         return;
       }
 
       await settingsService.setGuildModel(interaction.guildId, model);
-      await interaction.reply(`モデルを \`${model}\` に変更しました。`);
+      const successEmbed = createSuccessEmbed(
+        `モデルを \`${model}\` に変更しました。`,
+        "モデル変更",
+      );
+      await interaction.reply({ embeds: [successEmbed] });
     },
 
     async modelList(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -73,16 +88,19 @@ export function createCommandHandlers(
 
 モデルを変更するには \`/disqord model set <model>\` を使用してください。`;
 
-      await interaction.reply(message);
+      const embed = createSuccessEmbed(message, "モデル一覧");
+      await interaction.reply({ embeds: [embed] });
     },
 
     async modelRefresh(interaction: ChatInputCommandInteraction): Promise<void> {
       await interaction.deferReply();
       await modelService.refreshCache();
       const cacheStatus = modelService.getCacheStatus();
-      await interaction.editReply(
+      const embed = createSuccessEmbed(
         `モデルキャッシュを更新しました。${cacheStatus.modelCount}件のモデルを取得しました。`,
+        "モデルキャッシュ更新",
       );
+      await interaction.editReply({ embeds: [embed] });
     },
 
     async status(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -107,29 +125,47 @@ export function createCommandHandlers(
         cacheText = "未取得";
       }
 
-      let guildStatusText = "";
+      const fields: Array<{ name: string; value: string; inline?: boolean }> = [
+        { name: "OpenRouter残高", value: remainingText, inline: true },
+        { name: "レート制限", value: rateLimited ? "制限中" : "正常", inline: true },
+        { name: "モデルキャッシュ", value: cacheText, inline: true },
+      ];
+
       if (interaction.guildId) {
         const settings = await settingsService.getGuildSettings(interaction.guildId);
         const releaseChannelText = settings.releaseChannelId
           ? `<#${settings.releaseChannelId}>`
           : "未設定";
-        guildStatusText = `\n\n**Guild設定**
-- デフォルトモデル: \`${settings.defaultModel}\`
-- 無料モデル限定: ${settings.freeModelsOnly ? "有効" : "無効"}
-- リリース通知先: ${releaseChannelText}`;
+
+        fields.push(
+          {
+            name: "デフォルトモデル",
+            value: `\`${settings.defaultModel}\``,
+            inline: true,
+          },
+          {
+            name: "無料モデル限定",
+            value: settings.freeModelsOnly ? "有効" : "無効",
+            inline: true,
+          },
+          { name: "リリース通知先", value: releaseChannelText, inline: true },
+        );
       }
 
-      const statusText = `**DisQord Status**
-- OpenRouter残高: ${remainingText}
-- レート制限: ${rateLimited ? "制限中" : "正常"}
-- モデルキャッシュ: ${cacheText}${guildStatusText}`;
+      const embed = createEmbed({
+        color: EmbedColors.BLURPLE,
+        title: "ステータス",
+        fields,
+        timestamp: null,
+      });
 
-      await interaction.editReply(statusText);
+      await interaction.editReply({ embeds: [embed] });
     },
 
     async configFreeOnly(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
@@ -139,22 +175,29 @@ export function createCommandHandlers(
         const settings = await settingsService.getGuildSettings(interaction.guildId);
         const isFree = await modelService.isFreeModel(settings.defaultModel);
         if (!isFree) {
-          await interaction.reply(
+          const errorEmbed = createErrorEmbed(
             `現在のモデル \`${settings.defaultModel}\` は無料モデルではありません。先に無料モデルに変更してから有効化してください。`,
+            "設定エラー",
           );
+          await interaction.reply({ embeds: [errorEmbed] });
           return;
         }
       }
 
       await settingsService.setFreeModelsOnly(interaction.guildId, enabled);
-      await interaction.reply(
-        enabled ? "無料モデル限定を有効にしました。" : "無料モデル限定を無効にしました。",
+      const successEmbed = createSuccessEmbed(
+        enabled
+          ? "無料モデル限定を **有効** にしました。"
+          : "無料モデル限定を **無効** にしました。",
+        "無料モデル限定設定",
       );
+      await interaction.reply({ embeds: [successEmbed] });
     },
 
     async configReleaseChannel(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply("このコマンドはサーバー内でのみ使用できます。");
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
@@ -162,12 +205,17 @@ export function createCommandHandlers(
 
       if (!channel) {
         await settingsService.setReleaseChannel(interaction.guildId, null);
-        await interaction.reply("リリース通知を無効にしました。");
+        const embed = createSuccessEmbed("リリース通知を無効にしました。", "リリース通知設定");
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
       await settingsService.setReleaseChannel(interaction.guildId, channel.id);
-      await interaction.reply(`リリース通知を <#${channel.id}> に設定しました。`);
+      const embed = createSuccessEmbed(
+        `リリース通知を <#${channel.id}> に設定しました。`,
+        "リリース通知設定",
+      );
+      await interaction.reply({ embeds: [embed] });
     },
   };
 }

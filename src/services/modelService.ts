@@ -18,6 +18,7 @@ export interface IModelService {
   isModelAvailable(modelId: string): Promise<boolean>;
   isFreeModel(modelId: string): Promise<boolean>;
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
+  getModelName(modelId: string): Promise<string | null>;
   refreshCache(): Promise<void>;
   getCacheStatus(): CacheStatus;
 }
@@ -81,6 +82,12 @@ export class ModelService implements IModelService {
     }
 
     return { valid: true };
+  }
+
+  async getModelName(modelId: string): Promise<string | null> {
+    const models = await this.getAllModels();
+    const model = models.find((m) => m.id === modelId);
+    return model?.name ?? null;
   }
 
   async refreshCache(): Promise<void> {

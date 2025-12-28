@@ -1,5 +1,7 @@
-import type { Client, TextChannel } from "discord.js";
+import type { Client, EmbedBuilder, TextChannel } from "discord.js";
+import { EmbedColors } from "../types/embed";
 import type { GitHubReleasePayload, NotificationResult } from "../types/github";
+import { createEmbed } from "../utils/embedBuilder";
 import { logger } from "../utils/logger";
 import type { ISettingsService } from "./settingsService";
 
@@ -35,7 +37,7 @@ export class ReleaseNotificationService implements IReleaseNotificationService {
       return result;
     }
 
-    const message = this.formatMessage(payload);
+    const embed = this.createReleaseEmbed(payload);
 
     for (const guild of guilds) {
       if (!guild.releaseChannelId) {
@@ -55,7 +57,7 @@ export class ReleaseNotificationService implements IReleaseNotificationService {
           continue;
         }
 
-        await (channel as TextChannel).send(message);
+        await (channel as TextChannel).send({ embeds: [embed] });
         result.success++;
 
         logger.info("Release notification sent", {
@@ -82,23 +84,32 @@ export class ReleaseNotificationService implements IReleaseNotificationService {
     return result;
   }
 
-  private formatMessage(payload: GitHubReleasePayload): string {
+  private createReleaseEmbed(payload: GitHubReleasePayload): EmbedBuilder {
     const { release, repository } = payload;
     const title = release.name || release.tag_name;
-    const body = release.body ? this.truncateBody(release.body) : "";
+    const body = release.body ? this.truncateBody(release.body, 3800) : "";
 
-    let message = `**${repository.name} ${title} がリリースされました**`;
+    const timestamp = release.published_at ? new Date(release.published_at) : new Date();
 
-    if (body) {
-      message += `\n\n${body}`;
-    }
-
-    message += `\n\n詳細: <${release.html_url}>`;
-
-    return message;
+    return createEmbed({
+      color: EmbedColors.BLURPLE,
+      title: `${repository.name} ${title}`,
+      description: body || "リリースノートはありません。",
+      url: release.html_url,
+      author: {
+        name: release.author.login,
+        iconURL: release.author.avatar_url,
+        url: `https://github.com/${release.author.login}`,
+      },
+      thumbnail: release.author.avatar_url,
+      timestamp,
+      footer: {
+        text: `GitHub Release - ${repository.full_name}`,
+      },
+    });
   }
 
-  private truncateBody(body: string, maxLength = 1500): string {
+  private truncateBody(body: string, maxLength = 3800): string {
     // Remove markdown images and links to keep it concise
     const cleaned = body
       .replace(/!\[.*?\]\(.*?\)/g, "") // Remove images

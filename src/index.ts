@@ -31,7 +31,11 @@ async function bootstrap(): Promise<void> {
 
   const commandHandlers = createCommandHandlers(llmClient, settingsService, modelService);
 
-  const messageCreateHandler = createMessageCreateHandler(chatService);
+  const messageCreateHandler = createMessageCreateHandler(
+    chatService,
+    settingsService,
+    modelService,
+  );
   const interactionCreateHandler = createInteractionCreateHandler(commandHandlers);
 
   const client = await createBotClient();

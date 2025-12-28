@@ -163,7 +163,7 @@ describe("ReleaseNotificationService", () => {
       expect(result.failed).toBe(0);
     });
 
-    it("should format message correctly", async () => {
+    it("should format Embed message correctly", async () => {
       const mockChannel = createMockTextChannel();
       const client = createMockClient();
       (client.channels.fetch as ReturnType<typeof mock>).mockResolvedValue(mockChannel);
@@ -185,7 +185,7 @@ describe("ReleaseNotificationService", () => {
           prerelease: false,
           draft: false,
           created_at: "2025-01-01T00:00:00Z",
-          published_at: "2025-01-01T00:00:00Z",
+          published_at: "2025-01-01T12:00:00Z",
           author: {
             login: "testuser",
             avatar_url: "https://example.com/avatar.png",
@@ -196,11 +196,22 @@ describe("ReleaseNotificationService", () => {
       await service.notify(payload);
 
       const sendCall = (mockChannel.send as ReturnType<typeof mock>).mock.calls[0];
-      const message = sendCall[0] as string;
+      const sentData = sendCall[0];
 
-      expect(message).toContain("**repo Version 2.0.0 がリリースされました**");
-      expect(message).toContain("New features and bug fixes.");
-      expect(message).toContain("https://github.com/test/repo/releases/tag/v2.0.0");
+      expect(sentData.embeds).toBeDefined();
+      expect(sentData.embeds.length).toBe(1);
+
+      const embed = sentData.embeds[0];
+      expect(embed.data.color).toBe(0x5865f2); // BLURPLE
+      expect(embed.data.title).toContain("repo Version 2.0.0");
+      expect(embed.data.description).toContain("New features and bug fixes.");
+      expect(embed.data.url).toBe("https://github.com/test/repo/releases/tag/v2.0.0");
+      expect(embed.data.author?.name).toBe("testuser");
+      expect(embed.data.author?.icon_url).toBe("https://example.com/avatar.png");
+      expect(embed.data.author?.url).toBe("https://github.com/testuser");
+      expect(embed.data.thumbnail?.url).toBe("https://example.com/avatar.png");
+      expect(embed.data.timestamp).toBeDefined();
+      expect(embed.data.footer?.text).toContain("test/repo");
     });
 
     it("should use tag_name when release name is null", async () => {
@@ -236,9 +247,50 @@ describe("ReleaseNotificationService", () => {
       await service.notify(payload);
 
       const sendCall = (mockChannel.send as ReturnType<typeof mock>).mock.calls[0];
-      const message = sendCall[0] as string;
+      const sentData = sendCall[0];
 
-      expect(message).toContain("v1.0.0");
+      expect(sentData.embeds[0].data.title).toContain("v1.0.0");
+      expect(sentData.embeds[0].data.description).toBe("リリースノートはありません。");
+    });
+
+    it("should truncate body when it exceeds 4096 characters", async () => {
+      const longBody = "a".repeat(5000);
+      const mockChannel = createMockTextChannel();
+      const client = createMockClient();
+      (client.channels.fetch as ReturnType<typeof mock>).mockResolvedValue(mockChannel);
+
+      const settingsService = createMockSettingsService();
+      (settingsService.getGuildsWithReleaseChannel as ReturnType<typeof mock>).mockResolvedValue([
+        createMockGuildSettings({ releaseChannelId: "channel-1" }),
+      ]);
+
+      const service = new ReleaseNotificationService(client, settingsService);
+
+      const payload = createReleasePayload({
+        release: {
+          id: 123,
+          tag_name: "v1.0.0",
+          name: "Test Release",
+          body: longBody,
+          html_url: "https://github.com/test/repo/releases/tag/v1.0.0",
+          prerelease: false,
+          draft: false,
+          created_at: "2025-01-01T00:00:00Z",
+          published_at: "2025-01-01T00:00:00Z",
+          author: {
+            login: "testuser",
+            avatar_url: "https://example.com/avatar.png",
+          },
+        },
+      });
+
+      await service.notify(payload);
+
+      const sendCall = (mockChannel.send as ReturnType<typeof mock>).mock.calls[0];
+      const embed = sendCall[0].embeds[0];
+
+      expect(embed.data.description?.length).toBeLessThanOrEqual(4096);
+      expect(embed.data.description?.endsWith("...")).toBe(true);
     });
   });
 });
