@@ -243,7 +243,9 @@ ReleaseNotificationService
 
 ---
 
-### v1.3.0 モデル選択UI
+### v1.3.0 モデル選択UI + ストリーミング + `/stop`コマンド
+
+#### モデル選択UI（Autocomplete）
 
 **目的**: Autocompleteでモデル選択を直感的に
 
@@ -263,6 +265,65 @@ ReleaseNotificationService
 
 - [discord.js Autocomplete](https://discord.js.org/docs/packages/discord.js/main/AutocompleteInteraction:Class)
 - [Discord Autocomplete](https://discord.com/developers/docs/interactions/application-commands#autocomplete)
+
+---
+
+#### ストリーミング対応
+
+**目的**: リアルタイムでLLM応答を表示し、`/stop`コマンドでキャンセル可能に
+
+**変更対象**:
+
+- `src/llm/openrouter.ts` - `stream: true`対応、SSE処理
+- `src/services/chatService.ts` - ストリーミングレスポンス処理、進行中リクエスト追跡
+- `src/bot/events/messageCreate.ts` - メッセージ更新ロジック
+- `src/bot/commands/handlers.ts` - `/disqord stop`ハンドラー追加
+
+**設計メモ**:
+
+**キャンセルと課金**:
+
+- **非ストリーミングリクエスト**: クライアント側でキャンセルしてもサーバー側で処理継続、フル課金
+- **ストリーミングリクエスト（対応プロバイダー）**: 接続中断で即座に処理・課金停止
+- **対応プロバイダー**: OpenAI、Anthropic、Fireworks、Cohere、DeepInfra等20+
+- **非対応プロバイダー**: Google、AWS Bedrock、Groq、Mistral等20+
+
+**実装方式**:
+
+1. `Map<messageId, AbortController>` で進行中リクエストを追跡
+2. SSEストリーミングでトークンを受信
+3. 2秒ごとにDiscordメッセージを更新（レート制限: 5回/5秒 = 1回/秒、余裕を持って2秒間隔）
+4. `/disqord stop` でAbortController.abort()を呼び出し
+5. 完了/キャンセル時にMapから削除
+
+**エラーハンドリング**:
+
+- プロバイダーが非対応の場合、キャンセル警告を表示
+- 既に完了したリクエストへのキャンセルはエラー応答
+
+**参照**:
+
+- [OpenRouter Streaming](https://openrouter.ai/docs/api/reference/streaming)
+- [OpenRouter Streaming Cancellation](https://openrouter.ai/docs/api/reference/streaming#cancellation)
+
+---
+
+#### バージョン表示
+
+**目的**: `/disqord status`で実行中のBotバージョンを表示
+
+**変更対象**:
+
+- `src/bot/commands/handlers.ts` - statusハンドラーにバージョンフィールド追加
+
+**設計メモ**:
+
+- `package.json`から`version`をimportして表示
+- フォーマット: `v1.2.0`形式
+
+**参照**:
+
+- Bunは`import packageJson from "../../../package.json"`で直接import可能
 
 ---
 
@@ -307,15 +368,17 @@ ALTER TABLE guild_settings ADD COLUMN context_ttl_hours INTEGER DEFAULT 24;
 
 ---
 
-### v1.5.0 設定階層化
+### v1.5.0 設定階層化 + LLMパラメータ設定
 
-**目的**: Guild/Channel/User単位で設定を上書き可能に
+**目的**: Guild/Channel/User単位で設定を上書き可能に、LLMパラメータをモデルごとに最適化
 
 **変更対象**:
 
-- `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加
+- `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加、`llm_params`カラム追加
 - `src/db/repositories/` - 新規Repository追加
 - `src/services/settingsService.ts` - 階層解決ロジック
+- `src/services/modelService.ts` - デフォルトパラメータ取得
+- `src/llm/openrouter.ts` - パラメータ適用
 
 **DBスキーマ変更**:
 
@@ -325,20 +388,52 @@ CREATE TABLE channel_settings (
     guild_id TEXT NOT NULL,
     model TEXT,
     system_prompt TEXT,
+    llm_params TEXT,  -- JSON: {temperature, top_p, ...}
     FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
 );
 
 CREATE TABLE user_settings (
     user_id TEXT PRIMARY KEY,
     model TEXT,
-    system_prompt TEXT
+    system_prompt TEXT,
+    llm_params TEXT  -- JSON
 );
+
+ALTER TABLE guild_settings ADD COLUMN llm_params TEXT;
 ```
+
+**LLMパラメータ設計**:
+
+**Phase 1: モデルごとのデフォルトパラメータ**:
+
+1. `/api/v1/models` APIレスポンスに含まれる`default_parameters`を使用
+2. `ModelService`でキャッシュ時に保存
+3. `chatService`がモデルのデフォルトパラメータを取得して適用
+
+**Phase 2: ユーザー設定可能パラメータ**:
+
+- `/disqord config params set <json>` - パラメータをJSON形式で設定
+- `/disqord config params reset` - デフォルトに戻す
+- `/disqord config params show` - 現在の設定を表示
+
+**マージロジック**:
+
+1. モデルのデフォルトパラメータを取得
+2. Guild設定でマージ
+3. Channel設定でマージ
+4. User設定でマージ
+5. `supported_parameters`でバリデーション
+
+**参照**:
+
+- [OpenRouter Parameters](https://openrouter.ai/docs/api/reference/parameters)
+- [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/get-models)
 
 **設計メモ**:
 
-- 優先順位: User > Channel > Guild > Default
+- 優先順位: User > Channel > Guild > Model Default > OpenRouter Default
 - NULL値は上位設定を継承
+- 無効なパラメータはバリデーションで拒否
 
 ---
 

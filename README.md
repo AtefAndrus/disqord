@@ -64,6 +64,7 @@ docker run -d \
 | `/disqord model current` | 現在のモデルを表示 |
 | `/disqord model set <model>` | モデルを変更 |
 | `/disqord model list` | モデル一覧ページへ誘導 |
+| `/disqord model refresh` | モデルキャッシュを更新 |
 | `/disqord config free-only <on\|off>` | 無料モデル限定を切り替え |
 | `/disqord config release-channel [channel]` | リリース通知チャンネルを設定 |
 

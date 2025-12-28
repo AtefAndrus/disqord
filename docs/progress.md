@@ -8,26 +8,35 @@
 
 | バージョン | 機能 | 備考 |
 |-----------|------|------|
-| v1.3.0 | モデル選択UI + UX改善 | Autocomplete、色分け、詳細情報表示、snowflake、Discord.js v15対応 |
+| v1.3.0 | モデル選択UI + UX改善 + ストリーミング | Autocomplete、色分け、詳細情報表示、snowflake、Discord.js v15対応、ストリーミング対応、`/stop`コマンド |
 | v1.4.0 | コンテキスト対話 + コマンド改善 | 会話履歴保持（DBマイグレーション）、`/help`動的生成、prefix検討 |
-| v1.5.0 | 設定階層化 | Guild/Channel/User単位の設定（DBマイグレーションあり） |
+| v1.5.0 | 設定階層化 + パラメータ設定 | Guild/Channel/User単位の設定（DBマイグレーションあり）、LLMパラメータ設定 |
 | v1.6.0 | 権限管理 + AI改善 | チャンネル制限、管理ロール（DBマイグレーション）、markdown抑制 |
 | v1.7.0 | Web Search | OpenRouter `:online` サフィックス |
 | v1.8.0 | 複数モデル並列 | 複数モデルで同時回答 |
 
-### v1.3.0 詳細（モデル選択UI + UX改善）
+### v1.3.0 詳細（モデル選択UI + UX改善 + ストリーミング）
 
 - [ ] モデル選択UI（Autocomplete）
 - [ ] Embedの色をモデルごとにランダム化（`modelNameToColor()`）
 - [ ] `/disqord status`の時間表示でDiscord snowflake使用（`<t:unix:R>`形式）
+- [ ] `/disqord status`にバージョン表示（`package.json`から取得）
 - [ ] Discord.js v15非推奨警告対応（`ready` → `clientReady`）
 - [ ] LLM詳細情報表示モード（optional: tokens、latency、cost等）
+- [ ] ストリーミング対応（SSE、リアルタイム表示）
+- [ ] `/disqord stop`コマンド（進行中のリクエストを中断）
 
 ### v1.4.0 詳細（コンテキスト対話 + コマンド改善）
 
 - [ ] 直近n件の会話履歴保持（DBマイグレーションあり）
 - [ ] `/help`コマンド一覧の動的生成（SlashCommandBuilderから自動生成）
 - [ ] `disqord` prefix削除検討（ユーザー確認必要）
+
+### v1.5.0 詳細（設定階層化 + パラメータ設定）
+
+- [ ] Guild/Channel/User単位の設定（DBマイグレーションあり）
+- [ ] モデルごとのデフォルトパラメータ設定（temperature、top_p等）
+- [ ] ユーザーによるパラメータ上書き（`/disqord config params`）
 
 ### v1.6.0 詳細（権限管理 + AI改善）
 
