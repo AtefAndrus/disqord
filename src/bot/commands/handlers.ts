@@ -1,12 +1,11 @@
 import type { AutocompleteInteraction, ChatInputCommandInteraction } from "discord.js";
-import { MessageFlags } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { EmbedColors } from "../../types/embed";
-import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
+import { buildStatusMessage } from "../../utils/statusMessage";
 import type { CommandHandlers } from "../events/interactionCreate";
 
 export function createCommandHandlers(
@@ -113,55 +112,19 @@ export function createCommandHandlers(
       const rateLimited = llmClient.isRateLimited();
       const cacheStatus = modelService.getCacheStatus();
 
-      const remainingText =
-        credits.remaining === Number.POSITIVE_INFINITY
-          ? "無制限"
-          : `$${credits.remaining.toFixed(4)}`;
+      const settings = interaction.guildId
+        ? await settingsService.getGuildSettings(interaction.guildId)
+        : undefined;
 
-      let cacheText: string;
-      if (cacheStatus.lastUpdatedAt) {
-        const unixSeconds = Math.floor(cacheStatus.lastUpdatedAt.getTime() / 1000);
-        cacheText = `<t:${unixSeconds}:R> (${cacheStatus.modelCount}件)`;
-      } else {
-        cacheText = "未取得";
-      }
-
-      const fields: Array<{ name: string; value: string; inline?: boolean }> = [
-        { name: "バージョン", value: `v${packageJson.version}`, inline: true },
-        { name: "OpenRouter残高", value: remainingText, inline: true },
-        { name: "レート制限", value: rateLimited ? "制限中" : "正常", inline: true },
-        { name: "モデルキャッシュ", value: cacheText, inline: true },
-      ];
-
-      if (interaction.guildId) {
-        const settings = await settingsService.getGuildSettings(interaction.guildId);
-        const releaseChannelText = settings.releaseChannelId
-          ? `<#${settings.releaseChannelId}>`
-          : "未設定";
-
-        fields.push(
-          {
-            name: "デフォルトモデル",
-            value: `\`${settings.defaultModel}\``,
-            inline: true,
-          },
-          {
-            name: "無料モデル限定",
-            value: settings.freeModelsOnly ? "有効" : "無効",
-            inline: true,
-          },
-          { name: "リリース通知先", value: releaseChannelText, inline: true },
-        );
-      }
-
-      const embed = createEmbed({
-        color: EmbedColors.BLURPLE,
-        title: "ステータス",
-        fields,
-        timestamp: null,
+      const message = buildStatusMessage({
+        credits,
+        rateLimited,
+        cacheStatus,
+        settings,
+        version: packageJson.version,
       });
 
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply(message);
     },
 
     async configFreeOnly(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -223,7 +186,7 @@ export function createCommandHandlers(
     async configLlmDetails(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
         const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        await interaction.reply({ embeds: [embed] });
         return;
       }
 
@@ -234,7 +197,7 @@ export function createCommandHandlers(
         `LLM details display: **${enabled ? "ON" : "OFF"}**`,
         "Configuration Updated",
       );
-      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      await interaction.reply({ embeds: [embed] });
     },
   };
 }

@@ -3,6 +3,14 @@ import type { IEmbedConfig } from "../types/embed";
 import { EmbedColors, MODEL_COLOR_PALETTE } from "../types/embed";
 
 /**
+ * UTF-8バイト長を計測する関数
+ * Discord APIのバイト数制限（10,124バイト）に対応するため使用
+ */
+function getByteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+/**
  * FNV-1aハッシュ関数（決定論的）
  * 同じ文字列から常に同じハッシュ値を生成
  */
@@ -99,16 +107,39 @@ export function splitTextToMultipleMessages(
     };
   },
 ): Array<EmbedBuilder[]> {
-  const MAX_DESC_LENGTH = 4096;
+  const MAX_BYTE_LENGTH = 9000;
 
-  // テキストを4096文字単位で分割
+  // テキストを9000バイト単位で分割（改行位置優先）
   const chunks: string[] = [];
   let remaining = text;
 
-  while (remaining.length > 0) {
-    const chunk = remaining.slice(0, MAX_DESC_LENGTH);
-    chunks.push(chunk);
-    remaining = remaining.slice(MAX_DESC_LENGTH);
+  while (getByteLength(remaining) > MAX_BYTE_LENGTH) {
+    // バイナリサーチで9000バイト以下の最大位置を探す
+    let left = 0;
+    let right = remaining.length;
+    while (left < right) {
+      const mid = Math.floor((left + right + 1) / 2);
+      if (getByteLength(remaining.slice(0, mid)) <= MAX_BYTE_LENGTH) {
+        left = mid;
+      } else {
+        right = mid - 1;
+      }
+    }
+    let cutIndex = left;
+
+    // cutIndex以前で最後の改行を探す（改行優先）
+    const lastNewline = remaining.lastIndexOf("\n", cutIndex);
+    if (lastNewline > cutIndex * 0.8) {
+      // 80%以上の位置なら改行を優先
+      cutIndex = lastNewline + 1; // 改行を含める
+    }
+
+    chunks.push(remaining.slice(0, cutIndex));
+    remaining = remaining.slice(cutIndex);
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
   }
 
   const totalChunks = chunks.length;

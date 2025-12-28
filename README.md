@@ -8,7 +8,7 @@ Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び
 - **スラッシュコマンド**: `/disqord help`, `/disqord status`, `/disqord model`
 - **Guild単位設定**: デフォルトモデル、無料モデル限定
 - **リリース通知**: GitHub Release時に登録チャンネルへ自動通知
-- **長文対応**: 2000文字超は分割送信
+- **長文対応**: 9000バイト単位で分割送信（改行位置優先）
 
 ## セットアップ
 
@@ -60,7 +60,7 @@ docker run -d \
 | コマンド | 説明 |
 | -------- | ---- |
 | `/disqord help` | 使い方を表示 |
-| `/disqord status` | Botのステータスを表示 |
+| `/disqord status` | Botのステータスを表示、ボタンで設定切り替え可能 |
 | `/disqord model current` | 現在のモデルを表示 |
 | `/disqord model set <model>` | モデルを変更 |
 | `/disqord model list` | モデル一覧ページへ誘導 |

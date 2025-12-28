@@ -26,7 +26,7 @@
 | コマンド | 説明 |
 | -------- | ---- |
 | `/disqord help` | 使い方を表示 |
-| `/disqord status` | Botのステータス（OpenRouter残高等）を表示 |
+| `/disqord status` | Botのステータス（OpenRouter残高等）を表示、ボタンで設定切り替え可能 |
 | `/disqord model current` | 現在設定されているモデルを表示 |
 | `/disqord model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート） |
 | `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
@@ -40,7 +40,7 @@
 | 項目 | 仕様 |
 | ---- | ---- |
 | 送信方式 | 一括送信（Embed形式） |
-| 長文対応 | 4096文字単位で分割、複数メッセージに分散（ページ番号表示） |
+| 長文対応 | 9000バイト単位で分割、改行位置優先、複数メッセージに分散（ページ番号表示） |
 | Typing表示 | LLM応答待機中、8秒間隔で継続表示 |
 | Embedカラー | モデルIDから決定論的に色決定（FNV-1aハッシュ、16色パレット） |
 | LLM詳細情報 | トークン数、コスト、レイテンシ、TPS等をフッターに表示（ON/OFF切り替え可能、デフォルトON） |
@@ -225,60 +225,6 @@ ReleaseNotificationService
 ## 7. 将来計画（設計骨子）
 
 詳細設計は実装時に本セクションへ追記する。
-
-### v1.3.1 UX改善
-
-**目的**: メッセージ分割とstatusコマンドのUX改善
-
----
-
-#### メッセージ分割改善
-
-**変更対象**:
-
-- `src/utils/embedBuilder.ts` - `splitTextToMultipleMessages()`
-
-**設計メモ**:
-
-- 現在: 4096文字単位で単純分割（`String.slice()`）
-- 問題: Discord APIには文字数制限（4096文字）とバイト数制限（10,124バイト）が併存。日本語主体の4096文字は約10,000-12,000バイトとなり制限超過でHTTP 500エラー
-- 改善: 9000-9500バイト単位で分割、改行位置優先
-- マークダウン構文（コードブロック、ヘッダー等）が途中で切れる可能性を削減
-
----
-
-#### statusコマンドインタラクティブ化
-
-**変更対象**:
-
-- `src/utils/statusMessage.ts` - 新規作成、Embed+ボタン構築関数
-- `src/bot/commands/handlers.ts` - `status()`修正、共通関数呼び出し
-- `src/bot/events/interactionCreate.ts` - ボタンハンドラー追加
-- `src/index.ts` - DI調整（`llmClient`を`interactionCreate`に渡す）
-
-**設計メモ**:
-
-ボタン仕様:
-
-| customId | label | 動作 |
-|----------|-------|------|
-| `status_toggle_free_only` | 無料モデル限定: ON/OFF | トグル |
-| `status_toggle_llm_details` | LLM詳細: ON/OFF | トグル |
-| `status_model_refresh` | モデルキャッシュ更新 | 更新実行 |
-
-実装方針:
-
-- `buildStatusMessage()`: Embed+ボタンを構築する共通関数（`utils/statusMessage.ts`）
-- ボタンクリック時: 設定更新→メッセージ再構築→`interaction.update()`
-- free-only有効化時: 現在のモデルが無料モデルかバリデーション
-- エラーハンドリング: try-catchでラップ、エラー時はephemeralメッセージ
-
-**参照**:
-
-- [Discord.js Buttons](https://discord.js.org/docs/packages/discord.js/main/ButtonBuilder:Class)
-- [Discord.js Button Interactions](https://discord.js.org/docs/packages/discord.js/main/ButtonInteraction:Class)
-
----
 
 ### v1.4.0 ストリーミング対応
 
