@@ -226,6 +226,60 @@ ReleaseNotificationService
 
 詳細設計は実装時に本セクションへ追記する。
 
+### v1.3.1 UX改善
+
+**目的**: メッセージ分割とstatusコマンドのUX改善
+
+---
+
+#### メッセージ分割改善
+
+**変更対象**:
+
+- `src/utils/embedBuilder.ts` - `splitTextToMultipleMessages()`
+
+**設計メモ**:
+
+- 現在: 4096文字単位で単純分割（`String.slice()`）
+- 改善: 4096文字以内で最後の改行（`\n`）を探して分割
+- 改行が見つからない、または極端に前（半分以下）の場合は4096文字で切る
+- マークダウン構文（コードブロック、ヘッダー等）が途中で切れる可能性を大幅に削減
+
+---
+
+#### statusコマンドインタラクティブ化
+
+**変更対象**:
+
+- `src/utils/statusMessage.ts` - 新規作成、Embed+ボタン構築関数
+- `src/bot/commands/handlers.ts` - `status()`修正、共通関数呼び出し
+- `src/bot/events/interactionCreate.ts` - ボタンハンドラー追加
+- `src/index.ts` - DI調整（`llmClient`を`interactionCreate`に渡す）
+
+**設計メモ**:
+
+ボタン仕様:
+
+| customId | label | 動作 |
+|----------|-------|------|
+| `status_toggle_free_only` | 無料モデル限定: ON/OFF | トグル |
+| `status_toggle_llm_details` | LLM詳細: ON/OFF | トグル |
+| `status_model_refresh` | モデルキャッシュ更新 | 更新実行 |
+
+実装方針:
+
+- `buildStatusMessage()`: Embed+ボタンを構築する共通関数（`utils/statusMessage.ts`）
+- ボタンクリック時: 設定更新→メッセージ再構築→`interaction.update()`
+- free-only有効化時: 現在のモデルが無料モデルかバリデーション
+- エラーハンドリング: try-catchでラップ、エラー時はephemeralメッセージ
+
+**参照**:
+
+- [Discord.js Buttons](https://discord.js.org/docs/packages/discord.js/main/ButtonBuilder:Class)
+- [Discord.js Button Interactions](https://discord.js.org/docs/packages/discord.js/main/ButtonInteraction:Class)
+
+---
+
 ### v1.4.0 ストリーミング対応
 
 **目的**: リアルタイムでLLM応答を表示し、`/stop`コマンドでキャンセル可能に
