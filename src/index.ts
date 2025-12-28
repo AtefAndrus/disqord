@@ -37,7 +37,11 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
   );
-  const interactionCreateHandler = createInteractionCreateHandler(commandHandlers);
+  const interactionCreateHandler = createInteractionCreateHandler(
+    commandHandlers,
+    settingsService,
+    modelService,
+  );
 
   const client = await createBotClient();
   client.once(Events.ClientReady, () => onReady(client));

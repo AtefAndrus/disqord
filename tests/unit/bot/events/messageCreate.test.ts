@@ -29,7 +29,7 @@ describe("createMessageCreateHandler", () => {
 
   beforeEach(() => {
     mockChatService = {
-      generateResponse: mock(() => Promise.resolve("Mock response")),
+      generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
     };
 
     const mockGuildSettings = {
@@ -37,6 +37,7 @@ describe("createMessageCreateHandler", () => {
       defaultModel: "deepseek/deepseek-r1-0528:free",
       freeModelsOnly: false,
       releaseChannelId: null,
+      showLlmDetails: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -46,6 +47,8 @@ describe("createMessageCreateHandler", () => {
       setGuildModel: mock(() => Promise.resolve(mockGuildSettings)),
       setFreeModelsOnly: mock(() => Promise.resolve(mockGuildSettings)),
       setReleaseChannel: mock(() => Promise.resolve(mockGuildSettings)),
+      setShowLlmDetails: mock(() => Promise.resolve()),
+      toggleShowLlmDetails: mock(() => Promise.resolve(true)),
       getGuildsWithReleaseChannel: mock(() => Promise.resolve([])),
     };
 
@@ -168,7 +171,7 @@ describe("createMessageCreateHandler", () => {
         embeds: expect.arrayContaining([
           expect.objectContaining({
             data: expect.objectContaining({
-              color: 0x5865f2, // BLURPLE
+              color: expect.any(Number), // モデルIDから動的に決定
               description: "Mock response",
             }),
           }),
@@ -270,9 +273,10 @@ describe("createMessageCreateHandler", () => {
 
   test("10000文字の応答は複数メッセージに分割される（各メッセージ1 Embed）", async () => {
     const longResponse = "a".repeat(10000);
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce(
-      longResponse,
-    );
+    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
+      text: longResponse,
+      metadata: undefined,
+    });
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -295,9 +299,10 @@ describe("createMessageCreateHandler", () => {
 
   test("50000文字の応答は複数メッセージに分割される（各メッセージ1 Embed）", async () => {
     const longResponse = "a".repeat(50000);
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce(
-      longResponse,
-    );
+    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
+      text: longResponse,
+      metadata: undefined,
+    });
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,

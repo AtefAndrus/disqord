@@ -8,24 +8,28 @@ describe("ModelService", () => {
     {
       id: "free-model-1",
       name: "Free Model 1",
+      created: 1640000000,
       contextLength: 4096,
       pricing: { prompt: "0", completion: "0" },
     },
     {
       id: "free-model-2",
       name: "Free Model 2",
+      created: 1650000000,
       contextLength: 8192,
       pricing: { prompt: "0", completion: "0" },
     },
     {
       id: "paid-model-1",
       name: "Paid Model 1",
+      created: 1660000000,
       contextLength: 16384,
       pricing: { prompt: "0.001", completion: "0.002" },
     },
     {
       id: "paid-model-2",
       name: "Paid Model 2",
+      created: 1670000000,
       contextLength: 32768,
       pricing: { prompt: "0.01", completion: "0.02" },
     },

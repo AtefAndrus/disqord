@@ -1,6 +1,29 @@
 import { EmbedBuilder } from "discord.js";
 import type { IEmbedConfig } from "../types/embed";
-import { EmbedColors } from "../types/embed";
+import { EmbedColors, MODEL_COLOR_PALETTE } from "../types/embed";
+
+/**
+ * FNV-1aハッシュ関数（決定論的）
+ * 同じ文字列から常に同じハッシュ値を生成
+ */
+function hashString(str: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0; // 符号なし32bit整数
+}
+
+/**
+ * モデルIDからEmbedカラーを決定
+ * @param modelId - モデルID（例: "deepseek/deepseek-r1-0528:free"）
+ * @returns 16色パレットから選択された色コード
+ */
+export function getColorForModel(modelId: string): number {
+  const hash = hashString(modelId);
+  return MODEL_COLOR_PALETTE[hash % MODEL_COLOR_PALETTE.length];
+}
 
 /**
  * Embedを構築する基本関数
@@ -55,11 +78,26 @@ export function createEmbed(config: IEmbedConfig): EmbedBuilder {
  *
  * @param text - 分割対象テキスト
  * @param baseConfig - description/footer以外のEmbed設定
+ * @param metadata - LLM詳細情報（オプショナル）
  * @returns 分割されたEmbed配列の配列（各配列が1メッセージ分、各配列には1 Embedのみ）
  */
 export function splitTextToMultipleMessages(
   text: string,
   baseConfig: Omit<IEmbedConfig, "description" | "footer">,
+  metadata?: {
+    showDetails: boolean;
+    model?: string;
+    provider?: string;
+    latency?: number;
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      cost?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+      completion_tokens_details?: { reasoning_tokens?: number };
+    };
+  },
 ): Array<EmbedBuilder[]> {
   const MAX_DESC_LENGTH = 4096;
 
@@ -78,7 +116,49 @@ export function splitTextToMultipleMessages(
   // 各メッセージに1つのEmbedのみ（Discord API 6000文字制限対応）
   const messages: Array<EmbedBuilder[]> = chunks.map((chunk, index) => {
     const pageNumber = index + 1;
-    const footerText = totalChunks > 1 ? `ページ ${pageNumber}/${totalChunks}` : undefined;
+    const isLastPage = index === chunks.length - 1;
+
+    // フッターパーツを構築
+    const footerParts: string[] = [];
+
+    // ページ番号（2ページ以上の場合のみ）
+    if (totalChunks > 1) {
+      footerParts.push(`ページ ${pageNumber}/${totalChunks}`);
+    }
+
+    // LLM詳細情報（最後のページ かつ showDetails=true）
+    if (isLastPage && metadata?.showDetails && metadata.usage) {
+      const details: string[] = [
+        `Tokens: ${metadata.usage.prompt_tokens}+${metadata.usage.completion_tokens}=${metadata.usage.total_tokens}`,
+      ];
+
+      if (metadata.usage.cost !== undefined) {
+        details.push(`Cost: $${metadata.usage.cost.toFixed(6)}`);
+      }
+      if (metadata.model) {
+        details.push(`Model: ${metadata.model}`);
+      }
+      if (metadata.latency !== undefined) {
+        details.push(`Latency: ${metadata.latency}ms`);
+      }
+      if (metadata.provider) {
+        details.push(`Provider: ${metadata.provider}`);
+      }
+      if (metadata.usage.prompt_tokens_details?.cached_tokens) {
+        details.push(`Cached: ${metadata.usage.prompt_tokens_details.cached_tokens}`);
+      }
+      if (metadata.usage.completion_tokens_details?.reasoning_tokens) {
+        details.push(`Reasoning: ${metadata.usage.completion_tokens_details.reasoning_tokens}`);
+      }
+      if (metadata.usage.completion_tokens && metadata.latency) {
+        const tokensPerSecond = metadata.usage.completion_tokens / (metadata.latency / 1000);
+        details.push(`TPS: ${tokensPerSecond.toFixed(2)}`);
+      }
+
+      footerParts.push(details.join(" | "));
+    }
+
+    const footerText = footerParts.length > 0 ? footerParts.join("\n") : undefined;
 
     return [
       createEmbed({

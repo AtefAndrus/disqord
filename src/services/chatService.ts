@@ -1,9 +1,12 @@
 import type { ILLMClient } from "../llm/openrouter";
-import type { GuildId } from "../types";
+import type { ChatCompletionResponse, GuildId } from "../types";
 import type { ISettingsService } from "./settingsService";
 
 export interface IChatService {
-  generateResponse(guildId: GuildId, userMessage: string): Promise<string>;
+  generateResponse(
+    guildId: GuildId,
+    userMessage: string,
+  ): Promise<{ text: string; metadata?: ChatCompletionResponse & { latency: number } }>;
 }
 
 export class ChatService implements IChatService {
@@ -12,8 +15,13 @@ export class ChatService implements IChatService {
     private readonly settingsService: ISettingsService,
   ) {}
 
-  async generateResponse(guildId: GuildId, userMessage: string): Promise<string> {
+  async generateResponse(
+    guildId: GuildId,
+    userMessage: string,
+  ): Promise<{ text: string; metadata?: ChatCompletionResponse & { latency: number } }> {
     const settings = await this.settingsService.getGuildSettings(guildId);
+
+    const startTime = Date.now();
     const response = await this.llmClient.chat({
       model: settings.defaultModel,
       messages: [
@@ -23,7 +31,14 @@ export class ChatService implements IChatService {
         },
       ],
     });
+    const latency = Date.now() - startTime;
 
-    return response.choices[0]?.message.content ?? "";
+    return {
+      text: response.choices[0]?.message.content ?? "",
+      metadata: {
+        ...response,
+        latency,
+      },
+    };
   }
 }

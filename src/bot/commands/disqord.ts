@@ -24,7 +24,8 @@ export const disqordCommand = new SlashCommandBuilder()
             option
               .setName("model")
               .setDescription("Model identifier as provided by OpenRouter")
-              .setRequired(true),
+              .setRequired(true)
+              .setAutocomplete(true),
           ),
       )
       .addSubcommand((sub) =>
@@ -57,6 +58,18 @@ export const disqordCommand = new SlashCommandBuilder()
               .setName("channel")
               .setDescription("Channel to receive release notifications (omit to disable)")
               .addChannelTypes(ChannelType.GuildText),
+          ),
+      )
+      .addSubcommand((sub) =>
+        sub
+          .setName("llm-details")
+          .setDescription("Toggle LLM details display (tokens, cost, latency, etc.)")
+          .addStringOption((option) =>
+            option
+              .setName("enabled")
+              .setDescription("Enable or disable LLM details display")
+              .setRequired(true)
+              .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
           ),
       ),
   );

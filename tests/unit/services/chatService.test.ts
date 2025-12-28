@@ -51,7 +51,9 @@ describe("ChatService", () => {
 
     const result = await chatService.generateResponse("guild-123", "Hi");
 
-    expect(result).toBe("Hello, user!");
+    expect(result.text).toBe("Hello, user!");
+    expect(result.metadata).toBeDefined();
+    expect(result.metadata?.latency).toBeGreaterThanOrEqual(0);
   });
 
   test("choicesが空の場合は空文字を返す", async () => {
@@ -63,7 +65,7 @@ describe("ChatService", () => {
 
     const result = await chatService.generateResponse("guild-123", "Hi");
 
-    expect(result).toBe("");
+    expect(result.text).toBe("");
   });
 
   test("messageのcontentがundefinedの場合は空文字を返す", async () => {
@@ -75,7 +77,7 @@ describe("ChatService", () => {
 
     const result = await chatService.generateResponse("guild-123", "Hi");
 
-    expect(result).toBe("");
+    expect(result.text).toBe("");
   });
 
   test("LLMClientがエラーをスローした場合はそのまま伝播", async () => {

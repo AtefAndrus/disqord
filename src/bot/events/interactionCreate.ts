@@ -1,5 +1,8 @@
 import type { ChatInputCommandInteraction, Interaction } from "discord.js";
+import type { IModelService } from "../../services/modelService";
+import type { ISettingsService } from "../../services/settingsService";
 import { logger } from "../../utils/logger";
+import { handleAutocomplete } from "../commands/handlers";
 
 export interface CommandHandlers {
   help: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -10,10 +13,20 @@ export interface CommandHandlers {
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configReleaseChannel: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
-export function createInteractionCreateHandler(handlers: CommandHandlers) {
+export function createInteractionCreateHandler(
+  handlers: CommandHandlers,
+  settingsService: ISettingsService,
+  modelService: IModelService,
+) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
+    if (interaction.isAutocomplete()) {
+      await handleAutocomplete(interaction, settingsService, modelService);
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) {
       return;
     }
@@ -51,6 +64,9 @@ export function createInteractionCreateHandler(handlers: CommandHandlers) {
             break;
           case "release-channel":
             await handlers.configReleaseChannel(interaction);
+            break;
+          case "llm-details":
+            await handlers.configLlmDetails(interaction);
             break;
         }
       } else {

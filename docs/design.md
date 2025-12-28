@@ -28,19 +28,22 @@
 | `/disqord help` | 使い方を表示 |
 | `/disqord status` | Botのステータス（OpenRouter残高等）を表示 |
 | `/disqord model current` | 現在設定されているモデルを表示 |
-| `/disqord model set <model>` | Guildのデフォルトモデルを変更 |
+| `/disqord model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート） |
 | `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
 | `/disqord model refresh` | モデルキャッシュを更新 |
 | `/disqord config free-only <on\|off>` | Guildの無料モデル限定設定を切り替え |
 | `/disqord config release-channel [channel]` | リリースノート配信先チャンネルを設定（省略で無効化） |
+| `/disqord config llm-details <on\|off>` | LLM詳細情報表示を切り替え |
 
 ### 1.4 応答形式
 
 | 項目 | 仕様 |
 | ---- | ---- |
-| 送信方式 | 一括送信 |
-| 長文対応 | 2000文字を超える場合は複数メッセージに分割 |
+| 送信方式 | 一括送信（Embed形式） |
+| 長文対応 | 4096文字単位で分割、複数メッセージに分散（ページ番号表示） |
 | Typing表示 | LLM応答待機中、8秒間隔で継続表示 |
+| Embedカラー | モデルIDから決定論的に色決定（FNV-1aハッシュ、16色パレット） |
+| LLM詳細情報 | トークン数、コスト、レイテンシ、TPS等をフッターに表示（ON/OFF切り替え可能、デフォルトON） |
 
 ---
 
@@ -100,6 +103,7 @@ CREATE TABLE guild_settings (
     default_model TEXT NOT NULL DEFAULT 'deepseek/deepseek-r1-0528:free',
     free_models_only INTEGER NOT NULL DEFAULT 0,
     release_channel_id TEXT DEFAULT NULL,
+    show_llm_details INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -150,6 +154,7 @@ Error
        ├─ InsufficientCreditsError (402)
        ├─ ModerationError (403)
        ├─ InvalidModelError (400 + message pattern)
+       ├─ ConfigurationError (400 + message pattern)
        ├─ ModelUnavailableError (500, 502, 503)
        ├─ AuthenticationError (401)
        ├─ TimeoutError (408)
@@ -167,6 +172,7 @@ Error
 | クレジット不足 | API残高が不足しています。管理者にお問い合わせください。 |
 | コンテンツモデレーション | 入力内容が制限されました。表現を変えてお試しください。 |
 | 無効なモデル | 指定されたモデルは存在しません。 |
+| 設定エラー | OpenRouterの設定に問題があります。設定URLで確認してください。 |
 | モデル利用不可 | モデルが一時的に利用できません。 |
 | 認証エラー | Botの設定に問題があります。管理者にお問い合わせください。 |
 | タイムアウト | 応答に時間がかかりすぎています。短いメッセージでお試しください。 |
@@ -219,81 +225,6 @@ ReleaseNotificationService
 ## 7. 将来計画（設計骨子）
 
 詳細設計は実装時に本セクションへ追記する。
-
-### v1.3.0 モデル選択UI + UX改善
-
-**目的**: モデル選択体験とUI視認性を向上
-
----
-
-#### Embedの色をモデルごとにランダム化
-
-**目的**: 複数モデル並列実行時に視覚的に区別しやすく
-
-**変更対象**:
-
-- `src/utils/color.ts` - `modelNameToColor()`関数新規作成
-- `src/bot/events/messageCreate.ts` - Embed色を動的設定
-
-**設計メモ**:
-
-- モデル名をハッシュ化して色を決定（同じモデルは常に同じ色）
-- 彩度・明度を調整して可読性を確保
-- エラー時は引き続き`#ED4245`（Red）
-
-**参照**:
-
-- [EmbedBuilder.setColor()](https://discord.js.org/docs/packages/builders/main/EmbedBuilder:Class#setColor)
-
----
-
-#### モデル選択UI（Autocomplete）
-
-**目的**: Autocompleteでモデル選択を直感的に
-
-**変更対象**:
-
-- `src/bot/commands/disqord.ts` - `model set`サブコマンドに`setAutocomplete(true)`
-- `src/bot/events/interactionCreate.ts` - `isAutocomplete()`処理追加
-- `src/bot/commands/handlers.ts` - Autocompleteハンドラー追加
-
-**設計メモ**:
-
-- 候補上限: 25件（Discord API制限）
-- フィルタリング: モデル名・IDの部分一致（大文字小文字区別なし）
-- `freeModelsOnly=true` の場合は無料モデルのみ表示
-- 表示形式: `{name} ({id})`
-
-**参照**:
-
-- [discord.js Autocomplete](https://discord.js.org/docs/packages/discord.js/main/AutocompleteInteraction:Class)
-- [Discord Autocomplete](https://discord.com/developers/docs/interactions/application-commands#autocomplete)
-
----
-
-#### LLM詳細情報表示モード
-
-**目的**: tokens、latency、cost等の詳細情報をオプション表示
-
-**変更対象**:
-
-- `src/bot/events/messageCreate.ts` - Embedフッターに情報追加
-- `src/llm/openrouter.ts` - レスポンスヘッダーからメタデータ取得
-- `src/db/schema.ts` - `guild_settings.show_llm_details` カラム追加（任意）
-
-**設計メモ**:
-
-- フッターに表示: `Tokens: 123 | Latency: 1.2s | Cost: $0.0001`
-- OpenRouter レスポンスヘッダー:
-  - `x-ratelimit-limit-tokens`
-  - `x-ratelimit-remaining-tokens`
-- コスト計算: `input_tokens * pricing.prompt + output_tokens * pricing.completion`
-
-**参照**:
-
-- [OpenRouter Response Headers](https://openrouter.ai/docs/api/reference/response-headers)
-
----
 
 ### v1.4.0 ストリーミング対応
 

@@ -8,19 +8,12 @@
 
 | バージョン | 機能 | 備考 |
 |-----------|------|------|
-| v1.3.0 | モデル選択UI + UX改善 | Autocomplete、色分け、詳細情報表示 |
 | v1.4.0 | ストリーミング対応 | SSE、リアルタイム表示、`/stop`コマンド |
 | v1.5.0 | コンテキスト対話 + コマンド改善 | 会話履歴保持（DBマイグレーション）、`/help`動的生成、prefix検討 |
 | v1.6.0 | 設定階層化 + パラメータ設定 | Guild/Channel/User単位の設定（DBマイグレーションあり）、LLMパラメータ設定 |
 | v1.7.0 | 権限管理 + AI改善 | チャンネル制限、管理ロール（DBマイグレーション）、markdown抑制 |
 | v1.8.0 | Web Search | OpenRouter `:online` サフィックス |
 | v1.9.0 | 複数モデル並列 | 複数モデルで同時回答 |
-
-### v1.3.0 詳細（モデル選択UI + UX改善）
-
-- [ ] Embedの色をモデルごとにランダム化（`modelNameToColor()`）
-- [ ] モデル選択UI（Autocomplete）
-- [ ] LLM詳細情報表示モード（optional: tokens、latency、cost等）
 
 ### v1.4.0 詳細（ストリーミング対応）
 
@@ -50,39 +43,31 @@
 
 ## 完了済み
 
+### v1.3.0 (2025-12-29)
+
+モデル選択UI + UX改善
+
+- Embedカラーランダム化（モデルIDから決定論的に色決定）
+- Autocomplete実装（モデル選択時、最大25件、新しい順ソート）
+- LLM詳細情報表示（トークン数、コスト、レイテンシ、TPS等）
+- OpenRouter設定エラー改善（ConfigurationError追加）
+
 ### v1.2.1 (2025-12-28)
 
 クイックウィン（UX改善）
 
-- **バージョン表示**
-  - Botプレゼンスにバージョン表示（`v1.2.1をプレイ中`）
-  - `/disqord status`にバージョンフィールド追加（`package.json`から取得）
-- **Discord.js v15対応**
-  - `Events.ClientReady`使用、非推奨警告解消
-- **時間表示改善**
-  - モデルキャッシュ更新時刻をDiscord timestamp形式（`<t:unix:R>`）に変更
-  - ユーザータイムゾーン自動対応
+- バージョン表示（プレゼンス、`/status`）
+- Discord.js v15対応
+- 時間表示改善（Discord timestamp形式）
 
 ### v1.2.0 (2025-12-28)
 
 Embed化 + モデル名表示改善
 
-- **Embed化**
-  - LLM応答のEmbed化（author: モデル名、timestamp、色: Blurple）
-  - エラーメッセージのEmbed化（色: Red #ED4245）
-  - 全スラッシュコマンドのEmbed化
-  - リリース通知のEmbed化（author: GitHub user、thumbnail、timestamp、footer）
-- **長文対応**
-  - Discord API制限対応（1メッセージあたりEmbed合計6000文字）
-  - 4096文字単位で分割、複数メッセージに分散
-  - ページ番号表示（例: "ページ 1/3"）
-- **コマンドタイトル統一化**
-  - 全て日本語に統一（例: "DisQord ヘルプ"、"ステータス"、"モデル変更"）
-- **Model ID → Model Name変換**
-  - `ModelService.getModelName()` 追加
-  - LLM応答authorにModel Name表示（例: "DeepSeek R1 0528 (free)"）
-- **UX改善**
-  - `/disqord config free-only` の有効/無効を**太字**で強調
+- LLM応答/エラー/コマンドのEmbed化
+- 長文対応（4096文字単位で分割、ページ番号表示）
+- Model ID → Model Name変換
+- コマンドタイトル日本語統一
 
 ### v1.1.1 (2025-12-26)
 

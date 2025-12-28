@@ -1,11 +1,13 @@
-import type { ChatInputCommandInteraction } from "discord.js";
+import type { AutocompleteInteraction, ChatInputCommandInteraction } from "discord.js";
+import { MessageFlags } from "discord.js";
+import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import { EmbedColors } from "../../types/embed";
 import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import { logger } from "../../utils/logger";
 import type { CommandHandlers } from "../events/interactionCreate";
-import packageJson from "../../../package.json";
 
 export function createCommandHandlers(
   llmClient: ILLMClient,
@@ -217,5 +219,75 @@ export function createCommandHandlers(
       );
       await interaction.reply({ embeds: [embed] });
     },
+
+    async configLlmDetails(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const enabled = interaction.options.getString("enabled", true) === "on";
+      await settingsService.setShowLlmDetails(interaction.guildId, enabled);
+
+      const embed = createSuccessEmbed(
+        `LLM details display: **${enabled ? "ON" : "OFF"}**`,
+        "Configuration Updated",
+      );
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    },
   };
+}
+
+export async function handleAutocomplete(
+  interaction: AutocompleteInteraction,
+  settingsService: ISettingsService,
+  modelService: IModelService,
+): Promise<void> {
+  try {
+    // disqord model setのみ処理
+    if (
+      interaction.commandName !== "disqord" ||
+      interaction.options.getSubcommandGroup() !== "model" ||
+      interaction.options.getSubcommand() !== "set"
+    ) {
+      await interaction.respond([]);
+      return;
+    }
+
+    const focusedValue = interaction.options.getFocused().toLowerCase();
+    const guildId = interaction.guildId;
+
+    if (!guildId) {
+      await interaction.respond([]);
+      return;
+    }
+
+    // Guild設定を取得
+    const settings = await settingsService.getGuildSettings(guildId);
+
+    // モデル一覧取得
+    const models = settings.freeModelsOnly
+      ? await modelService.getFreeModels()
+      : await modelService.getAllModels();
+
+    // フィルタリング（name/id部分一致、大文字小文字無視）
+    const filtered = models
+      .filter(
+        (model) =>
+          model.name.toLowerCase().includes(focusedValue) ||
+          model.id.toLowerCase().includes(focusedValue),
+      )
+      .sort((a, b) => b.created - a.created) // 新しい順
+      .slice(0, 25) // Discord制限
+      .map((model) => ({
+        name: `${model.name} (${model.id})`,
+        value: model.id,
+      }));
+
+    await interaction.respond(filtered);
+  } catch (error) {
+    logger.error("Autocomplete error", { error });
+    await interaction.respond([]);
+  }
 }

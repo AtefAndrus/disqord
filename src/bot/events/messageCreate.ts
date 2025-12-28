@@ -3,8 +3,11 @@ import { AppError } from "../../errors";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { EmbedColors } from "../../types/embed";
-import { createErrorEmbed, splitTextToMultipleMessages } from "../../utils/embedBuilder";
+import {
+  createErrorEmbed,
+  getColorForModel,
+  splitTextToMultipleMessages,
+} from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 
 export function createMessageCreateHandler(
@@ -54,13 +57,23 @@ export function createMessageCreateHandler(
       const settings = await settingsService.getGuildSettings(message.guild.id);
       const modelName =
         (await modelService.getModelName(settings.defaultModel)) ?? settings.defaultModel;
-      const messageGroups = splitTextToMultipleMessages(response, {
-        color: EmbedColors.BLURPLE,
-        timestamp: new Date(),
-        author: {
-          name: modelName,
+      const messageGroups = splitTextToMultipleMessages(
+        response.text,
+        {
+          color: getColorForModel(settings.defaultModel),
+          timestamp: new Date(),
+          author: {
+            name: modelName,
+          },
         },
-      });
+        {
+          showDetails: settings.showLlmDetails,
+          model: response.metadata?.model,
+          provider: response.metadata?.provider,
+          latency: response.metadata?.latency,
+          usage: response.metadata?.usage,
+        },
+      );
 
       if ("send" in message.channel) {
         for (const embeds of messageGroups) {

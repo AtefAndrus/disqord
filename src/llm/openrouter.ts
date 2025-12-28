@@ -2,6 +2,7 @@ import type { AppConfig } from "../config";
 import {
   AuthenticationError,
   BadRequestError,
+  ConfigurationError,
   InsufficientCreditsError,
   InvalidModelError,
   ModelUnavailableError,
@@ -27,6 +28,7 @@ interface OpenRouterModelResponse {
   data: {
     id: string;
     name: string;
+    created: number;
     context_length: number;
     pricing: {
       prompt: string;
@@ -87,7 +89,12 @@ export class OpenRouterClient implements ILLMClient {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        ...request,
+        usage: {
+          include: true,
+        },
+      }),
     });
 
     if (!response.ok) {
@@ -119,6 +126,7 @@ export class OpenRouterClient implements ILLMClient {
     return data.data.map((model) => ({
       id: model.id,
       name: model.name,
+      created: model.created,
       contextLength: model.context_length,
       pricing: model.pricing,
     }));
@@ -156,6 +164,10 @@ export class OpenRouterClient implements ILLMClient {
       case 400:
         if (message.includes("is not a valid model ID")) {
           throw new InvalidModelError(message);
+        }
+        if (message.includes("data policy") || message.includes("Configure:")) {
+          const configUrl = message.match(/https:\/\/openrouter\.ai\/[^\s]+/)?.[0];
+          throw new ConfigurationError(message, configUrl);
         }
         throw new BadRequestError(message);
 

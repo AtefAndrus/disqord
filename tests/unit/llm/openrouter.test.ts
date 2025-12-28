@@ -92,7 +92,10 @@ describe("OpenRouterClient", () => {
 
       const callArgs = mockFetch.mock.calls[0];
       const options = callArgs[1] as RequestInit;
-      expect(JSON.parse(options.body as string)).toEqual(request);
+      expect(JSON.parse(options.body as string)).toEqual({
+        ...request,
+        usage: { include: true },
+      });
     });
 
     test("レート制限時はRateLimitErrorをスローする", async () => {
@@ -430,12 +433,14 @@ describe("OpenRouterClient", () => {
               {
                 id: "model-1",
                 name: "Model 1",
+                created: 1640000000,
                 context_length: 4096,
                 pricing: { prompt: "0", completion: "0" },
               },
               {
                 id: "model-2",
                 name: "Model 2",
+                created: 1650000000,
                 context_length: 8192,
                 pricing: { prompt: "0.001", completion: "0.002" },
               },
@@ -449,12 +454,14 @@ describe("OpenRouterClient", () => {
         {
           id: "model-1",
           name: "Model 1",
+          created: 1640000000,
           contextLength: 4096,
           pricing: { prompt: "0", completion: "0" },
         },
         {
           id: "model-2",
           name: "Model 2",
+          created: 1650000000,
           contextLength: 8192,
           pricing: { prompt: "0.001", completion: "0.002" },
         },

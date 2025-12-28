@@ -6,6 +6,8 @@ export interface ISettingsService {
   setGuildModel(guildId: string, model: string): Promise<GuildSettings>;
   setFreeModelsOnly(guildId: string, freeModelsOnly: boolean): Promise<GuildSettings>;
   setReleaseChannel(guildId: string, channelId: string | null): Promise<GuildSettings>;
+  setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void>;
+  toggleShowLlmDetails(guildId: string): Promise<boolean>;
   getGuildsWithReleaseChannel(): Promise<GuildSettings[]>;
 }
 
@@ -26,6 +28,7 @@ export class SettingsService implements ISettingsService {
       defaultModel: this.defaultModel,
       freeModelsOnly: false,
       releaseChannelId: null,
+      showLlmDetails: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -58,6 +61,17 @@ export class SettingsService implements ISettingsService {
       releaseChannelId: channelId,
       updatedAt: new Date().toISOString(),
     });
+  }
+
+  async setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void> {
+    await this.repo.updateShowLlmDetails(guildId, showLlmDetails);
+  }
+
+  async toggleShowLlmDetails(guildId: string): Promise<boolean> {
+    const settings = await this.getGuildSettings(guildId);
+    const newValue = !settings.showLlmDetails;
+    await this.repo.updateShowLlmDetails(guildId, newValue);
+    return newValue;
   }
 
   async getGuildsWithReleaseChannel(): Promise<GuildSettings[]> {

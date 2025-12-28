@@ -8,6 +8,7 @@ export interface GuildSettings {
   defaultModel: string;
   freeModelsOnly: boolean;
   releaseChannelId: ChannelId | null;
+  showLlmDetails: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -15,6 +16,7 @@ export interface GuildSettings {
 export interface OpenRouterModel {
   id: string;
   name: string;
+  created: number;
   contextLength: number;
   pricing: {
     prompt: string;
@@ -34,12 +36,26 @@ export interface ChatCompletionRequest {
 
 export interface ChatCompletionResponse {
   id?: string;
+  model?: string;
+  provider?: string;
   choices: {
     message: {
       role: "assistant";
       content: string;
     };
   }[];
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cost?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
+    completion_tokens_details?: {
+      reasoning_tokens?: number;
+    };
+  };
 }
 
 export interface OpenRouterError {

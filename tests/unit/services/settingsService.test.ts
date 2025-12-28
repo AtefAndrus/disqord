@@ -139,4 +139,46 @@ describe("SettingsService", () => {
       );
     });
   });
+
+  describe("setShowLlmDetails", () => {
+    test("showLlmDetailsを有効化する", async () => {
+      await settingsService.setShowLlmDetails("guild-123", true);
+
+      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", true);
+    });
+
+    test("showLlmDetailsを無効化する", async () => {
+      await settingsService.setShowLlmDetails("guild-123", false);
+
+      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", false);
+    });
+  });
+
+  describe("toggleShowLlmDetails", () => {
+    test("showLlmDetailsがtrueの場合はfalseに切り替える", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        showLlmDetails: true,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      const result = await settingsService.toggleShowLlmDetails("guild-123");
+
+      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", false);
+      expect(result).toBe(false);
+    });
+
+    test("showLlmDetailsがfalseの場合はtrueに切り替える", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        showLlmDetails: false,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      const result = await settingsService.toggleShowLlmDetails("guild-123");
+
+      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", true);
+      expect(result).toBe(true);
+    });
+  });
 });

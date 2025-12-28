@@ -31,4 +31,16 @@ export function applyMigrations(db: Database) {
       ADD COLUMN release_channel_id TEXT DEFAULT NULL
     `);
   }
+
+  // Migration: Add show_llm_details column
+  const columnsAfterRelease = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasShowLlmDetails = columnsAfterRelease.some((c) => c.name === "show_llm_details");
+  if (!hasShowLlmDetails) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN show_llm_details INTEGER NOT NULL DEFAULT 1
+    `);
+  }
 }

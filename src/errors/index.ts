@@ -87,3 +87,12 @@ export class UnknownApiError extends AppError {
     );
   }
 }
+
+export class ConfigurationError extends AppError {
+  constructor(message: string, configUrl?: string) {
+    const userMessage = configUrl
+      ? `OpenRouterの設定に問題があります。\n${configUrl}\nで設定を確認してください。`
+      : "OpenRouterの設定に問題があります。管理者にお問い合わせください。";
+    super(message, userMessage, 400);
+  }
+}
