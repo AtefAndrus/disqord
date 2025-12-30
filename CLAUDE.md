@@ -166,6 +166,9 @@ When creating a new release:
    - Release notes should include:
      - Summary of changes (bullet points)
      - At the end: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v{current}`
+   - Release notes are delivered to Discord users via webhook, so:
+     - Only include user-facing changes (new features, bug fixes, UX improvements)
+     - Do NOT include internal technical changes (test fixes, refactoring, code cleanup)
 
 ## Notes
 
