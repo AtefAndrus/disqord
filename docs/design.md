@@ -226,41 +226,6 @@ ReleaseNotificationService
 
 詳細設計は実装時に本セクションへ追記する。
 
-### v1.3.3 モデル詳細表示改善
-
-**目的**: 価格表示バグ修正、無料モデル表示改善
-
-**変更対象**:
-
-- `src/utils/modelDetailsFormatter.ts` - `formatPrice`関数修正
-- `src/bot/commands/handlers.ts` - 無料モデルフィールド削除
-
-**実装内容**:
-
-1. **価格表示バグ修正**:
-   - OpenRouter APIは1トークンあたりの価格を返す
-   - 表示時に100万倍して「$/1M tokens」形式に変換
-   - 小数点以下2桁で表示（6桁は不要）
-
-2. **無料モデルフィールド削除**:
-   - 「無料モデル: はい/いいえ」フィールドを削除
-   - 価格表示（「無料」or「$X.XX/1M」）のみで判断
-
-**修正例**:
-
-```typescript
-// formatPrice関数
-export function formatPrice(price: string): string {
-  if (price === "0") {
-    return "無料";
-  }
-  const numPrice = Number.parseFloat(price) * 1_000_000;
-  return `$${numPrice.toFixed(2)}/1M`;
-}
-```
-
----
-
 ### v1.4.0 即時UX改善
 
 **目的**: すぐに体感できるUX向上（ストリーミング、停止ボタン、prefix削除、自動応答チャンネル）

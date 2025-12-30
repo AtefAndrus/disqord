@@ -272,8 +272,8 @@ describe("createMessageCreateHandler", () => {
     expect(mockSendTyping).toHaveBeenCalled();
   });
 
-  test("10000文字の応答は複数メッセージに分割される（各メッセージ1 Embed）", async () => {
-    const longResponse = "a".repeat(10000);
+  test("10000文字の応答は9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", async () => {
+    const longResponse = "a".repeat(10000); // ASCII: 10000バイト
     (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
       text: longResponse,
       metadata: undefined,
@@ -287,19 +287,17 @@ describe("createMessageCreateHandler", () => {
     await handler(mockMessage as never);
 
     const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
-    const expectedMessages = Math.ceil(10000 / 4096); // 3メッセージ
+    const expectedMessages = Math.ceil(10000 / 9000); // 2メッセージ
 
     expect(sendCalls.length).toBe(expectedMessages);
     expect(sendCalls[0][0].embeds.length).toBe(1); // 各メッセージに1 Embed
     expect(sendCalls[1][0].embeds.length).toBe(1);
-    expect(sendCalls[2][0].embeds.length).toBe(1);
-    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/3");
-    expect(sendCalls[1][0].embeds[0].data.footer?.text).toContain("ページ 2/3");
-    expect(sendCalls[2][0].embeds[0].data.footer?.text).toContain("ページ 3/3");
+    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/2");
+    expect(sendCalls[1][0].embeds[0].data.footer?.text).toContain("ページ 2/2");
   });
 
-  test("50000文字の応答は複数メッセージに分割される（各メッセージ1 Embed）", async () => {
-    const longResponse = "a".repeat(50000);
+  test("50000文字の応答は9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", async () => {
+    const longResponse = "a".repeat(50000); // ASCII: 50000バイト
     (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
       text: longResponse,
       metadata: undefined,
@@ -315,16 +313,15 @@ describe("createMessageCreateHandler", () => {
     const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
     expect(sendCalls.length).toBeGreaterThan(1); // 複数メッセージ
 
-    const expectedMessages = Math.ceil(50000 / 4096); // 13メッセージ
+    const expectedMessages = Math.ceil(50000 / 9000); // 6メッセージ
 
     expect(sendCalls.length).toBe(expectedMessages);
     expect(sendCalls[0][0].embeds.length).toBe(1); // 各メッセージに1 Embed
-    expect(sendCalls[12][0].embeds.length).toBe(1);
+    expect(sendCalls[5][0].embeds.length).toBe(1);
 
     // ページ番号確認（全体通し）
-    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/13");
-    expect(sendCalls[9][0].embeds[0].data.footer?.text).toContain("ページ 10/13");
-    expect(sendCalls[10][0].embeds[0].data.footer?.text).toContain("ページ 11/13");
-    expect(sendCalls[12][0].embeds[0].data.footer?.text).toContain("ページ 13/13");
+    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/6");
+    expect(sendCalls[2][0].embeds[0].data.footer?.text).toContain("ページ 3/6");
+    expect(sendCalls[5][0].embeds[0].data.footer?.text).toContain("ページ 6/6");
   });
 });

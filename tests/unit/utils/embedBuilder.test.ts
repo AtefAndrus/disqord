@@ -82,41 +82,36 @@ describe("embedBuilder", () => {
       expect(messages[0][0].data.footer).toBeUndefined(); // 1ページの場合footerなし
     });
 
-    test("4096-40960文字のテキストは複数メッセージに分割される（各メッセージ1 Embed）", () => {
-      const text = "a".repeat(10000);
+    test("9000バイト超のテキストは複数メッセージに分割される（各メッセージ1 Embed）", () => {
+      const text = "a".repeat(10000); // ASCII: 10000バイト
       const messages = splitTextToMultipleMessages(text, {
         color: EmbedColors.BLURPLE,
       });
 
-      const expectedMessages = Math.ceil(10000 / 4096); // 3メッセージ
+      const expectedMessages = Math.ceil(10000 / 9000); // 2メッセージ
       expect(messages.length).toBe(expectedMessages);
       expect(messages[0].length).toBe(1); // 各メッセージに1 Embed
       expect(messages[1].length).toBe(1);
-      expect(messages[2].length).toBe(1);
-      expect(messages[0][0].data.footer?.text).toBe("ページ 1/3");
-      expect(messages[1][0].data.footer?.text).toBe("ページ 2/3");
-      expect(messages[2][0].data.footer?.text).toBe("ページ 3/3");
+      expect(messages[0][0].data.footer?.text).toBe("ページ 1/2");
+      expect(messages[1][0].data.footer?.text).toBe("ページ 2/2");
     });
 
-    test("40960文字超のテキストは複数メッセージに分割される（各メッセージ1 Embed）", () => {
-      const text = "a".repeat(100000); // 100000文字
+    test("大量テキストは9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", () => {
+      const text = "a".repeat(100000); // 100000バイト（ASCII）
       const messages = splitTextToMultipleMessages(text, {
         color: EmbedColors.BLURPLE,
       });
 
-      const expectedMessages = Math.ceil(100000 / 4096); // 25メッセージ
+      const expectedMessages = Math.ceil(100000 / 9000); // 12メッセージ
 
-      expect(messages.length).toBe(expectedMessages); // 25メッセージ
+      expect(messages.length).toBe(expectedMessages); // 12メッセージ
       expect(messages[0].length).toBe(1); // 各メッセージに1 Embed
-      expect(messages[24].length).toBe(1);
+      expect(messages[11].length).toBe(1);
 
       // ページ番号確認（全体通し）
-      expect(messages[0][0].data.footer?.text).toBe("ページ 1/25");
-      expect(messages[9][0].data.footer?.text).toBe("ページ 10/25");
-      expect(messages[10][0].data.footer?.text).toBe("ページ 11/25");
-      expect(messages[19][0].data.footer?.text).toBe("ページ 20/25");
-      expect(messages[20][0].data.footer?.text).toBe("ページ 21/25");
-      expect(messages[24][0].data.footer?.text).toBe("ページ 25/25");
+      expect(messages[0][0].data.footer?.text).toBe("ページ 1/12");
+      expect(messages[5][0].data.footer?.text).toBe("ページ 6/12");
+      expect(messages[11][0].data.footer?.text).toBe("ページ 12/12");
     });
 
     test("baseConfigの設定が各Embedに適用される", () => {

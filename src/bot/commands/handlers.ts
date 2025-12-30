@@ -98,7 +98,6 @@ export function createCommandHandlers(
               value: formatContextLength(details.contextLength),
               inline: true,
             },
-            { name: "無料モデル", value: details.isFree ? "はい" : "いいえ", inline: true },
             { name: "入力価格", value: formatPrice(details.pricing.prompt), inline: true },
             { name: "出力価格", value: formatPrice(details.pricing.completion), inline: true },
           ],
