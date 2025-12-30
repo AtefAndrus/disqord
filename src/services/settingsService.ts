@@ -38,8 +38,9 @@ export class SettingsService implements ISettingsService {
   }
 
   async setGuildModel(guildId: string, model: string): Promise<GuildSettings> {
+    const existing = await this.getGuildSettings(guildId);
     return this.repo.upsert(guildId, {
-      guildId,
+      ...existing,
       defaultModel: model,
       updatedAt: new Date().toISOString(),
     });

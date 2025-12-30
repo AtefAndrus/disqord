@@ -83,6 +83,29 @@ describe("SettingsService", () => {
         }),
       );
     });
+
+    test("既存設定を維持しつつモデルを更新", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        defaultModel: "old-model",
+        releaseChannelId: "channel-456",
+        freeModelsOnly: true,
+        showLlmDetails: false,
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.setGuildModel("guild-123", "new-model");
+
+      expect(mockRepo.upsert).toHaveBeenCalledWith(
+        "guild-123",
+        expect.objectContaining({
+          defaultModel: "new-model",
+          releaseChannelId: "channel-456",
+          freeModelsOnly: true,
+          showLlmDetails: false,
+        }),
+      );
+    });
   });
 
   describe("setFreeModelsOnly", () => {
