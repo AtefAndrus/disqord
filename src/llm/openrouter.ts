@@ -11,13 +11,23 @@ import {
   TimeoutError,
   UnknownApiError,
 } from "../errors";
-import type { ChatCompletionRequest, ChatCompletionResponse, OpenRouterModel } from "../types";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  OpenRouterModel,
+  StreamChunk,
+  StreamFinalResult,
+} from "../types";
 import { logger } from "../utils/logger";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
 export interface ILLMClient {
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  chatStream(
+    request: ChatCompletionRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<StreamChunk | StreamFinalResult, void, void>;
   listModels(): Promise<string[]>;
   listModelsWithPricing(): Promise<OpenRouterModel[]>;
   getCredits(): Promise<{ remaining: number }>;
@@ -53,6 +63,20 @@ interface OpenRouterErrorResponse {
     message: string;
     metadata?: Record<string, unknown>;
   };
+}
+
+interface StreamDelta {
+  id?: string;
+  model?: string;
+  provider?: string;
+  choices: {
+    delta: {
+      content?: string;
+      role?: string;
+    };
+    finish_reason?: string | null;
+  }[];
+  usage?: ChatCompletionResponse["usage"];
 }
 
 export class OpenRouterClient implements ILLMClient {
@@ -103,6 +127,105 @@ export class OpenRouterClient implements ILLMClient {
 
     const data = (await response.json()) as ChatCompletionResponse;
     return data;
+  }
+
+  async *chatStream(
+    request: ChatCompletionRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<StreamChunk | StreamFinalResult, void, void> {
+    if (this.isRateLimited()) {
+      const retryAfterSeconds = this.rateLimitResetAt
+        ? Math.max(0, Math.ceil((this.rateLimitResetAt - Date.now()) / 1000))
+        : undefined;
+      throw new RateLimitError("Rate limited. Please try again later.", retryAfterSeconds);
+    }
+
+    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ...request,
+        stream: true,
+        usage: {
+          include: true,
+        },
+      }),
+      signal,
+    });
+
+    if (!response.ok) {
+      await this.handleErrorResponse(response);
+    }
+
+    if (!response.body) {
+      throw new UnknownApiError("Response body is null", 0);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let lastModel: string | undefined;
+    let lastProvider: string | undefined;
+    let lastUsage: ChatCompletionResponse["usage"] | undefined;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") {
+            yield {
+              done: true,
+              fullText,
+              usage: lastUsage,
+              model: lastModel,
+              provider: lastProvider,
+            };
+            return;
+          }
+
+          try {
+            const chunk = JSON.parse(data) as StreamDelta;
+            const content = chunk.choices[0]?.delta?.content;
+
+            if (chunk.model) lastModel = chunk.model;
+            if (chunk.provider) lastProvider = chunk.provider;
+            if (chunk.usage) lastUsage = chunk.usage;
+
+            if (content) {
+              fullText += content;
+              yield { content, done: false };
+            }
+          } catch {
+            // JSON parse error, skip this line
+          }
+        }
+      }
+
+      // Handle case where stream ends without [DONE]
+      yield {
+        done: true,
+        fullText,
+        usage: lastUsage,
+        model: lastModel,
+        provider: lastProvider,
+      };
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async listModels(): Promise<string[]> {

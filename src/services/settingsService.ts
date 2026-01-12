@@ -9,6 +9,8 @@ export interface ISettingsService {
   setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void>;
   toggleShowLlmDetails(guildId: string): Promise<boolean>;
   getGuildsWithReleaseChannel(): Promise<GuildSettings[]>;
+  addAutoReplyChannel(guildId: string, channelId: string): Promise<void>;
+  removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
 }
 
 export class SettingsService implements ISettingsService {
@@ -29,6 +31,7 @@ export class SettingsService implements ISettingsService {
       freeModelsOnly: false,
       releaseChannelId: null,
       showLlmDetails: true,
+      autoReplyChannels: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -77,5 +80,29 @@ export class SettingsService implements ISettingsService {
 
   async getGuildsWithReleaseChannel(): Promise<GuildSettings[]> {
     return this.repo.findAllWithReleaseChannel();
+  }
+
+  async addAutoReplyChannel(guildId: string, channelId: string): Promise<void> {
+    const settings = await this.getGuildSettings(guildId);
+    const channels = settings.autoReplyChannels;
+
+    if (!channels.includes(channelId)) {
+      channels.push(channelId);
+      await this.repo.updateAutoReplyChannels(guildId, channels);
+    }
+  }
+
+  async removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean> {
+    const settings = await this.getGuildSettings(guildId);
+    const channels = settings.autoReplyChannels;
+    const index = channels.indexOf(channelId);
+
+    if (index === -1) {
+      return false;
+    }
+
+    channels.splice(index, 1);
+    await this.repo.updateAutoReplyChannels(guildId, channels);
+    return true;
   }
 }

@@ -21,14 +21,18 @@ export function createCommandHandlers(
 - 例: \`@DisQord こんにちは\`
 
 **コマンド:**
-- \`/disqord help\` - このヘルプを表示
-- \`/disqord status\` - Bot状態（残高等）を表示
-- \`/disqord model current\` - 現在のモデルを表示
-- \`/disqord model set <model>\` - モデルを変更
-- \`/disqord model list\` - OpenRouterのモデル一覧ページへ
-- \`/disqord model refresh\` - モデルキャッシュを更新
-- \`/disqord config free-only <on|off>\` - 無料モデル限定の切り替え
-- \`/disqord config release-channel [channel]\` - リリース通知チャンネルを設定（省略で無効化）`;
+- \`/help\` - このヘルプを表示
+- \`/status\` - Bot状態（残高等）を表示
+- \`/model current\` - 現在のモデルを表示
+- \`/model set <model>\` - モデルを変更
+- \`/model list\` - OpenRouterのモデル一覧ページへ
+- \`/model refresh\` - モデルキャッシュを更新
+- \`/config free-only <on|off>\` - 無料モデル限定の切り替え
+- \`/config release-channel [channel]\` - リリース通知チャンネルを設定
+- \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
+- \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
+- \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
+- \`/config auto-reply list\` - 自動応答チャンネル一覧`;
 
       const embed = createSuccessEmbed(helpText, "DisQord ヘルプ");
       await interaction.reply({ embeds: [embed] });
@@ -63,7 +67,7 @@ export function createCommandHandlers(
       if (!validation.valid) {
         if (validation.error === "MODEL_NOT_FOUND") {
           const errorEmbed = createErrorEmbed(
-            `モデル \`${model}\` は見つかりませんでした。\`/disqord model list\` で利用可能なモデルを確認してください。`,
+            `モデル \`${model}\` は見つかりませんでした。\`/model list\` で利用可能なモデルを確認してください。`,
             "モデル設定エラー",
           );
           await interaction.reply({ embeds: [errorEmbed] });
@@ -118,7 +122,7 @@ export function createCommandHandlers(
       const message = `モデル一覧はOpenRouterのサイトで確認できます:
 <https://openrouter.ai/models>
 
-モデルを変更するには \`/disqord model set <model>\` を使用してください。`;
+モデルを変更するには \`/model set <model>\` を使用してください。`;
 
       const embed = createSuccessEmbed(message, "モデル一覧");
       await interaction.reply({ embeds: [embed] });
@@ -224,8 +228,77 @@ export function createCommandHandlers(
       await settingsService.setShowLlmDetails(interaction.guildId, enabled);
 
       const embed = createSuccessEmbed(
-        `LLM details display: **${enabled ? "ON" : "OFF"}**`,
-        "Configuration Updated",
+        `LLM詳細情報表示を **${enabled ? "有効" : "無効"}** にしました。`,
+        "LLM詳細設定",
+      );
+      await interaction.reply({ embeds: [embed] });
+    },
+
+    async configAutoReplyAdd(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      const channel = interaction.options.getChannel("channel", true);
+      await settingsService.addAutoReplyChannel(interaction.guildId, channel.id);
+
+      const embed = createSuccessEmbed(
+        `<#${channel.id}> を自動応答チャンネルに追加しました。`,
+        "自動応答設定",
+      );
+      await interaction.reply({ embeds: [embed] });
+    },
+
+    async configAutoReplyRemove(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      const channel = interaction.options.getChannel("channel", true);
+      const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channel.id);
+
+      if (removed) {
+        const embed = createSuccessEmbed(
+          `<#${channel.id}> を自動応答チャンネルから削除しました。`,
+          "自動応答設定",
+        );
+        await interaction.reply({ embeds: [embed] });
+      } else {
+        const embed = createErrorEmbed(
+          `<#${channel.id}> は自動応答チャンネルに設定されていません。`,
+          "自動応答設定",
+        );
+        await interaction.reply({ embeds: [embed] });
+      }
+    },
+
+    async configAutoReplyList(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      const settings = await settingsService.getGuildSettings(interaction.guildId);
+      const channels = settings.autoReplyChannels;
+
+      if (channels.length === 0) {
+        const embed = createSuccessEmbed(
+          "自動応答チャンネルは設定されていません。",
+          "自動応答チャンネル一覧",
+        );
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      const channelList = channels.map((id) => `- <#${id}>`).join("\n");
+      const embed = createSuccessEmbed(
+        `**自動応答チャンネル:**\n${channelList}`,
+        "自動応答チャンネル一覧",
       );
       await interaction.reply({ embeds: [embed] });
     },
@@ -238,10 +311,9 @@ export async function handleAutocomplete(
   modelService: IModelService,
 ): Promise<void> {
   try {
-    // disqord model setのみ処理
+    // model set のみ処理
     if (
-      interaction.commandName !== "disqord" ||
-      interaction.options.getSubcommandGroup() !== "model" ||
+      interaction.commandName !== "model" ||
       interaction.options.getSubcommand() !== "set"
     ) {
       await interaction.respond([]);

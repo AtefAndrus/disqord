@@ -15,11 +15,13 @@ export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
         freeModelsOnly: settings.freeModelsOnly ?? false,
         releaseChannelId: settings.releaseChannelId ?? null,
         showLlmDetails: settings.showLlmDetails ?? true,
+        autoReplyChannels: settings.autoReplyChannels ?? [],
         createdAt: settings.createdAt ?? new Date().toISOString(),
         updatedAt: settings.updatedAt ?? new Date().toISOString(),
       }),
     ),
     updateShowLlmDetails: mock(() => Promise.resolve()),
+    updateAutoReplyChannels: mock(() => Promise.resolve()),
     delete: mock(() => Promise.resolve(true)),
   };
 }
@@ -39,6 +41,11 @@ export function createMockLLMClient(): ILLMClient {
         ],
       } satisfies ChatCompletionResponse),
     ),
+    chatStream: mock(async function* () {
+      yield { content: "Mock ", done: false as const };
+      yield { content: "response", done: false as const };
+      yield { done: true as const, fullText: "Mock response", usage: undefined, model: undefined, provider: undefined };
+    }),
     listModels: mock(() => Promise.resolve(["model-1", "model-2"])),
     listModelsWithPricing: mock(() =>
       Promise.resolve([
@@ -72,6 +79,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly: false,
         releaseChannelId: null,
         showLlmDetails: true,
+        autoReplyChannels: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -83,6 +91,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly: false,
         releaseChannelId: null,
         showLlmDetails: true,
+        autoReplyChannels: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -94,6 +103,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly,
         releaseChannelId: null,
         showLlmDetails: true,
+        autoReplyChannels: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -105,6 +115,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly: false,
         releaseChannelId: channelId,
         showLlmDetails: true,
+        autoReplyChannels: [],
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -112,6 +123,8 @@ export function createMockSettingsService(): ISettingsService {
     setShowLlmDetails: mock((_guildId: string, _showLlmDetails: boolean) => Promise.resolve()),
     toggleShowLlmDetails: mock((_guildId: string) => Promise.resolve(true)),
     getGuildsWithReleaseChannel: mock(() => Promise.resolve([])),
+    addAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve()),
+    removeAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve(true)),
   };
 }
 
@@ -122,6 +135,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     freeModelsOnly: false,
     releaseChannelId: null,
     showLlmDetails: true,
+    autoReplyChannels: [],
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

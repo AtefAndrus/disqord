@@ -1,9 +1,12 @@
 import { REST, Routes } from "discord.js";
-import { disqordCommand } from "./disqord";
+import { configCommand } from "./config";
+import { helpCommand } from "./help";
+import { modelCommand } from "./model";
+import { statusCommand } from "./status";
 
-export const commandDefinitions = [disqordCommand];
+export const commandDefinitions = [helpCommand, statusCommand, modelCommand, configCommand];
 
-export async function registerCommands(applicationId: string, token: string) {
+export async function registerCommands(applicationId: string, token: string): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(token);
   const commands = commandDefinitions.map((command) => command.toJSON());
 

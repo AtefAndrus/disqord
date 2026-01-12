@@ -9,6 +9,7 @@ export interface GuildSettings {
   freeModelsOnly: boolean;
   releaseChannelId: ChannelId | null;
   showLlmDetails: boolean;
+  autoReplyChannels: ChannelId[];
   createdAt: string;
   updatedAt: string;
 }
@@ -68,4 +69,17 @@ export interface OpenRouterError {
       "X-RateLimit-Reset"?: string;
     };
   };
+}
+
+export interface StreamChunk {
+  content: string;
+  done: false;
+}
+
+export interface StreamFinalResult {
+  done: true;
+  fullText: string;
+  usage?: ChatCompletionResponse["usage"];
+  model?: string;
+  provider?: string;
 }

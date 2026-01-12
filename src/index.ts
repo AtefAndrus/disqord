@@ -42,6 +42,7 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     llmClient,
+    chatService,
   );
 
   const client = await createBotClient();

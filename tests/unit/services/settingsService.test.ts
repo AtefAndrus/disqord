@@ -204,4 +204,90 @@ describe("SettingsService", () => {
       expect(result).toBe(true);
     });
   });
+
+  describe("addAutoReplyChannel", () => {
+    test("空の自動応答チャンネルリストに追加する", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: [],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.addAutoReplyChannel("guild-123", "channel-456");
+
+      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", ["channel-456"]);
+    });
+
+    test("既存の自動応答チャンネルリストに追加する", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: ["channel-111", "channel-222"],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.addAutoReplyChannel("guild-123", "channel-333");
+
+      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", [
+        "channel-111",
+        "channel-222",
+        "channel-333",
+      ]);
+    });
+
+    test("既に存在するチャンネルは重複追加しない", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: ["channel-456"],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.addAutoReplyChannel("guild-123", "channel-456");
+
+      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("removeAutoReplyChannel", () => {
+    test("自動応答チャンネルを削除する", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: ["channel-111", "channel-222", "channel-333"],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-222");
+
+      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", [
+        "channel-111",
+        "channel-333",
+      ]);
+      expect(result).toBe(true);
+    });
+
+    test("存在しないチャンネルを削除しようとするとfalseを返す", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: ["channel-111"],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-999");
+
+      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+    });
+
+    test("空のリストから削除しようとするとfalseを返す", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        autoReplyChannels: [],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-456");
+
+      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
+      expect(result).toBe(false);
+    });
+  });
 });

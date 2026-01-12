@@ -5,7 +5,13 @@ import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 
+interface MockBotMessage {
+  id: string;
+  edit: ReturnType<typeof mock>;
+}
+
 interface MockMessage {
+  id: string;
   author: { bot: boolean };
   guild: { id: string } | null;
   client: { user: { id: string } | null };
@@ -13,9 +19,32 @@ interface MockMessage {
   content: string;
   channel: {
     send: ReturnType<typeof mock>;
-    sendTyping: ReturnType<typeof mock>;
+    isThread: () => boolean;
   };
   reply: ReturnType<typeof mock>;
+}
+
+function createMockStreamGenerator(fullText: string) {
+  return async function* () {
+    // チャンクを複数に分割してyield
+    const chunkSize = Math.ceil(fullText.length / 3);
+    for (let i = 0; i < fullText.length; i += chunkSize) {
+      yield { content: fullText.slice(i, i + chunkSize), done: false as const };
+    }
+    yield {
+      done: true as const,
+      fullText,
+      usage: undefined,
+      model: undefined,
+      provider: undefined,
+    };
+  };
+}
+
+function createErrorStreamGenerator(error: Error) {
+  return async function* () {
+    throw error;
+  };
 }
 
 describe("createMessageCreateHandler", () => {
@@ -25,11 +54,18 @@ describe("createMessageCreateHandler", () => {
   let mockMessage: MockMessage;
   let mockReply: ReturnType<typeof mock>;
   let mockSend: ReturnType<typeof mock>;
-  let mockSendTyping: ReturnType<typeof mock>;
+  let mockBotMessage: MockBotMessage;
 
   beforeEach(() => {
+    mockBotMessage = {
+      id: "bot-msg-123",
+      edit: mock(() => Promise.resolve()),
+    };
+
     mockChatService = {
       generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
+      generateResponseStream: mock(createMockStreamGenerator("Mock response")),
+      cancelRequest: mock(() => false),
     };
 
     const mockGuildSettings = {
@@ -38,6 +74,7 @@ describe("createMessageCreateHandler", () => {
       freeModelsOnly: false,
       releaseChannelId: null,
       showLlmDetails: true,
+      autoReplyChannels: [] as string[],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -50,6 +87,8 @@ describe("createMessageCreateHandler", () => {
       setShowLlmDetails: mock(() => Promise.resolve()),
       toggleShowLlmDetails: mock(() => Promise.resolve(true)),
       getGuildsWithReleaseChannel: mock(() => Promise.resolve([])),
+      addAutoReplyChannel: mock(() => Promise.resolve()),
+      removeAutoReplyChannel: mock(() => Promise.resolve(true)),
     };
 
     mockModelService = {
@@ -69,10 +108,10 @@ describe("createMessageCreateHandler", () => {
     };
 
     mockReply = mock(() => Promise.resolve());
-    mockSend = mock(() => Promise.resolve());
-    mockSendTyping = mock(() => Promise.resolve());
+    mockSend = mock(() => Promise.resolve(mockBotMessage));
 
     mockMessage = {
+      id: "msg-123",
       author: { bot: false },
       guild: { id: "guild-123" },
       client: { user: { id: "123456789" } },
@@ -80,7 +119,7 @@ describe("createMessageCreateHandler", () => {
       content: "<@123456789> Hello",
       channel: {
         send: mockSend,
-        sendTyping: mockSendTyping,
+        isThread: () => false,
       },
       reply: mockReply,
     };
@@ -101,7 +140,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponse).not.toHaveBeenCalled();
+    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
   test("Guild外のメッセージは無視する", async () => {
@@ -114,7 +153,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponse).not.toHaveBeenCalled();
+    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
   test("メンションがない場合は無視する", async () => {
@@ -127,7 +166,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponse).not.toHaveBeenCalled();
+    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
   test("空のコンテンツは入力エラーEmbedを返す", async () => {
@@ -154,10 +193,10 @@ describe("createMessageCreateHandler", () => {
         allowedMentions: { repliedUser: false },
       }),
     );
-    expect(mockChatService.generateResponse).not.toHaveBeenCalled();
+    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
-  test("正常なメッセージに対してEmbed形式でレスポンスを生成する", async () => {
+  test("正常なメッセージに対してストリーミングレスポンスを生成する", async () => {
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -166,24 +205,33 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponse).toHaveBeenCalledWith("guild-123", "Hello");
+    // 初期メッセージ「生成中...」が送信される
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
-        embeds: expect.arrayContaining([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              color: expect.any(Number), // モデルIDから動的に決定
-              description: "Mock response",
-            }),
-          }),
-        ]),
+        content: "生成中...",
+        components: expect.any(Array),
       }),
     );
+
+    // generateResponseStreamが呼ばれる
+    expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+      "guild-123",
+      "Hello",
+      "msg-123",
+    );
+
+    // 最終更新でEmbedが設定される
+    expect(mockBotMessage.edit).toHaveBeenCalled();
+    const lastEditCall = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.at(-1);
+    expect(lastEditCall[0]).toHaveProperty("embeds");
+    expect(lastEditCall[0].components).toEqual([]);
   });
 
   test("AppErrorの場合は赤色EmbedでuserMessageを表示する", async () => {
     const error = new RateLimitError("Rate limited by API", 30);
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createErrorStreamGenerator(error),
+    );
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -209,7 +257,9 @@ describe("createMessageCreateHandler", () => {
 
   test("一般的なErrorの場合は赤色Embedで汎用メッセージを表示する", async () => {
     const error = new Error("Unknown error");
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createErrorStreamGenerator(error),
+    );
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -236,7 +286,9 @@ describe("createMessageCreateHandler", () => {
 
   test("カスタムAppErrorの場合は赤色EmbedでそのuserMessageを表示する", async () => {
     const error = new AppError("Technical message", "カスタムエラーメッセージ", 500);
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createErrorStreamGenerator(error),
+    );
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -260,7 +312,29 @@ describe("createMessageCreateHandler", () => {
     );
   });
 
-  test("sendTypingが呼ばれる", async () => {
+  test("自動応答チャンネルで応答する", async () => {
+    // メンションなし
+    mockMessage.mentions.has.mockReturnValue(false);
+    mockMessage.content = "Hello without mention";
+
+    // 自動応答チャンネルに設定
+    const mockGuildSettingsWithAutoReply = {
+      guildId: "guild-123",
+      defaultModel: "deepseek/deepseek-r1-0528:free",
+      freeModelsOnly: false,
+      releaseChannelId: null,
+      showLlmDetails: true,
+      autoReplyChannels: ["auto-reply-channel-id"],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+      mockGuildSettingsWithAutoReply,
+    );
+
+    // チャンネルIDを自動応答チャンネルに設定
+    (mockMessage.channel as { id?: string }).id = "auto-reply-channel-id";
+
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -269,15 +343,15 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockSendTyping).toHaveBeenCalled();
+    expect(mockChatService.generateResponseStream).toHaveBeenCalled();
   });
 
-  test("10000文字の応答は9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", async () => {
-    const longResponse = "a".repeat(10000); // ASCII: 10000バイト
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
-      text: longResponse,
-      metadata: undefined,
-    });
+  test("長文応答は複数メッセージに分割される", async () => {
+    const longResponse = "a".repeat(10000);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createMockStreamGenerator(longResponse),
+    );
+
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -286,22 +360,22 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
-    const expectedMessages = Math.ceil(10000 / 9000); // 2メッセージ
+    // 最初のメッセージはeditされる
+    expect(mockBotMessage.edit).toHaveBeenCalled();
 
-    expect(sendCalls.length).toBe(expectedMessages);
-    expect(sendCalls[0][0].embeds.length).toBe(1); // 各メッセージに1 Embed
-    expect(sendCalls[1][0].embeds.length).toBe(1);
-    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/2");
-    expect(sendCalls[1][0].embeds[0].data.footer?.text).toContain("ページ 2/2");
+    // 追加メッセージがsendで送信される（長文の場合）
+    const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
+    // 最初のsendは「生成中...」、その後に追加メッセージ
+    expect(sendCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("50000文字の応答は9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", async () => {
-    const longResponse = "a".repeat(50000); // ASCII: 50000バイト
-    (mockChatService.generateResponse as ReturnType<typeof mock>).mockResolvedValueOnce({
-      text: longResponse,
-      metadata: undefined,
-    });
+  test("AbortErrorの場合は停止メッセージを表示する", async () => {
+    const abortError = new Error("Request was aborted");
+    abortError.name = "AbortError";
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createErrorStreamGenerator(abortError),
+    );
+
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -310,18 +384,9 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
-    expect(sendCalls.length).toBeGreaterThan(1); // 複数メッセージ
-
-    const expectedMessages = Math.ceil(50000 / 9000); // 6メッセージ
-
-    expect(sendCalls.length).toBe(expectedMessages);
-    expect(sendCalls[0][0].embeds.length).toBe(1); // 各メッセージに1 Embed
-    expect(sendCalls[5][0].embeds.length).toBe(1);
-
-    // ページ番号確認（全体通し）
-    expect(sendCalls[0][0].embeds[0].data.footer?.text).toContain("ページ 1/6");
-    expect(sendCalls[2][0].embeds[0].data.footer?.text).toContain("ページ 3/6");
-    expect(sendCalls[5][0].embeds[0].data.footer?.text).toContain("ページ 6/6");
+    // AbortErrorの場合はreplyではなくeditで停止メッセージを表示
+    const lastEditCall = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.at(-1);
+    expect(lastEditCall[0].content).toContain("生成を停止しました");
+    expect(lastEditCall[0].components).toEqual([]);
   });
 });

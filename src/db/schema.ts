@@ -43,4 +43,16 @@ export function applyMigrations(db: Database) {
       ADD COLUMN show_llm_details INTEGER NOT NULL DEFAULT 1
     `);
   }
+
+  // Migration: Add auto_reply_channels column (JSON array)
+  const columnsAfterLlmDetails = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasAutoReplyChannels = columnsAfterLlmDetails.some((c) => c.name === "auto_reply_channels");
+  if (!hasAutoReplyChannels) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN auto_reply_channels TEXT DEFAULT NULL
+    `);
+  }
 }

@@ -2,6 +2,7 @@ import type { ButtonInteraction, ChatInputCommandInteraction, Interaction } from
 import { MessageFlags } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
+import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import { createErrorEmbed } from "../../utils/embedBuilder";
@@ -19,6 +20,9 @@ export interface CommandHandlers {
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configReleaseChannel: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
 }
 
 export function createInteractionCreateHandler(
@@ -26,6 +30,7 @@ export function createInteractionCreateHandler(
   settingsService: ISettingsService,
   modelService: IModelService,
   llmClient: ILLMClient,
+  chatService: IChatService,
 ) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -34,7 +39,13 @@ export function createInteractionCreateHandler(
     }
 
     if (interaction.isButton()) {
-      await handleButtonInteraction(interaction, settingsService, modelService, llmClient);
+      await handleButtonInteraction(
+        interaction,
+        settingsService,
+        modelService,
+        llmClient,
+        chatService,
+      );
       return;
     }
 
@@ -45,50 +56,68 @@ export function createInteractionCreateHandler(
     try {
       const { commandName } = interaction;
 
-      if (commandName !== "disqord") {
-        logger.warn("Unknown command", { commandName });
-        return;
-      }
+      switch (commandName) {
+        case "help":
+          await handlers.help(interaction);
+          break;
 
-      const subcommandGroup = interaction.options.getSubcommandGroup(false);
-      const subcommand = interaction.options.getSubcommand();
+        case "status":
+          await handlers.status(interaction);
+          break;
 
-      if (subcommandGroup === "model") {
-        switch (subcommand) {
-          case "current":
-            await handlers.modelCurrent(interaction);
-            break;
-          case "set":
-            await handlers.modelSet(interaction);
-            break;
-          case "list":
-            await handlers.modelList(interaction);
-            break;
-          case "refresh":
-            await handlers.modelRefresh(interaction);
-            break;
+        case "model": {
+          const subcommand = interaction.options.getSubcommand();
+          switch (subcommand) {
+            case "current":
+              await handlers.modelCurrent(interaction);
+              break;
+            case "set":
+              await handlers.modelSet(interaction);
+              break;
+            case "list":
+              await handlers.modelList(interaction);
+              break;
+            case "refresh":
+              await handlers.modelRefresh(interaction);
+              break;
+          }
+          break;
         }
-      } else if (subcommandGroup === "config") {
-        switch (subcommand) {
-          case "free-only":
-            await handlers.configFreeOnly(interaction);
-            break;
-          case "release-channel":
-            await handlers.configReleaseChannel(interaction);
-            break;
-          case "llm-details":
-            await handlers.configLlmDetails(interaction);
-            break;
+
+        case "config": {
+          const subcommandGroup = interaction.options.getSubcommandGroup(false);
+          const subcommand = interaction.options.getSubcommand();
+
+          if (subcommandGroup === "auto-reply") {
+            switch (subcommand) {
+              case "add":
+                await handlers.configAutoReplyAdd(interaction);
+                break;
+              case "remove":
+                await handlers.configAutoReplyRemove(interaction);
+                break;
+              case "list":
+                await handlers.configAutoReplyList(interaction);
+                break;
+            }
+          } else {
+            switch (subcommand) {
+              case "free-only":
+                await handlers.configFreeOnly(interaction);
+                break;
+              case "release-channel":
+                await handlers.configReleaseChannel(interaction);
+                break;
+              case "llm-details":
+                await handlers.configLlmDetails(interaction);
+                break;
+            }
+          }
+          break;
         }
-      } else {
-        switch (subcommand) {
-          case "help":
-            await handlers.help(interaction);
-            break;
-          case "status":
-            await handlers.status(interaction);
-            break;
-        }
+
+        default:
+          logger.warn("Unknown command", { commandName });
       }
     } catch (error) {
       logger.error("Command execution failed", { error });
@@ -110,6 +139,7 @@ async function handleButtonInteraction(
   settingsService: ISettingsService,
   modelService: IModelService,
   llmClient: ILLMClient,
+  chatService: IChatService,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({
@@ -121,6 +151,23 @@ async function handleButtonInteraction(
 
   try {
     const { customId } = interaction;
+
+    // 停止ボタン処理
+    if (customId.startsWith("stop_response_")) {
+      const messageId = customId.replace("stop_response_", "");
+      const cancelled = chatService.cancelRequest(messageId);
+
+      if (cancelled) {
+        // キャンセル成功 - メッセージはmessageCreate.tsのAbortError処理で更新される
+        await interaction.deferUpdate();
+      } else {
+        await interaction.reply({
+          content: "既に完了しているか、該当するリクエストが見つかりません。",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+      return;
+    }
 
     if (customId === "status_toggle_free_only") {
       const settings = await settingsService.getGuildSettings(interaction.guildId);

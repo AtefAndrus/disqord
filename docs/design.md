@@ -19,29 +19,32 @@
 ### 1.2 会話コンテキスト
 
 - **方式**: 単発応答（毎回リセット）
-- 過去の会話履歴は保持しない（v1.4.0で対応予定）
+- 過去の会話履歴は保持しない（v1.5.0で対応予定）
 
 ### 1.3 スラッシュコマンド一覧
 
 | コマンド | 説明 |
 | -------- | ---- |
-| `/disqord help` | 使い方を表示 |
-| `/disqord status` | Botのステータス（OpenRouter残高等）を表示、ボタンで設定切り替え可能 |
-| `/disqord model current` | 現在設定されているモデルを表示 |
-| `/disqord model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート、変更時にモデル詳細情報を表示） |
-| `/disqord model list` | OpenRouterのモデル一覧ページへ誘導 |
-| `/disqord model refresh` | モデルキャッシュを更新 |
-| `/disqord config free-only <on\|off>` | Guildの無料モデル限定設定を切り替え |
-| `/disqord config release-channel [channel]` | リリースノート配信先チャンネルを設定（省略で無効化） |
-| `/disqord config llm-details <on\|off>` | LLM詳細情報表示を切り替え |
+| `/help` | 使い方を表示 |
+| `/status` | Botのステータス（OpenRouter残高等）を表示、ボタンで設定切り替え可能 |
+| `/model current` | 現在設定されているモデルを表示 |
+| `/model set <model>` | Guildのデフォルトモデルを変更（Autocomplete対応、新しい順ソート、変更時にモデル詳細情報を表示） |
+| `/model list` | OpenRouterのモデル一覧ページへ誘導 |
+| `/model refresh` | モデルキャッシュを更新 |
+| `/config free-only <on\|off>` | Guildの無料モデル限定設定を切り替え |
+| `/config release-channel [channel]` | リリースノート配信先チャンネルを設定（省略で無効化） |
+| `/config llm-details <on\|off>` | LLM詳細情報表示を切り替え |
+| `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
+| `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
+| `/config auto-reply list` | 自動応答チャンネル一覧を表示 |
 
 ### 1.4 応答形式
 
 | 項目 | 仕様 |
 | ---- | ---- |
-| 送信方式 | 一括送信（Embed形式） |
+| 送信方式 | ストリーミング（SSE、2秒ごとにメッセージ更新）、完了後Embed形式 |
 | 長文対応 | 9000バイト単位で分割、改行位置優先、複数メッセージに分散（ページ番号表示） |
-| Typing表示 | LLM応答待機中、8秒間隔で継続表示 |
+| 停止ボタン | 生成中は🛑停止ボタンを表示、クリックでAbortController.abort() |
 | Embedカラー | モデルIDから決定論的に色決定（FNV-1aハッシュ、16色パレット） |
 | LLM詳細情報 | トークン数、コスト、レイテンシ、TPS等をフッターに表示（ON/OFF切り替え可能、デフォルトON） |
 
@@ -104,6 +107,7 @@ CREATE TABLE guild_settings (
     free_models_only INTEGER NOT NULL DEFAULT 0,
     release_channel_id TEXT DEFAULT NULL,
     show_llm_details INTEGER NOT NULL DEFAULT 1,
+    auto_reply_channels TEXT DEFAULT NULL,  -- JSON array: ["channel_id_1", "channel_id_2"]
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -225,165 +229,6 @@ ReleaseNotificationService
 ## 7. 将来計画（設計骨子）
 
 詳細設計は実装時に本セクションへ追記する。
-
-### v1.4.0 即時UX改善
-
-**目的**: すぐに体感できるUX向上（ストリーミング、停止ボタン、prefix削除、自動応答チャンネル）
-
----
-
-#### ストリーミング対応
-
-**変更対象**:
-
-- `src/llm/openrouter.ts` - `stream: true`対応、SSE処理
-- `src/services/chatService.ts` - ストリーミングレスポンス処理、進行中リクエスト追跡
-- `src/bot/events/messageCreate.ts` - メッセージ更新ロジック
-
-**設計メモ**:
-
-**キャンセルと課金**:
-
-- **非ストリーミングリクエスト**: クライアント側でキャンセルしてもサーバー側で処理継続、フル課金
-- **ストリーミングリクエスト（対応プロバイダー）**: 接続中断で即座に処理・課金停止
-- **対応プロバイダー**: OpenAI、Anthropic、Fireworks、Cohere、DeepInfra等20+
-- **非対応プロバイダー**: Google、AWS Bedrock、Groq、Mistral等20+
-
-**実装方式**:
-
-1. `Map<messageId, AbortController>` で進行中リクエストを追跡
-2. SSEストリーミングでトークンを受信
-3. 2秒ごとにDiscordメッセージを更新（レート制限: 5回/5秒 = 1回/秒、余裕を持って2秒間隔）
-4. 完了時にMapから削除
-
-**参照**:
-
-- [OpenRouter Streaming API](https://openrouter.ai/docs/api/reference/streaming) - `stream: true`でSSE有効化、2秒ごとにメッセージ更新推奨
-
----
-
-#### 停止ボタン
-
-**変更対象**:
-
-- `src/bot/events/messageCreate.ts` - 初期メッセージ送信、ボタン追加
-- `src/bot/events/interactionCreate.ts` - ボタンクリック処理
-- `src/services/chatService.ts` - AbortController管理、abort()呼び出し
-
-**UI設計**:
-
-```
-┌─────────────────────────────┐
-│ 回答生成中...               │
-│                             │
-│ [🛑 停止]                   │
-└─────────────────────────────┘
-```
-
-**実装フロー**:
-
-1. メンション受信→初期メッセージ送信（「回答生成中...」+ 🛑停止ボタン）
-2. ストリーミング開始、2秒ごとにメッセージ更新（ボタン保持）
-3. 完了→ボタン削除、最終応答表示
-4. 停止ボタンクリック→AbortController.abort()、停止メッセージ表示
-
-**設計メモ**:
-
-- ボタンのcustomIdに`stop_${messageId}_${timestamp}`を使用
-- プログレスバーは不要（進捗は不明なため）
-- エラーハンドリング:
-  - プロバイダーが非対応の場合、キャンセル警告を表示
-  - 既に完了したリクエストへのキャンセルはエラー応答
-
-**参照**:
-
-- [OpenRouter Streaming API](https://openrouter.ai/docs/api/reference/streaming) - ストリーミングキャンセルは`AbortController`で実装、プロバイダーによって対応状況が異なる
-- [discord.js ButtonBuilder](https://discord.js.org/docs/packages/discord.js/14.16.3/ButtonBuilder:Class) - ボタンコンポーネントの作成方法
-
----
-
-#### prefix削除
-
-**変更対象**:
-
-- `src/bot/commands/disqord.ts` - コマンド名変更（`disqord` → なし）
-
-**実装内容**:
-
-- `/disqord help` → `/help`
-- `/disqord status` → `/status`
-- `/disqord model set` → `/model set`
-- 全コマンドから`disqord`プレフィックスを削除
-
-**設計メモ**:
-
-- コマンド登録時に`name: "help"`のように変更
-- ユーザー確認不要、即座に適用
-
----
-
-#### 自動応答チャンネル
-
-**変更対象**:
-
-- `src/db/schema.ts` - guild_settings拡張
-- `src/bot/events/messageCreate.ts` - 自動応答判定ロジック
-- `src/bot/commands/disqord.ts` - `config auto-reply`サブコマンド追加
-
-**DBスキーマ変更**:
-
-```sql
-ALTER TABLE guild_settings ADD COLUMN auto_reply_channels TEXT; -- JSON array
-```
-
-**コマンド設計**:
-
-```
-/config auto-reply add <channel>
-  - 指定チャンネルを自動応答リストに追加
-  - チャンネル/スレッドの両方対応
-
-/config auto-reply remove <channel>
-  - 指定チャンネルを自動応答リストから削除
-
-/config auto-reply list
-  - 現在の自動応答チャンネルリストを表示
-```
-
-**実装内容**:
-
-1. **自動応答判定**:
-   - `auto_reply_channels`配列に含まれるチャンネル/スレッドでメンション不要
-   - Bot自身のメッセージには応答しない
-   - 他のBotのメッセージには応答しない
-
-2. **スレッド対応**:
-   - 親チャンネルIDが`auto_reply_channels`に含まれる場合、すべてのスレッドで自動応答
-   - 個別スレッドIDも追加可能（優先度: スレッド > 親チャンネル）
-
-3. **権限管理との関係**:
-   - `allowed_channels`: Botが応答可能なチャンネルのホワイトリスト（制限機能）
-   - `auto_reply_channels`: メンション不要で自動応答するチャンネル（拡張機能）
-   - `auto_reply_channels`は`allowed_channels`のサブセットであるべき
-
-**設計メモ**:
-
-```typescript
-function shouldAutoReply(message: Message, autoReplyChannels: string[]): boolean {
-  if (message.channel.isThread()) {
-    return autoReplyChannels.includes(message.channel.id) ||
-           autoReplyChannels.includes(message.channel.parentId);
-  }
-  return autoReplyChannels.includes(message.channel.id);
-}
-```
-
-**参照**:
-
-- [discord.js BaseChannel](https://discord.js.org/docs/packages/discord.js/14.16.3/BaseChannel:Class) - チャンネル・スレッド判定に`isThread()`メソッドを使用
-- [discord.js ThreadChannel](https://discord.js.org/docs/packages/discord.js/14.16.3/ThreadChannel:Class) - `parentId`プロパティで親チャンネルIDを取得
-
----
 
 ### v1.5.0 対話UX改善
 

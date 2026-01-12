@@ -43,6 +43,17 @@ describe("ModelService", () => {
       chat: mock(() =>
         Promise.resolve({ choices: [{ message: { role: "assistant" as const, content: "" } }] }),
       ),
+      chatStream: mock(async function* () {
+        yield { content: "Mock ", done: false as const };
+        yield { content: "response", done: false as const };
+        yield {
+          done: true as const,
+          fullText: "Mock response",
+          usage: undefined,
+          model: undefined,
+          provider: undefined,
+        };
+      }),
       listModels: mock(() => Promise.resolve(mockModels.map((m) => m.id))),
       listModelsWithPricing: mock(() => Promise.resolve(mockModels)),
       getCredits: mock(() => Promise.resolve({ remaining: 100 })),
