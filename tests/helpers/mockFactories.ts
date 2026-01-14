@@ -44,7 +44,13 @@ export function createMockLLMClient(): ILLMClient {
     chatStream: mock(async function* () {
       yield { content: "Mock ", done: false as const };
       yield { content: "response", done: false as const };
-      yield { done: true as const, fullText: "Mock response", usage: undefined, model: undefined, provider: undefined };
+      yield {
+        done: true as const,
+        fullText: "Mock response",
+        usage: undefined,
+        model: undefined,
+        provider: undefined,
+      };
     }),
     listModels: mock(() => Promise.resolve(["model-1", "model-2"])),
     listModelsWithPricing: mock(() =>

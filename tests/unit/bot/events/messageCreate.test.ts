@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IChatService } from "../../../../src/services/chatService";
@@ -12,12 +13,14 @@ interface MockBotMessage {
 
 interface MockMessage {
   id: string;
+  type: MessageType;
   author: { bot: boolean };
   guild: { id: string } | null;
   client: { user: { id: string } | null };
   mentions: { has: ReturnType<typeof mock> };
   content: string;
   channel: {
+    id: string;
     send: ReturnType<typeof mock>;
     isThread: () => boolean;
   };
@@ -42,6 +45,7 @@ function createMockStreamGenerator(fullText: string) {
 }
 
 function createErrorStreamGenerator(error: Error) {
+  // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
   return async function* () {
     throw error;
   };
@@ -112,12 +116,14 @@ describe("createMessageCreateHandler", () => {
 
     mockMessage = {
       id: "msg-123",
+      type: MessageType.Default,
       author: { bot: false },
       guild: { id: "guild-123" },
       client: { user: { id: "123456789" } },
       mentions: { has: mock(() => true) },
       content: "<@123456789> Hello",
       channel: {
+        id: "channel-123",
         send: mockSend,
         isThread: () => false,
       },
@@ -205,10 +211,10 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // 初期メッセージ「生成中...」が送信される
+    // 初期メッセージはEmbed形式で送信される
     expect(mockSend).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "生成中...",
+        embeds: expect.any(Array),
         components: expect.any(Array),
       }),
     );
@@ -222,9 +228,10 @@ describe("createMessageCreateHandler", () => {
 
     // 最終更新でEmbedが設定される
     expect(mockBotMessage.edit).toHaveBeenCalled();
-    const lastEditCall = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.at(-1);
-    expect(lastEditCall[0]).toHaveProperty("embeds");
-    expect(lastEditCall[0].components).toEqual([]);
+    const editCalls = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls;
+    const lastEditCall = editCalls[editCalls.length - 1];
+    expect(lastEditCall?.[0]).toHaveProperty("embeds");
+    expect(lastEditCall?.[0].components).toEqual([]);
   });
 
   test("AppErrorの場合は赤色EmbedでuserMessageを表示する", async () => {
@@ -333,7 +340,7 @@ describe("createMessageCreateHandler", () => {
     );
 
     // チャンネルIDを自動応答チャンネルに設定
-    (mockMessage.channel as { id?: string }).id = "auto-reply-channel-id";
+    mockMessage.channel.id = "auto-reply-channel-id";
 
     const handler = createMessageCreateHandler(
       mockChatService,
@@ -369,7 +376,7 @@ describe("createMessageCreateHandler", () => {
     expect(sendCalls.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("AbortErrorの場合は停止メッセージを表示する", async () => {
+  test("AbortErrorの場合は停止メッセージをEmbedで表示する", async () => {
     const abortError = new Error("Request was aborted");
     abortError.name = "AbortError";
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
@@ -384,9 +391,10 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // AbortErrorの場合はreplyではなくeditで停止メッセージを表示
-    const lastEditCall = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.at(-1);
-    expect(lastEditCall[0].content).toContain("生成を停止しました");
-    expect(lastEditCall[0].components).toEqual([]);
+    // AbortErrorの場合はreplyではなくeditでEmbed形式の停止メッセージを表示
+    const editCalls = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls;
+    const lastEditCall = editCalls[editCalls.length - 1];
+    expect(lastEditCall?.[0]).toHaveProperty("embeds");
+    expect(lastEditCall?.[0].components).toEqual([]);
   });
 });

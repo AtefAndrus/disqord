@@ -82,10 +82,16 @@ export function buildStatusMessage(data: StatusMessageData): {
       .setLabel("モデルキャッシュ更新")
       .setStyle(ButtonStyle.Primary);
 
+    const autoReplyListButton = new ButtonBuilder()
+      .setCustomId("status_auto_reply_list")
+      .setLabel("自動応答チャンネル一覧")
+      .setStyle(ButtonStyle.Secondary);
+
     const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
       freeOnlyButton,
       llmDetailsButton,
       refreshButton,
+      autoReplyListButton,
     );
 
     components.push(row);

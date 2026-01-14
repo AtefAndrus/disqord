@@ -58,15 +58,13 @@ export const configCommand = new SlashCommandBuilder()
         sub
           .setName("remove")
           .setDescription("自動応答チャンネルを削除")
-          .addChannelOption((option) =>
+          .addStringOption((option) =>
             option
               .setName("channel")
               .setDescription("自動応答を無効にするチャンネル")
               .setRequired(true)
-              .addChannelTypes(ChannelType.GuildText, ChannelType.PublicThread),
+              .setAutocomplete(true),
           ),
       )
-      .addSubcommand((sub) =>
-        sub.setName("list").setDescription("自動応答チャンネル一覧を表示"),
-      ),
+      .addSubcommand((sub) => sub.setName("list").setDescription("自動応答チャンネル一覧を表示")),
   );

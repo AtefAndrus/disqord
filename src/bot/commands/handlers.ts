@@ -258,18 +258,18 @@ export function createCommandHandlers(
         return;
       }
 
-      const channel = interaction.options.getChannel("channel", true);
-      const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channel.id);
+      const channelId = interaction.options.getString("channel", true);
+      const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channelId);
 
       if (removed) {
         const embed = createSuccessEmbed(
-          `<#${channel.id}> を自動応答チャンネルから削除しました。`,
+          `<#${channelId}> を自動応答チャンネルから削除しました。`,
           "自動応答設定",
         );
         await interaction.reply({ embeds: [embed] });
       } else {
         const embed = createErrorEmbed(
-          `<#${channel.id}> は自動応答チャンネルに設定されていません。`,
+          `<#${channelId}> は自動応答チャンネルに設定されていません。`,
           "自動応答設定",
         );
         await interaction.reply({ embeds: [embed] });
@@ -311,22 +311,44 @@ export async function handleAutocomplete(
   modelService: IModelService,
 ): Promise<void> {
   try {
-    // model set のみ処理
-    if (
-      interaction.commandName !== "model" ||
-      interaction.options.getSubcommand() !== "set"
-    ) {
+    const guildId = interaction.guildId;
+    if (!guildId) {
+      await interaction.respond([]);
+      return;
+    }
+
+    // config auto-reply remove のAutocomplete
+    if (interaction.commandName === "config") {
+      const subcommandGroup = interaction.options.getSubcommandGroup(false);
+      const subcommand = interaction.options.getSubcommand();
+
+      if (subcommandGroup === "auto-reply" && subcommand === "remove") {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
+        const settings = await settingsService.getGuildSettings(guildId);
+
+        const choices = settings.autoReplyChannels
+          .map((id) => {
+            const channel = interaction.guild?.channels.cache.get(id);
+            return {
+              name: channel ? `#${channel.name}` : `ID: ${id}`,
+              value: id,
+            };
+          })
+          .filter((choice) => choice.name.toLowerCase().includes(focusedValue))
+          .slice(0, 25);
+
+        await interaction.respond(choices);
+        return;
+      }
+    }
+
+    // model set のAutocomplete
+    if (interaction.commandName !== "model" || interaction.options.getSubcommand() !== "set") {
       await interaction.respond([]);
       return;
     }
 
     const focusedValue = interaction.options.getFocused().toLowerCase();
-    const guildId = interaction.guildId;
-
-    if (!guildId) {
-      await interaction.respond([]);
-      return;
-    }
 
     // Guild設定を取得
     const settings = await settingsService.getGuildSettings(guildId);

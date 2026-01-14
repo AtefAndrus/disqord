@@ -5,7 +5,7 @@ import type { ILLMClient } from "../../llm/openrouter";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { createErrorEmbed } from "../../utils/embedBuilder";
+import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
@@ -194,6 +194,29 @@ async function handleButtonInteraction(
       await settingsService.toggleShowLlmDetails(interaction.guildId);
     } else if (customId === "status_model_refresh") {
       await modelService.refreshCache();
+    } else if (customId === "status_auto_reply_list") {
+      // 自動応答チャンネル一覧は別メッセージで表示
+      const settings = await settingsService.getGuildSettings(interaction.guildId);
+      const channels = settings.autoReplyChannels;
+
+      if (channels.length === 0) {
+        await interaction.reply({
+          embeds: [
+            createSuccessEmbed(
+              "自動応答チャンネルは設定されていません。",
+              "自動応答チャンネル一覧",
+            ),
+          ],
+        });
+      } else {
+        const channelList = channels.map((id) => `- <#${id}>`).join("\n");
+        await interaction.reply({
+          embeds: [
+            createSuccessEmbed(`**自動応答チャンネル:**\n${channelList}`, "自動応答チャンネル一覧"),
+          ],
+        });
+      }
+      return;
     } else {
       logger.warn("Unknown button customId", { customId });
       return;

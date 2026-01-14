@@ -204,6 +204,47 @@ export function splitTextToMultipleMessages(
 }
 
 /**
+ * ストリーミング途中表示用Embed生成
+ * description上限4096文字で切り詰め
+ */
+export function createStreamingEmbed(
+  text: string,
+  modelName: string,
+  color: number,
+  footer?: string,
+): EmbedBuilder {
+  return createEmbed({
+    color,
+    description: text.slice(0, 4096),
+    author: { name: modelName },
+    footer: footer ? { text: footer } : undefined,
+  });
+}
+
+/**
+ * テキストを指定した最大長で分割
+ */
+export function splitTextIntoChunks(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLength) {
+    // 改行位置で分割を試みる（80%以上の位置なら改行優先）
+    const lastNewline = remaining.lastIndexOf("\n", maxLength);
+    const cutIndex = lastNewline > maxLength * 0.8 ? lastNewline + 1 : maxLength;
+
+    chunks.push(remaining.slice(0, cutIndex));
+    remaining = remaining.slice(cutIndex);
+  }
+
+  if (remaining.length > 0) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
+}
+
+/**
  * エラーメッセージ用Embed生成
  * 赤色（#ED4245）、タイムスタンプ付き
  */
