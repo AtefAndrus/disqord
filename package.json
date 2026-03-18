@@ -15,6 +15,7 @@
     "lint:md": "markdownlint-cli2 \"docs/**/*.md\" \"*.md\"",
     "format": "bun biome format --write .",
     "format:md": "markdownlint-cli2 --fix \"docs/**/*.md\" \"*.md\"",
+    "changelog": "git-cliff --output CHANGELOG.md",
     "generate:readme": "bun scripts/generate-readme.ts",
     "prepare": "lefthook install"
   },

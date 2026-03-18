@@ -8,5 +8,5 @@
     // テーブルカラムスタイルは無効（フォーマッターの責務）
     "MD060": false
   },
-  "ignores": ["node_modules/**"]
+  "ignores": ["node_modules/**", "CHANGELOG.md"]
 }

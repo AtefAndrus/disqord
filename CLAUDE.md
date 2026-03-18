@@ -12,7 +12,8 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 | Document | 役割 | 参照タイミング |
 | -------- | ---- | -------------- |
-| [progress.md](docs/progress.md) | バックログ・進捗 | **最初に参照**。未完了タスクと完了済み機能を把握 |
+| [CHANGELOG.md](CHANGELOG.md) | 変更履歴 | git-cliff で自動生成。リリース時に `bun run changelog` で更新 |
+| [progress.md](docs/progress.md) | バックログ | **最初に参照**。未完了タスクを把握 |
 | [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
 | [changes/TEMPLATE.md](docs/changes/TEMPLATE.md) | Change設計テンプレート | 新機能の設計書作成時にコピー |
 | `docs/changes/<name>/design.md` | 個別機能の設計書 | 該当機能の実装時に参照 |
@@ -25,8 +26,8 @@ Discord Bot that communicates with LLMs through OpenRouter.
   - 機能名、優先度（高/中/低）、changeフォルダへのリンクを記載
   - 優先度に応じた位置に挿入（上が高優先度）
   - タスク詳細は changeフォルダの Tasks セクションに記載（progress.md には書かない）
-- **実装完了時（commit前）**: バックログから該当項目を削除し、「完了済み」セクションへ移動
-  - バージョン番号（リリース時に決定）、実装日、主な変更内容を記載
+- **実装完了時（リリース時）**: バックログから該当項目を削除
+  - 変更履歴は CHANGELOG.md（git-cliff 自動生成）で管理
 
 #### docs/changes/（機能別設計書）
 
@@ -138,49 +139,35 @@ bun format         # Format with Biome
 - Commit messages: English
 - Branch: main
 
+### Commit Message Format
+
+Format: `[type] short description`
+
+| Prefix | 用途 | CHANGELOG カテゴリ |
+| ------------ | -------------------- | ----------------- |
+| `[feat]` | 新機能 | Added |
+| `[fix]` | バグ修正 | Fixed |
+| `[docs]` | ドキュメントのみ | Documentation |
+| `[refactor]` | リファクタリング | Refactoring |
+| `[test]` | テスト追加・修正 | Testing |
+| `[perf]` | パフォーマンス改善 | Performance |
+| `[chore]` | メンテナンス | スキップ |
+| `[release]` | リリースバージョン | スキップ |
+| `build(deps)` | Dependabot 自動生成 | Dependencies |
+
 ## Release Process
 
-When creating a new release:
+Use the `/release` skill to automate the release process. Example: `/release 1.5.0`
 
-1. **Update documentation**:
-   - Move completed tasks in `docs/progress.md` to "完了済み" section
-   - Update `README.md` (if needed)
+The skill handles: version bump, CHANGELOG.md generation, progress.md update, commit, tag, push, and GitHub release creation with hand-crafted release notes.
 
-2. **Update package.json version**:
+### Release Notes Guidelines
 
-   ```bash
-   # Edit package.json to update version field to vX.X.X
-   # Example: "version": "1.3.2"
-   ```
-
-3. **Commit and push changes**:
-
-   ```bash
-   git add .
-   git commit -m "[feat] implement vX.X.X ..."
-   git push
-   ```
-
-4. **Create and push tag**:
-
-   ```bash
-   git tag vX.X.X
-   git push --tags
-   ```
-
-5. **Create GitHub release**:
-
-   ```bash
-   gh release create vX.X.X --title "vX.X.X" --notes "..."
-   ```
-
-   - Release title: `vX.X.X`
-   - Release notes should include:
-     - Summary of changes (bullet points)
-     - At the end: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v{current}`
-   - Release notes are delivered to Discord users via webhook, so:
-     - Only include user-facing changes (new features, bug fixes, UX improvements)
-     - Do NOT include internal technical changes (test fixes, refactoring, code cleanup)
+- Release notes are delivered to Discord users via webhook
+- Only include user-facing changes (new features, bug fixes, UX improvements)
+- Do NOT include internal technical changes (test fixes, refactoring, code cleanup)
+- Write in Japanese with detailed feature descriptions (see existing releases for style reference)
+- End with: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v{current}`
 
 ## Notes
 
