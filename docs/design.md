@@ -19,7 +19,7 @@
 ### 1.2 会話コンテキスト
 
 - **方式**: 単発応答（毎回リセット）
-- 過去の会話履歴は保持しない（v1.5.0で対応予定）
+- 過去の会話履歴は保持しない（対話UX改善で対応予定）
 
 ### 1.3 スラッシュコマンド一覧
 
@@ -230,7 +230,7 @@ ReleaseNotificationService
 
 詳細設計は実装時に本セクションへ追記する。
 
-### v1.5.0 対話UX改善
+### 対話UX改善
 
 **目的**: 直近n件の会話履歴をLLMに送信し、文脈を保持した対話を実現。回答の再生成とメッセージ編集による再生成機能を追加。
 
@@ -345,123 +345,7 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 
 ---
 
-### v1.6.0 設定階層化 + LLMパラメータ + カスタムプロンプト
-
-**目的**: Guild/Channel/User単位で設定を上書き可能に、LLMパラメータをモデルごとに最適化、カスタムシステムプロンプトを設定可能に
-
-**変更対象**:
-
-- `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加、`llm_params`カラム追加
-- `src/db/repositories/` - 新規Repository追加
-- `src/services/settingsService.ts` - 階層解決ロジック
-- `src/services/modelService.ts` - デフォルトパラメータ取得
-- `src/llm/openrouter.ts` - パラメータ適用
-
-**DBスキーマ変更**:
-
-```sql
-CREATE TABLE channel_settings (
-    channel_id TEXT PRIMARY KEY,
-    guild_id TEXT NOT NULL,
-    model TEXT,
-    system_prompt TEXT,
-    llm_params TEXT,  -- JSON: {temperature, top_p, ...}
-    FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
-);
-
-CREATE TABLE user_settings (
-    user_id TEXT PRIMARY KEY,
-    model TEXT,
-    system_prompt TEXT,
-    llm_params TEXT  -- JSON
-);
-
-ALTER TABLE guild_settings ADD COLUMN llm_params TEXT;
-```
-
-**LLMパラメータ設計**:
-
-**Phase 1: モデルごとのデフォルトパラメータ**:
-
-1. `/api/v1/models` APIレスポンスに含まれる`default_parameters`を使用
-2. `ModelService`でキャッシュ時に保存
-3. `chatService`がモデルのデフォルトパラメータを取得して適用
-
-**Phase 2: ユーザー設定可能パラメータ**:
-
-- `/disqord config params set <json>` - パラメータをJSON形式で設定
-- `/disqord config params reset` - デフォルトに戻す
-- `/disqord config params show` - 現在の設定を表示
-
-**マージロジック**:
-
-1. モデルのデフォルトパラメータを取得
-2. Guild設定でマージ
-3. Channel設定でマージ
-4. User設定でマージ
-5. `supported_parameters`でバリデーション
-
-**参照**:
-
-- [OpenRouter Parameters](https://openrouter.ai/docs/api/reference/parameters)
-- [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/get-models)
-
-**設計メモ**:
-
-- 優先順位: User > Channel > Guild > Model Default > OpenRouter Default
-- NULL値は上位設定を継承
-- 無効なパラメータはバリデーションで拒否
-
----
-
-#### カスタムシステムプロンプト
-
-**変更対象**:
-
-- `src/bot/commands/disqord.ts` - `prompt`サブコマンド追加
-- `src/bot/commands/handlers.ts` - promptハンドラー追加
-- `src/services/settingsService.ts` - プロンプト取得・設定ロジック
-- `src/services/chatService.ts` - システムプロンプトの適用
-
-**コマンド設計**:
-
-```
-/disqord prompt set <scope> <prompt>
-  - scope: guild | channel | user
-  - prompt: システムプロンプト（最大2000文字）
-
-/disqord prompt show [scope]
-  - scope省略時: 現在の有効なプロンプトを表示（優先順位適用後）
-  - scope指定時: 指定スコープのプロンプトのみ表示
-
-/disqord prompt reset [scope]
-  - scope省略時: ユーザー設定をリセット
-  - scope指定時: 指定スコープの設定をリセット
-```
-
-**デフォルトシステムプロンプト**:
-
-```
-You are a helpful AI assistant in a Discord server.
-- Keep responses concise and clear
-- Use Discord-supported markdown only (no H4+, tables, horizontal rules)
-- Be respectful and informative
-```
-
-**設計メモ**:
-
-- 優先順位: User > Channel > Guild > Default
-- NULL値は上位プロンプトを継承
-- プロンプトは全メッセージの先頭に追加（`role: "system"`）
-- 最大長: 2000文字（Discord制限を考慮）
-
-**参照**:
-
-- [OpenRouter Chat Completions API](https://openrouter.ai/docs) - システムプロンプトは`messages`配列の最初の要素として`{role: "system", content: "..."}`形式で送信
-
----
-
-### v1.6.0 マルチモーダル対応
+### マルチモーダル対応
 
 **目的**: Discord画像添付をLLMに送信し、マルチモーダル対応モデルで画像認識を実現
 
@@ -514,7 +398,7 @@ export type ChatMessageContent =
 
 ---
 
-### v1.7.0 Web Search
+### Web Search
 
 **目的**: LLMにWeb検索機能を付与し、最新情報を取得可能に
 
@@ -532,7 +416,7 @@ ALTER TABLE guild_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAUL
 
 **コマンド設計**:
 
-```
+```text
 /config web-search <on|off>
   - ON: モデルIDに`:online`サフィックスを自動付与
   - OFF: 通常のモデルIDを使用（デフォルト）
@@ -563,7 +447,7 @@ ALTER TABLE guild_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAUL
 
 ---
 
-### v1.8.0 複数モデル並列
+### 複数モデル並列
 
 **目的**: 同じ質問を複数モデルに投げて比較、最適なモデル選択の支援
 
@@ -575,7 +459,7 @@ ALTER TABLE guild_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAUL
 
 **コマンド設計**:
 
-```
+```text
 /model compare <model1> <model2> [model3] [model4]
   - 2〜4モデルを指定
   - 各モデルで同じプロンプトを実行
@@ -609,7 +493,7 @@ ALTER TABLE guild_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAUL
 
 ---
 
-### v1.9.0 設定階層化 + LLMパラメータ + カスタムプロンプト
+### 設定階層化 + LLMパラメータ + カスタムプロンプト
 
 **目的**: Guild/Channel/User単位で設定を上書き可能に、LLMパラメータをモデルごとに最適化、カスタムシステムプロンプトを設定可能に
 
@@ -690,7 +574,7 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 
 **コマンド設計**:
 
-```
+```text
 /prompt set <scope> <prompt>
   - scope: guild | channel | user
   - prompt: システムプロンプト（最大2000文字）
@@ -706,7 +590,7 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 
 **デフォルトシステムプロンプト**:
 
-```
+```text
 You are a helpful AI assistant in a Discord server.
 - Keep responses concise and clear
 - Use Discord-supported markdown only (no H4+, tables, horizontal rules)
@@ -726,7 +610,7 @@ You are a helpful AI assistant in a Discord server.
 
 ---
 
-### v1.10.0 権限管理 + AI改善
+### 権限管理 + AI改善
 
 **目的**: Bot利用を特定チャンネル/ロールに制限
 
@@ -755,7 +639,7 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 
 ---
 
-### v1.11.0 使用統計
+### 使用統計
 
 **目的**: サーバー/ユーザー/モデル別の使用統計を記録・表示し、利用状況の可視化と最適化を支援
 

@@ -12,7 +12,7 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 | Document | 役割 | 参照タイミング |
 | -------- | ---- | -------------- |
-| [progress.md](docs/progress.md) | 進捗・ロードマップ | **最初に参照**。未完了タスクと完了済み機能を把握 |
+| [progress.md](docs/progress.md) | バックログ・進捗 | **最初に参照**。未完了タスクと完了済み機能を把握 |
 | [design.md](docs/design.md) | 仕様・アーキテクチャ・設計判断 | 実装時に参照。DBスキーマ、エラー設計など |
 | [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
 
@@ -20,11 +20,12 @@ Discord Bot that communicates with LLMs through OpenRouter.
 
 #### progress.md
 
-- **新機能検討時**: ロードマップ（未完了タスク）に追加
-  - バージョン番号、機能概要、主要タスクを記載
+- **新機能検討時**: バックログに追加
+  - 機能名、優先度（高/中/低）、主要タスクを記載
+  - 優先度に応じた位置に挿入（上が高優先度）
   - 詳細設計はこの時点では不要（design.mdで後述）
 - **実装完了時（commit前）**: 該当タスクを「完了済み」セクションへ移動
-  - 実装日、主な変更内容を記載
+  - バージョン番号（リリース時に決定）、実装日、主な変更内容を記載
 
 #### design.md
 
@@ -32,7 +33,7 @@ Discord Bot that communicates with LLMs through OpenRouter.
   - 変更ファイル、実装方針、技術的決定事項、制約条件などを記載
   - ロードマップの概要レベルから実装可能な詳細レベルに展開
 - **実装完了時（commit前）**: design.mdを「実装済み」扱いに更新
-  - 将来計画セクションから該当バージョンを削除
+  - 将来計画セクションから該当機能を削除
   - 実装済み機能の参照箇所を更新（コマンド説明、アーキテクチャ図など）
 
 ## Tech Stack

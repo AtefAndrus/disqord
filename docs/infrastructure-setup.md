@@ -120,7 +120,7 @@ Cloudflaredコンテナが起動し、Cloudflare Tunnelに接続される。
 | Events | **Let me select individual events** → **Releases** のみ |
 | Active | チェック |
 
-3. **Add webhook**
+1. **Add webhook**
 
 ---
 
