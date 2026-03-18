@@ -13,7 +13,6 @@ Discord Bot that communicates with LLMs through OpenRouter.
 | Document | 役割 | 参照タイミング |
 | -------- | ---- | -------------- |
 | [progress.md](docs/progress.md) | バックログ・進捗 | **最初に参照**。未完了タスクと完了済み機能を把握 |
-| [design.md](docs/design.md) | 実装済みシステムの仕様書 | 実装時に参照。DBスキーマ、エラー設計など |
 | [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
 | [changes/TEMPLATE.md](docs/changes/TEMPLATE.md) | Change設計テンプレート | 新機能の設計書作成時にコピー |
 | `docs/changes/<name>/design.md` | 個別機能の設計書 | 該当機能の実装時に参照 |
@@ -35,16 +34,8 @@ Discord Bot that communicates with LLMs through OpenRouter.
   - フォルダ名は kebab-case（例: `web-search`, `model-compare`）
   - テンプレートに従い Why / Goals・Non-Goals / Decisions / Design / Tasks を記載
   - 詳細設計は段階的に追記可能（一度に完成させる必要なし）
-- **実装完了時**: `docs/design.md` に実装済み仕様を反映した後、changeフォルダを削除
+- **実装完了時**: changesフォルダを削除
   - Git履歴がアーカイブとして機能するため、別途保存は不要
-
-#### design.md（実装済みシステムの仕様書）
-
-- **実装完了時（commit前）**: 実装済みの仕様を design.md の該当セクションに反映
-  - 新コマンド → コマンド一覧に追加
-  - 新テーブル → スキーマに追加
-  - 新インターフェース → インターフェース設計に追加
-- design.md は「現在のシステムの仕様書」としてのみ機能する（将来計画は含めない）
 
 #### README.md（自動生成セクション）
 
@@ -153,7 +144,7 @@ When creating a new release:
 
 1. **Update documentation**:
    - Move completed tasks in `docs/progress.md` to "完了済み" section
-   - Update `docs/design.md` and `README.md` (if needed)
+   - Update `README.md` (if needed)
 
 2. **Update package.json version**:
 
@@ -196,3 +187,17 @@ When creating a new release:
 - Discord message limit: 2000 characters (split required)
 - Default model: `deepseek/deepseek-r1-0528:free`
 - SQLite WAL mode enabled
+
+## References
+
+### API・SDK
+
+- [OpenRouter API Documentation](https://openrouter.ai/docs)
+- [OpenRouter TypeScript SDK](https://www.npmjs.com/package/@openrouter/sdk)
+- [discord.js v14 Documentation](https://discord.js.org/docs/packages/discord.js/14.16.3)
+- [discord.js Guide](https://discordjs.guide/)
+
+### Infrastructure
+
+- [GitHub Webhook Events](https://docs.github.com/en/webhooks/webhook-events-and-payloads)
+- [Bun Runtime](https://bun.sh/docs)
