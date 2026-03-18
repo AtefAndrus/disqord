@@ -1,0 +1,4 @@
+pre-commit:
+  commands:
+    generate-readme:
+      run: bun scripts/generate-readme.ts && git add README.md

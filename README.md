@@ -2,21 +2,15 @@
 
 Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び出す単発応答型。
 
-## 機能
-
-- **メンション呼び出し**: `@DisQord 質問` でLLMが応答
-- **スラッシュコマンド**: `/disqord help`, `/disqord status`, `/disqord model`
-- **Guild単位設定**: デフォルトモデル、無料モデル限定
-- **リリース通知**: GitHub Release時に登録チャンネルへ自動通知
-- **長文対応**: 9000バイト単位で分割送信（改行位置優先）
-
 ## セットアップ
 
 ### 必要なもの
 
-- [Bun](https://bun.sh/) 1.3+
+<!-- AUTO:REQUIREMENTS:START -->
+- [Bun](https://bun.sh/) >=1.3
 - Discord Bot Token
 - OpenRouter API Key
+<!-- AUTO:REQUIREMENTS:END -->
 
 ### ローカル開発
 
@@ -57,47 +51,22 @@ docker run -d \
 
 ## コマンド一覧
 
+<!-- AUTO:COMMANDS:START -->
 | コマンド | 説明 |
 | -------- | ---- |
-| `/disqord help` | 使い方を表示 |
-| `/disqord status` | Botのステータスを表示、ボタンで設定切り替え可能 |
-| `/disqord model current` | 現在のモデルを表示 |
-| `/disqord model set <model>` | モデルを変更 |
-| `/disqord model list` | モデル一覧ページへ誘導 |
-| `/disqord model refresh` | モデルキャッシュを更新 |
-| `/disqord config free-only <on\|off>` | 無料モデル限定を切り替え |
-| `/disqord config release-channel [channel]` | リリース通知チャンネルを設定 |
-| `/disqord config llm-details <on\|off>` | LLM詳細情報表示を切り替え |
-
-## ドキュメント
-
-- [設計書](docs/design.md) - アーキテクチャ、DBスキーマ、エラー設計
-- [進捗](docs/progress.md) - 実装状況、ロードマップ
-- [インフラ設定](docs/infrastructure-setup.md) - Cloudflare Tunnel、GitHub Webhook設定
-
-## Contributing
-
-### 開発コマンド
-
-```bash
-bun dev            # 開発モード（ホットリロード）
-bun test           # テスト実行（型チェック含む）
-bun lint           # Biomeでリント
-bun format         # Biomeでフォーマット
-```
-
-### コーディング規約
-
-- TypeScript strict mode
-- インターフェースには `I` プレフィックス（例: `ILLMClient`）
-- Repository パターン + Service パターン
-- 詳細は [CLAUDE.md](CLAUDE.md) を参照
-
-### PR作成時
-
-1. `bun test` が通ることを確認
-2. `bun lint` でエラーがないことを確認
-3. コミットメッセージは英語
+| `/help` | DisQordの使い方を表示 |
+| `/status` | Botのステータス（OpenRouter残高等）を表示 |
+| `/model current` | 現在のデフォルトモデルを表示 |
+| `/model set <model>` | デフォルトモデルを変更 |
+| `/model list` | OpenRouterのモデル一覧ページへ |
+| `/model refresh` | モデルキャッシュを更新 |
+| `/config free-only <enabled>` | 無料モデル限定の切り替え |
+| `/config release-channel [channel]` | リリース通知チャンネルを設定（省略で無効化） |
+| `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
+| `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
+| `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
+| `/config auto-reply list` | 自動応答チャンネル一覧を表示 |
+<!-- AUTO:COMMANDS:END -->
 
 ## ライセンス
 
