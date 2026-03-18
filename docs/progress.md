@@ -9,6 +9,10 @@
 上から優先度が高い順に並べる。バージョン番号はリリース時に決定する。
 各機能の詳細設計は [docs/changes/](changes/) を参照。
 
+### OAuth BYOK（ユーザー別 OpenRouter キー）
+
+優先度: 高 / 設計: [oauth-byok](changes/oauth-byok/design.md)
+
 ### 対話UX改善
 
 優先度: 高 / 設計: [conversation-context](changes/conversation-context/design.md)
