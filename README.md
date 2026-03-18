@@ -6,23 +6,17 @@ Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び
 
 ### 必要なもの
 
-<!-- AUTO:REQUIREMENTS:START -->
-- [Bun](https://bun.sh/) >=1.3
+- [mise](https://mise.jdx.dev/)
 - Discord Bot Token
 - OpenRouter API Key
-<!-- AUTO:REQUIREMENTS:END -->
 
 ### ローカル開発
 
 ```bash
-# 依存関係インストール
-bun install
-
-# .envを編集して環境変数を設定
-cp .env.example .env
-
-# 起動
-bun dev
+mise install       # Bun を自動インストール
+mise run setup     # bun install + .env コピー
+# .env を編集して環境変数を設定
+bun dev            # 起動
 ```
 
 ### Docker
@@ -39,6 +33,7 @@ docker run -d \
 
 ## 環境変数
 
+<!-- AUTO:ENV_VARS:START -->
 | 変数名 | 必須 | 説明 |
 | ------ | ---- | ---- |
 | DISCORD_TOKEN | Yes | Discord Bot Token |
@@ -48,6 +43,7 @@ docker run -d \
 | DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `deepseek/deepseek-r1-0528:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |
 | GITHUB_WEBHOOK_SECRET | No | GitHub Webhook署名検証用（リリース通知使用時は必須） |
+<!-- AUTO:ENV_VARS:END -->
 
 ## コマンド一覧
 

@@ -5,6 +5,7 @@ import type {
   RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
 import { ApplicationCommandOptionType } from "discord.js";
+import type { EnvVarDefinition } from "../src/config/envVars";
 
 // --- Pure functions (testable) ---
 
@@ -75,17 +76,17 @@ export function generateCommandTable(
   return lines.join("\n");
 }
 
-export function generateRequirements(engines: Record<string, string>): string {
-  const items: string[] = [];
-  if (engines.bun) {
-    items.push(`- [Bun](https://bun.sh/) ${engines.bun}`);
-  }
-  if (engines.node) {
-    items.push(`- [Node.js](https://nodejs.org/) ${engines.node}`);
-  }
-  items.push("- Discord Bot Token");
-  items.push("- OpenRouter API Key");
-  return items.join("\n");
+export function generateEnvVarsTable(vars: EnvVarDefinition[]): string {
+  const lines = [
+    "| 変数名 | 必須 | 説明 |",
+    "| ------ | ---- | ---- |",
+    ...vars.map((v) => {
+      const required = v.required ? "Yes" : "No";
+      const desc = v.default ? `${v.description}（デフォルト: \`${v.default}\`）` : v.description;
+      return `| ${v.name} | ${required} | ${desc} |`;
+    }),
+  ];
+  return lines.join("\n");
 }
 
 export function replaceMarkerSection(
@@ -114,15 +115,14 @@ function main(): void {
   const rootDir = resolve(import.meta.dir, "..");
   const readmePath = resolve(rootDir, "README.md");
 
-  // Load package.json
-  const pkg = JSON.parse(readFileSync(resolve(rootDir, "package.json"), "utf-8"));
-
-  // Load command definitions (dynamic import would require async, use require-like approach)
-  // Instead, we import statically and call toJSON()
+  // Load command definitions
   const { commandDefinitions } = require(resolve(rootDir, "src/bot/commands/index.ts"));
   const commands = commandDefinitions.map(
     (cmd: { toJSON(): RESTPostAPIChatInputApplicationCommandsJSONBody }) => cmd.toJSON(),
   );
+
+  // Load env var definitions
+  const { envVarDefinitions } = require(resolve(rootDir, "src/config/envVars.ts"));
 
   let readme = readFileSync(readmePath, "utf-8");
 
@@ -130,9 +130,9 @@ function main(): void {
   const commandTable = generateCommandTable(commands);
   readme = replaceMarkerSection(readme, "COMMANDS", commandTable);
 
-  // Replace REQUIREMENTS section
-  const requirements = generateRequirements(pkg.engines ?? {});
-  readme = replaceMarkerSection(readme, "REQUIREMENTS", requirements);
+  // Replace ENV_VARS section
+  const envVarsTable = generateEnvVarsTable(envVarDefinitions);
+  readme = replaceMarkerSection(readme, "ENV_VARS", envVarsTable);
 
   writeFileSync(readmePath, readme);
   console.log("README.md updated.");

@@ -46,6 +46,16 @@ Discord Bot that communicates with LLMs through OpenRouter.
   - 新インターフェース → インターフェース設計に追加
 - design.md は「現在のシステムの仕様書」としてのみ機能する（将来計画は含めない）
 
+#### README.md（自動生成セクション）
+
+- README.md の一部セクションは `<!-- AUTO:SECTION:START/END -->` マーカーで囲まれており、pre-commit hook で自動生成される
+- **手動で編集しない** こと。ソースを編集すれば commit 時に自動反映される
+
+| セクション | 編集先 |
+| ---------- | ------ |
+| コマンド一覧 | `src/bot/commands/` の各コマンド定義 |
+| 環境変数 | `src/config/envVars.ts` |
+
 ## Tech Stack
 
 - Runtime: Bun 1.3+

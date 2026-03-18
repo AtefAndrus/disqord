@@ -3,9 +3,10 @@ import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from "discord.js
 import { ApplicationCommandOptionType } from "discord.js";
 import {
   generateCommandTable,
-  generateRequirements,
+  generateEnvVarsTable,
   replaceMarkerSection,
 } from "../../../scripts/generate-readme";
+import type { EnvVarDefinition } from "../../../src/config/envVars";
 
 describe("generateCommandTable", () => {
   test("サブコマンドなしのコマンド", () => {
@@ -133,24 +134,38 @@ describe("generateCommandTable", () => {
   });
 });
 
-describe("generateRequirements", () => {
-  test("Bunバージョンを含む", () => {
-    const result = generateRequirements({ bun: ">=1.3" });
-    expect(result).toContain("- [Bun](https://bun.sh/) >=1.3");
-    expect(result).toContain("- Discord Bot Token");
-    expect(result).toContain("- OpenRouter API Key");
+describe("generateEnvVarsTable", () => {
+  test("必須変数はYes、任意変数はNoで表示", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "TOKEN", required: true, description: "トークン" },
+      { name: "PORT", required: false, description: "ポート" },
+    ];
+    const result = generateEnvVarsTable(vars);
+    expect(result).toContain("| TOKEN | Yes | トークン |");
+    expect(result).toContain("| PORT | No | ポート |");
   });
 
-  test("enginesが空でもトークン情報は含む", () => {
-    const result = generateRequirements({});
-    expect(result).toContain("- Discord Bot Token");
-    expect(result).toContain("- OpenRouter API Key");
-    expect(result).not.toContain("Bun");
+  test("デフォルト値がある場合は説明に含まれる", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "PORT", required: false, description: "ポート", default: "3000" },
+    ];
+    const result = generateEnvVarsTable(vars);
+    expect(result).toContain("| PORT | No | ポート（デフォルト: `3000`） |");
   });
 
-  test("Nodeバージョンがある場合も対応", () => {
-    const result = generateRequirements({ node: ">=18" });
-    expect(result).toContain("- [Node.js](https://nodejs.org/) >=18");
+  test("デフォルト値がない場合は説明のみ", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "SECRET", required: false, description: "シークレット" },
+    ];
+    const result = generateEnvVarsTable(vars);
+    expect(result).toContain("| SECRET | No | シークレット |");
+    expect(result).not.toContain("デフォルト");
+  });
+
+  test("テーブルヘッダーが含まれる", () => {
+    const vars: EnvVarDefinition[] = [{ name: "TOKEN", required: true, description: "トークン" }];
+    const result = generateEnvVarsTable(vars);
+    expect(result).toStartWith("| 変数名 | 必須 | 説明 |\n| ------ | ---- | ---- |");
   });
 });
 
