@@ -7,68 +7,31 @@
 ## バックログ（優先度順）
 
 上から優先度が高い順に並べる。バージョン番号はリリース時に決定する。
-詳細設計は実装時に [design.md](design.md) へ追記する。
+各機能の詳細設計は [docs/changes/](changes/) を参照。
 
 ### 対話UX改善
 
-優先度: 高
-
-- [ ] 会話履歴（Discord APIから取得、DB不要）
-  - `channel.messages.fetch()`で直近n件取得
-  - コンテキスト設定（デフォルト5件、0-20件）
-- [ ] 回答再生成ボタン（前の回答も表示可能、DBマイグレーション: `response_generations`）
-- [ ] メッセージ編集再生成（最新回答のみ対象、`messageUpdate`イベント）
-- [ ] `/help`コマンド一覧の動的生成（SlashCommandBuilderから自動生成）
+優先度: 高 / 設計: [conversation-context](changes/conversation-context/design.md)
 
 ### マルチモーダル対応
 
-優先度: 高
-
-- [ ] Discord画像添付対応（メンション時に画像を含めてLLMに送信）
-- [ ] マルチモーダル対応モデルの表示（`input_modalities`/`output_modalities`表示）
-- [ ] 画像URL対応（Discord CDN経由、最大10枚）
+優先度: 高 / 設計: [multimodal](changes/multimodal/design.md)
 
 ### Web Search
 
-優先度: 中
-
-- [ ] Web Search ON/OFF設定（DBマイグレーション: `web_search_enabled`カラム）
-- [ ] モデルIDに`:online`サフィックス自動付与
-- [ ] 追加費用警告表示
-- [ ] ステータス表示への追加
+優先度: 中 / 設計: [web-search](changes/web-search/design.md)
 
 ### 複数モデル並列
 
-優先度: 中
-
-- [ ] 複数モデル指定UI（`/model compare <model1> <model2> ...`、最大4モデル）
-- [ ] 並列リクエスト処理（`Promise.allSettled()`）
-- [ ] 各モデルの応答を別Embedで表示
-- [ ] エラーハンドリング（一部失敗しても継続）
+優先度: 中 / 設計: [model-compare](changes/model-compare/design.md)
 
 ### 設定階層化 + パラメータ + プロンプト
 
-優先度: 中
+優先度: 中 / 設計: [settings-hierarchy](changes/settings-hierarchy/design.md)
 
-- [ ] Guild/Channel/User単位の設定（DBマイグレーション: `channel_settings`, `user_settings`）
-- [ ] モデルごとのデフォルトパラメータ取得（`default_parameters`）
-- [ ] ユーザーによるパラメータ上書き（`/config params set/reset/show`）
-- [ ] カスタムシステムプロンプト設定（`/prompt set/show/reset`）
+### 権限管理 + 使用統計
 
-### 権限管理 + AI改善
-
-優先度: 低
-
-- [ ] チャンネル制限、管理ロール（DBマイグレーション: `allowed_channels`, `admin_role_id`）
-- [ ] 権限チェックロジック（メンション時の権限検証）
-- [ ] Discord非対応markdown抑制（system prompt: H4以上、水平線、表等禁止）
-
-### 使用統計
-
-優先度: 低
-
-- [ ] サーバ/ユーザ/モデル別統計（DBマイグレーション）
-- [ ] コスト/トークン/停止率の集計・表示
+優先度: 低 / 設計: [permissions-stats](changes/permissions-stats/design.md)
 
 ---
 

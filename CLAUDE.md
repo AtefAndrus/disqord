@@ -13,28 +13,38 @@ Discord Bot that communicates with LLMs through OpenRouter.
 | Document | 役割 | 参照タイミング |
 | -------- | ---- | -------------- |
 | [progress.md](docs/progress.md) | バックログ・進捗 | **最初に参照**。未完了タスクと完了済み機能を把握 |
-| [design.md](docs/design.md) | 仕様・アーキテクチャ・設計判断 | 実装時に参照。DBスキーマ、エラー設計など |
+| [design.md](docs/design.md) | 実装済みシステムの仕様書 | 実装時に参照。DBスキーマ、エラー設計など |
 | [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
+| [changes/TEMPLATE.md](docs/changes/TEMPLATE.md) | Change設計テンプレート | 新機能の設計書作成時にコピー |
+| `docs/changes/<name>/design.md` | 個別機能の設計書 | 該当機能の実装時に参照 |
 
 ### 更新ルール
 
-#### progress.md
+#### progress.md（バックログ・インデックス）
 
 - **新機能検討時**: バックログに追加
-  - 機能名、優先度（高/中/低）、主要タスクを記載
+  - 機能名、優先度（高/中/低）、changeフォルダへのリンクを記載
   - 優先度に応じた位置に挿入（上が高優先度）
-  - 詳細設計はこの時点では不要（design.mdで後述）
-- **実装完了時（commit前）**: 該当タスクを「完了済み」セクションへ移動
+  - タスク詳細は changeフォルダの Tasks セクションに記載（progress.md には書かない）
+- **実装完了時（commit前）**: バックログから該当項目を削除し、「完了済み」セクションへ移動
   - バージョン番号（リリース時に決定）、実装日、主な変更内容を記載
 
-#### design.md
+#### docs/changes/（機能別設計書）
 
-- **Planning完了時（実装前）**: 詳細設計をdesign.mdに追記
-  - 変更ファイル、実装方針、技術的決定事項、制約条件などを記載
-  - ロードマップの概要レベルから実装可能な詳細レベルに展開
-- **実装完了時（commit前）**: design.mdを「実装済み」扱いに更新
-  - 将来計画セクションから該当機能を削除
-  - 実装済み機能の参照箇所を更新（コマンド説明、アーキテクチャ図など）
+- **新機能検討時**: `docs/changes/<feature-name>/design.md` を `TEMPLATE.md` からコピーして作成
+  - フォルダ名は kebab-case（例: `web-search`, `model-compare`）
+  - テンプレートに従い Why / Goals・Non-Goals / Decisions / Design / Tasks を記載
+  - 詳細設計は段階的に追記可能（一度に完成させる必要なし）
+- **実装完了時**: `docs/design.md` に実装済み仕様を反映した後、changeフォルダを削除
+  - Git履歴がアーカイブとして機能するため、別途保存は不要
+
+#### design.md（実装済みシステムの仕様書）
+
+- **実装完了時（commit前）**: 実装済みの仕様を design.md の該当セクションに反映
+  - 新コマンド → コマンド一覧に追加
+  - 新テーブル → スキーマに追加
+  - 新インターフェース → インターフェース設計に追加
+- design.md は「現在のシステムの仕様書」としてのみ機能する（将来計画は含めない）
 
 ## Tech Stack
 
