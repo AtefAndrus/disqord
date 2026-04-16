@@ -47,7 +47,7 @@ export class ReleaseNotificationService implements IReleaseNotificationService {
       try {
         const channel = await this.client.channels.fetch(guild.releaseChannelId);
 
-        if (!channel || !channel.isTextBased()) {
+        if (!channel?.isTextBased()) {
           result.failed++;
           result.errors.push({
             guildId: guild.guildId,
