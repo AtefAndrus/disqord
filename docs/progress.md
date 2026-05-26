@@ -25,6 +25,10 @@
 
 優先度: 高 / 設計: [multimodal](changes/multimodal/design.md)
 
+### コード実行（microsandbox）
+
+優先度: 中 / 設計: [code-execution](changes/code-execution/design.md)
+
 ### Web Search
 
 優先度: 中 / 設計: [web-search](changes/web-search/design.md)
