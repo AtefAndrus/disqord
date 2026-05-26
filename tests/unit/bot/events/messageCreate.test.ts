@@ -74,7 +74,7 @@ describe("createMessageCreateHandler", () => {
 
     const mockGuildSettings = {
       guildId: "guild-123",
-      defaultModel: "deepseek/deepseek-r1-0528:free",
+      defaultModel: "deepseek/deepseek-v4-flash:free",
       freeModelsOnly: false,
       releaseChannelId: null,
       showLlmDetails: true,
@@ -327,7 +327,7 @@ describe("createMessageCreateHandler", () => {
     // 自動応答チャンネルに設定
     const mockGuildSettingsWithAutoReply = {
       guildId: "guild-123",
-      defaultModel: "deepseek/deepseek-r1-0528:free",
+      defaultModel: "deepseek/deepseek-v4-flash:free",
       freeModelsOnly: false,
       releaseChannelId: null,
       showLlmDetails: true,

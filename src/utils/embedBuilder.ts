@@ -25,7 +25,7 @@ function hashString(str: string): number {
 
 /**
  * モデルIDからEmbedカラーを決定
- * @param modelId - モデルID（例: "deepseek/deepseek-r1-0528:free"）
+ * @param modelId - モデルID（例: "deepseek/deepseek-v4-flash:free"）
  * @returns 16色パレットから選択された色コード
  */
 export function getColorForModel(modelId: string): number {

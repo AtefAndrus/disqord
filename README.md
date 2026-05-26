@@ -40,7 +40,7 @@ docker run -d \
 | DISCORD_APPLICATION_ID | Yes | Discord Application ID |
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: `data/disqord.db`） |
-| DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `deepseek/deepseek-r1-0528:free`） |
+| DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `deepseek/deepseek-v4-flash:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |
 | GITHUB_WEBHOOK_SECRET | No | GitHub Webhook署名検証用（リリース通知使用時は必須） |
 <!-- AUTO:ENV_VARS:END -->

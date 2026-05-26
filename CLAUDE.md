@@ -172,7 +172,7 @@ The skill handles: version bump, CHANGELOG.md generation, progress.md update, co
 ## Notes
 
 - Discord message limit: 2000 characters (split required)
-- Default model: `deepseek/deepseek-r1-0528:free`
+- Default model: `deepseek/deepseek-v4-flash:free`
 - SQLite WAL mode enabled
 
 ## References
