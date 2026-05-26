@@ -29,6 +29,10 @@
 
 優先度: 中 / 設計: [code-execution](changes/code-execution/design.md)
 
+### デフォルトモデル定数の SSOT 化
+
+優先度: 中 / 設計: [default-model-ssot](changes/default-model-ssot/design.md)
+
 ### Web Search
 
 優先度: 中 / 設計: [web-search](changes/web-search/design.md)
