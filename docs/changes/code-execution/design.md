@@ -45,10 +45,11 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 | Tool call の承認モデル | `execute_code` は自動実行、`execute_code_with_network` も自動実行（allow-list 内なので） | UI 承認ボタンを挟むと Bot のラウンドトリップが増え UX 悪化。隔離と allow-list で blast radius 抑止 |
 | 実行タイムアウト | デフォルト 30 秒、tool 引数で最大 120 秒まで上書き可 | 無限ループ・暴走対策。Discord interaction の defer 制限（15 分）の遥か内側 |
 | 出力上限 | stdout/stderr 各 256 KB、超過は truncate + 切り捨て表示 | sandbox 側で `head -c` ではなくホスト側 NAPI 受信時に切る |
-| Discord 出力整形 | 1500 字以下 + 単一ブロック: 本文埋め込み。それ以上: stdout/stderr/exit/files を Embed + `output.txt` 添付。PNG/JPEG/SVG は image embed | Discord 2000 字制限と添付ファイル UI を活用 |
+| Discord 出力整形 | Components V2 (`Container` + `TextDisplay` + `MediaGallery` + `File` + `Section`/`Button`) で 1 メッセージ完結 | 2025-04 リリースの新コンポーネント体系。embed の 4096 字制限を `TextDisplay` 複数化で吸収、画像は `MediaGallery` で並列表示、長文 stdout は `File` で attachment card 化、`Section` の accessory に再実行 `Button` を置ける。1 メッセージあたり 40 components 枠 |
 | 画像出力ピックアップ | sandbox 終了後 `/tmp/out/*.{png,jpg,jpeg,svg}` を自動収集 | matplotlib / Pillow 等の慣習的な出力場所を強制せず、ユーザに「`/tmp/out/` に保存して」と暗黙ルールを置く |
-| ユーザ UI | `/run language:<select> code:<modal>` | Modal の paragraph text input は 4000 字まで対応。slash option の string は 1 行で改行扱いが面倒 |
-| 言語選択 | スラッシュ choices で `python` / `node` / `bash` 固定 | v1 は限定。将来 image 拡張時に choices 更新 |
+| ユーザ UI（v1 リリース時） | LLM tool call のみ。`/run` スラッシュコマンドはリリースしない | LLM チャット経由の利用が主目的。`/run` を出すと LLM 関係ない単独機能が増え、設計のフォーカスがぼやける |
+| ユーザ UI（実装/テスト時のみ） | `/run` スラッシュコマンド → Modal 1 枚に `StringSelect(language)` + `TextInput(code, paragraph, max=4000)` を `Label` wrap で同梱 | 2025-09 から modal に select が入れられるため slash option を削れる。`NODE_ENV !== "production"` のときだけ command registration、production では未公開 |
+| 言語選択 | modal 内 `StringSelect` の choices で `python` / `node` / `bash` 固定 | v1 は限定。tool 側 `language` enum と同一定義を import |
 | DB スキーマ | `sandbox_sessions` テーブル + `guild_settings.code_execution_enabled` | 起動時の孤児 sandbox 検出 + ON/OFF |
 | 孤児検出 | Bot 起動時に `Sandbox.list()` と DB を突合、片側にしかないものは `stop()` + DB から削除 | プロセスクラッシュ後のリーク回収 |
 | Reasoning モデルでの tool calling | サポート対象として明示しない（warning なし） | DeepSeek V4 / GPT-5 / Claude Haiku 4.5 等は問題ないと判断。問題が出たらモデル選定 UI 側で対処 |
@@ -108,10 +109,10 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 - `src/llm/openrouter.ts` — リクエストに `tools` / `tool_choice` を渡す経路を追加
 - `src/db/schema.ts` — `sandbox_sessions` テーブル + `guild_settings.code_execution_enabled`
 - `src/db/repositories/` — `sandboxSessionRepository.ts` 追加、`guildSettingsRepository.ts` 拡張
-- `src/config/envVars.ts` — `SANDBOX_ENABLED` / `SANDBOX_MAX_CONCURRENT` / `SANDBOX_IDLE_TTL_SEC` / `SANDBOX_NETWORK_ALLOWLIST` / `MSB_HOME`
+- `src/config/envVars.ts` — `SANDBOX_ENABLED` / `SANDBOX_MAX_CONCURRENT` / `SANDBOX_IDLE_TTL_SEC` / `SANDBOX_NETWORK_ALLOWLIST` / `SANDBOX_OUTPUT_MAX_BYTES` / `MSB_HOME`
 - `src/bot/commands/config.ts` — `/config code-execution <on|off>` サブコマンド
-- `src/bot/commands/index.ts` — `/run` 登録
-- `src/bot/events/interactionCreate.ts`（または該当 handler） — Modal submit ハンドラ追加
+- `src/bot/commands/index.ts` — `/run` を **dev only** で条件付き登録（`if (process.env.NODE_ENV !== "production") commandDefinitions.push(runCommand)`）
+- `src/bot/events/interactionCreate.ts`（または該当 handler） — Modal submit + Re-run button (`custom_id: codeexec:rerun:*`) ハンドラ追加
 - `package.json` — `microsandbox` 依存追加
 - Dockerfile — ベース変更 `oven/bun:1-debian`、kvm group 設定
 
@@ -193,35 +194,64 @@ interface ExecResult {
 }
 ```
 
-### Discord 出力整形ルール
+### Discord 出力整形ルール（Components V2）
 
-1. 短文（stdout + stderr 合計 1500 字以下、画像なし）:
-   - コードブロック埋め込み 1 件で返信。
-2. 長文 or バイナリ:
-   - Embed: exit code / duration / truncation 表示
-   - Attachment: `stdout.txt`, `stderr.txt`（空でなければ）, 画像は `image_<n>.png` として image embed
-3. 例外（タイムアウト / OOM / sandbox 起動失敗）:
-   - Embed の color を赤、エラー種別を見出しに
-
-### /run スラッシュコマンド + Modal フロー
+メッセージは常に `MessageFlags.IsComponentsV2` flag を立てる。`content` / `embeds` / `attachments` 配列は同時使用不可（一度 V2 として送信した message は legacy に戻せない sticky flag）。
 
 ```text
-1. /run language:python  ← slash command (language は choices)
+Container (accent color: green/yellow/red = success/truncated/error)
+├ TextDisplay  "▶ python · 1.23s · exit 0"                ← ヘッダ行
+├ Separator (small)
+├ TextDisplay  "```\n<stdout, up to 3800 chars>\n```"     ← 短文時はここで完結
+│   (長文時は省略 → File に回す)
+├ TextDisplay  "**stderr**\n```\n<stderr, up to 1500>\n```"  ← stderr あれば
+├ MediaGallery [image_1.png, image_2.png, ...]            ← /tmp/out/*.{png,jpg,jpeg,svg}
+├ File [stdout.txt]                                       ← stdout が 3800 字超 or truncate あり
+├ File [stderr.txt]                                       ← 同様
+├ Separator (large)
+└ Section
+    ├ TextDisplay  "Re-run last code or stop the session"
+    └ Button (accessory, Secondary, custom_id="codeexec:rerun:<sandboxName>")
+```
+
+整形ルール詳細:
+
+1. **短文** (stdout ≤ 3800 字 かつ stderr ≤ 1500 字 かつ画像 ≤ 4 枚): すべて `TextDisplay` + `MediaGallery` でインライン表示。
+2. **長文 / truncate あり**: stdout/stderr を `File` (`stdout.txt`/`stderr.txt`) として attachment card 化、`TextDisplay` には先頭 N 行のプレビュー + "... (full output attached)" を表示。
+3. **画像 ≥ 5 枚**: `MediaGallery` の最大 10 枚以内に収め、超過分は `File` で zip 添付（v1.1 で対応、v1 は警告して 10 枚で打ち切り）。
+4. **例外** (タイムアウト / OOM / sandbox 起動失敗): Container accent を red、`TextDisplay` にエラー種別 + 原因。
+5. **File 上限**: `SANDBOX_OUTPUT_MAX_BYTES` (デフォルト 9 MB) を超える stdout は事前 truncate。guild の boost level に応じて bot 起動時に上限取得（L0=10MB / L2=50MB / L3=100MB）→ 環境変数を上書き可能。
+
+### /run スラッシュコマンド + Modal フロー（dev/test only）
+
+リリース時には command registration から除外（`NODE_ENV !== "production"` のときだけ `commandDefinitions` に push）。production guild からは見えない。実装時の手動テスト + integration test で利用。
+
+```text
+1. /run                                              ← slash command (option なし)
 2. Bot: Modal を showModal() で開く
-   ModalBuilder
-     ├ TextInputBuilder (paragraph, label="Code", maxLength=4000)
-     └ TextInputBuilder (short, label="Timeout sec (optional)", required=false)
+   ModalBuilder (Components V2 modal)
+     ├ Label "Language"
+     │   └ StringSelectMenuBuilder
+     │       options: [python, node, bash]
+     ├ Label "Code"
+     │   └ TextInputBuilder (paragraph, maxLength=4000)
+     └ Label "Timeout sec (optional, max 120)"
+         └ TextInputBuilder (short, required=false)
 3. ユーザ submit
 4. interactionCreate handler が ModalSubmitInteraction を捕捉
-5. defer → sandboxService.execute() → 整形して reply
+5. deferReply({ flags: MessageFlags.Ephemeral })
+   → sandboxService.execute()
+   → Components V2 メッセージで editReply
 ```
 
 Discord UI の制約と採用判断:
 
-- **Modal**: text input のみ、最大 5 components、`maxLength=4000`。コード入力に十分。Modal は slash/button/select の応答としてしか開けない（自動表示不可）が、本ケースは `/run` の応答として開くので問題なし。
-- **Slash command string option**: 1 行入力、改行は `\n` 手入力になり UX 悪い。却下。
-- **メッセージ添付 (.py / .js)**: スレッド内で会話文の流れを切らずに送れるが、コマンド意図が暗黙的になり誤反応リスク。v1 は採用せず、将来 `/run upload` サブコマンドとして拡張余地。
-- **コードブロックを含むメッセージ自動検知**: 同上、意図検知が曖昧で却下。
+- **Modal in modal の select**: 2025-09-10 から `Label` で wrap すれば `StringSelect` 等を modal に入れられる（[Discord API change log](https://docs.discord.com/developers/change-log)）。これにより slash option を削れて UX 簡潔。
+- **Slash command string option (旧案)**: 1 行入力、改行は `\n` 手入力。modal に統合したので不要。
+- **メッセージ添付 (.py / .js)**: 意図検知が暗黙的でコマンド誤反応リスク、却下。
+- **コードブロックを含むメッセージ自動検知**: 同上、却下。
+- **Private thread でのセッション隔離**: 検討したが v1 ではコマンド未公開のため不要。LLM tool call 経路はチャット文脈の中で結果を返すのが自然で thread 化のメリット薄。Phase 2 候補。
+- **Ephemeral flag**: `ephemeral: true` は discord.js v14.19 で deprecated。`flags: MessageFlags.Ephemeral` を使う。本機能の出力は会話履歴に残したいので **ephemeral は使わない**（dev `/run` 時のみ初期 defer に使用）。
 
 ### tool calling 多ターンループ
 
@@ -254,6 +284,7 @@ throw new MaxToolTurnsExceededError();
 | `SANDBOX_DEFAULT_CPUS` | `1` | per-sandbox |
 | `SANDBOX_DEFAULT_MEMORY_MIB` | `512` | per-sandbox |
 | `SANDBOX_NETWORK_ALLOWLIST` | `pypi.org,files.pythonhosted.org,registry.npmjs.org` | `with_network` ツールで使用 |
+| `SANDBOX_OUTPUT_MAX_BYTES` | `9437184` (9 MB) | File attachment 上限。free guild の 10 MB から安全マージンを引いた値。boost L2 環境では `47185920` (45 MB) 等に上書き |
 | `MSB_HOME` | `~/.microsandbox` | NAPI が参照 |
 
 ### セキュリティ・観測
@@ -272,6 +303,10 @@ throw new MaxToolTurnsExceededError();
 - OpenRouter tool calling: <https://openrouter.ai/docs/guides/features/tool-calling>
 - OpenRouter models filter: `GET /api/v1/models?supported_parameters=tools`
 - discord.js Modal: <https://discordjs.guide/interactions/modals.html>
+- Discord Components V2 (2025-04-22 リリース): <https://docs.discord.com/developers/components/reference>
+- discord.js PR #10781 (Components V2 in v14): <https://github.com/discordjs/discord.js/pull/10781>
+- discord.js PR #11169 (Modal Label + select-in-modal, 2025-09): <https://github.com/discordjs/discord.js/pull/11169>
+- Discord Developer Change Log: <https://docs.discord.com/developers/change-log>
 
 ## Tasks
 
@@ -291,12 +326,13 @@ throw new MaxToolTurnsExceededError();
 - [ ] 環境変数追加 + `envVars.ts` 反映
 - [ ] unit test: sandboxService（Sandbox を mock 化）
 
-### Phase B: ユーザ UI
+### Phase B: 出力整形 + dev/test UI
 
-- [ ] `/run` スラッシュコマンド実装（language choices）
-- [ ] Modal builder + ModalSubmitInteraction handler
-- [ ] `codeExecutionService` 実装（出力整形 + 添付ファイル化 + 画像ピックアップ）
+- [ ] `codeExecutionService` 実装（Components V2 ビルダ + 出力 truncation + 画像ピックアップ + `File`/`MediaGallery` 振り分け）
+- [ ] Re-run button handler (`custom_id: codeexec:rerun:*`)
 - [ ] `/config code-execution <on|off>` サブコマンド
+- [ ] `/run` スラッシュコマンド（**dev only registration**、Modal 内 `StringSelect(language)` + `TextInput(code)` + `TextInput(timeout)` を `Label` wrap）
+- [ ] ModalSubmitInteraction handler
 - [ ] `/status` に sandbox 機能状態を表示
 
 ### Phase C: LLM tool 統合
@@ -324,8 +360,11 @@ throw new MaxToolTurnsExceededError();
 - **言語追加要求**: rust / go / ruby など。OCI image 追加だけで対応可能だが、`/run language` choices と toolschema enum も併せて更新が必要。enum を DB / 設定ファイル駆動にすべきか v1 リリース後に判断。
 - **`execute_code_with_network` の allow-list 維持コスト**: pypi mirror の host 変更などで壊れる可能性。環境変数で吸収する形にしているが、運用上 dashboard 化したくなる可能性あり。
 - **モデル側の tool calling 安定性**: DeepSeek V4 Flash:free / Gemini Flash 系 / Claude Haiku 4.5 で問題が出たケースを観測したら、モデル選定 UI 側の絞り込み（別 spec）を優先する。
+- **Components V2 message が sticky な点**: 一度 V2 として送信した message は legacy に戻せない。本機能の出力は最初から V2 で組むため問題にならないが、将来 stream 編集パターンを採用する場合（マルチモーダル change と統合する場合）に注意。
 
 ## Out of Scope（別 spec を切る候補）
 
 - **モデル選定 UI の tool calling 絞り込み**: `GET /api/v1/models?supported_parameters=tools` の結果で `/model` choices を動的にフィルタする。新 change `model-selection-tool-filter` として独立。`code-execution` のリリース後に着手で良い（先にユーザが tool 非対応モデルでハマる事例を観測してから優先度判断）。
-- **デフォルトモデル更新（`deepseek/deepseek-r1-0528:free` → `deepseek/deepseek-v4-flash:free`）**: spec 不要の単一定数変更。`envVars.ts` の `DEFAULT_MODEL` を差し替えて単独 PR を切る。
+- **LLM チャット返信の Components V2 化**: 既存 `embedBuilder.ts` ベースの 1 embed (4096 字制限) を `Container` + 複数 `TextDisplay` + 末尾 `Section` で `regenerate` / `model-switch` button を inline 配置する形へ刷新。マルチモーダル change と coupling が高いため、新 change `chat-response-v2` として独立、マルチモーダル後に着手。
+- **`/run` の production 公開**: 現状 dev only。需要が出たら別 PR で `NODE_ENV` ガード解除。
+- **設定 SSOT 化**: 別 change `default-model-ssot` で対応（envVars.ts を SSOT 化 + CLAUDE.md AUTO 生成）。
