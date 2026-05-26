@@ -25,6 +25,10 @@
 
 優先度: 高 / 設計: [multimodal](changes/multimodal/design.md)
 
+### LLM チャット返信の Components V2 化
+
+優先度: 高 / 設計: [chat-response-v2](changes/chat-response-v2/design.md)（multimodal 完了後に着手）
+
 ### コード実行（microsandbox）
 
 優先度: 中 / 設計: [code-execution](changes/code-execution/design.md)
