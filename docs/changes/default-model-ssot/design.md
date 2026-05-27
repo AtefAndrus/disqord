@@ -46,6 +46,7 @@
 
 **修正対象:**
 
+- `.env.example` — 元々 envVars.ts と独立に手書き同期されており、今回の `v4-flash` 切替でも漏れて単独 commit (35c9cc8) で追従が必要だった。`scripts/generate-readme.ts` を `envVarDefinitions` から `.env.example` を生成する責務も追加 (`name=<default>` 形式で出力)、手書き同期を撤廃する。Required な変数 (DISCORD_TOKEN 等、default なし) は空値 `NAME=` で出す
 - `src/config/index.ts` — `defaultModel: z.string().default(...)` → `z.string().min(1)`
 - `src/db/schema.ts` — 新規 `CREATE TABLE guild_settings (...)` の `default_model TEXT NOT NULL DEFAULT '...'` から DEFAULT 句のみ削除 (`default_model TEXT NOT NULL`)
 - `src/db/repositories/guildSettingsRepository.ts`(実装位置を grep で確認) — INSERT 経路で `config.defaultModel` を明示渡し
@@ -131,7 +132,8 @@ pre-commit:
 - [ ] CLAUDE.md に `<!-- AUTO:DEFAULT_MODEL:START/END -->` マーカー追加
 - [ ] `scripts/generate-readme.ts` を CLAUDE.md 対応に拡張
 - [ ] `scripts/generate-readme.test.ts` に CLAUDE.md AUTO セクションのテスト追加
-- [ ] `lefthook.yml` の generate-readme command で `git add CLAUDE.md` 追加
+- [ ] `lefthook.yml` の generate-readme command で `git add CLAUDE.md .env.example` 追加
+- [ ] `scripts/generate-readme.ts` に `.env.example` 生成ロジック追加 (envVarDefinitions ベース、required → 空値、default あり → `NAME=<default>`)
 - [ ] `guildSettingsRepository` (実装位置を grep で確認) の INSERT で `config.defaultModel` を明示渡し
 - [ ] `src/db/schema.ts` の新規 `CREATE TABLE` 句から DEFAULT 句削除 (既存テーブルは触らない)
 - [ ] `bun typecheck && bun test` クリーン確認
