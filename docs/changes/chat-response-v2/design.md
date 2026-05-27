@@ -21,11 +21,11 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 - 既存 UX を保つ:
   - ストリーミング (2 秒間隔の逐次 edit、文字が増えていく見た目) は維持
   - 停止ボタン (Stop) は維持、位置は Section accessory に変更
-  - LLM detail footer (Tokens/Cost/Latency/Provider/TPS) は `showLlmDetails` 設定で抑制可、表示位置は末尾 TextDisplay
+  - LLM detail footer (Tokens/Cost/Latency/Provider/TPS) は `showLlmDetails` 設定で抑制可、表示位置は末尾 TextDisplay (Section ではない)
   - エラーメッセージ (`createErrorEmbed` 経由) も V2 化、color accent で red
   - 停止時の "Stopped" 表示は維持
 - 長文は **複数メッセージ分割を継続**。各 message は `Container + TextDisplay(+ Separator)` で V2 化
-- 末尾メッセージに metadata Section と停止ボタン (生成中) / "Stopped" 表示 (中断時) / 完了マーク (完了時) を集約
+- 末尾メッセージに metadata TextDisplay (完了 / "Stopped") を配置。**Stop button は生成中のときだけ Section accessory として置く** (Section は accessory 必須なので、ボタン不要な状態では Section を使わない)
 - multimodal change との統合: 出力画像は `MediaGallery`、添付ファイル (例: 生成 PDF / コードファイル) は `File` で表示
 - `embedBuilder.ts` の embed-向けユーティリティを退役、置き換えで `containerBuilder.ts` (仮) を新設
 
@@ -47,13 +47,14 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | 長文分割の単位 | 1 TextDisplay あたり **3800 字** (4000 字上限から 200 字の安全マージン)、超過時は次の TextDisplay へ。1 message あたり **3 TextDisplay まで** (~11400 字)、超過時は次の message へ | TextDisplay の char limit は公式未明記だが community 報告で 4000、安全マージンを取る。1 message に 3 chunk なのは Section + Separator 含め 40 components 枠を温存するため |
 | ストリーミング edit | 既存ロジック (2 秒間隔) を踏襲、V2 で組んだ Container を毎回 edit | sticky flag 制約と整合。初期送信から V2、edit も V2、最終も V2 |
 | 初期 placeholder | `Container { TextDisplay("生成中...") + Section[Stop button] }` | 現状の `createStreamingEmbed("生成中...")` 相当を V2 化 |
-| 停止ボタン位置 | 最終 message の末尾 Section accessory | 現状は ActionRow で外置き。V2 では text と紐付けて配置できる |
-| ボタン migration | message が増えるごとに、前 message の Section + Button を除去、新 message の末尾に Section + Button を配置 | 「停止ボタンは常に最新 message にだけある」を維持。現状ロジックと一致 |
-| Metadata footer | 完了時、最終 message の Section 内 TextDisplay (`showLlmDetails=true` のみ) | 現状の embed footer 相当。色変更で目立たせない、説明テキスト的に配置 |
+| 停止ボタン位置 (生成中) | 最終 message に `Section + accessory: Button(Danger)` を末尾配置。**この Section が唯一の Section 使用箇所**。Section 子は `TextDisplay("生成中...")` 1 つ | Discord Section は accessory 必須なので、ボタンが要る間しか Section を使えない |
+| ボタン migration | message が増えるごとに、前 message から末尾 Section を edit で削除 (生成中表示も含めて消える)、新 message の末尾に Section + Button を新設配置 | 「停止ボタンは常に最新 message にだけある」を維持。現状ロジックと一致 |
+| Metadata footer (完了 / 停止時) | 最終 message の末尾を **Section ではなく裸の `TextDisplay`** に置換 (`Separator(small)` + `TextDisplay("Tokens: ... \| ...")` または `TextDisplay("🛑 Stopped \| ...")`) | Section から Button を抜くと invalid (Section は accessory 必須)。完了 / 停止時は Section 自体を消す |
 | Container accent color | model id hash の 16色パレットを `setAccentColor` に流用 | 現状の embed color と同じ運用、変更最小 |
 | Author / model badge | 先頭 message の最初の TextDisplay 行に `**Model:** xxx` を入れる (現状の `embed.author.name`) | V2 には embed author 相当がなく、TextDisplay 内 markdown で表現 |
 | エラー表示 | `Container { accent_color: red, TextDisplay(エラー本文) }` | `createErrorEmbed` の役割を V2 で再現 |
-| 停止時表示 | 最終 message の Section から Button を削除、Section 内 TextDisplay に "🛑 Stopped" 追記 | 現状の "Stopped" footer 相当 |
+| 停止時表示 | 最終 message から Section を削除、代わりに `Separator + TextDisplay("🛑 Stopped \| xx.xs \| Tokens: ...")` を末尾配置 | 上記 Metadata footer と同じ理由で Section は外す |
+| Mention safety | **全 `channel.send` / `message.edit` / `message.reply` 経路で `allowedMentions: { parse: [] }` を強制**。`message.reply()` 経路では追加で `repliedUser: false` を併用 (元投稿者の意図しない ping を防ぐ、現状の messageCreate.ts:92 と同じ) | TextDisplay は legacy embed.description と違い content と同じ ping 挙動。送信ヘルパに必ず allowedMentions を含めて、edit 経路で漏れないよう builder の型シグネチャ側で強制する |
 | `embedBuilder.ts` の扱い | 退役。chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages`) を削除、slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` / `splitTextIntoChunks` は残す | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
 | 新規 builder ファイル | `src/utils/chatContainerBuilder.ts` を新設 | embed-V2 を完全に分離。V2 関連の型 (`ContainerBuilder`, `TextDisplayBuilder`, etc.) を集中させる |
 | 多言語化 / i18n | しない (現状の hardcoded ja を踏襲) | 別 spec が立つまで現状維持 |
@@ -84,21 +85,26 @@ ChatContainerBuilder (NEW)
                                                                       └ TextDisplay 単位
         │
         ▼
-channel.send / message.edit
-  ({ components: [container], flags: MessageFlags.IsComponentsV2 })
+channel.send / message.edit / message.reply
+  ({
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [], repliedUser: false },  // mention safety、reply 経路では repliedUser も
+  })
 ```
 
 ### メッセージ構造のレイアウト例
+
+**Discord Section に関する制約**: Section は `accessory` (Button or Thumbnail) が **required** であり、accessory なしで使うと payload が invalid。完了状態 / 停止状態で「ボタンを消したい」場合は **Section を使わず、Container 直下に Separator + TextDisplay (metadata) を並べる**形にする。Stop button を出す stream 中だけ Section を使う。
 
 #### ケース A: 短文応答 (≤3800 字), 完了済み, showLlmDetails=true
 
 ```text
 Container (accent: model color)
-├ TextDisplay  "**Model:** GPT-5-mini\n\n<full response, ≤3800 chars>"
+├ TextDisplay  "**Model:** GPT-5-mini"           ← モデル badge (1 component)
+├ TextDisplay  "<full response, ≤3800 chars>"   ← 本文 (model badge 分は budget から除外)
 ├ Separator (small, no divider)
-└ Section
-    ├ TextDisplay  "Tokens: 123+456=579 | Cost: $0.001 | Latency: 1234ms | TPS: 45.2"
-    └ accessory: (no button — completed)
+└ TextDisplay  "Tokens: 123+456=579 | Cost: $0.001 | Latency: 1234ms | TPS: 45.2"
 ```
 
 #### ケース B: 長文応答 (~10000 字), 完了済み
@@ -106,7 +112,8 @@ Container (accent: model color)
 ```text
 [Message 1]
 Container (accent: model color)
-├ TextDisplay  "**Model:** xxx\n\n<chars 1..3800>"
+├ TextDisplay  "**Model:** xxx"
+├ TextDisplay  "<chars 1..3800>"
 ├ TextDisplay  "<chars 3801..7600>"
 └ TextDisplay  "<chars 7601..10000>"
 
@@ -114,9 +121,7 @@ Container (accent: model color)
 Container (accent: model color)
 ├ TextDisplay  "<chars 10001..end>"
 ├ Separator
-└ Section
-    ├ TextDisplay  "ページ 2/2 | Tokens: ... | Cost: $..."
-    └ accessory: (none)
+└ TextDisplay  "ページ 2/2 | Tokens: ... | Cost: $..."
 ```
 
 #### ケース C: ストリーミング途中 (生成中)
@@ -124,11 +129,14 @@ Container (accent: model color)
 ```text
 [Latest message]
 Container (accent: model color)
-├ TextDisplay  "<current partial text up to N chars>"
+├ TextDisplay  "**Model:** xxx"
+├ TextDisplay  "<current partial text up to ~3800 chars>"
 ├ Separator
 └ Section
     ├ TextDisplay  "生成中..."
-    └ accessory: Button (Danger, 🛑 停止, custom_id: "stop_response_<msgId>")
+    └ accessory: Button (Danger, 🛑 停止,
+                         custom_id: "stop_response_<triggerMessageId>")
+                                                  ← 入力ユーザの msg.id (Bot 返信前に既知)
 ```
 
 #### ケース D: 停止時
@@ -136,11 +144,10 @@ Container (accent: model color)
 ```text
 [Latest message]
 Container (accent: model color)
+├ TextDisplay  "**Model:** xxx"
 ├ TextDisplay  "<partial text>"
 ├ Separator
-└ Section
-    ├ TextDisplay  "🛑 Stopped | xx.xs | Tokens: ..."
-    └ accessory: (none — button removed)
+└ TextDisplay  "🛑 Stopped | xx.xs | Tokens: ..."   ← Section ではなく裸の TextDisplay
 ```
 
 #### ケース E: エラー
@@ -158,13 +165,12 @@ Container (accent: model color)
 ├ MediaGallery
 │   ├ item: image_1.png (alt: "Generated chart")
 │   └ item: image_2.png (alt: "Generated diagram")
-├ File
-│   └ analysis.csv
+├ File  analysis.csv
 ├ Separator
-└ Section
-    ├ TextDisplay  "Tokens: ... | Cost: $... | Latency: ..."
-    └ accessory: (none)
+└ TextDisplay  "Tokens: ... | Cost: $... | Latency: ..."
 ```
+
+注: `MediaGallery` / `File` を使う場合、メッセージ payload の `files: [...]` 配列に AttachmentBuilder を **必ず添付**し、`MediaGallery.items[].media.url` や `File.file.url` を `attachment://<filename>` 形式で参照する。V2 が無効化するのは「attachments 配列の自動 unfurl」だけで、`files` payload upload + `attachment://` 参照のパスは V2 でも維持される ([Discord File component spec](https://docs.discord.com/developers/components/reference))。
 
 ### 変更対象
 
@@ -175,10 +181,10 @@ Container (accent: model color)
 
 **修正対象:**
 
-- `src/bot/events/messageCreate.ts` — `embedBuilder.ts` 依存を `chatContainerBuilder` に置換、`updateStreamingMessages` を V2 ベースに書き換え、`channel.send`/`edit` 呼び出しの `embeds:` を `components:` + `flags: MessageFlags.IsComponentsV2` に変更
+- `src/bot/events/messageCreate.ts` — `embedBuilder.ts` 依存を `chatContainerBuilder` に置換、`updateStreamingMessages` を V2 ベースに書き換え、`channel.send`/`edit` 呼び出しの `embeds:` を `components:` + `flags: MessageFlags.IsComponentsV2` + **`allowedMentions: { parse: [] }`** に変更。`custom_id` には現状実装と同じく `triggerMessageId` (入力ユーザの `message.id`、Bot 返信送信前に既知) を埋める
 - `src/utils/embedBuilder.ts` — chat 専用関数 (`createStreamingEmbed`, `splitTextToMultipleMessages`) を削除。slash command で使う `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` / `splitTextIntoChunks` は残す
 - `src/utils/buttonBuilder.ts` — `createStopButton` を ActionRow → 単独 ButtonBuilder に変更 (Section accessory として使うため)、または新たに `createStopButtonAccessory()` を追加して旧関数併存
-- `src/bot/events/interactionCreate.ts` — `handleButtonInteraction` の停止処理ロジックはそのまま (`custom_id: stop_response_*` パース不変)、ただし停止後の message 更新で V2 container を edit するように調整
+- `src/bot/events/interactionCreate.ts` — `handleButtonInteraction` の停止処理ロジックはそのまま (`custom_id: stop_response_*` パース不変、抽出された ID は `triggerMessageId` = ユーザ入力 msg.id として `chatService.cancelRequest()` に渡す既存実装と一致)、ただし停止後の message 更新で V2 container を edit するように調整
 - 関連 unit test 群:
   - `tests/unit/bot/events/messageCreate.test.ts` — mock の `embeds: [...]` 検証を `components: [...]` + `flags` 検証に書き換え
   - `tests/unit/utils/embedBuilder.test.ts` — 削除関数のテスト削除
@@ -203,6 +209,8 @@ export function splitTextIntoMessages(text: string): string[][] {
 }
 ```
 
+注: **Model badge `**Model:** xxx` は別 TextDisplay として分離** (上記のレイアウト例参照)。これにより本文 chunk の `MAX_CHARS_PER_TEXT_DISPLAY = 3800` 予算は badge 分を考慮しなくて済む。badge TextDisplay は ~50 字程度で、独立 component として 40 components 枠を 1 つ消費するが余裕あり。
+
 ### Streaming flow の擬似コード
 
 ```ts
@@ -210,11 +218,18 @@ const messages: Message[] = [];
 let fullText = "";
 let lastUpdate = 0;
 
-// 初期送信
-const initialContainer = buildStreamingContainer("生成中...", modelName, color, true);
+// 初期送信 (Stop button の custom_id には triggerMessage.id を埋める = ユーザ入力 msg.id)
+const initialContainer = buildStreamingContainer({
+  text: "生成中...",
+  modelName,
+  color,
+  triggerMessageId: triggerMessage.id,
+  isLast: true,
+});
 messages.push(await channel.send({
   components: [initialContainer],
   flags: MessageFlags.IsComponentsV2,
+  allowedMentions: { parse: [] },  // ping safety
 }));
 
 // ストリーム
@@ -223,15 +238,26 @@ for await (const chunk of stream) {
   fullText += chunk.content;
   if (Date.now() - lastUpdate < STREAM_UPDATE_INTERVAL) continue;
 
-  await updateStreamingMessages(messages, fullText, modelName, color);
+  await updateStreamingMessages(messages, fullText, modelName, color, triggerMessage.id);
+  // updateStreamingMessages 内の各 send / edit は必ず allowedMentions: { parse: [] } を渡す
   lastUpdate = Date.now();
 }
 
 // 完了時
 await updateFinalMessages(messages, finalResult.fullText, modelName, color, metadata);
+// updateFinalMessages も同様、message.reply 経路を含む場合は repliedUser: false も付与
 ```
 
-`updateStreamingMessages` は `splitTextIntoMessages(fullText)` で必要 message 数を計算し、不足分は新規送信、余剰分は削除、各 message を V2 Container で edit。「最終 message にのみ Section + Button」のルールに従う。
+`updateStreamingMessages` / `updateFinalMessages` の関数シグネチャは `{ allowedMentions: AllowedMentions }` を **常に内部で組み立てて呼び出し側に強制**する形にし、引数で上書きできない設計にする (mention 漏れ事故防止)。
+
+`updateStreamingMessages` は:
+
+1. `splitTextIntoMessages(fullText)` で必要 message 数を計算
+2. 不足分は新規送信、余剰分は削除
+3. 各 message を V2 Container で edit
+4. 「最後の message にのみ Section + Stop Button」「他の message は Section なし」のルールに従う
+5. **PATCH rate limit 対策**: 各 edit は最低 `STREAM_UPDATE_INTERVAL = 2000ms` 間隔。Discord から 429 を受けた場合は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect、なければ次の 2 秒サイクルまで待機)。Bot がクラッシュしても次回起動時に message が中途半端な状態で残るリスクは許容 (再生成すれば良い、別 spec の conversation-context で取扱い)
+6. **メッセージ追加時の "停止ボタン移動コスト"**: chunks が `MAX_TEXT_DISPLAYS_PER_MESSAGE` を超えて新 message が作られた瞬間、前 message から Section を除去 (edit 1 回) + 新 message を Section 付きで送信 (1 回) で計 2 操作。これは新 message 追加時のみなので頻度は低い。stream 中に発生する場合でも `STREAM_UPDATE_INTERVAL` の debounce 内で同じサイクルで処理
 
 ### 既存テストの破壊範囲
 
@@ -303,11 +329,12 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 ## Open Questions / Risks
 
 - **TextDisplay の真の char limit**: 公式未明記、community 報告ベースで 4000。`MAX_CHARS_PER_TEXT_DISPLAY=3800` が安全マージン込みで現実的だが、Discord 側の挙動変化で 3800 がはみ出る可能性。Phase A の unit test では mock のため検出できない、Phase C の手動回帰で長文 (1万字以上) を流して挙動確認必須。
-- **40 components/message 枠**: 1 Container + 3 TextDisplay + 1 Separator + 1 Section (内 1 TextDisplay + 1 Button) = 8 components/message。十分余裕あり。
-- **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。edit 回数が増えるため Discord rate limit (`PATCH /channels/{}/messages/{}`: 5/5s/channel) と相性が悪い。Phase B 実装時に rate limit hit が出ないか確認、出るなら `BUTTON_MOVE_DEBOUNCE_MS` のような閾値を入れる。
+- **40 components/message 枠**: 1 Container + 1 Model badge TextDisplay + 3 本文 TextDisplay + 1 Separator + 1 Section (内 1 TextDisplay + 1 Button) = 9 components/message。十分余裕あり。
+- **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。`STREAM_UPDATE_INTERVAL = 2000ms` の debounce 内で同サイクル処理するため、Discord channel-level PATCH rate limit (5/5s) には収まるはず。429 受信時は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect)。
 - **multimodal 統合のタイミングずれ**: V2 spec を先に書き、multimodal 着手後に Phase B 以降。multimodal の API が固まる前に Phase A を着手する場合、`MediaGallery` / `File` のスロットは builder 側に「将来追加」枠だけ用意して中身は noop。
 - **stream 中の partial markdown**: Markdown table や code block が途中で切れている場合、TextDisplay 末尾でレンダリングが崩れる。現状 embed でも同じ問題があり許容しているが、V2 で chunk 境界が増えると目立つ可能性。気になるなら chunking ロジックで「\`\`\`block を尊重して切る」ヒューリスティック追加検討、本 spec scope 外。
 - **ephemeral 経路の漏れ**: 本 spec では chat 返信が ephemeral ではないため影響なしの見込みだが、`ephemeral: true` を grep して deprecated 警告が残っていないか念のため確認 (Phase B 着手時)。
+- **`code-execution` change との連携**: 本 spec が提供する `chatContainerBuilder` の streaming updater は code-execution の tool call 中の進捗表示 (「コード実行中...」) で利用される。code-execution が `chat-response-v2` 完成前に Phase C に着手する場合は updater stub + legacy 描画フォールバックが必要。共通 primitive は本 spec の builder にのみ集約し、code-execution は **独自の `codeContainerBuilder` (tool 結果出力専用)** を別途持つ (chat の text stream と code 実行結果は構造的に異なるため、無理に共通化しない)。
 
 ## Out of Scope (将来別 spec 候補)
 
