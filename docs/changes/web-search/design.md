@@ -51,7 +51,7 @@ ALTER TABLE guild_settings ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAUL
 
 1. **Web Search有効化**:
    - 設定ONの場合、LLMリクエスト時にモデルIDに`:online`を追加
-   - 例: `deepseek/deepseek-r1-0528:free` → `deepseek/deepseek-r1-0528:free:online`
+   - 例: `provider/model-id` → `provider/model-id:online`
 
 2. **費用警告**:
    - Web Search有効化時に警告メッセージを表示
