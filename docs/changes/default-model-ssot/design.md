@@ -23,7 +23,7 @@
 - 他の設定値（PORT、DATABASE_PATH 等）の SSOT 化（今回は default model のみ）
 - ユーザが `/config model` で設定した値（`guild_settings.default_model` の per-row 値）の扱い変更
 - 既存 DB 行の default_model 値の一斉マイグレーション（ユーザの明示選択を尊重）
-- `generate-readme.ts` の責務拡大（フォーマット変更、新セクション追加等）
+- `generate-readme.ts` の責務の **大幅** 拡大（フォーマット変更、新セクション追加、リネーム等）。CLAUDE.md 対応の追加は最小拡張として実施するが、その他の役割追加はスコープ外
 
 ## Decisions
 
@@ -31,13 +31,14 @@
 | -------- | ---- | ---- |
 | SSOT の場所 | `src/config/envVars.ts` の `EnvVarDefinition.default` フィールド | 既存 generate-readme.ts が `envVarDefinitions` を import して README に反映する基盤と一致。新規 `constants.ts` を切るより既存構造に乗る方が責務が一貫する |
 | zod fallback | 削除（`.default(...)` を消して `z.string().min(1)` のみ） | envVars.ts が必ず default を埋めるので fallback は同期事故源にしかならない |
-| DB DEFAULT 句 | 撤廃 (`default_model TEXT NOT NULL` のみ) | アプリ設定値を SQL リテラルに埋める設計が悪い。Repository の `create()` で `config.defaultModel` を明示 INSERT |
+| DB DEFAULT 句 (新 schema 定義) | 撤廃 (`default_model TEXT NOT NULL` のみ) | アプリ設定値を SQL リテラルに埋める設計が悪い。Repository の `create()` 経路で `config.defaultModel` を明示 INSERT |
+| **既存デプロイの DB DEFAULT** | **そのまま残置 (実害なし)** | SQLite は `ALTER TABLE` で DROP DEFAULT を直接サポートしない。table 再作成 migration を打つ手もあるが、Repository が常に `default_model` を明示 INSERT する以上、既存テーブルに残った DEFAULT 句は **dead code** で実害ゼロ。再作成 migration のリスク (downtime、ロックタイミング) を取る価値なし |
 | 既存 DB 行 | 触らない | ユーザが `/config model` で意図的に設定した値かもしれない。一斉書き換えは UX 上のサプライズ |
-| マイグレーション順序 | DEFAULT 撤廃前にコード側で必ず値を渡す変更を先行、後から `ALTER TABLE` で DEFAULT 句削除 | SQLite は `ALTER TABLE` で DEFAULT 削除が `DROP COLUMN` + 再作成しないとできないため、本 change では DEFAULT 句撤廃は **新 INSERT のみに影響**するロジック改修（既存テーブル定義はそのまま放置、新規 INSERT で必ず値を渡せば実害なし） |
+| マイグレーション順序 | (1) Repository 経路を `config.defaultModel` 明示 INSERT に変更 → (2) `db/schema.ts` の新規 `CREATE TABLE` 句から DEFAULT 削除 → (3) 既存テーブルは触らない | 順序を守れば既存 production DB に対しても安全 (Repository が常に値を渡すので、SQL DEFAULT が発火しない) |
 | CLAUDE.md AUTO 化 | 既存 `scripts/generate-readme.ts` を拡張、リネームは行わず | スクリプト名が誤解を招くが、リネームすると lefthook 設定 + git 履歴 + 既存テストへの波及が出る。スコープ拡大を避ける |
 | AUTO マーカー粒度 | "Default model" の 1 行だけマーカー化 (`<!-- AUTO:DEFAULT_MODEL:START/END -->`) | Notes セクション全体を AUTO 化すると編集自由度が落ちる。最小マーカー |
-| docstring 例 | `"openai/gpt-4o:free"` のような架空 ID に固定 | コメントは "形" を示す例示で十分、本物の default 値である必要なし |
-| テスト fixture | `tests/unit/bot/events/messageCreate.test.ts:77,330` の値を `"test-model:fixture"` に変更 | コード読解で確認した結果、`defaultModel` の値は assert されておらず `getGuildSettings` モックの返り値の "形" を埋める fixture でしかない。production constants 連動は不要で、明示的テスト値に変えるべき |
+| docstring 例 | `"provider/model-id"` のような **明らかにプレースホルダと判別できる文字列** | `openai/gpt-4o:free` は OpenRouter 実在モデルと混同される。`provider/model-id` ならドキュメント例だと一目で分かる |
+| テスト fixture | `messageCreate.test.ts` の `getGuildSettings` モック fixture (現状 2 箇所) の値を `"test-model:fixture"` に変更 | コード読解で確認した結果、`defaultModel` の値は assert されておらず `getGuildSettings` モックの返り値の "形" を埋める fixture でしかない。production constants 連動は不要で、明示的テスト値に変えるべき。**ハードコード行番号は記載しない** (test 名 / fixture 名で位置特定する方が将来安定) |
 
 ## Design
 
@@ -46,13 +47,14 @@
 **修正対象:**
 
 - `src/config/index.ts` — `defaultModel: z.string().default(...)` → `z.string().min(1)`
-- `src/db/schema.ts` — `default_model TEXT NOT NULL DEFAULT '...'` → `default_model TEXT NOT NULL`
-- `src/db/repositories/guildSettingsRepository.ts`（推定パス、要 grep） — `create()` / 同等の INSERT 経路で `config.defaultModel` を明示渡し
-- `src/utils/embedBuilder.ts:28` — docstring 例を `"openai/gpt-4o:free"` に置換
-- `tests/unit/bot/events/messageCreate.test.ts:77,330` — `"test-model:fixture"` に置換
+- `src/db/schema.ts` — 新規 `CREATE TABLE guild_settings (...)` の `default_model TEXT NOT NULL DEFAULT '...'` から DEFAULT 句のみ削除 (`default_model TEXT NOT NULL`)
+- `src/db/repositories/guildSettingsRepository.ts`(実装位置を grep で確認) — INSERT 経路で `config.defaultModel` を明示渡し
+- `src/utils/embedBuilder.ts` の `getColorForModel` docstring — 例を `"provider/model-id"` に置換
+- `tests/unit/bot/events/messageCreate.test.ts` の `getGuildSettings` モック fixture (`defaultModel:` フィールド) を `"test-model:fixture"` に置換 (該当行は実装時に grep)
 - `CLAUDE.md` — Default model 行を AUTO マーカーで囲む
-- `scripts/generate-readme.ts` — CLAUDE.md も対象に追加
-- 関連 unit test — `generate-readme.test.ts` 等があれば CLAUDE.md AUTO 化分のテストを追加
+- `scripts/generate-readme.ts` — CLAUDE.md も対象に追加 (リネームしない)
+- `lefthook.yml` の generate-readme command で `git add CLAUDE.md` 追加
+- 関連 unit test — `tests/unit/scripts/generate-readme.test.ts` 等に CLAUDE.md AUTO セクションのテスト追加
 
 ### CLAUDE.md AUTO 化の実装
 
@@ -124,14 +126,14 @@ pre-commit:
 ## Tasks
 
 - [ ] `src/config/index.ts` の zod fallback `.default(...)` 削除
-- [ ] `src/utils/embedBuilder.ts:28` docstring を架空モデル ID に置換
-- [ ] `tests/unit/bot/events/messageCreate.test.ts:77,330` の fixture 値を `test-model:fixture` に変更（意図の最終確認 + 必要なら docstring コメント追加）
+- [ ] `src/utils/embedBuilder.ts` の `getColorForModel` docstring を `"provider/model-id"` に置換
+- [ ] `tests/unit/bot/events/messageCreate.test.ts` の `getGuildSettings` モック fixture (`defaultModel` フィールド) を `"test-model:fixture"` に変更 (該当行は実装時に grep で特定)
 - [ ] CLAUDE.md に `<!-- AUTO:DEFAULT_MODEL:START/END -->` マーカー追加
 - [ ] `scripts/generate-readme.ts` を CLAUDE.md 対応に拡張
 - [ ] `scripts/generate-readme.test.ts` に CLAUDE.md AUTO セクションのテスト追加
 - [ ] `lefthook.yml` の generate-readme command で `git add CLAUDE.md` 追加
 - [ ] `guildSettingsRepository` (実装位置を grep で確認) の INSERT で `config.defaultModel` を明示渡し
-- [ ] `src/db/schema.ts` の `default_model TEXT NOT NULL DEFAULT '...'` から DEFAULT 句削除
+- [ ] `src/db/schema.ts` の新規 `CREATE TABLE` 句から DEFAULT 句削除 (既存テーブルは触らない)
 - [ ] `bun typecheck && bun test` クリーン確認
 - [ ] pre-commit hook で CLAUDE.md が正しく自動更新されることを手動確認
 - [ ] docs/changes/default-model-ssot/ 削除（リリース完了時）

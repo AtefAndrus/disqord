@@ -135,6 +135,33 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 - [discord.js Client Events](https://discord.js.org/docs/packages/discord.js/14.16.3/Client:Class) - `messageUpdate`イベントで編集を検知
 - [discord.js Message.fetch](https://discord.js.org/docs/packages/discord.js/14.16.3/TextChannel:Class#fetch) - `channel.messages.fetch({limit: n})`で履歴取得
 
+---
+
+### 連携: コード実行サンドボックスの会話跨ぎ永続化
+
+[`code-execution`](../code-execution/design.md) change は v1 では **per tool call sandbox** (1 リクエスト = 新規 sandbox 作成 → exec → 破棄) を採用しており、変数や import が会話跨ぎで持続しない。本 change (本体は Discord API fetch ベースで DB 永続化なしの方針) と組み合わせて、コード実行サンドボックスの会話跨ぎ永続化を Phase 2 以降のスコープとして検討する。
+
+**重要な技術的制約**:
+
+`detached sandbox` だけでは「変数・import 持続」は実現できない。microsandbox の `sandbox.exec("python", ["-c", code])` は毎回新プロセスを起動するため、Python のグローバル変数や import は exec 跨ぎで消える (filesystem 状態と sandbox プロセス自体は detached で残る)。本物の Jupyter ライクな体験には、sandbox 内に **言語ごとの long-lived REPL kernel / interpreter** (Python なら IPython kernel、Node なら `node --interactive` プロセス、bash なら interactive shell) を常駐させ、code を stdin で送る形が必要。これは microsandbox の単純な `exec` API では足りず、`ExecHandle.takeStdin()` を使った双方向通信や、Jupyter Kernel Protocol の薄いブリッジを sandbox 内に立てる等の設計が要る。
+
+**設計ストア**: 上述の通り「会話 ID で sandbox を引く」必要があるが、本 change 本体は **Discord API fetch で会話履歴を取得し DB 永続化しない**方針。そのため、persistent sandbox 用には:
+
+- (a) Discord 会話の **channelId** (または thread id) を直接 sandbox name のキーとし、サーバ側に持つ map は in-memory のみ (Bot 再起動で消える、ただし sandbox 自体は detached で生存)、起動時に `Sandbox.list()` で発見 + 名前で復元、または
+- (b) `sandbox_sessions` のような小さなテーブルを別途追加して mapping を永続化
+
+のいずれか。(a) のほうが既存方針 (DB 不要) と整合的だが、起動時の reconcile ロジックが必要。
+
+**検討事項 (本 change の Phase 2 以降のスコープ候補)**:
+
+- 会話単位での sandbox 生存期間 (TTL、最大同時保持数)
+- sandbox の起動・破棄イベントと会話開始・終了の対応付け (会話の境界をどう検知するか)
+- 言語切替時の挙動 (同じ会話で `python` → `bash` を切り替えたいケース)。microsandbox の `Sandbox` は image (= 言語) を生成時に確定するため、言語切替は新 sandbox 作成 (= 状態破棄) を伴う。これを許容するか、(conversation_id, language) のキーで複数 sandbox を持つか
+- REPL kernel の常駐方式 (起動時に kernel プロセスを spawn、`ExecHandle.takeStdin()` で stdin pipe、レスポンスを stdout で受ける薄いプロトコル設計)
+- LXC + Coolify 上で多数の detached microVM を抱える際のメモリ予算
+- プロセスクラッシュ後の孤児 sandbox 検出 (`Sandbox.list()` + キーマップ突合)
+- 共有チャンネル文脈での privacy: 「同じ会話」をどう定義するか (チャンネル / 投稿 / DM / ユーザ単位)、別ユーザの sandbox を覗かれないモデル設計
+
 ## Tasks
 
 - [ ] 会話履歴（Discord APIから取得、DB不要）
