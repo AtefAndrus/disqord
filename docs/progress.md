@@ -9,6 +9,10 @@
 上から優先度が高い順に並べる。バージョン番号はリリース時に決定する。
 各機能の詳細設計は [docs/changes/](changes/) を参照。
 
+### CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT
+
+優先度: 高 / 設計: [ci-pipeline](changes/ci-pipeline/design.md)
+
 ### Bot 管理 API（admin endpoints）
 
 優先度: 高 / 設計: [admin-endpoints](changes/admin-endpoints/design.md)
