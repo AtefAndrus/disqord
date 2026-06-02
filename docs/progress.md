@@ -57,6 +57,10 @@
 
 優先度: 中 / 設計: Phase 2 着手時に作成（候補は VictoriaLogs / Grafana Loki monolithic / OpenObserve）
 
+### Bot UI プレビュー（visual refine）
+
+優先度: 低 / 設計: [ui-preview](changes/ui-preview/design.md)（プロトタイプ実装済み。残タスクは任意項目のみ）
+
 ---
 
 ## 完了済み

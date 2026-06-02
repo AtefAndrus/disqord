@@ -5,3 +5,7 @@ bun.lockb
 tmp
 .DS_Store
 data
+
+# UI preview tool (generated screenshots + downloaded font)
+.preview
+scripts/preview/fonts
