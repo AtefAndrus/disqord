@@ -2,17 +2,13 @@
 
 ## Why
 
-Discord Bot の応答 UI（Embed・ボタン・整形テキスト）は、コードからは最終的な見た目が分からず、
-デザイン変更のたびに人間が Discord 上で目視確認していた。これを Claude Code から
-「Claude がどう描画されるかを画像で確認 → UI 生成関数を refine」できるようにし、
-目視チェックの手戻りを減らす。
+Discord Bot の応答 UI（Embed・ボタン・整形テキスト）は、コードからは最終的な見た目が分からず、デザイン変更のたびに人間が Discord 上で目視確認していた。これを Claude Code から「Claude がどう描画されるかを画像で確認 → UI 生成関数を refine」できるようにし、目視チェックの手戻りを減らす。
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- 実際の UI 生成関数（`embedBuilder` / `statusMessage` / `buttonBuilder`）の出力を
-  Discord 風に描画して PNG 化し、Claude が `Read` で視認できる状態にする
+- 実際の UI 生成関数（`embedBuilder` / `statusMessage` / `buttonBuilder`）の出力を Discord 風に描画して PNG 化し、Claude が `Read` で視認できる状態にする
 - 代表的な UI 状態を fixture 化し、`bun run preview` で一括生成する
 - UI 関数を変更すれば出力に即反映されるループ（編集 → 描画 → 視認 → 再修正）を成立させる
 
@@ -54,20 +50,13 @@ Discord Bot の応答 UI（Embed・ボタン・整形テキスト）は、コー
 
 1. `fixtures.ts` が UI 関数を呼びペイロード取得
 2. `payloadToMarkup.ts` がマークアップへ変換
-3. `render.ts` が Chromium ページにマークアップ設定 → バンドル注入 → カスタム要素定義待ち →
-   フォント/ネットワーク待ち → `<discord-messages>` をスクショ
+3. `render.ts` が Chromium ページにマークアップ設定 → バンドル注入 → カスタム要素定義待ち → フォント/ネットワーク待ち → `<discord-messages>` をスクショ
 
 ### 対応している整形
 
-Embed（color/title/author/description/fields/footer/thumbnail/image）、ボタン（4 スタイル + unicode 絵文字 +
-リンク + disabled）、string select、見出し（H1-H3、description のみ）、太字/斜体、
-インラインコード/コードブロック、チャンネル/ユーザー/ロールメンション、`<t:unix:style>`（style 省略時は
-実機同様に絶対日時）、footer タイムスタンプ、`<url>` 抑制リンク、素の URL 自動リンク、`-` 箇条書き、
-本文 unicode 絵文字（国旗・肌色・キーキャップ・ZWJ 連結を含む Twemoji）、inline フィールドの 3 列グリッド。
+Embed（color/title/author/description/fields/footer/thumbnail/image）、ボタン（4 スタイル + unicode 絵文字 + リンク + disabled）、string select、見出し（H1-H3、description のみ）、太字/斜体、インラインコード/コードブロック、チャンネル/ユーザー/ロールメンション、`<t:unix:style>`（style 省略時は実機同様に絶対日時）、footer タイムスタンプ、`<url>` 抑制リンク、素の URL 自動リンク、`-` 箇条書き、本文 unicode 絵文字（国旗・肌色・キーキャップ・ZWJ 連結を含む Twemoji）、inline フィールドの 3 列グリッド。
 
-変換は「インライン要素（コード・リンク・メンション・タイムスタンプ・絵文字・見出し）を先に退避してから
-太字/斜体/箇条書きを適用 → 復元」する方式。後段の装飾正規表現が前段で挿入したタグ（特に URL の href）を
-壊さない。属性値は全て `"` までエスケープし、タイムスタンプは不正値で NaN を出さない。
+変換は「インライン要素（コード・リンク・メンション・タイムスタンプ・絵文字・見出し）を先に退避してから太字/斜体/箇条書きを適用 → 復元」する方式。後段の装飾正規表現が前段で挿入したタグ（特に URL の href）を壊さない。属性値は全て `"` までエスケープし、タイムスタンプは不正値で NaN を出さない。
 
 ### 既知の忠実度ギャップ（近似であること）
 
