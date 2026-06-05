@@ -9,7 +9,7 @@ Discord が 2025-04 にリリースした **Components V2** (`IS_COMPONENTS_V2` 
 - text 表示と添付ファイル表示を統一構造で扱える (multimodal change で扱う入力画像・出力画像・添付ファイルが自然に MediaGallery / File に乗る)
 - Section accessory を使えば inline Button が text の隣に置ける (停止ボタンの取扱いが綺麗になる)
 - ページ番号 footer の擬似実装をやめて Container の構造で表現できる
-- embed 6000 字制限から解放され、TextDisplay 4000 字 × 複数の合算で 1 message あたりの content 密度を上げられる
+- embed の構造的制約（description 4096 字・全体 6000 字・footer/author の固定枠）から解放され、text/画像/ファイルを 1 つの Container 構造で柔軟に組める（TextDisplay は 1 message 合計 4000 字制約だが、複数 message へシームレスに分割できる）
 
 multimodal change を先行させ、それと統合する形で V2 化を進める。
 
@@ -43,8 +43,8 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 実装タイミング | multimodal change の後に着手 | multimodal で扱う画像入出力の表現要件 (MediaGallery / File) が固まってから V2 builder を設計、二度手間回避 |
-| メッセージ構造 | 各 message = 1 Container、1〜3 TextDisplay (chunk) + 必要に応じ Separator + 末尾 message のみ Section + Button | community 事例 (discord.js toolkit / TripBot) と一致。1 message に大量 chunk を詰めるパターンは実例少なく、リスク高い |
-| 長文分割の単位 | 1 TextDisplay あたり **3800 字** (4000 字上限から 200 字の安全マージン)、超過時は次の TextDisplay へ。1 message あたり **3 TextDisplay まで** (~11400 字)、超過時は次の message へ | TextDisplay の char limit は公式未明記だが community 報告で 4000、安全マージンを取る。1 message に 3 chunk なのは Section + Separator 含め 40 components 枠を温存するため |
+| メッセージ構造 | 各 message = 1 Container、Model badge / 本文 / metadata の TextDisplay + 必要に応じ Separator + 末尾 message のみ Section + Button。**1 message 内の全 TextDisplay 合計 ≤ 3800 字** | community 事例 (discord.js toolkit / TripBot) と一致。文字数上限は per-component ではなく **1 message の全 TextDisplay 合計 4000 字**（discord.js guide）なので、本文・badge・footer を合算して管理する |
+| 長文分割の単位 | **1 message の全 TextDisplay 合計で 3800 字**（Discord 上限 4000 字から 200 字マージン）。Model badge・本文・metadata footer を**合算**してこの予算に収め、超過分は次の message へ。本文の実効上限 ≈ 3800 −(badge+footer) ≈ 3700 字/message | discord.js guide が「全 text display components の合計 4000 字」と明記（**per-component ではなく 1 message 合計**）。したがって 1 message ≈ 1 本文チャンク（~3700 字）で分割する。components 数は message 全体 40 枠に十分収まる |
 | ストリーミング edit | 既存ロジック (2 秒間隔) を踏襲、V2 で組んだ Container を毎回 edit | sticky flag 制約と整合。初期送信から V2、edit も V2、最終も V2 |
 | 初期 placeholder | `Container { TextDisplay("生成中...") + Section[Stop button] }` | 現状の `createStreamingEmbed("生成中...")` 相当を V2 化 |
 | 停止ボタン位置 (生成中) | 最終 message に `Section + accessory: Button(Danger)` を末尾配置。**この Section が唯一の Section 使用箇所**。Section 子は `TextDisplay("生成中...")` 1 つ | Discord Section は accessory 必須なので、ボタンが要る間しか Section を使えない |
@@ -79,10 +79,11 @@ ChatContainerBuilder (NEW)
         ├ buildFinalContainer(text, model, color, metadata, isLast): ContainerBuilder
         ├ buildErrorContainer(message): ContainerBuilder
         ├ buildStoppedContainer(text, model, color, isLast): ContainerBuilder
-        └ splitTextIntoTextDisplayChunks(text, maxCharsPerChunk, maxChunksPerMessage): string[][]
-                                                                      ↑          ↑
-                                                                      │          └ 配列の配列 = メッセージ単位
-                                                                      └ TextDisplay 単位
+        └ splitTextIntoMessages(text, badgeChars, footerChars): string[]
+                                          ↑           ↑
+                                          │           └ その message の footer 文字数（合計予算から差し引く）
+                                          └ その message の Model badge 文字数（合計予算から差し引く）
+            ※ 戻り値 = message ごとの本文（1 message の全 TextDisplay 合計 ≤ 3800 字を保証）
         │
         ▼
 channel.send / message.edit / message.reply
@@ -95,33 +96,37 @@ channel.send / message.edit / message.reply
 
 ### メッセージ構造のレイアウト例
 
-**Discord Section に関する制約**: Section は `accessory` (Button or Thumbnail) が **required** であり、accessory なしで使うと payload が invalid。完了状態 / 停止状態で「ボタンを消したい」場合は **Section を使わず、Container 直下に Separator + TextDisplay (metadata) を並べる**形にする。Stop button を出す stream 中だけ Section を使う。
+**Discord Section に関する制約**: Section は `accessory` (Button or Thumbnail) が **required** であり、accessory なしで使うと payload が invalid。完了状態 / 停止状態で「ボタンを消したい」場合は **Section を使わず、Container 直下に Separator + TextDisplay (metadata) を並べる**形にする。Stop button を出す stream 中だけ Section を使う。なお discord.js の `SectionBuilder.accessory` は TS 型上 `optional`（`ButtonBuilder | ThumbnailBuilder | undefined`）だが、Discord API プロトコルでは必須。型に従って省略すると送信時にサーバ側エラーになるため、実装では必ず accessory をセットする。
 
-#### ケース A: 短文応答 (≤3800 字), 完了済み, showLlmDetails=true
+#### ケース A: 短文応答 (badge+本文+footer の合計 ≤3800 字), 完了済み, showLlmDetails=true
 
 ```text
 Container (accent: model color)
-├ TextDisplay  "**Model:** GPT-5-mini"           ← モデル badge (1 component)
-├ TextDisplay  "<full response, ≤3800 chars>"   ← 本文 (model badge 分は budget から除外)
+├ TextDisplay  "**Model:** GPT-5-mini"           ← モデル badge
+├ TextDisplay  "<full response>"                 ← 本文 (badge + footer と合算して 1 message 合計 ≤3800 字)
 ├ Separator (small, no divider)
 └ TextDisplay  "Tokens: 123+456=579 | Cost: $0.001 | Latency: 1234ms | TPS: 45.2"
 ```
 
 #### ケース B: 長文応答 (~10000 字), 完了済み
 
+全 TextDisplay 合計が 1 message 4000 字上限なので、**本文は 1 message あたり ~3700 字**（badge/footer 予約分を引いた残り）で分割する。
+
 ```text
 [Message 1]
 Container (accent: model color)
-├ TextDisplay  "**Model:** xxx"
-├ TextDisplay  "<chars 1..3800>"
-├ TextDisplay  "<chars 3801..7600>"
-└ TextDisplay  "<chars 7601..10000>"
+├ TextDisplay  "**Model:** xxx"          ← badge
+└ TextDisplay  "<本文 chars 1..~3700>"   ← この message の合計 ≤3800 字
 
 [Message 2]
 Container (accent: model color)
-├ TextDisplay  "<chars 10001..end>"
+└ TextDisplay  "<本文 chars ~3701..~7400>"
+
+[Message 3]
+Container (accent: model color)
+├ TextDisplay  "<本文 chars ~7401..end>"
 ├ Separator
-└ TextDisplay  "ページ 2/2 | Tokens: ... | Cost: $..."
+└ TextDisplay  "ページ 3/3 | Tokens: ... | Cost: $..."   ← footer 分も合計予算に含む
 ```
 
 #### ケース C: ストリーミング途中 (生成中)
@@ -192,24 +197,26 @@ Container (accent: model color)
 
 ### TextDisplay chunking ロジック
 
+**制約**: Discord は **1 message 内の全 TextDisplay の合計文字数を 4000 字**に制限する（per-component ではなく、discord.js guide の仕様）。よって分割は「1 message = 合計 3800 字」を単位にする。Model badge と metadata footer もこの合計に含むため、本文の実効予算はそれらを引いた残り。
+
 ```ts
 // chatContainerBuilder.ts
-const MAX_CHARS_PER_TEXT_DISPLAY = 3800;
-const MAX_TEXT_DISPLAYS_PER_MESSAGE = 3;
+const MAX_TOTAL_CHARS_PER_MESSAGE = 3800; // 1 message の全 TextDisplay 合計（Discord 4000 から安全マージン）
 
-export function splitTextIntoMessages(text: string): string[][] {
-  // 1. 改行優先で 3800 字単位 chunk に分割 (現状の splitTextIntoChunks ロジック流用)
-  const chunks = splitByCharCount(text, MAX_CHARS_PER_TEXT_DISPLAY);
-  // 2. MAX_TEXT_DISPLAYS_PER_MESSAGE ごとに message にグルーピング
-  const messages: string[][] = [];
-  for (let i = 0; i < chunks.length; i += MAX_TEXT_DISPLAYS_PER_MESSAGE) {
-    messages.push(chunks.slice(i, i + MAX_TEXT_DISPLAYS_PER_MESSAGE));
-  }
-  return messages;
+// 本文を「1 message に載る本文量」ごとに分割。各要素 = 1 message の本文。
+// badgeChars / footerChars はその message に同居する badge・footer の文字数（合計予算から差し引く）。
+export function splitTextIntoMessages(
+  text: string,
+  badgeChars: number,
+  footerChars: number,
+): string[] {
+  const bodyBudget = MAX_TOTAL_CHARS_PER_MESSAGE - badgeChars - footerChars;
+  // 改行優先で bodyBudget 単位に分割（現状の splitTextIntoChunks ロジック流用）。各 chunk が 1 message の本文。
+  return splitByCharCount(text, bodyBudget);
 }
 ```
 
-注: **Model badge `**Model:** xxx` は別 TextDisplay として分離** (上記のレイアウト例参照)。これにより本文 chunk の `MAX_CHARS_PER_TEXT_DISPLAY = 3800` 予算は badge 分を考慮しなくて済む。badge TextDisplay は ~50 字程度で、独立 component として 40 components 枠を 1 つ消費するが余裕あり。
+注: **Model badge `**Model:** xxx` と metadata footer も合計 4000 字予算に含まれる**。badge は ~30 字・footer は ~80 字程度なので、本文の実効上限は 1 message あたり ~3700 字前後。components 数（badge + 本文 + Separator + footer/Section ≈ 4〜5）は message 全体 40 枠に十分収まる。本文を複数 TextDisplay に割っても合計予算は変わらないため、1 message は基本 1 本文 TextDisplay で良い。
 
 ### Streaming flow の擬似コード
 
@@ -252,12 +259,12 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 `updateStreamingMessages` は:
 
-1. `splitTextIntoMessages(fullText)` で必要 message 数を計算
+1. `splitTextIntoMessages(fullText, badgeChars, footerChars)` で必要 message 数を計算（各 message の全 TextDisplay 合計 ≤ 3800 字）
 2. 不足分は新規送信、余剰分は削除
 3. 各 message を V2 Container で edit
 4. 「最後の message にのみ Section + Stop Button」「他の message は Section なし」のルールに従う
 5. **PATCH rate limit 対策**: 各 edit は最低 `STREAM_UPDATE_INTERVAL = 2000ms` 間隔。Discord から 429 を受けた場合は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect、なければ次の 2 秒サイクルまで待機)。Bot がクラッシュしても次回起動時に message が中途半端な状態で残るリスクは許容 (再生成すれば良い、別 spec の conversation-context で取扱い)
-6. **メッセージ追加時の "停止ボタン移動コスト"**: chunks が `MAX_TEXT_DISPLAYS_PER_MESSAGE` を超えて新 message が作られた瞬間、前 message から Section を除去 (edit 1 回) + 新 message を Section 付きで送信 (1 回) で計 2 操作。これは新 message 追加時のみなので頻度は低い。stream 中に発生する場合でも `STREAM_UPDATE_INTERVAL` の debounce 内で同じサイクルで処理
+6. **メッセージ追加時の "停止ボタン移動コスト"**: 本文が 1 message の合計予算（~3700 字）を超えて新 message が作られた瞬間、前 message から Section を除去 (edit 1 回) + 新 message を Section 付きで送信 (1 回) で計 2 操作。これは新 message 追加時のみなので頻度は低い。stream 中に発生する場合でも `STREAM_UPDATE_INTERVAL` の debounce 内で同じサイクルで処理
 
 ### 既存テストの破壊範囲
 
@@ -265,39 +272,12 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - `tests/unit/utils/embedBuilder.test.ts`: `createStreamingEmbed` / `splitTextToMultipleMessages` の test を削除、chunking 関連は `chatContainerBuilder.test.ts` 側に移植
 - `tests/unit/bot/events/interactionCreate.test.ts`: 停止ボタン押下後の reply 検証を V2 化
 
-## 参照
-
-### Discord 公式
-
-- [Components Reference](https://docs.discord.com/developers/components/reference) — `Container` / `TextDisplay` / `Section` / `Separator` / `MediaGallery` / `File` / `Label` の仕様
-- [Using Message Components](https://docs.discord.com/developers/components/using-message-components)
-- [discord-api-docs source](https://github.com/discord/discord-api-docs/blob/main/developers/components/reference.mdx) — 公式 mdx の生ソース、`Section: 1-3 children`、`MediaGallery: 1-10 items`、`Messages: up to 40 total components` 等の数値ソース
-- [Discord API Change Log](https://docs.discord.com/developers/change-log) — V2 リリース 2025-04-22
-
-### 関連 discord.js
-
-- [discord.js PR #10781](https://github.com/discordjs/discord.js/pull/10781) — V2 builders 導入
-- [Display Components guide (discord.js)](https://discordjs.guide/legacy/popular-topics/display-components)
-- [InteractionReplyOptions (`ephemeral` deprecation)](https://discord.js.org/docs/packages/discord.js/14.19.2/InteractionReplyOptions:Interface)
-
-### 他 bot 実装例 (本 spec の判断根拠)
-
-- [discordjs/discord-toolkit-bot src/index.ts](https://github.com/discordjs/discord-toolkit-bot/blob/main/src/index.ts) — Container + TextDisplay + Section/Button のシンプル構成、認可された参照実装
-- [sveltejs/discord-bot src/commands/docs/docs.ts](https://github.com/sveltejs/discord-bot/blob/main/src/commands/docs/docs.ts) — Section + TextDisplay (1600 字 slice) + Link Button "Continue Reading" の preview パターン
-- [TripSit/TripBot src/discord/utils/ai/](https://github.com/TripSit/TripBot/tree/main/src/discord/utils/ai) — AI bot の Container + 複数 TextDisplay + Separator 反復パターン、content slice 1500 と aggressive truncate
-- [finki-hub/discord-bot src/common/utils/pagination.ts](https://github.com/finki-hub/discord-bot/blob/main/src/common/utils/pagination.ts) — V2 + button pagination の最小実装
-
-### Discord API 既知制約 (Issues)
-
-- [discord-api-docs#7528 — >64 media items in V2 → 500 error](https://github.com/discord/discord-api-docs/issues/7528) — 媒体数上限の挙動
-- [discord-api-docs#7910 — DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE ignores IS_COMPONENTS_V2 (closed)](https://github.com/discord/discord-api-docs/issues/7910) — defer + V2 の歴史的バグ、現在は解決
-
 ## Tasks
 
 ### Phase A: builder の新設 (multimodal 未着手でも先行可能)
 
 - [ ] `src/utils/chatContainerBuilder.ts` の API 設計確定 (build* 4 種 + splitTextIntoMessages)
-- [ ] chunking ロジック実装 (`MAX_CHARS_PER_TEXT_DISPLAY=3800`, `MAX_TEXT_DISPLAYS_PER_MESSAGE=3`)
+- [ ] chunking ロジック実装 (`MAX_TOTAL_CHARS_PER_MESSAGE=3800` = 1 message の全 TextDisplay 合計。badge/footer 文字数を差し引いた残りが本文予算)
 - [ ] build* 関数群実装
 - [ ] unit test (`tests/unit/utils/chatContainerBuilder.test.ts`)
 
@@ -328,13 +308,15 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 ## Open Questions / Risks
 
-- **TextDisplay の真の char limit**: 公式未明記、community 報告ベースで 4000。`MAX_CHARS_PER_TEXT_DISPLAY=3800` が安全マージン込みで現実的だが、Discord 側の挙動変化で 3800 がはみ出る可能性。Phase A の unit test では mock のため検出できない、Phase C の手動回帰で長文 (1万字以上) を流して挙動確認必須。
-- **40 components/message 枠**: 1 Container + 1 Model badge TextDisplay + 3 本文 TextDisplay + 1 Separator + 1 Section (内 1 TextDisplay + 1 Button) = 9 components/message。十分余裕あり。
+- **TextDisplay の char limit（確定: 1 message 合計 4000 字）**: discord.js guide が「The amount of text across all text display components cannot exceed 4000 characters」と明記＝**per-component ではなく 1 message 内の全 TextDisplay 合計 4000 字**。本設計はこれを前提に `MAX_TOTAL_CHARS_PER_MESSAGE=3800`（200 字マージン）で **1 message ≈ 本文 3700 字**に分割する（badge/footer も合計予算に含む）。公式 Component Reference 自体には数値の明記がないため、Phase C の手動回帰で長文 (1万字以上) を実機に流し、合計 4000 で正しく次 message に送られることを最終確認する。
+- **components 数の枠（ネスト子も数える）**: 完了時 = Container + badge + 本文 + Separator + footer TextDisplay = **5**、生成中 = Container + badge + 本文 + Separator + Section + Section内TextDisplay + Button = **7**。いずれも下記の上限内。本文を複数 TextDisplay に割っても合計文字 4000 制約が先に効くため、通常 1 本文 TextDisplay。
+- **Container 内の component 数上限 = 10**: discord-api-types の `APIContainerComponent` JSDoc に「A Container is a top-level layout component that holds **up to 10 components**」と明記（Discord 公式 docs 準拠）。Section は別途 1–3 子の制約。**メッセージ全体は 40 components**（ネスト子も含む）。現設計（1 Container = 5〜7 components）は Container 10・メッセージ 40 のいずれにも余裕がある。
 - **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。`STREAM_UPDATE_INTERVAL = 2000ms` の debounce 内で同サイクル処理するため、Discord channel-level PATCH rate limit (5/5s) には収まるはず。429 受信時は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect)。
 - **multimodal 統合のタイミングずれ**: V2 spec を先に書き、multimodal 着手後に Phase B 以降。multimodal の API が固まる前に Phase A を着手する場合、`MediaGallery` / `File` のスロットは builder 側に「将来追加」枠だけ用意して中身は noop。
 - **stream 中の partial markdown**: Markdown table や code block が途中で切れている場合、TextDisplay 末尾でレンダリングが崩れる。現状 embed でも同じ問題があり許容しているが、V2 で chunk 境界が増えると目立つ可能性。気になるなら chunking ロジックで「\`\`\`block を尊重して切る」ヒューリスティック追加検討、本 spec scope 外。
 - **ephemeral 経路の漏れ**: 本 spec では chat 返信が ephemeral ではないため影響なしの見込みだが、`ephemeral: true` を grep して deprecated 警告が残っていないか念のため確認 (Phase B 着手時)。
 - **`code-execution` change との連携**: 本 spec が提供する `chatContainerBuilder` の streaming updater は code-execution の tool call 中の進捗表示 (「コード実行中...」) で利用される。code-execution が `chat-response-v2` 完成前に Phase C に着手する場合は updater stub + legacy 描画フォールバックが必要。共通 primitive は本 spec の builder にのみ集約し、code-execution は **独自の `codeContainerBuilder` (tool 結果出力専用)** を別途持つ (chat の text stream と code 実行結果は構造的に異なるため、無理に共通化しない)。
+- **`conversation-context` / `model-compare` との V2 一貫性**: ユーザ方針により、回答再生成 UI（[conversation-context](../conversation-context/design.md)）とモデル比較表示（[model-compare](../model-compare/design.md)）も Components V2 で組む。両者は本 spec の `chatContainerBuilder`（特に `buildFinalContainer` / 前回応答の折りたたみ相当・モデル別 Container）を再利用する想定で、本 spec が先行して builder を確定させる。再生成ボタンや「比較」用の Section accessory は本 spec の停止ボタンと同じ「Section は accessory 必須」「allowedMentions 強制」ルールに従う。なお Regenerate ボタン等の **新規インタラクションのハンドラ実装**は引き続き各 change 側の責務（本 spec は描画 primitive のみ提供）。
 
 ## Out of Scope (将来別 spec 候補)
 
@@ -342,3 +324,30 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - **`/help` `/status` `/config` `/model` の V2 化**: 静的・設定系で V2 の利得が小さく、移行コストに見合わない。
 - **`releaseNotificationService` の V2 化**: リリースノートは embed の構造が読みやすく、また「ユーザがリアクションで反応する」用途で legacy 互換が望ましい。
 - **stream chunking の markdown 賢化**: ` ``` ` block / table の境界を尊重した chunking。Phase C の手動回帰で実害を確認してから判断。
+
+## 参照
+
+### Discord 公式
+
+- [Components Reference](https://docs.discord.com/developers/components/reference) — `Container` / `TextDisplay` / `Section` / `Separator` / `MediaGallery` / `File` / `Label` の仕様
+- [Using Message Components](https://docs.discord.com/developers/components/using-message-components)
+- [discord-api-docs source](https://github.com/discord/discord-api-docs/blob/main/developers/components/reference.mdx) — 公式 mdx の生ソース、`Section: 1-3 children`、`MediaGallery: 1-10 items`、`Messages: up to 40 total components` 等の数値ソース
+- [Discord API Change Log](https://docs.discord.com/developers/change-log) — V2 リリース 2025-04-22
+
+### 関連 discord.js
+
+- [discord.js PR #10781](https://github.com/discordjs/discord.js/pull/10781) — V2 builders 導入
+- [Display Components guide (discord.js)](https://discordjs.guide/legacy/popular-topics/display-components)
+- [InteractionReplyOptions (`ephemeral` deprecation)](https://discord.js.org/docs/packages/discord.js/14.19.2/InteractionReplyOptions:Interface)
+
+### 他 bot 実装例 (本 spec の判断根拠)
+
+- [discordjs/discord-toolkit-bot src/index.ts](https://github.com/discordjs/discord-toolkit-bot/blob/main/src/index.ts) — Container + TextDisplay + Section/Button のシンプル構成、認可された参照実装
+- [sveltejs/discord-bot src/commands/docs/docs.ts](https://github.com/sveltejs/discord-bot/blob/main/src/commands/docs/docs.ts) — Section + TextDisplay (1600 字 slice) + Link Button "Continue Reading" の preview パターン
+- [TripSit/TripBot src/discord/utils/ai/](https://github.com/TripSit/TripBot/tree/main/src/discord/utils/ai) — AI bot の Container + 複数 TextDisplay + Separator 反復パターン、content slice 1500 と aggressive truncate
+- [finki-hub/discord-bot src/common/utils/pagination.ts](https://github.com/finki-hub/discord-bot/blob/main/src/common/utils/pagination.ts) — V2 + button pagination の最小実装
+
+### Discord API 既知制約 (Issues)
+
+- [discord-api-docs#7528 — >64 media items in V2 → 500 error](https://github.com/discord/discord-api-docs/issues/7528) — 媒体数上限の挙動
+- [discord-api-docs#7910 — DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE ignores IS_COMPONENTS_V2 (closed)](https://github.com/discord/discord-api-docs/issues/7910) — defer + V2 の歴史的バグ、現在は解決

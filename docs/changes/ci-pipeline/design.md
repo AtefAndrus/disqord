@@ -9,29 +9,6 @@
 
 本 change では「品質 CI の新設」「自前 workflow の供給網 hardening」「workflow 静的解析（actionlint + zizmor）」「main ブランチ保護で CI をゲート化」「mise.toml を bun バージョンの SSOT 化」「Dependabot を全エコシステム1 PR 集約化」をまとめて行う。
 
-## 前提（調査で判明した現状）
-
-着手前の事実確認。ご認識との相違を含む。
-
-- **デプロイ自動化は既存**: `.github/workflows/deploy.yml` が `release: published` で Coolify webhook を叩く。CI が「全く無い」のではなく、品質ゲートだけが無い。
-- **Dependabot は既に 3 エコシステム対応済み**: `.github/dependabot.yml` は `bun` / `github-actions` / `docker` を設定済みで稼働中。github-actions の PR が出ないのは `deploy.yml` が第三者 `uses:` を一切使わず `run: curl` のみだから、docker の PR が出ないのは `oven/bun:1.3-slim` に対し bun の新タグが未リリースだから。「bun しか見ていない」のではなく「他は現状 bump 対象がゼロ」なだけ。
-- **既存のセキュリティ設定（良好）**: 公開リポジトリ。Actions `default_workflow_permissions=read`、`can_approve_pull_request_reviews=false`。secret scanning + push protection 有効。Dependabot security updates 有効。
-- **穴**: ① Actions `allowed_actions=all`（任意 action 実行可）② `sha_pinning_required=false`（SHA 固定が未強制）③ **main にブランチ保護が無い**（CI を作っても必須ゲートにならない）。
-- **bun バージョンの分散**: `mise.toml`（`bun = "1.3"`）/ `Dockerfile`（`FROM oven/bun:1.3-slim`）/ `package.json`（`engines.bun = ">=1.3"`）/ 将来の CI に重複。
-- **テスト規模**: `tests/` 16 ファイル、`src/` 33 ファイル。`bun test` で完結（外部サービス不要、SQLite はインメモリ）。
-
-## ツール検証で確定した事実
-
-設計判断の根拠（裏取り済み。入力名・挙動は実 `action.yml` / 公式 docs で確認）。
-
-- **Dependabot は複数エコシステムを1 PR に集約可能**（2025-07 GA の `multi-ecosystem-groups`）。Renovate 乗り換えは不要。
-- **`oven-sh/setup-bun` は `mise.toml` を読めない**（`bun-version-file` が読めるのは `package.json` / `.bun-version` / `.tool-versions`）。CI を mise SSOT にするなら `jdx/mise-action` に置き換える。
-- **`jdx/mise-action` は `install_args` で対象ツールを限定できる**（例: `install_args: bun` で bun のみインストール、`mise.toml` の他ツールは入れない）。
-- **`zizmorcore/zizmor-action` の既定は `advanced-security: true`**（SARIF を GHAS にアップロードするため `security-events: write` を要求）/ `online-audits: true` / `version: latest`。SARIF を使わず CI fail のみで運用するなら入力で明示的に無効化が必要。
-- **Dependabot に mise 対応は無い** → `mise.toml` の `bun` バージョン自体は Dependabot で bump できない（手動 bump）。
-- **`rhysd/actionlint` は `action.yml` を持たず `uses:` 不可**（docker image / バイナリ実行）。**`zizmorcore/zizmor-action` は `action.yml` あり**（SHA 固定で利用可）。
-- **`sha_pinning_required` は `uses:` の action 参照にのみ効く**。docker イメージ / Dockerfile base / DL バイナリ / mise が入れるツールには効かない。
-
 ## Goals / Non-Goals
 
 **Goals:**
@@ -88,6 +65,25 @@
 
 ## Design
 
+### 現状と前提
+
+- デプロイ自動化は既存。`.github/workflows/deploy.yml` が `release: published` で Coolify webhook を叩く。無いのは品質ゲートだけ。
+- Dependabot は `bun` / `github-actions` / `docker` の 3 エコシステムを設定済みで稼働中。github-actions の PR が出ないのは `deploy.yml` が第三者 `uses:` を使わず `run: curl` のみのため、docker の PR が出ないのは `oven/bun:1.3-slim` に対し bun の新タグが未リリースのため。
+- 既存セキュリティ設定: 公開リポジトリ、Actions `default_workflow_permissions=read`、`can_approve_pull_request_reviews=false`、secret scanning + push protection 有効、Dependabot security updates 有効。
+- 残る穴: ① Actions `allowed_actions=all` ② `sha_pinning_required=false` ③ main にブランチ保護が無い。
+- bun バージョンが `mise.toml`（`bun = "1.3"`）/ `Dockerfile`（`FROM oven/bun:1.3-slim`）/ `package.json`（`engines.bun = ">=1.3"`）に分散。
+- テスト規模: `tests/` 16 ファイル、`src/` 33 ファイル。`bun test` で完結（外部サービス不要、SQLite はインメモリ）。
+
+### 技術メモ
+
+- Dependabot は `multi-ecosystem-groups`（2025-07 GA）で複数エコシステムを 1 PR に集約できる。Renovate 乗り換えは不要。
+- `oven-sh/setup-bun` は `mise.toml` を読めない（`bun-version-file` は `package.json` / `.bun-version` / `.tool-versions` のみ）。mise SSOT にするなら `jdx/mise-action` を使う。
+- `jdx/mise-action` は `install_args` で対象ツールを限定できる（`install_args: bun` で bun のみ）。
+- `zizmorcore/zizmor-action` の既定は `advanced-security: true`（SARIF を GHAS にアップロードするため `security-events: write` を要求）/ `online-audits: true` / `version: latest`。CI fail のみで運用するには入力で無効化する。
+- Dependabot は mise 非対応。`mise.toml` の `bun` バージョンは手動 bump。
+- `rhysd/actionlint` は `action.yml` を持たず `uses:` 不可（docker image / バイナリ実行）。`zizmorcore/zizmor-action` は `action.yml` あり（SHA 固定可）。
+- `sha_pinning_required` は `uses:` の action 参照にのみ効く。docker イメージ / Dockerfile base / DL バイナリ / mise tool には効かない。
+
 ### 変更/新規ファイル
 
 **新規:**
@@ -108,7 +104,7 @@
 
 ### CI workflow スケルトン（`.github/workflows/ci.yml`）
 
-> action の SHA と zizmor/mise の tool 版は 2026-06-02 時点で固定済み。actionlint の docker digest（`<DIGEST>`）と base image digest のみ実装時に解決する。
+> action の SHA・zizmor/mise の tool 版・actionlint の docker digest は固定値（actionlint digest は `docker.io/rhysd/actionlint:1.7.12` の **multi-arch OCI image index**、amd64/arm64 両対応）。Dockerfile base image の digest のみ実装時に `docker pull oven/bun:1.3-slim` で解決する。
 
 ```yaml
 name: CI
@@ -129,7 +125,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       # bun の minor 線が mise.toml(SSOT) / Dockerfile / package.json で一致するか検証（bun 不要・純テキスト）
@@ -143,9 +139,9 @@ jobs:
             echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
           fi
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
-      - uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          version: "2026.5.18"  # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
+          version: "2026.6.0"  # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
           install_args: bun     # bun のみ。git-cliff は CI に入れない
       - run: bun install --frozen-lockfile
       - run: bun run lint        # biome check .
@@ -156,13 +152,13 @@ jobs:
   actions-security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: actionlint
         run: |
           docker run --rm -v "$PWD:/repo" --workdir /repo \
-            rhysd/actionlint:1.7.12@sha256:<DIGEST> -color
+            docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
       - uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
         with:
           version: "1.25.2"          # zizmor CLI 版を固定（既定 latest=可変）
@@ -172,7 +168,7 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - run: docker build -t disqord:ci .
@@ -303,10 +299,10 @@ JSON
 - [ ] `.github/workflows/ci.yml` を新規作成（quality（drift-check ステップ含む）/ actions-security / docker-build、SHA 固定・最小権限・persist-credentials:false・concurrency）
 - [ ] CI の bun を `jdx/mise-action`（`install_args: bun`）で取得（setup-bun は使わない、git-cliff を CI に入れない）
 - [ ] zizmor-action に `advanced-security: false` / `online-audits: false` / `version` 固定を設定し、findings で CI が fail することを確認
-- [ ] actionlint docker image の digest を解決して `<DIGEST>` を埋める
+- [x] actionlint docker image の digest を固定（`sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` = `docker.io/rhysd/actionlint:1.7.12` の multi-arch OCI image index。`docker run` がこの index を解決し amd64/arm64 どちらの runner でも動く）
 - [ ] Dockerfile base を `oven/bun:1.3-slim@sha256:<digest>` に digest 固定（digest を解決）
 - [ ] bun version drift-check を実 mise.toml / Dockerfile / package.json で検証（jq + アンカー grep、minor 線比較、空値ガード）。mise 側は `[tools]` テーブル内の `bun` のみを拾うこと、Dockerfile 側は canonical な `FROM oven/bun:...` 形を前提とすることを確認/明記
-- [ ] `jdx/mise-action` が `[settings] env_file = ".env"` 不在の CI で警告/失敗しないか確認（必要なら空 `.env` 作成 or ガード）
+- [x] `[settings] env_file = ".env"` 不在時の挙動: mise v2026.6.0 では `.env` 欠落は警告なく無視され exit 0。`install_args: bun` の install は env を要求しないため、空 `.env` 作成ガードは不要
 - [ ] CI を PR で走らせ、quality / actions-security / docker-build が全て緑になることを確認
 - [ ] `.github/dependabot.yml` を `multi-ecosystem-groups` 化（`oven/bun` は ignore しない）
 - [ ] bun エコシステムが multi-ecosystem-group に参加できるか実 PR で確認（不可なら別グループにフォールバック）
@@ -326,7 +322,7 @@ JSON
 - **「赤 PR をナッジに」は未検証**: bun minor 上げを Dependabot が minor タグ bump として提案するか（=drift-check を赤にしてナッジになるか）は Dependabot の保証された挙動ではない。digest のみ更新でタグ据え置きの可能性があり、その場合ナッジは発生しない。bun minor の検知は手動監視 or 別途 scheduled チェックを前提に置く。fixture/実 PR で挙動を確認するまで設計の前提にしない。
 - **base image digest 追従の検証**: digest 固定した `oven/bun` を Dependabot が digest 更新できるか（tag+digest 併記時の挙動）を実装時に確認。追従しないなら手動 digest 更新 or digest 固定を外して理由を明記。
 - **Dependabot 管理外の pin が stale 化する**: actionlint image digest（`run:` 文字列内）・zizmor CLI `version`・mise `version` は Dependabot が更新しない。手動 bump を怠ると古い tool に固定され続ける。運用メモ + 定期確認で補う。
-- **mise-action と `env_file = ".env"`**: CI に `.env` が無いため mise が警告/失敗する可能性。`install_args: bun` の install 自体は env を要求しない想定だが要検証。失敗するなら CI 先頭で空 `.env` を作るか mise 設定をガードする。
+- **mise-action と `env_file = ".env"`**: mise v2026.6.0 では `.env` 欠落時も警告なく exit 0 で正常終了するため、空 `.env` 作成ガードは不要（`install_args: bun` の install は env を要求しない）。
 - **multi-ecosystem-groups の bun 参加可否**: 公式例は npm/docker/actions。bun エコシステムが同グループに合流できるか未確認。不可なら bun を単独グループにフォールバック（「完全1 PR」が崩れる）。
 - **Dependabot security updates は別 PR で来得る**: 「全部1 PR」は scheduled version updates の範囲。脆弱性駆動の security update は grouping/cadence に従わず単独 PR で来る場合がある。
 - **`sha_pinning_required` の適用範囲**: `uses:` の action 参照のみ強制。actionlint の docker image / Dockerfile base / DL バイナリ / mise tool は対象外で、digest/version pin の自前規律に依存する。
@@ -337,17 +333,19 @@ JSON
 - **zizmor の online audit**: `online-audits: false` で外部送信を断つが既知悪性 action 照合等の検出力が下がる。必要なら token を絞って有効化。
 - **git-cliff `latest`**: `mise.toml` の `"github:orhun/git-cliff" = "latest"` は可変。CI は `install_args: bun` で取り込まないため CI 上の懸念は解消するが、release フロー（ローカル/手動）では可変のまま。版 pin が望ましい（別 change の quick-win）。
 - **Coolify ビルドとの乖離**: CI の `docker build` は Dockerfile 破損を捕まえるが Coolify 側の build 引数/コンテキスト差異までは保証しない。
+- **branch protection API vs rulesets（将来検討）**: 本 change は旧 branch-protection API（`required_status_checks.checks`）を使う。これは 2026-06 時点で非推奨ではない（`contexts` フィールドのみ段階的廃止予定で、本 change は既に `checks` を使用）。ただし新規設定は **repository rulesets** が推奨されつつある（複数ルールの同時適用・bypass actor 設定・audit log 統合が可能、`app_id` 相当は rulesets では `integration_id`）。solo 運用の公開リポジトリでは今すぐ移行する実益は薄いため旧 API で着手し、必要が出たら rulesets へ移行する。
+- **GitHub 2026 Actions セキュリティ機能（GA 後に再評価）**: 2026-03 発表のロードマップに以下が含まれる。いずれも本 change の方針の上位互換になり得るため、GA 後に採用を検討する。①**Workflow lockfile**（`dependencies:` で workflow 依存を SHA+hash ロック＝`sha_pinning_required` の上位互換）②**Scoped secrets**（secret を workflow/branch/repo 粒度にバインド＝`COOLIFY_WEBHOOK` 等の scope 絞り）③**Native egress firewall**（hosted runner の L7 egress 制御＝不採用とした harden-runner の代替候補）④**Immutable actions publishing**（tag 不変化）。
 
 ## References
 
 - 既存 workflow: `.github/workflows/deploy.yml`（release → Coolify webhook）
 - 既存 Dependabot: `.github/dependabot.yml`（bun/github-actions/docker、稼働中）
-- 参照バージョン（2026-06-02 時点）:
-  - actions/checkout v6.0.2 (`de0fac2e4500dabe0009e67214ff5f5447ce83dd`)
-  - jdx/mise-action v4.0.1 (`1648a7812b9aeae629881980618f079932869151`) / mise 本体 latest v2026.5.18
-  - zizmorcore/zizmor-action v0.5.6 (`5f14fd08f7cf1cb1609c1e344975f152c7ee938d`) / zizmor CLI latest v1.25.2
-  - rhysd/actionlint v1.7.12 (`914e7df21a07ef503a81201c76d2b11c789d3fca`、docker digest は実装時に解決)
-  - GitHub Actions app_id: `15368`
+- 参照バージョン（2026-06-05 時点）:
+  - actions/checkout v6.0.3 (`df4cb1c069e1874edd31b4311f1884172cec0e10`)
+  - jdx/mise-action v4.1.0 (`dba19683ed58901619b14f395a24841710cb4925`) / mise 本体 v2026.6.0
+  - zizmorcore/zizmor-action v0.5.6 (`5f14fd08f7cf1cb1609c1e344975f152c7ee938d`) / zizmor CLI v1.25.2
+  - rhysd/actionlint v1.7.12 (`914e7df21a07ef503a81201c76d2b11c789d3fca`、docker digest `sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` = `docker.io/rhysd/actionlint:1.7.12` の multi-arch OCI image index、amd64/arm64 両対応)
+  - GitHub Actions app_id: `15368`（実値は CI 初回 run 後に確認）
 - Dependabot multi-ecosystem: <https://docs.github.com/en/code-security/dependabot/working-with-dependabot/configuring-multi-ecosystem-updates>
 - Dependabot multi-ecosystem GA 告知: <https://github.blog/changelog/2025-07-01-single-pull-request-for-dependabot-multi-ecosystem-support/>
 - Branch protection API: <https://docs.github.com/en/rest/branches/branch-protection>
@@ -355,3 +353,5 @@ JSON
 - zizmor: <https://github.com/zizmorcore/zizmor>
 - actionlint: <https://github.com/rhysd/actionlint>
 - GitHub Actions security hardening: <https://docs.github.com/actions/security-guides/security-hardening-for-github-actions>
+- tj-actions/changed-files サプライチェーン事件（CVE-2025-30066、2025-03。tag 書き換えで全タグが汚染され secret を CI ログに流出＝SHA 固定が唯一の有効策だった実証例）: <https://www.cve.org/CVERecord?id=CVE-2025-30066>
+- GitHub Actions セキュリティ 2026 ロードマップ（Workflow lockfile / Scoped secrets / Native egress firewall / Immutable actions）: <https://github.blog/news-insights/product-news/>

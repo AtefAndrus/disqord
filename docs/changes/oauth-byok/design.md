@@ -35,7 +35,7 @@ OAuth PKCE でユーザーまたは Guild 管理者が OpenRouter アカウン�
 | フォールバック | デフォルトキー使用（設定可能） | `ALLOW_UNAUTHENTICATED` で制御 |
 | OAuth state 管理 | インメモリ Map + TTL | 短命（10分）のため DB 保存は不要 |
 | コールバック方式 | 既存 HTTP サーバーに `/auth/callback` を追加 | 新規サーバー不要 |
-| キー検証 | 接続時に `/api/v1/credits` を呼んで検証 | キーの有効性を即時確認 |
+| キー検証 | 接続時に `GET /api/v1/key`（Bearer = 取得したユーザキー）を呼んで検証 | OAuth で得たユーザキーで直接呼べる。`/api/v1/credits` は Management key 要件のため OAuth キーだと 401 になる可能性があり不採用（実装時に実キーで両方を試して最終確定する） |
 | DB テーブル設計 | `api_keys` 1テーブル + `scope` カラム | user/guild を統一管理。テーブル分割は不要な複雑さ |
 
 ## Design
@@ -63,16 +63,25 @@ Discord                    Bot                     OpenRouter
   │                         │  POST /api/v1/auth/keys  │
   │                         │  (code + code_verifier)  │
   │                         ├─────────────────────────>│
-  │                         │  { key: "sk-or-..." }    │
+  │                         │  { key, user_id }        │
   │                         │<─────────────────────────┤
   │                         │                          │
+  │                         │  GET /api/v1/key で検証  │
   │                         │  キーを暗号化して DB 保存 │
-  │                         │  GET /api/v1/credits     │
-  │                         │  で有効性を確認           │
   │                         │                          │
   │  「接続完了」DM          │                          │
   │<────────────────────────┤                          │
 ```
+
+### OpenRouter OAuth エンドポイント（2026-06 時点の現行仕様）
+
+| 段階 | エンドポイント | 内容 |
+| ---- | -------------- | ---- |
+| 認可リダイレクト | `https://openrouter.ai/auth?callback_url=<OAUTH_CALLBACK_URL>&code_challenge=<S256(code_verifier)>&code_challenge_method=S256` | ユーザのブラウザをここへ誘導する。`POST /api/v1/auth/keys/code` は Management key を要する別用途（プログラム的キー生成）で、一般ユーザ向け OAuth フローでは使わない |
+| キー交換 | `POST /api/v1/auth/keys`（body: `{ code, code_verifier, code_challenge_method: "S256" }`） | レスポンスは `{ key: "sk-or-...", user_id }`。`user_id` は OpenRouter 側アカウント識別子で、DB の `owner_id`（= Discord User/Guild ID）とは別物。保存は任意（突合用にログするのは可） |
+| キー検証 | `GET /api/v1/key`（`Authorization: Bearer <取得したキー>`） | 200 で有効、401 で無効。レスポンスに `limit_remaining` / `usage` / `is_free_tier` 等。Management key 不要のため OAuth ユーザキーで直接呼べる |
+
+- **state の引き継ぎ**: CSRF 対策の `state` を OpenRouter の auth URL がそのまま callback に返すかは保証されないため、`callback_url` 自体のクエリに `state` を埋め込み（例: `callback_url=https%3A%2F%2Fbot.example.com%2Fauth%2Fcallback%3Fstate%3D<state>`）、コールバック時に in-memory Map と突合する。auth URL に `state` パラメータを併用できるかは実装時に確認する。
 
 ### キー解決ロジック
 

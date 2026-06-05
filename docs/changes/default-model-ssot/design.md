@@ -30,7 +30,7 @@
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | SSOT の場所 | `src/config/envVars.ts` の `EnvVarDefinition.default` フィールド | 既存 generate-readme.ts が `envVarDefinitions` を import して README に反映する基盤と一致。新規 `constants.ts` を切るより既存構造に乗る方が責務が一貫する |
-| zod fallback | 削除（`.default(...)` を消して `z.string().min(1)` のみ） | envVars.ts が必ず default を埋めるので fallback は同期事故源にしかならない |
+| zod fallback | 削除（`.default(...)` を消して `z.string().min(1)` のみ） | envVars.ts が必ず default を埋めるので fallback は同期事故源にしかならない。zod v4 では `.default()` は input が `undefined` のとき output 型のデフォルトを short-circuit で返す挙動（v3 の input パース挙動は `.prefault()` に移動）だが、本ケースは `undefined` が来ない経路のため `.default()` は dead code であり削除が正しい（v4 と整合） |
 | DB DEFAULT 句 (新 schema 定義) | 撤廃 (`default_model TEXT NOT NULL` のみ) | アプリ設定値を SQL リテラルに埋める設計が悪い。Repository の `create()` 経路で `config.defaultModel` を明示 INSERT |
 | **既存デプロイの DB DEFAULT** | **そのまま残置 (実害なし)** | SQLite は `ALTER TABLE` で DROP DEFAULT を直接サポートしない。table 再作成 migration を打つ手もあるが、Repository が常に `default_model` を明示 INSERT する以上、既存テーブルに残った DEFAULT 句は **dead code** で実害ゼロ。再作成 migration のリスク (downtime、ロックタイミング) を取る価値なし |
 | 既存 DB 行 | 触らない | ユーザが `/config model` で意図的に設定した値かもしれない。一斉書き換えは UX 上のサプライズ |

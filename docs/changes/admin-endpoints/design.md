@@ -35,6 +35,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `/admin/logs` と 
 | Timestamp バリデーション | `/^\d{1,15}$/` + `Number.isSafeInteger && >0` | `Math.abs(Date.now() - NaN)` が `false` 評価される NaN バイパスを塞ぐ |
 | Query 正規化 | `URLSearchParams` パース → key/value 昇順安定ソート → `encodeURIComponent` で `&` 連結 | クライアントとサーバの順序差異を吸収。`+` と `%20` は `URLSearchParams` が両方 space に正規化するため同じ署名になる |
 | HTTP メソッド | GET のみ | 副作用なしの読み取り専用 API。それ以外は 405 + `Allow: GET` |
+| ルーティング実装 | Bun.serve の `routes` オプション（per-method ハンドラ）で `/admin/*` を定義 | 現状の `health.ts` は `fetch(req)` 内で `url.pathname` を手動分岐している。Bun 1.2.3+ の `routes` は `{ "/admin/metrics": { GET: handler } }` のように method 別ハンドラを書ける。**未定義 method の扱いは要検証**（バージョンによっては 404 や `fetch` フォールバックに落ちる既知 issue があるため、405 + `Allow: GET` を返せるか実装時に確認。確実を期すなら各 route で全 method を受けて非 GET を明示的に 405 にする）。`/admin/*` を `routes` で追加し、既存の `/health` `/webhook/github` は `fetch` フォールバックに残すか同時に `routes` へ寄せる（移行は任意・最小差分優先） |
 | ログローテーション実装 | 自前（外部ライブラリなし） | 30 LOC 程度。Bun の `fs.writeSync(fd, ...)` で十分。pino 等を入れると `logger.ts` 全面書き換えが必要 |
 | ログ書込みエラー時の挙動 | `console.error` に 1 回フォールバック報告し、`write()` を no-op 化 | disk full 時に `logger.error()` から二次例外を投げて Bot を落とさない |
 | メトリクス保存 | 1 分粒度 × 60 スロットのリングバッファ + 各スロットに絶対分番号を保持 | 「直近 1 時間」を低コストで返せる。長時間無書込み後でも古いスロットが集計に混入しない |
@@ -61,7 +62,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `/admin/logs` と 
 **変更ファイル:**
 
 - `src/utils/logger.ts` — `console[level]()` 直後に `logFileWriter.write(line)` を追加（遅延初期化）
-- `src/health.ts` — `HttpServerOptions` に `adminApiSecret` / `db` / `databasePath` を追加し、`/admin/logs` `/admin/metrics` ルートを追加（GET 以外は 405 + `Allow: GET`）
+- `src/health.ts` — `HttpServerOptions` に `adminApiSecret` / `db` / `databasePath` を追加し、Bun.serve の `routes` で `/admin/logs` `/admin/metrics` を per-method（GET）定義（GET 以外は Bun 自動 405、`Allow: GET` を明示付与）。既存の `fetch` 分岐（`/health` `/webhook/github`）はフォールバックとして温存可
 - `src/index.ts` — `metrics.attach({ client, db, databasePath })` 呼び出し、`startHttpServer` への DI 追加、shutdown フックに `logFileWriter.flush(); close()`
 - `src/config/envVars.ts` — `ADMIN_API_SECRET` / `LOG_DIR` / `LOG_MAX_BYTES` の env var 定義追加
 - `src/config/index.ts` — `Config` 型と `loadConfig()` に上記を追加
@@ -167,7 +168,7 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 - [ ] `src/http/adminEndpoints.ts` 作成 + テスト（GET 以外は 405 / フィルタ動作 / 401・503 分岐）
 - [ ] `src/utils/logger.ts` に `logFileWriter.write` 追記
 - [ ] `src/config/envVars.ts` / `src/config/index.ts` に env var 追加
-- [ ] `src/health.ts` にルーティング追加（GET 以外は 405）
+- [ ] `src/health.ts` に Bun.serve `routes` で `/admin/*` 追加（per-method GET、GET 以外は自動 405 + `Allow: GET`。未登録 method が `fetch` フォールバックに落ちないか動作確認）
 - [ ] `src/index.ts` で DI とシャットダウンフック配線
 - [ ] `src/llm/openrouter.ts` / `src/bot/events/interactionCreate.ts` にカウンタ挿入
 - [ ] `docs/admin-api.md` 作成

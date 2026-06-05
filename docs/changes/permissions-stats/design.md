@@ -50,8 +50,8 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 
 **参照**:
 
-- [discord.js PermissionsBitField](https://discord.js.org/docs/packages/discord.js/14.16.3/PermissionsBitField:Class) - `member.permissions.has()`で権限チェック
-- [discord.js GuildMember](https://discord.js.org/docs/packages/discord.js/14.16.3/GuildMember:Class) - `member.roles.cache.has(roleId)`でロール所属確認
+- [discord.js PermissionsBitField](https://discord.js.org/docs/packages/discord.js/14.26.3/PermissionsBitField:Class) - `member.permissions.has()`で権限チェック
+- [discord.js GuildMember](https://discord.js.org/docs/packages/discord.js/14.26.3/GuildMember:Class) - `member.roles.cache.has(roleId)`でロール所属確認
 
 ---
 
@@ -144,12 +144,14 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 
 - ログは永続保存（削除機能は将来検討）
 - 個人情報保護: メッセージ内容は保存しない
-- コスト計算: OpenRouterレスポンスの`usage`から取得
+- コスト計算: OpenRouterレスポンスの`usage`から取得。**`usage.cost` は無料モデルでは 0、ストリーミング前段チャンク等では欠落し得る**（公式に「null」と明記はされていない）ため、記録時は `cost ?? 0` でガードする（`usage_logs.cost REAL NOT NULL DEFAULT 0` は null 非許容なので明示フォールバックが必要）
+- `usage` は全レスポンスで自動返却されるため `usage: { include: true }` / `stream_options: { include_usage: true }` は **deprecated**。リクエストに付与しない
+- 追加で `prompt_tokens_details.cached_tokens` / `completion_tokens_details.reasoning_tokens` 等も usage に含まれる（記録するかは任意、初期は基本フィールドのみ）
 - パフォーマンス: インデックスで集計クエリを高速化
 
 **参照**:
 
-- [OpenRouter Usage Data](https://openrouter.ai/docs) - レスポンスの`usage`オブジェクトに`prompt_tokens`, `completion_tokens`, `total_tokens`が含まれる
+- [OpenRouter Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) - レスポンスの`usage`オブジェクトに`prompt_tokens`, `completion_tokens`, `total_tokens`, optional な `cost` が含まれる。`usage:{include:true}` は deprecated（自動返却）
 - [SQLite Aggregate Functions](https://www.sqlite.org/lang_aggfunc.html) - `SUM()`, `AVG()`, `COUNT()`で統計集計
 
 ## Tasks

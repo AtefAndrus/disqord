@@ -65,9 +65,10 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 
 **Phase 1: モデルごとのデフォルトパラメータ**:
 
-1. `/api/v1/models` APIレスポンスに含まれる`default_parameters`を使用
+1. `/api/v1/models` APIレスポンスに含まれる`default_parameters`を使用（**型は `object | null`**。OpenRouter docs の例では `null` のモデルもあるため、取得側で `default_parameters ?? {}` の null ガードをしてからマージする。object の場合の中身は `temperature` / `top_p` / `top_k` / `frequency_penalty` / `presence_penalty` / `repetition_penalty`、いずれも nullable）
 2. `ModelService`でキャッシュ時に保存
 3. `chatService`がモデルのデフォルトパラメータを取得して適用
+4. `supported_parameters`（enum 配列）でモデルが受け付けるパラメータを判定。現行 enum には `temperature` / `top_p` / `top_k` / `min_p` / `top_a` / `frequency_penalty` / `presence_penalty` / `repetition_penalty` / `max_tokens` / `logit_bias` / `logprobs` / `top_logprobs` / `seed` / `response_format` / `structured_outputs` / `stop` / `tools` / `tool_choice` / `parallel_tool_calls` / `reasoning` / `reasoning_effort` / `include_reasoning` / **`web_search_options`** / **`verbosity`** 等が含まれる（実装時に最新を確認）
 
 **Phase 2: ユーザー設定可能パラメータ**:
 
@@ -83,10 +84,19 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 4. User設定でマージ
 5. `supported_parameters`でバリデーション
 
+**JSON パラメータの zod バリデーション（実装方針）:**
+
+- `llm_params TEXT`（JSON 文字列）の検証では、zod v4 の `z.json()`（**存在はするが「任意の JSON 値」用のバリデータで、文字列のパースはしない**）は使わない。`JSON.parse` を **transform 内で素のまま呼ぶと throw が Zod に捕捉されない**点に注意する（公式: "Transform functions should never throw"。`safeParse` でも `SyntaxError` が外に飛ぶ）。次のいずれかにする:
+  - (a) catch して issue 化: `z.string().transform((s, ctx) => { try { return JSON.parse(s); } catch { ctx.addIssue({ code: "custom", message: "invalid JSON" }); return z.NEVER; } }).pipe(z.object({ temperature: z.number().min(0).max(2).optional(), top_p: z.number().optional(), /* ... */ }))`
+  - (b) transform を使わず、先に `JSON.parse` を自前 try/catch してから `z.object({...}).safeParse(parsed)` で検証する（こちらの方が単純）。
+- モデルが受け付けるキーの絞り込みは `z.literal([...supported_parameters])` 由来の許可リストで行うと型推論も union になり安全。
+- zod v4 はパース性能が向上しており、階層マージ後の最終バリデーションを安価に行える。
+
 **参照**:
 
-- [OpenRouter API Documentation](https://openrouter.ai/docs) - チャットパラメータ（temperature、top_pなど）は`/api/v1/chat/completions`のリクエストボディに含める
-- [OpenRouter Models API](https://openrouter.ai/docs) - `/api/v1/models`エンドポイントで`default_parameters`と`supported_parameters`を取得
+- [OpenRouter Chat Completions](https://openrouter.ai/docs/api/api-reference) - チャットパラメータ（temperature、top_pなど）は`/api/v1/chat/completions`のリクエストボディに含める
+- [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/get-models) - `/api/v1/models`で`default_parameters`（temperature/top_p/top_k/frequency_penalty/presence_penalty/repetition_penalty）と`supported_parameters`（enum 配列）を取得。`?supported_parameters=tools` でフィルタも可
+- [Zod v4](https://zod.dev/v4) - JSON 文字列は素の `transform(JSON.parse)` だと throw が Zod に捕捉されないため、上記 (a)（catch して `ctx.addIssue` + `z.NEVER`）または (b)（事前 try/catch → `z.object().safeParse`）で検証する。`z.json()` は任意 JSON 値用で文字列パースはしない。`z.literal([...])` で許可キー集合を定義
 
 **設計メモ**:
 

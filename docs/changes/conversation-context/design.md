@@ -95,18 +95,22 @@ CREATE TABLE response_generations (
 CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 ```
 
-**UI設計**:
+**UI設計（Components V2）**:
 
-- LLM応答の下に再生成ボタンを配置
-- クリック時に同じプロンプトで新しい応答を生成
-- 前の応答は折りたたみフィールドに移動（「前回の応答 (第N世代)」）
-- 最新の応答は常にメインコンテンツに表示
+[chat-response-v2](../chat-response-v2/design.md) でチャット返信が Components V2 化されるため、再生成 UI も V2 で組み、同じ `chatContainerBuilder` を再利用する（embed の「フィールド」は V2 に存在しないため、旧設計の「折りたたみフィールド」を V2 構造へ置き換える）。
+
+- 最新の応答は Container 直下の TextDisplay でメイン表示。
+- 再生成ボタンは **Section accessory**（Button）として配置する。Section は accessory 必須なので、ボタンを置く間だけ Section を使う（chat-response-v2 の停止ボタンと同じ作法）。`custom_id` に対象メッセージ ID を埋める。
+- 前回の応答は **Spoiler 指定した Container**（`ContainerBuilder.setSpoiler(true)`）に「前回の応答 (第N世代)」見出し付きで格納し、クリックで展開する（旧 embed の「折りたたみフィールド」の V2 代替）。最新 Container と前回 Container は、両者の本文が **1 message の全 TextDisplay 合計 4000 字**に収まる場合のみ同一 message の `components` 配列に並べる。超える場合は前回応答を別 message の Spoiler Container にするか、先頭 N 字に切り詰めて表示する。
+- 全送信・edit で `allowedMentions: { parse: [] }` を強制（V2 の TextDisplay は本文と同じ ping 挙動のため）。
+- メッセージは `flags: MessageFlags.IsComponentsV2` で送信（一度 V2 にすると legacy へ edit-back 不可）。
 
 **設計メモ**:
 
 - 世代番号を管理（第1世代、第2世代...）
 - 最大保存世代数: 5世代（古いものは削除）
 - ボタンは5分間有効（タイムアウト後は新規メンションで呼び出し）
+- 1 Container は最大 10 components（discord-api-types: holds up to 10 components）、メッセージ全体は 40 components。components 数は最新 + 前回 spoiler の二段構成でも余裕。**ただし TextDisplay は 1 message 合計 4000 字制約があり、2 世代の本文を同居させると超過しやすい**点が実質的な制約（上記 UI 設計参照）
 
 ---
 
@@ -128,12 +132,14 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 - 編集検知は無制限（時間制限なし）
 - 最新の応答のみを更新（履歴の複雑化を避ける）
 - 会話履歴には編集後の内容を保存
+- `messageUpdate(oldMessage, newMessage)` で `newMessage.content` を読むには `GatewayIntentBits.MessageContent` 特権インテントが必要（guild チャンネルの場合）。現クライアントの intents 設定を実装時に確認する
+- キャッシュにない message は `oldMessage` が **partial**（`.content` が null）になり得る。`oldMessage.partial` チェック、または `oldMessage.content ?? ""` でガードする（v14.16→14.26 で挙動変化なし）
 
 **参照**:
 
 - [OpenRouter Chat Completions API](https://openrouter.ai/docs) - `/api/v1/chat/completions`エンドポイントで会話履歴は`messages`配列に複数メッセージを送信
-- [discord.js Client Events](https://discord.js.org/docs/packages/discord.js/14.16.3/Client:Class) - `messageUpdate`イベントで編集を検知
-- [discord.js Message.fetch](https://discord.js.org/docs/packages/discord.js/14.16.3/TextChannel:Class#fetch) - `channel.messages.fetch({limit: n})`で履歴取得
+- [discord.js Client Events](https://discord.js.org/docs/packages/discord.js/14.26.3/Client:Class) - `messageUpdate`イベントで編集を検知（`MessageContent` intent 必要、`oldMessage` は partial になり得る）
+- [discord.js Message.fetch](https://discord.js.org/docs/packages/discord.js/14.26.3/TextChannel:Class#fetch) - `channel.messages.fetch({limit: n})`で履歴取得
 
 ---
 
@@ -152,6 +158,8 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 
 のいずれか。(a) のほうが既存方針 (DB 不要) と整合的だが、起動時の reconcile ロジックが必要。
 
+microsandbox SDK 側にはこの用途に使える API が揃っている（npm `microsandbox@0.5.4`）: `SandboxBuilder.idleTimeout(secs)` / `.maxDuration(secs)` で生存期間を設定して `.createDetached()` で常駐起動、Bot 再起動後は **会話キーを sandbox 名に埋めた** `Sandbox.startDetached(name)` で再接続、`Sandbox.list()` で既存 sandbox を列挙して名前突合できる（sandbox 名は 128 UTF-8 バイト以内）。per-conversation persistent sandbox を実装する際はこれらを利用する（v1 の per-call lifecycle では未使用）。
+
 **検討事項 (本 change の Phase 2 以降のスコープ候補)**:
 
 - 会話単位での sandbox 生存期間 (TTL、最大同時保持数)
@@ -167,6 +175,6 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 - [ ] 会話履歴（Discord APIから取得、DB不要）
   - `channel.messages.fetch()`で直近n件取得
   - コンテキスト設定（デフォルト5件、0-20件）
-- [ ] 回答再生成ボタン（前の回答も表示可能、DBマイグレーション: `response_generations`）
-- [ ] メッセージ編集再生成（最新回答のみ対象、`messageUpdate`イベント）
+- [ ] 回答再生成ボタン（Components V2: Section accessory ボタン + 前回応答を Spoiler Container、`chatContainerBuilder` 再利用、DBマイグレーション: `response_generations`）
+- [ ] メッセージ編集再生成（最新回答のみ対象、`messageUpdate`イベント。`MessageContent` intent / partial ガード確認）
 - [ ] `/help`コマンド一覧の動的生成（SlashCommandBuilderから自動生成）

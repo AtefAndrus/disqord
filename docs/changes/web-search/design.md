@@ -86,7 +86,7 @@ export interface ChatCompletionRequest {
 
 **検索回数の制御:**
 
-- server tool はモデル判断で 0〜N 回検索しうるため、`max_results`（1検索あたりの件数, 既定5）と `max_total_results`（リクエスト全体の累計上限）を必ず指定し、費用とコンテキスト肥大を抑える。
+- server tool はモデル判断で 0〜N 回検索しうるため、`max_results`（1検索あたりの件数, **範囲 1–25・既定 5**。Exa/Parallel/Firecrawl に適用、native では無視）と `max_total_results`（リクエスト全体の累計上限）を必ず指定し、費用とコンテキスト肥大を抑える。
 - `usage.server_tool_use.web_search_requests` で実際の検索回数を取得できるため、ログ・課金把握に利用する（[permissions-stats](../permissions-stats/design.md) の usage_logs とも整合させる）。
 
 **ストリーミングの扱い:**
@@ -94,6 +94,7 @@ export interface ChatCompletionRequest {
 - 現行 `chatStream` は `delta.content` のみ処理している。`StreamDelta` 型に `annotations` / `server_tool_use` はない（`types/index.ts`）。
 - server tool 使用時はツール実行中のSSEイベント（検索中の状態・`annotations` の引用元）が流れるが、最終回答の `content` は従来どおり取得できる。
 - 初期実装では引用元（`url_citation`）の整形表示は行わず、本文のみ表示する。ただし検索回数ログ・課金表示のため `server_tool_use` の取り込みは行う。引用UIは段階的に対応する。
+- `usage` は全レスポンスで自動返却されるようになったため、`usage: { include: true }` / `stream_options: { include_usage: true }` は **deprecated**。リクエストに付与しない（付けても害はないが不要）。`server_tool_use.web_search_requests` も自動返却の `usage` 内に含まれる。
 
 **検索結果の扱い（プロンプトインジェクション対策）:**
 
@@ -105,7 +106,9 @@ export interface ChatCompletionRequest {
 
 - Exa: $0.005/リクエスト（10件まで含む）、超過分 $0.001/件。
 - Parallel: $0.005/リクエスト（10件まで含む）、超過分 $0.001/件。
+- Firecrawl: BYOK（自前 API キー）。OpenRouter クレジットは課金されない。本 change の初期実装では採用しない（キー管理が増えるため）。
 - native 検索対応プロバイダ（Anthropic / OpenAI / Perplexity / xAI）はプロバイダ従量。
+- エンジン未指定時の既定は `Auto`（native 優先 → Exa フォールバック）。本 change はコスト把握のためエンジンを明示する（初期は Exa or Parallel）。
 - 料金は変動しうるため実装時に最新ドキュメントを確認する。有効化時に費用警告メッセージを表示する。
 
 **権限:**
@@ -208,6 +211,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - **規約グレー**: 本番で常用する場合は self-host（MITライセンス）が無難。
 - **server tool の失敗**: any model で動作するが、特定モデル/プロバイダで失敗する可能性はある。その場合は検索なしで継続する。
 - **プライバシー**: ツイート展開ONの間、投稿内のツイートURLが fxtwitter ホストへ送信される（送るのは公開ツイートのIDのみだが、参照事実は第三者に見える）。README・`/status` で明示し、self-host で解消できることも記す。
+- **`openrouter:web_fetch` server tool（2026-05-07 に `web_search` と同時追加）**: 任意 URL の本文取得を OpenRouter 側で実行できる server tool。一般 URL の内容取得補助として将来活用余地があるが、**X はボット遮断で web_fetch でも本文取得が不安定なため、ツイート展開の fxtwitter 方針は変えない**。初期スコープ外、必要が出たら別途検討。
 
 ### self-host 手順（参考）
 

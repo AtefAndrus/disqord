@@ -22,8 +22,8 @@
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 並列実行方式 | `Promise.allSettled()` | 一部失敗でも他は継続 |
-| 最大モデル数 | 4 | Discord Embed制限（10個）に余裕を持たせる |
-| 結果表示形式 | 個別Embed | モデルごとの応答を明確に区別 |
+| 最大モデル数 | 4 | **モデルごとに別 message**（1 message = 1 モデルの Container）で送る。TextDisplay は 1 message 合計 4000 字制約があるため複数モデルを 1 message に集約しない。各 message は Container 内 10 / メッセージ全体 40 components の枠に余裕 |
+| 結果表示形式 | モデルごとに 1 Container（Components V2） | [chat-response-v2](../chat-response-v2/design.md) と一貫させる。各 Container の accent color と Model badge TextDisplay でモデルを区別。`chatContainerBuilder` を再利用 |
 
 ## Design
 
@@ -31,7 +31,7 @@
 
 - `src/services/chatService.ts` - 並列リクエスト、エラーハンドリング
 - `src/bot/commands/model.ts` - `compare`サブコマンド追加
-- `src/bot/events/messageCreate.ts` - 複数Embed送信ロジック
+- `src/bot/events/messageCreate.ts` - 複数 Container 送信ロジック（`chatContainerBuilder` 再利用、`flags: MessageFlags.IsComponentsV2`、`allowedMentions: { parse: [] }`）
 
 **コマンド設計**:
 
@@ -39,7 +39,7 @@
 /model compare <model1> <model2> [model3] [model4]
   - 2〜4モデルを指定
   - 各モデルで同じプロンプトを実行
-  - 結果を別々のEmbedで表示
+  - 結果をモデルごとの Container (Components V2) で表示
 ```
 
 **実装内容**:
@@ -49,26 +49,30 @@
    - 各モデルの応答を個別に処理（一部失敗しても他は継続）
 
 2. **結果表示**:
-   - 各モデルの応答を別々のEmbedで表示
-   - Embedカラーはモデルごとに決定論的に決定（既存ロジック）
-   - 失敗したモデルはエラーEmbedで表示
+   - 各モデルの応答を別々の Container（Components V2）で表示
+   - Container の accent color はモデルごとに決定論的に決定（既存の `getColorForModel` ロジック）
+   - 各 Container 先頭の TextDisplay に Model badge（`**Model:** xxx`）を表示
+   - 失敗したモデルは accent=red の Container（`buildErrorContainer` 相当）で表示
 
 3. **比較メッセージヘッダー**:
-   - 「比較結果: モデルA vs モデルB」
-   - 各Embedのタイトルにモデル名を表示
+   - 先頭に「比較結果」見出しの TextDisplay（または独立 Container）を 1 つ置く
+   - 各モデル Container の Model badge でモデル名を識別
 
 **設計メモ**:
 
 - レート制限考慮: 並列リクエストで制限に達する可能性あり → エラーハンドリング強化
 - 費用注意: 複数モデル実行で費用増加 → 警告メッセージ表示
+- **モデルごとに別 message**（1 message = 1 モデルの Container）にする。TextDisplay は 1 message の全 TextDisplay 合計 4000 字制約があるため、複数モデルの回答を 1 message に集約しない。先頭に「比較結果」見出し message を 1 つ置く。各モデルの長文応答はさらに chat-response-v2 の `splitTextIntoMessages` で分割する。components 数（Container 内 10 / メッセージ全体 40）は各 message 単位で余裕
+- Non-Goals どおり比較表示はストリーミングしない（各モデル完了後にまとめて Container 送信）
 
 **参照**:
 
 - [Promise.allSettled()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled)
+- [chat-response-v2](../chat-response-v2/design.md) - `chatContainerBuilder` / Components V2 の組み方・mention safety・分割ロジック
 
 ## Tasks
 
 - [ ] `compare`サブコマンドをmodel.tsに追加
 - [ ] chatServiceに並列リクエストロジック実装
-- [ ] 複数Embed送信ロジック実装
+- [ ] 複数 Container 送信ロジック実装（`chatContainerBuilder` 再利用、V2 flag + allowedMentions）
 - [ ] 費用警告メッセージ実装

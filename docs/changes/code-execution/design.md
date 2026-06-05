@@ -36,8 +36,8 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 | -------- | ---- | ---- |
 | サンドボックス実装 | microsandbox | microVM ハードウェア隔離 + smoltcp ユーザ空間ネット (TUN 不要、LXC 親和性◯) + default-deny egress。Piston/Judge0 はホスト型で security profile が弱い |
 | デプロイ形態 v1 | Bot コンテナ同居（Phase A） | 最短検証ルート。`/dev/kvm` を 3 層（Proxmox LXC → Docker → Bot コンテナ）でパススルー。失敗時は Phase B（別 VM + HTTP wrapper）に退避 |
-| Bot ベースイメージ | `oven/bun:1-debian` | microsandbox は glibc 必須（`scripts/install.sh:379-390`）。Alpine 系不可。タグは `1-debian` (Bun 1.x の安定 debian 系列) で固定 |
-| イメージキャッシュ | コンテナ内の固定パス (`/data/microsandbox/`、`MSB_HOME` 環境変数で指定) を Docker named volume にマウント。Bot 起動時に 3 言語 image を **prewarm**: 各 image で `Sandbox.builder("prewarm-" + slugify(img)).image(img).create()` → `stopAndWait()` を 1 回ずつ実行することで image layer を pull + cache | 再起動毎の image pull を回避し、初回 tool call の応答時間を sandbox boot (~100ms) のみに。NAPI SDK には直接の `pullImage()` API はないので create-then-stop で代用 (CLI `msb pull` を呼ぶ手もあるが余分なプロセスを増やしたくない)。sandbox name は許容文字に制限がある可能性があるため `python:3.13-slim` のような image 名は `:` `/` を `-` に置換した slug を使う (例: `prewarm-python-3-13-slim`)。実 API の name 制約は Phase A の verify task で確認 |
+| Bot ベースイメージ | `oven/bun:1-debian`（ただし glibc バージョン要確認） | microsandbox は **glibc 2.39 以上**を要求（`scripts/install.sh` の `LINUX_GLIBC_MIN_VERSION="2.39"`。Linux バンドルが Ubuntu 24.04/glibc 2.39 でビルドされるため）。Alpine/musl 不可。`oven/bun:1-debian` は Debian **bookworm**（glibc 2.36）ベースで **2.39 未満の可能性があり Phase 0 で要確認**。不足なら `ubuntu:24.04` + Bun 手動インストールのカスタム Dockerfile、または glibc 2.39+ を含む newer な debian/trixie タグへ切替 |
+| イメージキャッシュ | コンテナ内の固定パス (`/data/microsandbox/`、`MSB_HOME` 環境変数で指定) を Docker named volume にマウント。Bot 起動時に 3 言語 image を **prewarm**: 各 image で `Sandbox.builder("prewarm-" + slugify(img)).image(img).create()` → `stopAndWait()` を 1 回ずつ実行することで image layer を pull + cache | 再起動毎の image pull を回避し、初回 tool call の応答時間を sandbox boot (~100ms) のみに。NAPI SDK には `Image.pull()` のような直接 API はない（`Image` クラスは get/list/inspect/remove/gc のみ）ので create-then-stop で代用。pull 完了を確実に検知したい場合は `Sandbox.builder(...).createWithPullProgress()`（レイヤ単位の進捗を返す）を使う選択肢もある。sandbox name は許容文字に制限がある可能性があるため `python:3.13-slim` のような image 名は `:` `/` を `-` に置換した slug を使う (例: `prewarm-python-3-13-slim`)。実 API の name 制約は Phase A の verify task で確認 |
 | Sandbox name 採番 | per-call で `exec-${crypto.randomUUID()}` (collision-proof な短縮 ID) | microsandbox の Sandbox は name 必須、同時実行で衝突しないために UUID ベース |
 | Sandbox ライフサイクル | **per tool call**: `Sandbox.builder(name).image(img).cpus(1).memory(512).create()` → `exec(cmd, args)` → 結果収集 (下記の fs read) → `stopAndWait()` を 1 リクエスト内で完結。permanent storage / detached なし | 「会話跨ぎで変数・import が持続」は **複数 exec 跨ぎで long-lived REPL kernel が必要** で v1 にはオーバーキル。[`conversation-context`](../conversation-context/design.md) change 側で per-conversation persistent sandbox を扱う |
 | 結果として消える複雑性 | DB sandbox_sessions テーブル、TTL sweeper、LRU 強制停止、起動時孤児検出、channel-level privacy concern | 全て per-call lifecycle により構造的に不要 |
@@ -48,8 +48,8 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 | 同時実行ロック (sandbox 内) | per-call なので不要 (1 sandbox = 1 exec) | per-call lifecycle の副次的利点 |
 | 出力上限 (host 側) | stdout/stderr 各 256 KB (`SANDBOX_OUTPUT_MAX_BYTES_HOST`)、超過は host 側 NAPI 受信時に truncate | sandbox 側の `head -c` ではなく NAPI レベル。Discord file attachment 上限 (`SANDBOX_FILE_MAX_BYTES`、9 MB) は別概念 (下記別行) |
 | `/tmp/out/*` の収集上限 | 合計 50 MB / 最大 50 ファイル (host 側収集の上限)。**Discord に表示する個数は 10 まで** (bitmap MediaGallery 最大 8 + 個別 File 最大 2、Discord API の `files: [...]` 配列上限に合わせる)、超過は warning TextDisplay で「N 件のファイルが省略されました」を表示 | 暴走時の disk fill 防止 + Discord attachment 上限保護。詳細は「Discord 出力整形ルール」参照 |
-| ネットワーク既定 | egress 完全禁止 (`SandboxBuilder.network({ enabled: false })` 相当 — 厳密な TS API は実装時に [microsandbox-rs crates/network/lib/config.rs](https://github.com/superradcompany/microsandbox/blob/main/crates/network/lib/config.rs) と NAPI binding を見て確定) | 最小権限。pypi 等が必要な場合は `execute_code_with_network` |
-| `execute_code_with_network` の挙動 | default-deny + allow-list (`pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `objects.githubusercontent.com`)。RFC1918/loopback/cloud metadata は smoltcp 側で常時ブロック | microsandbox の `NetworkPolicy` (上記 config.rs:27-69) を使う。allow-list は環境変数で拡張可。**実装着手時に TS SDK 側の network 設定 API が想定通り存在することを Phase A の verify task で確認**、無ければ DNS 解決フィルタや per-host accept lists 等の代替策を検討 |
+| ネットワーク既定 | egress 完全禁止。`SandboxBuilder.disableNetwork()`（npm `microsandbox@0.5.4` では `network()` は callback 形式 `network((b)=>...)` で、旧設計の `.network({ enabled })` オブジェクト渡しは存在しない） | 最小権限。pypi 等が必要な場合は `execute_code_with_network` |
+| `execute_code_with_network` の挙動 | default-deny + allow-list (`pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`, `objects.githubusercontent.com`)。RFC1918/loopback/cloud metadata は常時ブロック | TS SDK（npm `microsandbox@0.5.4`）の `.network((b) => ...)` callback で設定。**default-deny を基礎**にし、DNS と allow-list ドメインのみ許可する `{ rules: [Rule.allowDns(), Rule.allowEgress(Destination.domain("pypi.org")), Rule.allowEgress(Destination.domain("files.pythonhosted.org")), ...] }` を渡す（`NetworkPolicy.publicOnly()` は public 宛先**全般**を許可してしまい allow-list 用途には不適なので使わない）。`NetworkPolicy`（`none/allowAll/publicOnly/nonLocal` factory）/ `Destination` / `Rule` / `NetworkPolicyBuilder` / `RuleBuilder` は package から export 済み。allow-list は環境変数で拡張可。**network callback 内で policy を適用する正確な形のみ Phase A で実コード最終確認** |
 | Network tool 有効化ゲート (二段階) | **`code_execution_network_enabled = false` がデフォルト**。`code_execution_enabled = true` でも `_with_network` tool は LLM に expose されない。両 toggle が true で初めて両 tool が tools 配列に入る | 「コード実行 OK」と「コード実行 + 外部ネット OK」を分離。npm/pip install は postinstall で任意コード実行できるため、サーバ管理者が **追加で意識的に許可**する必要 |
 | Tool call の承認モデル | 両 tool とも自動実行 (UI 承認ボタンなし) | 二段階 toggle が承認ゲートの役割。実行中は per-call で UI 確認は UX を著しく悪化 |
 | Tool 結果の LLM 渡し形式 | JSON 文字列で **stdout/stderr は先頭 4 KB + 末尾 4 KB のみ** (`SANDBOX_TOOL_RESULT_STDOUT_MAX_BYTES = 8192`, `SANDBOX_TOOL_RESULT_STDERR_MAX_BYTES = 8192`)、超過時は `"\n...[truncated N bytes]...\n"` で繋ぐ。`exitCode` / `durationMs` / `truncated` / `files: [{name, size, mime}]` (file bytes は含めない) を付ける | host 側で受け取った 256 KB stdout をそのまま LLM context に流すと token 消費が暴騰 (例: 64K tokens = $0.06+)。Discord にはフル出力を attachment で渡しつつ、LLM には head+tail プレビューだけ渡す。`JSON.stringify` で `Uint8Array` が壊れる + バイナリを LLM context に流すのは無駄 |
@@ -129,8 +129,8 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 - `src/bot/commands/config.ts` — `/config code-execution <on|off>` + `/config code-execution-network <on|off>` 2 サブコマンド
 - `src/bot/commands/index.ts` — `/run` を dev only 条件付き登録 (`if (process.env.NODE_ENV !== "production") commandDefinitions.push(runCommand)`)
 - `src/bot/events/interactionCreate.ts`(or 該当 handler) — Modal submit ハンドラ。Re-run button は v1 では実装しない
-- `package.json` — `microsandbox` 依存追加。`discord.js` のバージョンが modal-in-modal select (`Label` + select) を含むビルド (v14.22 以降想定、Phase A で要確認、必要なら bump) であることを確認
-- Dockerfile (image build 部分) — ベース `oven/bun:1-debian`、`apt-get install -y --no-install-recommends ca-certificates` 程度
+- `package.json` — `microsandbox` 依存追加（最新 v0.5.4、Apache-2.0、活発にメンテ中）。`discord.js` は **v14.26.3 で `LabelBuilder`（modal 内 select / RadioGroup / Checkbox）対応済みのため bump 不要**（インストール済み 14.26.3）
+- Dockerfile (image build 部分) — ベースは glibc ≥ 2.39 を満たすもの（`oven/bun:1-debian` が満たさなければ `ubuntu:24.04` + Bun 等）、`apt-get install -y --no-install-recommends ca-certificates` 程度
 - docker-compose.yml / Coolify 設定 (runtime / orchestration 部分) — `devices: [/dev/kvm:/dev/kvm]` + `group_add: [kvm]` + volume `microsandbox_cache:/data/microsandbox`、entry script で `/dev/kvm` の存在を確認しない場合 fail-fast (`SANDBOX_ENABLED=true` のときのみ)
 
 ### DB スキーマ
@@ -193,10 +193,11 @@ interface ISandboxService {
   prewarmImages(): Promise<void>;
 
   // per-call lifecycle:
-  //   1. Sandbox.builder(`exec-${crypto.randomUUID()}`).image(img).cpus(1).memory(512)
-  //        .network({ enabled: networkAllowed, /* allow-list は network=true 時のみ */ }).create()
-  //   2. sandbox.exec(cmd, args) を timeout で race
-  //   3. /tmp/out から fs() 経由で生成ファイルを読み取り (詳細下記)
+  //   1. let b = Sandbox.builder(`exec-${crypto.randomUUID()}`).image(img).cpus(1).memory(MiB(512));
+  //      b = networkAllowed ? b.network((n) => n.policy(allowListPolicy)) : b.disableNetwork();
+  //      const sandbox = await b.create();   // pull 完了を確実に待つなら createWithPullProgress() も可
+  //   2. sandbox.exec("python", ["-c", code]) など (複数行 code は exec の args か shell(script)。Phase A で確定) を timeout で race
+  //   3. /tmp/out から fs() 経由で生成ファイルを読み取り (詳細下記、list()/read())
   //   4. timeout 時は ExecHandle.kill() → sandbox.kill() の順、success 時は sandbox.stopAndWait()
   //   5. (再利用しないので必ず sandbox.removePersisted() で DB エントリも掃除)
   // 同時実行数が SANDBOX_MAX_CONCURRENT を超えると Bottleneck などのキューで待機、5 秒超で QueueTimeoutError を投げる
@@ -225,20 +226,21 @@ interface ExecResult {
 
 ```ts
 const fs = sandbox.fs();
-const entries = await fs.readDir("/tmp/out");      // SandboxFs API、サブディレクトリ entry は skip
+const entries = await fs.list("/tmp/out");          // SandboxFs.list()、サブディレクトリ entry は skip
 for (const entry of entries) {
-  if (entry.isDirectory) continue;                 // non-recursive
+  if (entry.kind === "directory") continue;         // non-recursive (FsEntry.kind: "file"|"directory"|"symlink"|"other")
   if (totalBytes + entry.size > SANDBOX_OUT_FILES_MAX_BYTES) break;
   if (files.length >= SANDBOX_OUT_FILES_MAX_COUNT) break;
-  const bytes = await fs.readFile(entry.path);
-  files.push({ name: entry.name, bytes, mime: detectMime(entry.name) });
+  const bytes = await fs.read(entry.path);          // SandboxFs.read() → Uint8Array
+  const name = entry.path.split("/").at(-1) ?? entry.path;  // FsEntry に name は無く path のみ
+  files.push({ name, bytes, mime: detectMime(name) });
   totalBytes += bytes.length;
 }
 ```
 
 非再帰仕様: ユーザ (LLM) には「画像やファイルは `/tmp/out/` 直下に保存してください」と tool description で誘導済 (executeCodeTool の description 内)。サブディレクトリ作成は機能上の non-goal。
 
-(`sandbox.fs()` → `SandboxFs.readDir` / `readFile` の正確なシグネチャは [`sdk/node-ts/src/sandbox.ts:251-257`](https://github.com/superradcompany/microsandbox/blob/main/sdk/node-ts/src/sandbox.ts) と関連 fs ファイルを Phase A 着手時に確認、もし API 形が違えば spec を当該箇所だけ修正する)
+(`sandbox.fs()` → `SandboxFs`（`microsandbox@0.5.4`）の API: `list(path)` → `FsEntry[]`（`{ path, kind, size, mode, modified }`、`readDir`/`isDirectory`/`name` は無い）、`read(path)` → `Uint8Array`、`readToString(path)` → string、`stat` / `exists` / `write` / `mkdir` / `remove` / `copyFromHost` / `copyToHost` 等。Phase A で allow-list 周りなど残りの細部を実コードで最終確認する)
 
 注: tool 結果 (LLM に渡す `role: "tool"` content) は `ExecResult` 全体ではなく **head+tail clip された compact JSON**。詳細な実装は下記「tool calling 完全 streaming ループ」セクション内の `toolResultForLlm` 定義を参照。バイナリ bytes は LLM 文脈に流さず、Discord upload にだけ使う。Discord 側は 256 KB のフル出力 (truncate なしの場合) を `File` で受け取れる。
 
@@ -254,9 +256,9 @@ for (const entry of entries) {
 Container (accent color: green/yellow/red = success/truncated/error)
 ├ TextDisplay  "▶ python · 1.23s · exit 0"                ← ヘッダ行
 ├ Separator (small)
-├ TextDisplay  "```\n<stdout, up to 3800 chars>\n```"     ← 短文時はここで完結
-│                                                            (長文時は省略 → File に回す)
-├ TextDisplay  "**stderr**\n```\n<stderr, up to 1500>\n```"  ← stderr あれば
+├ TextDisplay  "```\n<stdout>\n```"                       ← ヘッダ+stdout+stderr+フッタの TextDisplay 合計 ≤ 3800 字に収まる時のみインライン
+│                                                            (合計超過時は stdout/stderr を File に回す)
+├ TextDisplay  "**stderr**\n```\n<stderr>\n```"           ← stderr あれば (上記の合計予算を共有)
 ├ MediaGallery [image_1.png, image_2.png, ...]            ← /tmp/out/*.{png,jpg,jpeg} のみ (SVG 除く)
 ├ File [stdout.txt]                                       ← stdout が 3800 字超 or truncate あり
 ├ File [stderr.txt]                                       ← 同様
@@ -268,7 +270,7 @@ Container (accent color: green/yellow/red = success/truncated/error)
 
 #### 整形ルール詳細
 
-1. **短文** (stdout 本体 ≤ 3792 字 (3800 − ` ``` ` fence overhead 8 字)、stderr ≤ 1492 字 (1500 − overhead) 、bitmap 画像 ≤ 4 枚): すべて `TextDisplay` + `MediaGallery` でインライン表示。
+1. **短文** (**ヘッダ + stdout + stderr + フッタの TextDisplay 合計が 1 message 4000 字制約に収まる**＝安全マージン込みで合計 ≤ 3800 字。fence ` ``` ` の overhead も計上。bitmap 画像 ≤ 4 枚): すべて `TextDisplay` + `MediaGallery` でインライン表示。stdout と stderr を両方インラインに載せる場合は両者で合計予算を共有し、超過分（大きい方優先で）を `File` に回す。
 2. **長文 / truncate あり**: stdout/stderr を `File` (`stdout.txt`/`stderr.txt`) として attachment card 化、`TextDisplay` には先頭 N 行 + "... (attached output; truncated if host cap was hit)" を表示。host 側 256 KB cap (`SANDBOX_OUTPUT_MAX_BYTES_HOST`) を超えた場合は attachment 自体も truncate されていることを明示する文言を入れる。
 3. **bitmap 画像 ≥ 5 枚**: `MediaGallery` (公式仕様で 1〜10 枚) に収めるが、**本 spec では下記の可視ファイル個数上限 (bitmap ≤ 8) を優先**。超過分は (a) `File` での代替添付か (b) warning TextDisplay の省略表示 に振り分ける。
 4. **SVG / その他形式 (`.html`, `.csv`, `.json`, `.bin` 等)**: 全て `File` で添付。SVG は Discord client での inline 描画挙動が安定しないため `MediaGallery` には入れない。
@@ -309,7 +311,8 @@ Container (accent color: green/yellow/red = success/truncated/error)
 
 Discord UI の制約と採用判断:
 
-- **Modal in modal の select**: 2025-09-10 から `Label` で wrap すれば `StringSelect` 等を modal に入れられる（[Discord API change log](https://docs.discord.com/developers/change-log)）。これにより slash option を削れて UX 簡潔。
+- **Modal in modal の select**: 2025-08-25 から `Label` で wrap すれば `StringSelect` 等を modal に入れられる（[Discord API change log](https://docs.discord.com/developers/change-log)）。discord.js では `LabelBuilder` を `modal.addLabelComponents(label)` で追加するのが推奨 API（旧 `addComponents(ActionRow)` パターンは legacy 扱い）。これにより slash option を削れて UX 簡潔。
+- **RadioGroup の代替案**: 2026-02 から modal 内に `RadioGroup` / `Checkbox` が追加され、discord.js v14.26.x の `LabelBuilder.setRadioGroupComponent()` で利用可能。言語の 3 択（python/node/bash）は排他選択なので `StringSelect` より `RadioGroup` の方が意図が明確。v1 は `StringSelect` のままで可、UI 改善候補として記録。
 - **Slash command string option (旧案)**: 1 行入力、改行は `\n` 手入力。modal に統合したので不要。
 - **メッセージ添付 (.py / .js)**: 意図検知が暗黙的でコマンド誤反応リスク、却下。
 - **コードブロックを含むメッセージ自動検知**: 同上、却下。
@@ -495,13 +498,13 @@ function clipHeadTailBytes(s: string, cap: number): string {
   - `sdk/node-ts/README.md` — NAPI SDK 概要、detached mode
   - `docs/networking/security-model.mdx` — default-deny egress 仕様
   - `docs/configuration.mdx` — `sandbox_defaults` / paths
-  - `scripts/install.sh:379-390` — glibc 要件
+  - `scripts/install.sh` — glibc ≥ 2.39 要件（`LINUX_GLIBC_MIN_VERSION="2.39"`）、musl 拒否
 - OpenRouter tool calling: <https://openrouter.ai/docs/guides/features/tool-calling>
 - OpenRouter models filter: `GET /api/v1/models?supported_parameters=tools`
 - discord.js Modal: <https://discordjs.guide/interactions/modals.html>
 - Discord Components V2 (2025-04-22 リリース): <https://docs.discord.com/developers/components/reference>
 - discord.js PR #10781 (Components V2 in v14): <https://github.com/discordjs/discord.js/pull/10781>
-- discord.js PR #11169 (Modal Label + select-in-modal, 2025-09): <https://github.com/discordjs/discord.js/pull/11169>
+- discord.js `LabelBuilder`（modal 内 select / RadioGroup / Checkbox、v14.25.1+ / 14.26.3）: <https://discord.js.org/docs/packages/discord.js/14.26.3/LabelBuilder:Class>
 - Discord Developer Change Log: <https://docs.discord.com/developers/change-log>
 
 ## Tasks
@@ -509,17 +512,18 @@ function clipHeadTailBytes(s: string, cap: number): string {
 ### Phase 0: ホスト検証（実装着手の前提条件）
 
 - [ ] Proxmox LXC conf に `/dev/kvm` パススルー + `nesting=1` 設定
-- [ ] Coolify Bot コンテナのベースを `oven/bun:1-debian` に変更し起動確認
+- [ ] Coolify Bot コンテナのベースを決定し起動確認。**先に `ldd --version` で glibc ≥ 2.39 を確認**（`oven/bun:1-debian`=bookworm は 2.36 で不足の可能性。不足なら `ubuntu:24.04` ベース等に切替）
 - [ ] Bot コンテナ内で `ls -l /dev/kvm` と `npx microsandbox run debian -- echo hi` が成功することを確認
+- [ ] **Bun ランタイムで `require("microsandbox")` が NAPI エラーなくロードできることを smoke test**（Bun の NAPI 実装が microsandbox バインディングと互換か）
 - [ ] 失敗時の判定: Phase A 中止 → Phase B（別 Proxmox VM + HTTP wrapper）に切替方針を再起票
 
 ### Phase A: sandbox 基盤
 
-- [ ] `microsandbox` 依存追加 + `discord.js` のバージョン確認 (modal-in-modal select 対応版か、必要なら bump)
+- [ ] `microsandbox` 依存追加（v0.5.4）。`discord.js` は 14.26.3 で `LabelBuilder` 対応済みのため bump 不要
 - [ ] `/data/microsandbox` を named volume 化 (Coolify / docker-compose 設定)
 - [ ] DB マイグレーション: `code_execution_enabled` + `code_execution_network_enabled` 2 カラム追加
-- [ ] microsandbox SDK の network API (`SandboxBuilder.network({ enabled, allow })` 相当) の実形を確認、想定と違えば spec の該当箇所を修正
-- [ ] microsandbox SDK の `sandbox.fs()` / `SandboxFs.readDir` / `readFile` シグネチャ確認
+- [ ] microsandbox SDK の network 設定（`disableNetwork()` / `network((b)=>...)` callback 内で **default-deny + `Rule.allowDns()` + allow-list ドメインの `Rule.allowEgress(Destination.domain(...))`** を適用する形）を実コードで最終確認（API 名は `microsandbox@0.5.4` の型のとおり。callback 内の policy 適用形のみ未確定）
+- [ ] microsandbox SDK の `sandbox.fs()` → `SandboxFs.list()` / `read()` / `readToString()` と `FsEntry { path, kind, size, mode, modified }` の実挙動を実装時に最終確認
 - [ ] `sandboxService` 実装 (`prewarmImages` (create-stopAndWait) + `execute` (UUID name 採番、Bottleneck で同時数キュー、5 秒超で QueueTimeoutError))
 - [ ] Bot 起動時に 3 言語 image を prewarm (`SANDBOX_ENABLED=true` 時のみ)
 - [ ] timeout → `ExecHandle.kill()` → `sandbox.kill()` → `removePersisted()` パスの統合動作確認
@@ -553,6 +557,7 @@ function clipHeadTailBytes(s: string, cap: number): string {
 ## Open Questions / Risks
 
 - **LXC 内 `/dev/kvm` 配線が通らない可能性**: Phase 0 で判定。LXC config + Docker `--device` + コンテナ内 kvm group の **3 層プラミング**が必要で、特に Coolify が device pass-through を UI で許可していない場合は compose-override か raw Docker run の検討が必要。**所要時間は理想 30 分だが、3 層のどこかで詰まれば数時間規模に膨張する**ことを許容して見積もる。失敗時は迷わず Phase B (別 Proxmox VM + HTTP wrapper) に pivot。
+- **glibc 2.39 要件 / Bun NAPI 互換**: microsandbox は glibc ≥ 2.39 を要求する。`oven/bun:1-debian`（bookworm, glibc 2.36）では不足の可能性があり、Phase 0 で `ldd --version` 確認 → 不足なら Ubuntu 24.04 ベース等に切替。加えて Bun の NAPI 実装が microsandbox バインディングを完全サポートするかは未確証で、Phase 0 の `require("microsandbox")` smoke test で確認する。どちらかが通らなければ Phase B（別 VM + HTTP wrapper、Bot からは HTTP 呼び出しで NAPI を回避）に pivot。
 - **言語追加要求**: rust / go / ruby など。OCI image 追加だけで対応可能だが、`/run language` choices と tool schema の `language` enum も併せて更新が必要。enum を DB / 設定ファイル駆動にすべきかは v1 リリース後に判断。
 - **`execute_code_with_network` の allow-list 維持コスト**: pypi mirror の host 変更等で壊れる可能性。環境変数で吸収する形にしているが、運用上 dashboard 化したくなる可能性あり。
 - **モデル側の tool calling 安定性**: DeepSeek V4 Flash:free / Gemini Flash 系 / Claude Haiku 4.5 で問題が出たケースを観測したら、モデル選定 UI 側の絞り込み (別 spec) を優先する。

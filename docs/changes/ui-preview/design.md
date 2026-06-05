@@ -23,7 +23,7 @@ Discord Bot の応答 UI（Embed・ボタン・整形テキスト）は、コー
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 描画方式 | discord-components + Playwright(Chromium) | 公式の描画ツールは存在せず、selfbot は ToS 違反。実ブラウザ + コミュニティ標準コンポーネントが selfbot 抜きで最も忠実 |
-| 描画ライブラリ | `@skyra/discord-components-core` v4 | Embed/ボタン/フィールド3列/メンション等を網羅。discord.js 公式ガイドも採用。Lit 製で import 副作用で登録される |
+| 描画ライブラリ | `@skyra/discord-components-core` v4 | Embed/ボタン/フィールド3列/メンション等を網羅。discord.js 公式ガイドも採用。Lit 製で import 副作用で登録される。**legacy components 専用で Components V2 は非対応**（V2 化する UI のプレビューは別途要検討、下記） |
 | バンドル | `Bun.build`（target=browser）で 1 回バンドル → ページ注入 | Stencil/Lit の bare import を file:// で解決する問題を回避。ネットワーク非依存 |
 | CJK フォント | Noto Sans JP woff を `@font-face` で `gg sans` 名に割当 | コンポーネントのフォントスタック先頭が `'gg sans'`。同名で登録すれば OS フォント導入や Shadow DOM 貫通なしで豆腐回避 |
 | 絵文字 | unicode → Twemoji 画像 URL | Noto Sans JP に絵文字グリフが無く豆腐化するため。Discord も Twemoji 系画像 |
@@ -65,6 +65,7 @@ Embed（color/title/author/description/fields/footer/thumbnail/image）、ボタ
 - 順序付きリスト（`1.`）は素表示、テーブルは Discord 自体未対応のため実機同様に生表示
 - カスタム/アニメーション絵文字、モバイル表示、実アバター、添付プレビューは対象外
 - 見出しは embed description のみ描画（Discord は field value では未対応 [discord-api-docs#7167]）
+- **Components V2（Container / TextDisplay / Section / MediaGallery / Separator / File）は未対応**: `@skyra/discord-components-core` v4 は legacy components（Embed / ボタン / select 等）専用で、V2 コンポーネントのブラウザ描画は提供しない（v4 系・upstream に V2 対応の予定も確認できず）。ブラウザ用の V2 Web Component ライブラリは 2026-06 時点で存在が確認できない（`discord-components-v2` 等は JSON ペイロード生成用でブラウザ描画ではない）
 
 ピクセル等価が必要な最終確認は、テストサーバへ実送信して目視するのが確実。
 
@@ -85,4 +86,5 @@ Embed（color/title/author/description/fields/footer/thumbnail/image）、ボタ
 - [ ] （任意）inline フィールド 1〜2 個時の引き伸ばし再現
 - [ ] （任意）順序付きリスト（`1.`）の番号リスト描画
 - [ ] （任意）リリース通知 Embed の fixture 化（`createReleaseEmbed` は private のため要 export 検討）
+- [ ] （要検討）Components V2 プレビュー対応: chat-response-v2 / code-execution / conversation-context / model-compare が V2 化するとチャット返信 UI がプレビュー対象外になる。`@skyra/discord-components-core` v4 が未対応のため、(a) V2 専用のブラウザ描画ライブラリ調査、(b) Container/TextDisplay/Section を模した自前 HTML/CSS テンプレート、(c) `payload.json` の構造ダンプ表示、のいずれかを別途設計する
 - [ ] （任意・今回見送り）CI 回帰ゲート（`payload.json` スナップショット差分）
