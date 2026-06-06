@@ -118,7 +118,7 @@ CREATE TABLE api_keys (
 
 ### 変更対象ファイル
 
-#### 新規ファイル
+#### 新規
 
 | ファイル | 役割 |
 | -------- | ---- |
@@ -130,7 +130,7 @@ CREATE TABLE api_keys (
 | `tests/unit/services/cryptoService.test.ts` | 暗号化サービスのテスト |
 | `tests/unit/db/repositories/apiKey.test.ts` | リポジトリのテスト |
 
-#### 変更ファイル
+#### 修正
 
 | ファイル | 変更内容 |
 | -------- | -------- |
@@ -286,3 +286,4 @@ generateResponseStream(
 - [ ] 11. 環境変数: `ENCRYPTION_KEY`, `OAUTH_CALLBACK_URL`, `ALLOW_UNAUTHENTICATED` 追加
 - [ ] 12. DI 配線: `index.ts` に新規サービス追加
 - [ ] 13. 結合テスト: connect → chat → disconnect のフロー確認
+- [ ] 14. `docs/changes/oauth-byok/` 削除（リリース完了時、git 履歴がアーカイブ）

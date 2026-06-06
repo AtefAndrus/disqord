@@ -21,7 +21,6 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 **Non-Goals:**
 
 - **複数 exec 跨ぎでの変数・import・生成ファイル持続** — v1 は **1 tool call = 新規 sandbox 作成 → exec → 破棄** の per-call lifecycle。「会話文脈下での persistent sandbox」は既存の [`conversation-context`](../conversation-context/design.md) change で扱うので、本 spec では扱わない
-- モデル選定 UI の tool calling 対応モデル絞り込み（別 change: `model-selection-tool-filter`）
 - カスタム OCI image のユーザ指定 UI（v1 は固定 3 言語）
 - pip / npm の永続パッケージ管理（毎回 fresh image、必要なら sandbox 内で `pip install` を含むコードを書いてもらう想定）
 - GPU sandbox（microsandbox 自体が現状サポートしない）
@@ -29,6 +28,15 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 - 永続ボリューム / 会話跨ぎのファイル共有
 - `/run` の production 公開（dev only）
 - 既存の `chat-response-v2` change（別途進行）との V2 builder 統合最適化 — 両者で V2 component を組むが、code-execution の output と chat-response の text stream は構造が大きく異なるため、共通 primitive は最小限（`buildErrorContainer` 等）に留め、それぞれ独立の builder を持つ
+
+**将来別 change 候補:**
+
+- モデル選定 UI の tool calling 絞り込み（`GET /api/v1/models?supported_parameters=tools` で `/model` choices を動的フィルタ）→ 別 change `model-selection-tool-filter`
+- LLM チャット返信の Components V2 化 + 進捗表示インフラ → 既存 `chat-response-v2` で対応
+- 設定 SSOT 化（envVars.ts を SSOT 化 + CLAUDE.md AUTO 生成）→ 別 change `default-model-ssot`
+- Re-run button / Regenerate UI → 別 change（ephemeral in-memory store (TTL 短め) + per-user opt-in。コード本体保存がプライバシー方針と矛盾するため v1 不可）
+- L2/L3 boost level に応じた `SANDBOX_FILE_MAX_BYTES` 自動上書き → v1.1
+- 画像超過時の zip 化（bitmap > 10 枚 + その他多数）→ v1.1（v1 は個別 `File`）
 
 ## Decisions
 
@@ -105,9 +113,9 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 └─────────────────────────────────────────────────┘
 ```
 
-### 変更対象
+### 変更対象ファイル
 
-**新規ファイル:**
+**新規:**
 
 - `src/services/sandboxService.ts` — per-call sandbox lifecycle (`execute()` のみ)、グローバル同時実行キュー、起動時 image pre-pull
 - `src/services/codeExecutionService.ts` — Discord 整形ロジック (V2 Container 構築、`/tmp/out/*` ピックアップ、`allowedMentions: { parse: [] }` 強制、SVG/その他は `File` 振り分け、bitmap 画像は `MediaGallery`)
@@ -119,7 +127,7 @@ LLM はコードを書けるが実行できないため、計算結果の検証�
 - `tests/unit/llm/toolHandler.test.ts`
 - `tests/integration/codeExecution.test.ts` — 実 sandbox を 1 回起動する smoke test (CI では skip、ローカル `KVM_AVAILABLE=1` で実行)
 
-**修正対象:**
+**修正:**
 
 - `src/services/chatService.ts` — tool calling **完全 streaming ループ**: OpenRouter chat stream を読みつつ tool_call delta を蓄積、tool_call 完成時に toolHandler 呼出、結果を message 配列に push してストリームを継続、最大 5 turn
 - `src/llm/openrouter.ts` — リクエストに `tools` / `tool_choice` を渡す経路 + streaming delta 内の tool_call 部分パース
@@ -565,14 +573,3 @@ function clipHeadTailBytes(s: string, cap: number): string {
 - **PATCH rate limit (chat 中の進捗更新)**: tool 実行中の「コード実行中...」表示で chat message を edit する経路は `chat-response-v2` の 2 秒 debounce + 429 スキップポリシーをそのまま流用 (本 spec で別途実装しない)。
 - **`chat-response-v2` change との依存関係**: 本 spec の Phase C (LLM tool 統合) は `chat-response-v2` の V2 streaming updater を利用する。`chat-response-v2` が完了していない時期に Phase C を着手する場合、進捗 TextDisplay の updater をスタブで置いて legacy embed 描画にフォールバックする必要あり (実装時に判断)。
 - **`code_execution_network_enabled` の悪用リスク**: 二段階 toggle で対応するが、サーバ管理者が ON にした後の悪用 (LLM が悪意ある npm package をインストールする等) のリスクは構造的に残る。allow-list を厳しめに保つ + 監査ログ + 必要ならサーバ管理者向けに「最近実行された install コマンド」の表示機能を v1.1 で検討。
-
-## Out of Scope（別 spec を切る候補）
-
-- **モデル選定 UI の tool calling 絞り込み**: `GET /api/v1/models?supported_parameters=tools` の結果で `/model` choices を動的にフィルタする。新 change `model-selection-tool-filter` として独立。
-- **LLM チャット返信の Components V2 化 + 進捗表示インフラ**: 既存の `chat-response-v2` change で対応。
-- **会話跨ぎの persistent sandbox**: 既存の [`conversation-context`](../conversation-context/design.md) change で扱う (本 spec から追記済)。
-- **`/run` の production 公開**: 現状 dev only。需要が出たら別 PR で `NODE_ENV` ガード解除。
-- **設定 SSOT 化**: 別 change `default-model-ssot` で対応 (envVars.ts を SSOT 化 + CLAUDE.md AUTO 生成)。
-- **Re-run button / Regenerate UI**: コード本体を保存する仕組みが必要 (プライバシー方針と矛盾)、v1 では実装しない。需要が出たら ephemeral in-memory store (TTL 短め) + per-user opt-in で別 change。
-- **L2/L3 boost level に応じた `SANDBOX_FILE_MAX_BYTES` 自動上書き**: Bot 起動時に自 guild の boost level を取得して環境変数を上書き。v1.1。
-- **画像超過時の zip 化**: bitmap > 10 枚 + その他多数のとき zip にまとめる。v1 は個別 `File` で済ます。

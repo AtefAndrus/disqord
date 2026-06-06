@@ -27,7 +27,7 @@
 
 ## Design
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/services/chatService.ts` - 並列リクエスト、エラーハンドリング
 - `src/bot/commands/model.ts` - `compare`サブコマンド追加
@@ -76,3 +76,4 @@
 - [ ] chatServiceに並列リクエストロジック実装
 - [ ] 複数 Container 送信ロジック実装（`chatContainerBuilder` 再利用、V2 flag + allowedMentions）
 - [ ] 費用警告メッセージ実装
+- [ ] `docs/changes/model-compare/` 削除（リリース完了時、git 履歴がアーカイブ）

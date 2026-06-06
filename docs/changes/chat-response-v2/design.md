@@ -33,10 +33,14 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 
 - `/help` `/status` `/config` `/model` 等 slash command 系の V2 化（embed のままで十分、利得なし）
 - `releaseNotificationService` の V2 化（リリースノートは embed が読みやすい、別途検討）
-- 新規インタラクション機能の追加（Regenerate / Details toggle / Model-switch 等は将来別 spec）
 - 編集後の rendering を legacy 互換に戻す機能（V2 sticky 仕様により不可、戻したい場合は新規送信）
 - showLlmDetails の per-response toggle 化（current は per-guild config、本 spec で変えない）
 - 古い Discord client での見た目最適化（V2 GA、Discord 側でフォールバックされる）
+
+**将来別 change 候補:**
+
+- Regenerate Button / Details toggle / Model-switch Button（新規インタラクション。本 spec は「現状 UX を V2 で再現」が目的）→ 別 change `chat-response-interactions` として独立
+- stream chunking の markdown 賢化（` ``` ` block / table の境界を尊重した chunking）→ Phase C の手動回帰で実害を確認してから判断
 
 ## Decisions
 
@@ -177,14 +181,14 @@ Container (accent: model color)
 
 注: `MediaGallery` / `File` を使う場合、メッセージ payload の `files: [...]` 配列に AttachmentBuilder を **必ず添付**し、`MediaGallery.items[].media.url` や `File.file.url` を `attachment://<filename>` 形式で参照する。V2 が無効化するのは「attachments 配列の自動 unfurl」だけで、`files` payload upload + `attachment://` 参照のパスは V2 でも維持される ([Discord File component spec](https://docs.discord.com/developers/components/reference))。
 
-### 変更対象
+### 変更対象ファイル
 
-**新規ファイル:**
+**新規:**
 
 - `src/utils/chatContainerBuilder.ts` — V2 Container builder 群、上記の `buildStreamingContainer` / `buildFinalContainer` / `buildErrorContainer` / `buildStoppedContainer` + chunking utility
 - `tests/unit/utils/chatContainerBuilder.test.ts`
 
-**修正対象:**
+**修正:**
 
 - `src/bot/events/messageCreate.ts` — `embedBuilder.ts` 依存を `chatContainerBuilder` に置換、`updateStreamingMessages` を V2 ベースに書き換え、`channel.send`/`edit` 呼び出しの `embeds:` を `components:` + `flags: MessageFlags.IsComponentsV2` + **`allowedMentions: { parse: [] }`** に変更。`custom_id` には現状実装と同じく `triggerMessageId` (入力ユーザの `message.id`、Bot 返信送信前に既知) を埋める
 - `src/utils/embedBuilder.ts` — chat 専用関数 (`createStreamingEmbed`, `splitTextToMultipleMessages`) を削除。slash command で使う `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` / `splitTextIntoChunks` は残す
@@ -317,13 +321,6 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - **ephemeral 経路の漏れ**: 本 spec では chat 返信が ephemeral ではないため影響なしの見込みだが、`ephemeral: true` を grep して deprecated 警告が残っていないか念のため確認 (Phase B 着手時)。
 - **`code-execution` change との連携**: 本 spec が提供する `chatContainerBuilder` の streaming updater は code-execution の tool call 中の進捗表示 (「コード実行中...」) で利用される。code-execution が `chat-response-v2` 完成前に Phase C に着手する場合は updater stub + legacy 描画フォールバックが必要。共通 primitive は本 spec の builder にのみ集約し、code-execution は **独自の `codeContainerBuilder` (tool 結果出力専用)** を別途持つ (chat の text stream と code 実行結果は構造的に異なるため、無理に共通化しない)。
 - **`conversation-context` / `model-compare` との V2 一貫性**: ユーザ方針により、回答再生成 UI（[conversation-context](../conversation-context/design.md)）とモデル比較表示（[model-compare](../model-compare/design.md)）も Components V2 で組む。両者は本 spec の `chatContainerBuilder`（特に `buildFinalContainer` / 前回応答の折りたたみ相当・モデル別 Container）を再利用する想定で、本 spec が先行して builder を確定させる。再生成ボタンや「比較」用の Section accessory は本 spec の停止ボタンと同じ「Section は accessory 必須」「allowedMentions 強制」ルールに従う。なお Regenerate ボタン等の **新規インタラクションのハンドラ実装**は引き続き各 change 側の責務（本 spec は描画 primitive のみ提供）。
-
-## Out of Scope (将来別 spec 候補)
-
-- **Regenerate Button / Details toggle / Model-switch Button**: 本 spec は「現状 UX を V2 で再現」が目的。新規インタラクションは別 change `chat-response-interactions` として独立。
-- **`/help` `/status` `/config` `/model` の V2 化**: 静的・設定系で V2 の利得が小さく、移行コストに見合わない。
-- **`releaseNotificationService` の V2 化**: リリースノートは embed の構造が読みやすく、また「ユーザがリアクションで反応する」用途で legacy 互換が望ましい。
-- **stream chunking の markdown 賢化**: ` ``` ` block / table の境界を尊重した chunking。Phase C の手動回帰で実害を確認してから判断。
 
 ## 参照
 

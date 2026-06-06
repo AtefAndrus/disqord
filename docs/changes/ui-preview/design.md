@@ -88,3 +88,4 @@ Embed（color/title/author/description/fields/footer/thumbnail/image）、ボタ
 - [ ] （任意）リリース通知 Embed の fixture 化（`createReleaseEmbed` は private のため要 export 検討）
 - [ ] （要検討）Components V2 プレビュー対応: chat-response-v2 / code-execution / conversation-context / model-compare が V2 化するとチャット返信 UI がプレビュー対象外になる。`@skyra/discord-components-core` v4 が未対応のため、(a) V2 専用のブラウザ描画ライブラリ調査、(b) Container/TextDisplay/Section を模した自前 HTML/CSS テンプレート、(c) `payload.json` の構造ダンプ表示、のいずれかを別途設計する
 - [ ] （任意・今回見送り）CI 回帰ゲート（`payload.json` スナップショット差分）
+- [ ] `docs/changes/ui-preview/` 削除（リリース完了時、git 履歴がアーカイブ）

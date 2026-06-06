@@ -33,7 +33,7 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type:"fi
 
 ## Design
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/bot/events/messageCreate.ts` - 画像/PDF 添付検知、URL抽出
 - `src/services/chatService.ts` - 画像URL・ファイルを含むメッセージ送信
@@ -97,3 +97,4 @@ PDF 解析エンジンは OpenRouter のリクエストに `plugins: [{ id: "fil
 - [ ] マルチモーダル対応モデルの表示（`input_modalities`/`output_modalities`表示）
 - [ ] 画像URL対応（Discord CDN経由、実装上の上限 10 枚）
 - [ ] `ChatMessageContent` 型に `file` バリアント追加、`openrouter.ts` で `content` 配列に file を載せる
+- [ ] `docs/changes/multimodal/` 削除（リリース完了時、git 履歴がアーカイブ）

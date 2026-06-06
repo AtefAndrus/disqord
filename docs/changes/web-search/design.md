@@ -1,4 +1,4 @@
-# Web Search
+# Web 検索 + ツイート展開
 
 ## Why
 
@@ -57,7 +57,7 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 
 ### 1. 一般Web検索（server tools）
 
-**変更対象:**
+**変更対象ファイル**:
 
 - `src/types/index.ts` - `ChatCompletionRequest` を拡張（`tools?`）、`usage` に `server_tool_use` を追加
 - `src/services/chatService.ts` - 設定ON時に server tool を付与
@@ -118,7 +118,7 @@ export interface ChatCompletionRequest {
 
 ### 2. ツイート展開（fxtwitter）
 
-**変更対象:**
+**変更対象ファイル**:
 
 - `src/services/tweetService.ts` -（新規）ツイートURL検出・取得・整形
 - `src/services/chatService.ts` - ユーザー入力からツイートを抽出し、取得結果を非信頼データとして文脈に注入
@@ -260,3 +260,4 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - [ ] `guild_settings` に `web_search_enabled` / `twitter_expand_enabled` を追加（schema / types / repository / upsert）
 - [ ] `settingsService` に `setWebSearchEnabled` / `setTwitterExpandEnabled` を追加
 - [ ] テスト追加（検索ON/OFF分岐・server tool失敗時の継続・URL検出・レスポンス分類・インジェクション無害化・設定の読み書き）
+- [ ] `docs/changes/web-search/` 削除（リリース完了時、git 履歴がアーカイブ）

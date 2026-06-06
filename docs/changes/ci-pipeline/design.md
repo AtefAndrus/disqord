@@ -84,7 +84,7 @@
 - `rhysd/actionlint` は `action.yml` を持たず `uses:` 不可（docker image / バイナリ実行）。`zizmorcore/zizmor-action` は `action.yml` あり（SHA 固定可）。
 - `sha_pinning_required` は `uses:` の action 参照にのみ効く。docker イメージ / Dockerfile base / DL バイナリ / mise tool には効かない。
 
-### 変更/新規ファイル
+### 変更対象ファイル
 
 **新規:**
 
@@ -336,7 +336,7 @@ JSON
 - **branch protection API vs rulesets（将来検討）**: 本 change は旧 branch-protection API（`required_status_checks.checks`）を使う。これは 2026-06 時点で非推奨ではない（`contexts` フィールドのみ段階的廃止予定で、本 change は既に `checks` を使用）。ただし新規設定は **repository rulesets** が推奨されつつある（複数ルールの同時適用・bypass actor 設定・audit log 統合が可能、`app_id` 相当は rulesets では `integration_id`）。solo 運用の公開リポジトリでは今すぐ移行する実益は薄いため旧 API で着手し、必要が出たら rulesets へ移行する。
 - **GitHub 2026 Actions セキュリティ機能（GA 後に再評価）**: 2026-03 発表のロードマップに以下が含まれる。いずれも本 change の方針の上位互換になり得るため、GA 後に採用を検討する。①**Workflow lockfile**（`dependencies:` で workflow 依存を SHA+hash ロック＝`sha_pinning_required` の上位互換）②**Scoped secrets**（secret を workflow/branch/repo 粒度にバインド＝`COOLIFY_WEBHOOK` 等の scope 絞り）③**Native egress firewall**（hosted runner の L7 egress 制御＝不採用とした harden-runner の代替候補）④**Immutable actions publishing**（tag 不変化）。
 
-## References
+## 参照
 
 - 既存 workflow: `.github/workflows/deploy.yml`（release → Coolify webhook）
 - 既存 Dependabot: `.github/dependabot.yml`（bun/github-actions/docker、稼働中）

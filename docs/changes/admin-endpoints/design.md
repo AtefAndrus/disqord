@@ -45,9 +45,9 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `/admin/logs` と 
 
 ## Design
 
-### 変更対象
+### 変更対象ファイル
 
-**新規ファイル:**
+**新規:**
 
 - `src/utils/logFile.ts` — 回転ファイルライター
 - `src/utils/metrics.ts` — インメモリカウンタ + snapshot
@@ -59,7 +59,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `/admin/logs` と 
 - `tests/unit/http/adminAuth.test.ts`
 - `tests/unit/http/adminEndpoints.test.ts`
 
-**変更ファイル:**
+**修正:**
 
 - `src/utils/logger.ts` — `console[level]()` 直後に `logFileWriter.write(line)` を追加（遅延初期化）
 - `src/health.ts` — `HttpServerOptions` に `adminApiSecret` / `db` / `databasePath` を追加し、Bun.serve の `routes` で `/admin/logs` `/admin/metrics` を per-method（GET）定義（GET 以外は Bun 自動 405、`Allow: GET` を明示付与）。既存の `fetch` 分岐（`/health` `/webhook/github`）はフォールバックとして温存可
@@ -175,3 +175,4 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 - [ ] `bun test && bun typecheck && bun lint` パス
 - [ ] ローカルで E2E 確認（`bun dev` + `curl http://localhost:3000`）
 - [ ] Coolify に `ADMIN_API_SECRET` 設定 → 本番デプロイ → 本番 URL で curl 確認
+- [ ] `docs/changes/admin-endpoints/` 削除（リリース完了時、git 履歴がアーカイブ）

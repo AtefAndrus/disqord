@@ -32,10 +32,16 @@ Discord Bot that communicates with LLMs through OpenRouter.
 #### docs/changes/（機能別設計書）
 
 - **新機能検討時**: `docs/changes/<feature-name>/design.md` を `TEMPLATE.md` からコピーして作成
-  - フォルダ名は kebab-case（例: `web-search`, `model-compare`）
-  - テンプレートに従い Why / Goals・Non-Goals / Decisions / Design / Tasks を記載
+  - フォルダ名は kebab-case 英語（例: `web-search`, `model-compare`）。design.md のタイトル見出しは日本語の機能名で書く
+  - 必須セクション: Why / Goals・Non-Goals / Decisions / Design / Tasks
+  - 任意セクション: 「依存 / 関連 change」「Open Questions / Risks」「参照」（不要なら節ごと削除）。参照の見出しは日本語「参照」に統一する（「References」は使わない）
   - 詳細設計は段階的に追記可能（一度に完成させる必要なし）
-- **実装完了時**: changesフォルダを削除
+- **change の粒度（フォルダ vs ファイル）**: 分割軸はドキュメントの大きさではなく **リリース単位**
+  - 別々にリリースする機能 → 別フォルダ（別 change）。フォルダがバックログ項目・リリース・削除の単位
+  - 同時リリースの複数サブ機能（小〜中規模）→ 1 フォルダ・単一 `design.md`、Design 内を `---` で機能別小節に分割
+  - 同時リリースの複数サブ機能（大規模かつ共有コアあり）→ 1 フォルダ・複数ファイル。`design.md` をインデックス（共有 Why/Decisions/依存 + リンク）にし、サブ機能を `design.<subfeature>.md` に分割。フォルダはリリース単位として不可分（他 change からの参照は `design.md` に向けてリンク安定性を保つ）
+  - サブ機能を別々にリリースしたくなったら、ファイル分割ではなくフォルダ分割（別 change）にする
+- **実装完了時**: changesフォルダを削除（Tasks の最終項目に削除を明記しておく）
   - Git履歴がアーカイブとして機能するため、別途保存は不要
 
 #### README.md（自動生成セクション）

@@ -30,7 +30,7 @@
 
 ### 設定階層化
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加、`llm_params`カラム追加
 - `src/db/repositories/` - 新規Repository追加
@@ -108,7 +108,7 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 
 ### カスタムシステムプロンプト
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/bot/commands/prompt.ts` - `prompt`コマンド追加
 - `src/bot/commands/handlers.ts` - promptハンドラー追加
@@ -159,3 +159,4 @@ You are a helpful AI assistant in a Discord server.
 - [ ] Phase 2: `/config params`サブコマンド実装
 - [ ] `/prompt`コマンド実装（set/show/reset）
 - [ ] システムプロンプトの適用ロジック
+- [ ] `docs/changes/settings-hierarchy/` 削除（リリース完了時、git 履歴がアーカイブ）

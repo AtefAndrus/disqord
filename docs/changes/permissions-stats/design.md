@@ -30,7 +30,7 @@ Botが全チャンネル・全ユーザに無制限でアクセス可能な状�
 
 ### 権限管理
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/db/schema.ts` - guild_settings拡張
 - `src/bot/events/messageCreate.ts` - 権限チェック追加
@@ -57,7 +57,7 @@ ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
 
 ### 使用統計
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/db/schema.ts` - `usage_logs`テーブル追加
 - `src/db/repositories/usageRepository.ts` - 使用ログのCRUD
@@ -164,3 +164,4 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 - [ ] chatServiceにログ記録追加
 - [ ] statsService実装
 - [ ] `/stats`コマンド実装（server/user/model）
+- [ ] `docs/changes/permissions-stats/` 削除（リリース完了時、git 履歴がアーカイブ）

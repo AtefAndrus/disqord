@@ -42,9 +42,9 @@
 
 ## Design
 
-### 変更対象
+### 変更対象ファイル
 
-**修正対象:**
+**修正:**
 
 - `.env.example` — 元々 envVars.ts と独立に手書き同期されており、今回の `v4-flash` 切替でも漏れて単独 commit (35c9cc8) で追従が必要だった。`scripts/generate-readme.ts` を `envVarDefinitions` から `.env.example` を生成する責務も追加 (`name=<default>` 形式で出力)、手書き同期を撤廃する。Required な変数 (DISCORD_TOKEN 等、default なし) は空値 `NAME=` で出す
 - `src/config/index.ts` — `defaultModel: z.string().default(...)` → `z.string().min(1)`
@@ -146,7 +146,7 @@ pre-commit:
 - **`scripts/generate-readme.ts` のリネーム回避**: スクリプト名が "readme" のままで実際は CLAUDE.md も触るのは紛らわしい。将来的に `generate-docs.ts` にリネームしたくなるが、本 change ではスコープ外（リネームは lefthook 設定 + 既存テスト + git mv が伴うため、本 change が肥大化する）。リネームしたくなったら別 change。
 - **既存 DB 行の扱い**: 旧 default (`deepseek-r1-0528:free`) を持つ guild_settings 行が残るが、ユーザが意図的に設定した可能性があるため触らない。問題が出たら別 change で対応。
 
-## References
+## 参照
 
 - 元議論: code-execution 設計時のデフォルトモデル切替で 6 ファイル編集が発生し、SSOT 化の必要性が顕在化
 - 関連 change: [code-execution](../code-execution/design.md) — 同時期にデフォルトモデルを参照する箇所が増える見込み

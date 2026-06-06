@@ -30,7 +30,7 @@
 
 ### コンテキスト対話
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/services/chatService.ts` - Discord APIから履歴取得、複数メッセージ対応
 - `src/bot/events/messageCreate.ts` - channelId抽出
@@ -73,7 +73,7 @@ const conversationMessages = messages
 
 ### 回答再生成機能
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/db/schema.ts` - `response_generations`テーブル追加
 - `src/bot/events/messageCreate.ts` - 再生成ボタン追加、インタラクション処理
@@ -116,7 +116,7 @@ CREATE INDEX idx_response_user_msg ON response_generations(user_message_id);
 
 ### メッセージ編集再生成
 
-**変更対象**:
+**変更対象ファイル**:
 
 - `src/bot/events/messageUpdate.ts` - 新規作成
 - `src/services/chatService.ts` - 編集検知、再生成ロジック
@@ -178,3 +178,4 @@ microsandbox SDK 側にはこの用途に使える API が揃っている（npm 
 - [ ] 回答再生成ボタン（Components V2: Section accessory ボタン + 前回応答を Spoiler Container、`chatContainerBuilder` 再利用、DBマイグレーション: `response_generations`）
 - [ ] メッセージ編集再生成（最新回答のみ対象、`messageUpdate`イベント。`MessageContent` intent / partial ガード確認）
 - [ ] `/help`コマンド一覧の動的生成（SlashCommandBuilderから自動生成）
+- [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
