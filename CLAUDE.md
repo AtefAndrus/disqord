@@ -180,6 +180,8 @@ The skill handles: version bump, CHANGELOG.md generation, progress.md update, co
 - Discord message limit: 2000 characters (split required)
 - Default model: `deepseek/deepseek-v4-flash:free`
 - SQLite WAL mode enabled
+- bun のバージョンは `mise.toml` の minor 線（`bun = "1.x"`）が SSOT。上げるときは `Dockerfile` の tag/digest と `package.json` の `engines.bun` を同 PR で揃える（CI の drift-check が不一致を fail にする）
+- Dependabot 管理外の手動 pin（定期 bump 対象）: `ci.yml` の actionlint docker image digest / zizmor-action の `version` 入力 / mise-action の `version` 入力
 
 ## References
 

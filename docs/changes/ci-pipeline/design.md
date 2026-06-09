@@ -317,7 +317,7 @@ JSON
 - [x] `gh api` で `sha_pinning_required=true` を適用
 - [x] branch protection 適用前に check-runs API で各 job の `app.id` を実値確認（3 job とも `15368` で確定）
 - [x] `gh api` で main ブランチ保護を `required_status_checks.checks` で適用（`contexts` は併記すると 422 になるため省略。strict=true / enforce_admins=false / force-push・削除禁止）
-- [x] 手動更新対象（Dependabot 管理外）を運用メモ化し定期 bump: actionlint image digest / zizmor CLI `version` / mise `version`（`ci.yml` 冒頭の運用メモコメントに記載）
+- [x] 手動更新対象（Dependabot 管理外）を運用メモ化し定期 bump: actionlint image digest / zizmor CLI `version` / mise `version`（CLAUDE.md の Notes に記載）
 - [x] 故意にエラー/版不一致を含む PR で merge ブロックを確認し破棄（PR #54: Dockerfile の bun minor を 1.4 に drift → quality fail → `mergeStateStatus=BLOCKED` を確認しクローズ）
 - [x] ドキュメント編集後は `bun run format:md` を流す運用を徹底（CI は `lint:md` のまま auto-fix はしない。グローバル CLAUDE.md の既存運用で担保）
 - [x] （任意）README に CI バッジ追加
