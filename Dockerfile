@@ -1,11 +1,12 @@
-FROM oven/bun:1.3-slim AS base
+FROM oven/bun:1.3-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04 AS base
 WORKDIR /app
 
 # Install dependencies (cache optimization)
 FROM base AS install
 RUN mkdir -p /temp/prod
 COPY package.json bun.lock /temp/prod/
-RUN cd /temp/prod && bun install --frozen-lockfile --production
+# --ignore-scripts: prepare (lefthook install) は dev 用 hook 設定で、本番イメージでは不要かつ devDependency 不在で失敗する
+RUN cd /temp/prod && bun install --frozen-lockfile --production --ignore-scripts
 
 # Release image
 FROM base AS release

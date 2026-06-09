@@ -1,23 +1,24 @@
 version: 2
+
+multi-ecosystem-groups:
+  all-dependencies:
+    schedule:
+      interval: "weekly"
+      day: "monday"
+
 updates:
   - package-ecosystem: "bun"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    target-branch: "main"
+    patterns: ["*"]
+    multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    target-branch: "main"
+    patterns: ["*"]
+    multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
   - package-ecosystem: "docker"
     directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    target-branch: "main"
+    patterns: ["*"]
+    multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5

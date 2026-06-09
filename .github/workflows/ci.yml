@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      # bun の minor 線が mise.toml(SSOT) / Dockerfile / package.json で一致するか検証（bun 不要・純テキスト）
+      - name: bun version drift check (mise SSOT)
+        run: |
+          mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+).*/\1/p' mise.toml)
+          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile | head -n1)
+          eng_v=$(jq -r '.engines.bun' package.json | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/')
+          echo "mise=$mise_v dockerfile=$docker_v engines=$eng_v"
+          if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$eng_v" ]; then
+            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
+          fi
+      # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          version: "2026.6.1" # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
+          install_args: bun # bun のみ。git-cliff は CI に入れない
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run lint:md
+
+  actions-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          docker run --rm -v "$PWD:/repo" --workdir /repo \
+            docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+      - uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+        with:
+          version: "1.25.2" # zizmor CLI 版を固定（既定 latest=可変）
+          advanced-security: false # SARIF/GHAS アップロード無効化（security-events: write 昇格を回避）
+          online-audits: false # 外部 API 参照を無効化（offline 運用）
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - run: docker build -t disqord:ci .

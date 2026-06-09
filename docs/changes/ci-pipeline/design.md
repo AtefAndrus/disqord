@@ -94,7 +94,7 @@
 
 - `.github/dependabot.yml` — `multi-ecosystem-groups` で1 PR 集約
 - `.github/workflows/deploy.yml` — `permissions: {}` を追加
-- `Dockerfile` — base image を `oven/bun:1.3-slim@sha256:<digest>` に digest 固定
+- `Dockerfile` — base image を `oven/bun:1.3-slim@sha256:<digest>` に digest 固定。加えて `bun install --production` に `--ignore-scripts` を追加（未リリースの `prepare: lefthook install` が production install で実行され exit 127 になる破損を CI 実装中の `docker build` 検証で検出・修正）
 - `package.json` の `engines.bun` — 値は据え置きだが drift-check の対象として mise の minor 線と一致を維持
 
 **repo 設定（git 管理外。実装時に `gh api`）:**
@@ -104,7 +104,7 @@
 
 ### CI workflow スケルトン（`.github/workflows/ci.yml`）
 
-> action の SHA・zizmor/mise の tool 版・actionlint の docker digest は固定値（actionlint digest は `docker.io/rhysd/actionlint:1.7.12` の **multi-arch OCI image index**、amd64/arm64 両対応）。Dockerfile base image の digest のみ実装時に `docker pull oven/bun:1.3-slim` で解決する。
+> action の SHA・zizmor/mise の tool 版・actionlint の docker digest は固定値（actionlint digest は `docker.io/rhysd/actionlint:1.7.12` の **multi-arch OCI image index**、amd64/arm64 両対応）。Dockerfile base image の digest は `docker buildx imagetools inspect oven/bun:1.3-slim` で解決済み（`sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04` = multi-arch index）。
 
 ```yaml
 name: CI
@@ -132,7 +132,7 @@ jobs:
       - name: bun version drift check (mise SSOT)
         run: |
           mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+).*/\1/p' mise.toml)
-          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile)
+          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile | head -n1)
           eng_v=$(jq -r '.engines.bun' package.json | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/')
           echo "mise=$mise_v dockerfile=$docker_v engines=$eng_v"
           if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$eng_v" ]; then
@@ -141,7 +141,7 @@ jobs:
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
       - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          version: "2026.6.0"  # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
+          version: "2026.6.1"  # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
           install_args: bun     # bun のみ。git-cliff は CI に入れない
       - run: bun install --frozen-lockfile
       - run: bun run lint        # biome check .
@@ -296,17 +296,17 @@ JSON
 
 ## Tasks
 
-- [ ] `.github/workflows/ci.yml` を新規作成（quality（drift-check ステップ含む）/ actions-security / docker-build、SHA 固定・最小権限・persist-credentials:false・concurrency）
-- [ ] CI の bun を `jdx/mise-action`（`install_args: bun`）で取得（setup-bun は使わない、git-cliff を CI に入れない）
-- [ ] zizmor-action に `advanced-security: false` / `online-audits: false` / `version` 固定を設定し、findings で CI が fail することを確認
+- [x] `.github/workflows/ci.yml` を新規作成（quality（drift-check ステップ含む）/ actions-security / docker-build、SHA 固定・最小権限・persist-credentials:false・concurrency）
+- [x] CI の bun を `jdx/mise-action`（`install_args: bun`）で取得（setup-bun は使わない、git-cliff を CI に入れない）。mise 本体は v2026.6.1 に固定（実装時の latest）
+- [x] zizmor-action に `advanced-security: false` / `online-audits: false` / `version` 固定を設定（ローカル `zizmor 1.25.2 --no-online-audits` で両 workflow とも findings ゼロを確認。findings 時に CI が fail する挙動は zizmor-action の既定動作に依拠、実 findings での検証は未実施）
 - [x] actionlint docker image の digest を固定（`sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` = `docker.io/rhysd/actionlint:1.7.12` の multi-arch OCI image index。`docker run` がこの index を解決し amd64/arm64 どちらの runner でも動く）
-- [ ] Dockerfile base を `oven/bun:1.3-slim@sha256:<digest>` に digest 固定（digest を解決）
-- [ ] bun version drift-check を実 mise.toml / Dockerfile / package.json で検証（jq + アンカー grep、minor 線比較、空値ガード）。mise 側は `[tools]` テーブル内の `bun` のみを拾うこと、Dockerfile 側は canonical な `FROM oven/bun:...` 形を前提とすることを確認/明記
+- [x] Dockerfile base を `oven/bun:1.3-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04` に digest 固定（multi-arch index digest。`docker build` 成功確認済み。副産物として `--ignore-scripts` 追加で prepare スクリプト破損を修正）
+- [x] bun version drift-check を実 mise.toml / Dockerfile / package.json で検証（jq + アンカー grep、minor 線比較、空値ガード。ローカル実行で mise=dockerfile=engines=1.3 の緑を確認。Dockerfile 側は `head -n1` で先頭 FROM のみ参照）
 - [x] `[settings] env_file = ".env"` 不在時の挙動: mise v2026.6.0 では `.env` 欠落は警告なく無視され exit 0。`install_args: bun` の install は env を要求しないため、空 `.env` 作成ガードは不要
 - [ ] CI を PR で走らせ、quality / actions-security / docker-build が全て緑になることを確認
-- [ ] `.github/dependabot.yml` を `multi-ecosystem-groups` 化（`oven/bun` は ignore しない）
+- [x] `.github/dependabot.yml` を `multi-ecosystem-groups` 化（`oven/bun` は ignore しない）
 - [ ] bun エコシステムが multi-ecosystem-group に参加できるか実 PR で確認（不可なら別グループにフォールバック）
-- [ ] `.github/workflows/deploy.yml` に `permissions: {}` を追加
+- [x] `.github/workflows/deploy.yml` に `permissions: {}` を追加
 - [ ] PR を main にマージ → CI を main 上で 1 回実行し status context を登録
 - [ ] `gh api` で `sha_pinning_required=true` を適用
 - [ ] branch protection 適用前に `gh api repos/AtefAndrus/disqord/commits/main/check-runs` で各 job の `app.id` を実値確認（`app_id` を確定 or 省略）
@@ -342,10 +342,11 @@ JSON
 - 既存 Dependabot: `.github/dependabot.yml`（bun/github-actions/docker、稼働中）
 - 参照バージョン（2026-06-05 時点）:
   - actions/checkout v6.0.3 (`df4cb1c069e1874edd31b4311f1884172cec0e10`)
-  - jdx/mise-action v4.1.0 (`dba19683ed58901619b14f395a24841710cb4925`) / mise 本体 v2026.6.0
+  - jdx/mise-action v4.1.0 (`dba19683ed58901619b14f395a24841710cb4925`) / mise 本体 v2026.6.1（2026-06-10 再検証時の latest）
   - zizmorcore/zizmor-action v0.5.6 (`5f14fd08f7cf1cb1609c1e344975f152c7ee938d`) / zizmor CLI v1.25.2
   - rhysd/actionlint v1.7.12 (`914e7df21a07ef503a81201c76d2b11c789d3fca`、docker digest `sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` = `docker.io/rhysd/actionlint:1.7.12` の multi-arch OCI image index、amd64/arm64 両対応)
   - GitHub Actions app_id: `15368`（実値は CI 初回 run 後に確認）
+  - oven/bun:1.3-slim digest: `sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04`（multi-arch index、2026-06-10 解決）
 - Dependabot multi-ecosystem: <https://docs.github.com/en/code-security/dependabot/working-with-dependabot/configuring-multi-ecosystem-updates>
 - Dependabot multi-ecosystem GA 告知: <https://github.blog/changelog/2025-07-01-single-pull-request-for-dependabot-multi-ecosystem-support/>
 - Branch protection API: <https://docs.github.com/en/rest/branches/branch-protection>
