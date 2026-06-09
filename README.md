@@ -1,5 +1,7 @@
 # DisQord
 
+[![CI](https://github.com/AtefAndrus/disqord/actions/workflows/ci.yml/badge.svg)](https://github.com/AtefAndrus/disqord/actions/workflows/ci.yml)
+
 Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び出す単発応答型。
 
 ## セットアップ
