@@ -270,7 +270,6 @@ gh api -X PUT repos/AtefAndrus/disqord/branches/main/protection \
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": [],
     "checks": [
       {"context": "quality", "app_id": 15368},
       {"context": "actions-security", "app_id": 15368},
@@ -286,7 +285,8 @@ gh api -X PUT repos/AtefAndrus/disqord/branches/main/protection \
 JSON
 ```
 
-- `app_id: 15368` は GitHub Actions の app id（一般値）だが brittle。CI 初回 run 後に実値を確認してから設定する: `gh api repos/AtefAndrus/disqord/commits/main/check-runs --jq '.check_runs[]|select(.name=="quality")|.app.id'`。確信が無ければ `app_id` を省略し provider 自動選択に委ねる（`contexts: []` は必須スキーマ回避のため残す）。
+- `app_id: 15368` は CI 初回 run 後に check-runs API で実値確認済み（quality / actions-security / docker-build いずれも `15368` = github-actions app）。
+- `contexts: []` を `checks` と併記すると API が 422（oneOf 競合）を返す。`contexts` は完全に省略する（適用済みの実証結果）。
 - `required_linear_history` は今回の Goal 外かつ squash/rebase merge 設定に依存するため入れない（必要なら repo の merge 設定を確認のうえ別途）。
 - `strict: true`（branch 最新化必須）は Dependabot PR が積むと再 push が増えるが、1 PR 集約で PR 数自体を抑えるため両立しやすい。煩雑なら `false` に緩める。
 - 必須チェックの context は **CI が一度実行され GitHub に登録された後** でないと設定に現れない。`ci.yml` を main にマージ → 1 回 run させてから protection を適用する。
@@ -309,18 +309,18 @@ JSON
 - [x] Dockerfile base を `oven/bun:1.3-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04` に digest 固定（multi-arch index digest。`docker build` 成功確認済み。副産物として `--ignore-scripts` 追加で prepare スクリプト破損を修正）
 - [x] bun version drift-check を実 mise.toml / Dockerfile / package.json で検証（jq + アンカー grep、minor 線比較、空値ガード。ローカル実行で mise=dockerfile=engines=1.3 の緑を確認。Dockerfile 側は `head -n1` で先頭 FROM のみ参照）
 - [x] `[settings] env_file = ".env"` 不在時の挙動: mise v2026.6.0 では `.env` 欠落は警告なく無視され exit 0。`install_args: bun` の install は env を要求しないため、空 `.env` 作成ガードは不要
-- [ ] CI を PR で走らせ、quality / actions-security / docker-build が全て緑になることを確認
+- [x] CI を PR で走らせ、quality / actions-security / docker-build が全て緑になることを確認（PR #52）
 - [x] `.github/dependabot.yml` を `multi-ecosystem-groups` 化（`oven/bun` は ignore しない）
-- [ ] bun エコシステムが multi-ecosystem-group に参加できるか実 PR で確認（不可なら別グループにフォールバック）
+- [ ] bun エコシステムが multi-ecosystem-group に参加できるか実 PR で確認（不可なら別グループにフォールバック）。config 検証は pass 済み（Dependabot の dependabot.yml チェック緑）。実際の集約は次回 weekly 実行（月曜）の PR で確認する
 - [x] `.github/workflows/deploy.yml` に `permissions: {}` を追加
-- [ ] PR を main にマージ → CI を main 上で 1 回実行し status context を登録
-- [ ] `gh api` で `sha_pinning_required=true` を適用
-- [ ] branch protection 適用前に `gh api repos/AtefAndrus/disqord/commits/main/check-runs` で各 job の `app.id` を実値確認（`app_id` を確定 or 省略）
-- [ ] `gh api` で main ブランチ保護を `required_status_checks.checks`（`contexts: []` 併記）で適用（context 名一致を確認）
-- [ ] 手動更新対象（Dependabot 管理外）を運用メモ化し定期 bump: actionlint image digest / zizmor CLI `version` / mise `version`
-- [ ] 故意にエラー/版不一致を含む PR で merge ブロックを確認し破棄
-- [ ] ドキュメント編集後は `bun run format:md` を流す運用を徹底（CI は `lint:md` のまま auto-fix はしない）
-- [ ] （任意）README に CI バッジ追加
+- [x] PR を main にマージ → CI を main 上で 1 回実行し status context を登録
+- [x] `gh api` で `sha_pinning_required=true` を適用
+- [x] branch protection 適用前に check-runs API で各 job の `app.id` を実値確認（3 job とも `15368` で確定）
+- [x] `gh api` で main ブランチ保護を `required_status_checks.checks` で適用（`contexts` は併記すると 422 になるため省略。strict=true / enforce_admins=false / force-push・削除禁止）
+- [x] 手動更新対象（Dependabot 管理外）を運用メモ化し定期 bump: actionlint image digest / zizmor CLI `version` / mise `version`（`ci.yml` 冒頭の運用メモコメントに記載）
+- [x] 故意にエラー/版不一致を含む PR で merge ブロックを確認し破棄（PR #54: Dockerfile の bun minor を 1.4 に drift → quality fail → `mergeStateStatus=BLOCKED` を確認しクローズ）
+- [x] ドキュメント編集後は `bun run format:md` を流す運用を徹底（CI は `lint:md` のまま auto-fix はしない。グローバル CLAUDE.md の既存運用で担保）
+- [x] （任意）README に CI バッジ追加
 - [ ] docs/changes/ci-pipeline/ 削除（リリース完了時）
 
 ## Open Questions / Risks
