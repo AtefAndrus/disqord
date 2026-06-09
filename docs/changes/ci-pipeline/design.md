@@ -201,33 +201,32 @@ multi-ecosystem-groups:
     schedule:
       interval: "weekly"
       day: "monday"
+    open-pull-requests-limit: 5
 
 updates:
   - package-ecosystem: "bun"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
   - package-ecosystem: "docker"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
 ```
 
 - ci.yml に実 action（checkout / mise-action / zizmor-action）が入ることで github-actions エコシステムが SHA 追従の bump を出すようになり、`all-dependencies` グループに合流する。Dependabot は SHA 固定 + バージョンコメント形式を維持するため `sha_pinning_required` と矛盾しない。
 - 各 update に `cooldown: default-days: 7` を設定する。zizmor の `dependabot-cooldown` 監査（medium）が cooldown 不在を fail にするため必須（実 CI で検出済み）。リリース直後の compromised version を即取り込まないための供給網対策で、本 change の方針とも整合する。
+- `open-pull-requests-limit` は multi-ecosystem-group 配下の update には置けず、グループ側に置く（Dependabot の config 検証チェックが update 側指定を invalid として fail する。実検証済み）。
 - `multi-ecosystem-groups` で `bun` エコシステムが参加可能かは公式例（npm/docker/actions）に明示が無いため、実装時に PR が実際に集約されるか確認する（参加不可なら bun だけ別グループにフォールバック）。
 - 通常の `oven/bun` digest 更新はタグを変えないため drift-check は緑で、集約 PR に安全に同梱される。drift-check が赤になるのは「mise を上げずに Dockerfile の minor だけ変わった」場合に限られ、Dependabot の通常運用では起きにくい（万一その経路が煩雑なら docker を別グループに分離）。
 - **Dependabot が更新しない pin がある**: actionlint の docker image（`run:` 文字列内）、zizmor CLI の `version` 入力、mise の `version` 入力は Dependabot の管理外。これらは手動更新（下記 Tasks）。Dependabot が追うのは `uses:` action / Dockerfile の base image / bun パッケージのみ。
