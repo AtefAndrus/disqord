@@ -12,13 +12,19 @@ updates:
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   - package-ecosystem: "docker"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7

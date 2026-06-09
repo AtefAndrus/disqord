@@ -208,19 +208,26 @@ updates:
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
   - package-ecosystem: "docker"
     directory: "/"
     patterns: ["*"]
     multi-ecosystem-group: "all-dependencies"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
 ```
 
 - ci.yml に実 action（checkout / mise-action / zizmor-action）が入ることで github-actions エコシステムが SHA 追従の bump を出すようになり、`all-dependencies` グループに合流する。Dependabot は SHA 固定 + バージョンコメント形式を維持するため `sha_pinning_required` と矛盾しない。
+- 各 update に `cooldown: default-days: 7` を設定する。zizmor の `dependabot-cooldown` 監査（medium）が cooldown 不在を fail にするため必須（実 CI で検出済み）。リリース直後の compromised version を即取り込まないための供給網対策で、本 change の方針とも整合する。
 - `multi-ecosystem-groups` で `bun` エコシステムが参加可能かは公式例（npm/docker/actions）に明示が無いため、実装時に PR が実際に集約されるか確認する（参加不可なら bun だけ別グループにフォールバック）。
 - 通常の `oven/bun` digest 更新はタグを変えないため drift-check は緑で、集約 PR に安全に同梱される。drift-check が赤になるのは「mise を上げずに Dockerfile の minor だけ変わった」場合に限られ、Dependabot の通常運用では起きにくい（万一その経路が煩雑なら docker を別グループに分離）。
 - **Dependabot が更新しない pin がある**: actionlint の docker image（`run:` 文字列内）、zizmor CLI の `version` 入力、mise の `version` 入力は Dependabot の管理外。これらは手動更新（下記 Tasks）。Dependabot が追うのは `uses:` action / Dockerfile の base image / bun パッケージのみ。
@@ -298,7 +305,7 @@ JSON
 
 - [x] `.github/workflows/ci.yml` を新規作成（quality（drift-check ステップ含む）/ actions-security / docker-build、SHA 固定・最小権限・persist-credentials:false・concurrency）
 - [x] CI の bun を `jdx/mise-action`（`install_args: bun`）で取得（setup-bun は使わない、git-cliff を CI に入れない）。mise 本体は v2026.6.1 に固定（実装時の latest）
-- [x] zizmor-action に `advanced-security: false` / `online-audits: false` / `version` 固定を設定（ローカル `zizmor 1.25.2 --no-online-audits` で両 workflow とも findings ゼロを確認。findings 時に CI が fail する挙動は zizmor-action の既定動作に依拠、実 findings での検証は未実施）
+- [x] zizmor-action に `advanced-security: false` / `online-audits: false` / `version` 固定を設定。findings で CI が fail する挙動は実証済み（dependabot.yml の cooldown 不在を medium 3 件として検出し exit 13 で fail → cooldown 追加で解消）
 - [x] actionlint docker image の digest を固定（`sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667` = `docker.io/rhysd/actionlint:1.7.12` の multi-arch OCI image index。`docker run` がこの index を解決し amd64/arm64 どちらの runner でも動く）
 - [x] Dockerfile base を `oven/bun:1.3-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04` に digest 固定（multi-arch index digest。`docker build` 成功確認済み。副産物として `--ignore-scripts` 追加で prepare スクリプト破損を修正）
 - [x] bun version drift-check を実 mise.toml / Dockerfile / package.json で検証（jq + アンカー grep、minor 線比較、空値ガード。ローカル実行で mise=dockerfile=engines=1.3 の緑を確認。Dockerfile 側は `head -n1` で先頭 FROM のみ参照）
