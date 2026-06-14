@@ -14,7 +14,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `/admin/logs` と 
 - ログをファイルにローテーション保存し（10 MB × 5 世代）、再起動を跨いで直近ログを保持
 - `process.uptime()` / `memoryUsage()` / Discord ws ping / OpenRouter リクエスト・エラー数 / コマンド実行数 / SQLite 合計バイト数 / ログ合計バイト数 を JSON で返す軽量メトリクス
 - ログのレベルフィルタ（`?level=warn`）、行数指定（`?lines=500`）、時刻フィルタ（`?since=<ISO>`）対応
-- 既存の Cloudflare Tunnel 経路をそのまま使い、追加インフラ不要
+- 既存の公開 HTTPS 経路を流用し、追加インフラ不要（現状は Cloudflare Tunnel）
 
 **Non-Goals:**
 
