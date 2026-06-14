@@ -33,6 +33,10 @@
 
 優先度: 高 / 設計: [chat-response-v2](changes/chat-response-v2/design.md)（multimodal 完了後に着手）
 
+### リリース更新通知のポーリング化
+
+優先度: 中 / 設計: [release-polling](changes/release-polling/design.md)（push 廃止・セルフホスト対応。admin-endpoints の Tunnel 依存と関連）
+
 ### コード実行（microsandbox）
 
 優先度: 中 / 設計: [code-execution](changes/code-execution/design.md)
