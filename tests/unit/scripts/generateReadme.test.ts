@@ -241,9 +241,7 @@ describe("generateDefaultModelLine", () => {
   });
 
   test("DEFAULT_MODEL エントリが無い場合はエラー", () => {
-    const vars: EnvVarDefinition[] = [
-      { name: "OTHER", required: true, description: "other" },
-    ];
+    const vars: EnvVarDefinition[] = [{ name: "OTHER", required: true, description: "other" }];
     expect(() => generateDefaultModelLine(vars)).toThrow("DEFAULT_MODEL definition");
   });
 
