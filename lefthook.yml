@@ -1,4 +1,13 @@
 pre-commit:
+  piped: true
   commands:
-    generate-readme:
+    01_generate-readme:
       run: bun scripts/generate-readme.ts && git add README.md CLAUDE.md .env.example
+    02_lint:
+      run: bun run lint
+    03_lint-md:
+      run: bun run lint:md
+    04_typecheck:
+      run: bun run typecheck
+    05_test:
+      run: bun test
