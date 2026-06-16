@@ -1,5 +1,6 @@
 import { type Message, MessageType, type ThreadChannel } from "discord.js";
 import { AppError } from "../../errors";
+import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
@@ -85,7 +86,29 @@ export function createMessageCreateHandler(
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
 
-    if (!content) {
+    // 添付ファイルをパース（画像 / PDF / 拒否を分類）
+    const attachmentResult = parseAttachments(message.attachments);
+
+    if (attachmentResult.rejected.length > 0) {
+      const rejectionLines = attachmentResult.rejected
+        .map((r) =>
+          r.reason === "MISSING_MIME"
+            ? `- ${r.filename}: MIME を判定できませんでした`
+            : `- ${r.filename}: サポート外の形式です`,
+        )
+        .join("\n");
+      const errorEmbed = createErrorEmbed(
+        `サポートされていない添付ファイルが含まれています。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
+        "添付ファイルエラー",
+      );
+      await message.reply({
+        embeds: [errorEmbed],
+        allowedMentions: { repliedUser: false },
+      });
+      return;
+    }
+
+    if (!content && attachmentResult.parts.length === 0) {
       const errorEmbed = createErrorEmbed("メッセージを入力してください。", "入力エラー");
       await message.reply({
         embeds: [errorEmbed],
@@ -102,6 +125,23 @@ export function createMessageCreateHandler(
     const modelName =
       (await modelService.getModelName(settings.defaultModel)) ?? settings.defaultModel;
     const color = getColorForModel(settings.defaultModel);
+
+    // 画像添付がある場合、モデルが画像入力に対応するかを事前判定
+    // null（メタ取得不可 / architecture 欠落）は判定不能のため透過し OpenRouter 側に委ねる
+    if (attachmentResult.hasImage) {
+      const capable = await modelService.isMultimodalCapable(settings.defaultModel, "image");
+      if (capable === false) {
+        const errorEmbed = createErrorEmbed(
+          `現在のモデル \`${settings.defaultModel}\` は画像入力に対応していません。\n\`/disqord model set\` で画像対応モデルに切り替えてください。`,
+          "モデル非対応",
+        );
+        await message.reply({
+          embeds: [errorEmbed],
+          allowedMentions: { repliedUser: false },
+        });
+        return;
+      }
+    }
 
     try {
       // 初期メッセージ送信（Embed形式、停止ボタン付き）
@@ -121,7 +161,7 @@ export function createMessageCreateHandler(
       try {
         const stream = chatService.generateResponseStream(
           message.guild.id,
-          { text: content },
+          { text: content, parts: attachmentResult.parts },
           message.id,
         );
 

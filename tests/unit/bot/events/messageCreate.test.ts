@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { MessageType } from "discord.js";
+import { type Attachment, Collection, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IChatService } from "../../../../src/services/chatService";
@@ -19,12 +19,32 @@ interface MockMessage {
   client: { user: { id: string } | null };
   mentions: { has: ReturnType<typeof mock> };
   content: string;
+  attachments: Collection<string, Attachment>;
   channel: {
     id: string;
     send: ReturnType<typeof mock>;
     isThread: () => boolean;
   };
   reply: ReturnType<typeof mock>;
+}
+
+type AttachmentFixture = {
+  id: string;
+  name: string;
+  url: string;
+  contentType: string | null;
+};
+
+function makeAttachments(fixtures: AttachmentFixture[]): Collection<string, Attachment> {
+  const collection = new Collection<string, Attachment>();
+  for (const fixture of fixtures) {
+    collection.set(fixture.id, {
+      name: fixture.name,
+      url: fixture.url,
+      contentType: fixture.contentType,
+    } as unknown as Attachment);
+  }
+  return collection;
 }
 
 function createMockStreamGenerator(fullText: string) {
@@ -123,6 +143,7 @@ describe("createMessageCreateHandler", () => {
       client: { user: { id: "123456789" } },
       mentions: { has: mock(() => true) },
       content: "<@123456789> Hello",
+      attachments: makeAttachments([]),
       channel: {
         id: "channel-123",
         send: mockSend,
@@ -220,10 +241,10 @@ describe("createMessageCreateHandler", () => {
       }),
     );
 
-    // generateResponseStreamが呼ばれる
+    // generateResponseStreamが呼ばれる（parts は空配列）
     expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
       "guild-123",
-      { text: "Hello" },
+      { text: "Hello", parts: [] },
       "msg-123",
     );
 
@@ -375,6 +396,196 @@ describe("createMessageCreateHandler", () => {
     const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
     // 最初のsendは「生成中...」、その後に追加メッセージ
     expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  describe("マルチモーダル入力", () => {
+    test("画像添付 + マルチモーダル対応モデル → parts に image_url を含めて chatService を呼ぶ", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "photo.png",
+          url: "https://cdn.discord.test/photo.png",
+          contentType: "image/png",
+        },
+      ]);
+      (mockModelService.isMultimodalCapable as ReturnType<typeof mock>).mockResolvedValueOnce(true);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+        "guild-123",
+        {
+          text: "Hello",
+          parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
+        },
+        "msg-123",
+      );
+    });
+
+    test("画像添付 + 非対応モデル (isMultimodalCapable=false) → 警告を返し chatService 未呼び出し", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "photo.png",
+          url: "https://cdn.discord.test/photo.png",
+          contentType: "image/png",
+        },
+      ]);
+      (mockModelService.isMultimodalCapable as ReturnType<typeof mock>).mockResolvedValueOnce(
+        false,
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockReply).toHaveBeenCalled();
+      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
+        embeds: unknown[];
+      };
+      expect(replyArg.embeds).toBeDefined();
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    });
+
+    test("画像添付 + isMultimodalCapable=null (判定不能) → 透過して chatService を呼ぶ", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "photo.png",
+          url: "https://cdn.discord.test/photo.png",
+          contentType: "image/png",
+        },
+      ]);
+      (mockModelService.isMultimodalCapable as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateResponseStream).toHaveBeenCalled();
+    });
+
+    test("PDF 添付 → モデル判定なしで chatService を呼ぶ (parts に file)", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "spec.pdf",
+          url: "https://cdn.discord.test/spec.pdf",
+          contentType: "application/pdf",
+        },
+      ]);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockModelService.isMultimodalCapable).not.toHaveBeenCalled();
+      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+        "guild-123",
+        {
+          text: "Hello",
+          parts: [
+            {
+              type: "file",
+              file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+            },
+          ],
+        },
+        "msg-123",
+      );
+    });
+
+    test("UNSUPPORTED_MIME 添付 → 警告を返し chatService 未呼び出し", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "data.csv",
+          url: "https://cdn.discord.test/data.csv",
+          contentType: "text/csv",
+        },
+      ]);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockReply).toHaveBeenCalled();
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    });
+
+    test("MISSING_MIME 添付 (contentType: null) → 警告を返し chatService 未呼び出し", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "unknown.bin",
+          url: "https://cdn.discord.test/unknown.bin",
+          contentType: null,
+        },
+      ]);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockReply).toHaveBeenCalled();
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    });
+
+    test("テキスト空 + 画像添付 → 早期 return せず chatService を text='' で呼ぶ", async () => {
+      mockMessage.content = "<@123456789>";
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "photo.png",
+          url: "https://cdn.discord.test/photo.png",
+          contentType: "image/png",
+        },
+      ]);
+      (mockModelService.isMultimodalCapable as ReturnType<typeof mock>).mockResolvedValueOnce(true);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+        "guild-123",
+        {
+          text: "",
+          parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
+        },
+        "msg-123",
+      );
+    });
   });
 
   test("AbortErrorの場合は停止メッセージをEmbedで表示する", async () => {
