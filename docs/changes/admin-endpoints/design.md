@@ -155,9 +155,9 @@ Phase 1（アーカイブ維持、失敗しても writes は継続）:
 
 Phase 2（current ファイルの差し替え、失敗で writer を no-op 化）:
 
-3. 現行 fd を close
-4. `disqord.log → disqord.1.log` を `renameSync`
-5. 新しい `disqord.log` を `openSync("a")` で再オープン
+1. 現行 fd を close
+2. `disqord.log → disqord.1.log` を `renameSync`
+3. 新しい `disqord.log` を `openSync("a")` で再オープン
 
 逆順（current → .1 を最初）にすると `.1` が上書きされて消える。
 Phase 1 が失敗したら `writtenBytes` をリセットして次回 rotate まで writes を継続する（毎 write で rotate を試みて connsole.error を連発しない）。
