@@ -35,15 +35,16 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "f
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 画像 URL 取得元 | Discord CDN URL を直渡し | 追加ストレージ不要。Discord 受信 → 即時 OpenRouter 送信のフローなので、署名付き URL（`ex`/`is`/`hm`）の期限切れは実害無し。base64 化フォールバックは初期スコープ外 |
-| ファイル (PDF) の渡し方 | `type: "file"` の `file.file_data` に Discord CDN URL を直渡し | OpenRouter 公式仕様。URL 直渡しが効かないケースが観測されたら別 change で fetch → data URL 化を追加 |
+| ファイル (PDF) の渡し方 | Bot 側で Discord CDN から fetch → base64 化し、`type: "file"` の `file.file_data` に `data:application/pdf;base64,...` 形式の data URL を渡す | 公式 docs が「non-publicly accessible files は base64 必須」と明記。Discord CDN URL は signed (`?ex/is/hm`) で実質 non-public 扱いとなり、URL 直渡しでは file-parser が "Failed to parse" を返すケースが smoke test で観測された。base64 化が最も確実 |
 | PDF 解析エンジン | `cloudflare-ai` 固定（無料の Markdown 変換） | 課金なしで開始可能。精度が必要なら `mistral-ocr`（$2/1000ページ）、モデルがネイティブ対応なら `native`。`pdf-text` は deprecated（`cloudflare-ai` にリダイレクト） |
 | `plugins` の送出タイミング | PDF content part が含まれる場合のみ送出 | `plugins` を省略しても PDF パースは走るが、意図表明と実装分岐を単純化するため明示送出 |
 | `image_url.detail` フィールド | 送らない（OpenRouter default `"auto"` に委譲） | 当面のユーザ要件なし。後で `/config` に出す余地は残す |
 | 非マルチモーダルモデル × 画像 | 送信前 `ModelService.isMultimodalCapable(modelId, "image")` で判定。`true` → 続行、`false` → 警告 + 中止、`null`（モデル詳細取得不可 or `architecture` メタ欠落で `inputModalities` が空） → 透過し OpenRouter 400 に委ねる | 二重防衛で UX と堅牢性を両立。tri-state で「非対応確定」「不明」「対応」を区別。メタ欠落を `false` に潰さない |
 | 非マルチモーダルモデル × PDF | 透過（事前判定なし） | OpenRouter file-parser が非ネイティブモデルにテキスト化して渡す |
 | 添付拒否（MIME） | サポート外 MIME を含むメッセージは警告 embed → 送信中止。テキストだけのフォールバックはしない | 「画像/PDF で質問」という意図を silently 落とすのは害になる |
-| 添付サイズ上限 | 設けない（Discord 側の制約に律する） | Bot 独自の上限はユーザ体験を複雑化させる。OpenRouter が 400/413/422 を返したら既存エラー経路で透過（詳細はエラーパス表） |
-| テキスト無しメッセージ（添付のみ） | 許可。`ChatUserInput.text` に空文字を渡し、`messages[0].content` を `parts` のみで組む | 「画像/PDF だけで聞きたい」というユースケースは自然。事前の `messageCreate` 早期 return（content 空 + 添付なし）は維持し、添付がある場合は処理を進める |
+| 画像の添付サイズ上限 | 設けない（Discord 側の制約に律する） | Bot 独自の上限はユーザ体験を複雑化させる。`image_url` は CDN URL 直渡しでメモリを抱えないため OpenRouter 側に任せる |
+| PDF の添付サイズ上限 | 1 ファイル最大 `MAX_PDF_BYTES = 20MB`、1 メッセージあたり合計 `MAX_TOTAL_PDF_BYTES = 40MB` | base64 化を Bot 側で抱える都合上、無制限だとメモリ・payload DoS リスクがある。Discord は 1 メッセージに最大 10 attachments を許可するため、合計上限を必ず設ける。PDF 用途は通常 1〜2 個で十分 |
+| テキスト無しメッセージ（添付のみ） | 許可。`ChatUserInput.text` は空文字のまま受けるが、`buildChatRequest` 内で **default prompt** を text part として補い `[text part, ...parts]` の content 配列を組む。default prompt は parts の構成で切り替え（画像のみ「添付された画像について説明してください。」/ PDF のみ「添付された文書を要約してください。」/ 混在「添付ファイルについて説明してください。」） | 「画像/PDF だけで聞きたい」というユースケースは自然。ただし OpenRouter / 一部モデルは text part を含まない content 配列で接続を切る（smoke test で `ECONNRESET` 観測）。Bot 側で text part を必ず置くことで API 互換性を担保 |
 | 画像枚数の上限 | 設けない（Discord 自体が 1 メッセージあたり最大 10 attachments） | 自前で count を持つ理由がない |
 
 ## Design
@@ -145,7 +146,11 @@ interface OpenRouterModelResponse {
 
 ```ts
 // src/services/attachmentParser.ts
-export type AttachmentRejectReason = "UNSUPPORTED_MIME" | "MISSING_MIME";
+export type AttachmentRejectReason =
+  | "UNSUPPORTED_MIME"
+  | "MISSING_MIME"
+  | "FETCH_FAILED"
+  | "FILE_TOO_LARGE";
 
 export interface AttachmentParseResult {
   parts: ChatMessageContent[];
@@ -160,12 +165,14 @@ export const PDF_PARSER_PLUGIN: ChatPlugin;
 
 export function parseAttachments(
   attachments: Collection<string, Attachment>,
-): AttachmentParseResult;
+): Promise<AttachmentParseResult>;
 ```
+
+PDF パスでは内部で `fetch(attachment.url, { signal: AbortSignal.timeout(30000) })` → `arrayBuffer` → base64 → `data:application/pdf;base64,...` を組む。送信前に 2 段階のサイズチェック: 単体で `attachment.size > MAX_PDF_BYTES (= 20MB)` か、集約 `totalPdfBytes + attachment.size > MAX_TOTAL_PDF_BYTES (= 40MB)` のいずれかを満たす場合は `FILE_TOO_LARGE` で reject（fetch しない）。集約超過の場合、当該 PDF のみ reject し、それ以前に通った PDF は処理する。fetch が `!ok` / throw / timeout した場合は `FETCH_FAILED` reason で `rejected` に積む。画像 (`image_url`) は CDN URL のまま渡す（OpenRouter の画像取得経路は動作確認済み）。
 
 `Attachment.contentType` は `string | null` のため、`null` の添付は `MISSING_MIME` として `rejected` に積み、`UNSUPPORTED_MIME`（既知だが Bot がサポート外）と区別する。拡張子フォールバック判定は本 change では入れず、ログ・警告メッセージでユーザに MIME 不明である旨を伝える。
 
-`SUPPORTED_IMAGE_MIME` = `{"image/png","image/jpeg","image/jpg","image/gif","image/webp"}`
+`SUPPORTED_IMAGE_MIME` = `{"image/png","image/jpeg","image/gif","image/webp"}`
 `SUPPORTED_FILE_MIME` = `{"application/pdf"}`
 `PDF_PARSER_PLUGIN` = `{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }`
 
@@ -183,12 +190,26 @@ export interface ChatUserInput {
 実装の中核:
 
 ```ts
+function pickDefaultPrompt(parts: ChatMessageContent[]): string {
+  const hasImage = parts.some((p) => p.type === "image_url");
+  const hasFile = parts.some((p) => p.type === "file");
+  if (hasImage && hasFile) return "添付ファイルについて説明してください。";
+  if (hasImage) return "添付された画像について説明してください。";
+  return "添付された文書を要約してください。";
+}
+
 const parts = input.parts ?? [];
 const hasFile = parts.some((p) => p.type === "file");
-const textPart: TextContentPart[] =
-  input.text.length > 0 ? [{ type: "text", text: input.text }] : [];
-const content: ChatMessage["content"] =
-  parts.length > 0 ? [...textPart, ...parts] : input.text;
+
+let content: ChatMessage["content"];
+if (parts.length === 0) {
+  content = input.text;
+} else {
+  // OpenRouter / 一部モデルは text part を含まない content 配列で接続を切るため、
+  // text が空の場合は default prompt を補う
+  const text = input.text.length > 0 ? input.text : pickDefaultPrompt(parts);
+  content = [{ type: "text", text }, ...parts];
+}
 const request: ChatCompletionRequest = {
   model: settings.defaultModel,
   messages: [{ role: "user", content }],
@@ -196,7 +217,7 @@ const request: ChatCompletionRequest = {
 };
 ```
 
-`text` が空文字のときは空の text part を混ぜず、`parts` のみで `content` を組む。`parts` が空かつ `text` も空の状況は `messageCreate` 側で早期 return されるためここには到達しない。
+`parts` ありのときは必ず先頭に text part が入る（ユーザ入力 or default prompt）。`parts` が空かつ `text` も空の状況は `messageCreate` 側で早期 return されるためここには到達しない。
 
 **OpenRouter クライアントの payload 透過:**
 
@@ -241,7 +262,9 @@ fields: [
 | ---- | -------- | ---- |
 | サポート外 MIME 添付（`UNSUPPORTED_MIME`） | `attachmentParser.parseAttachments` | 警告 embed（ファイル名 + reason）→ 送信中止 |
 | MIME 欠落（`Attachment.contentType` が null、`MISSING_MIME`） | 同上 | 警告 embed（「MIME を判定できなかった添付があります」）→ 送信中止 |
-| テキスト無し + 添付あり | `messageCreate` | 早期 return せず処理を継続（`ChatUserInput.text = ""`、`parts` のみで送信） |
+| PDF 取得失敗（Discord CDN から fetch 失敗、`FETCH_FAILED`） | `attachmentParser.parseAttachments` 内部の fetch | 警告 embed（「ファイルの取得に失敗しました」）→ 送信中止。ログに `filename` / `size` / エラー詳細を記録（署名付き URL は記録しない） |
+| PDF サイズ上限超過（`FILE_TOO_LARGE`、`attachment.size > MAX_PDF_BYTES` または合計 > `MAX_TOTAL_PDF_BYTES`） | `attachmentParser.parseAttachments` の事前判定 | 警告 embed（「ファイルサイズが上限 (20MB) を超えています」）→ 送信中止。fetch は実行しない。集約超過の場合は当該 PDF のみ reject し、それ以前の PDF は処理する |
+| テキスト無し + 添付あり | `messageCreate` | 早期 return せず処理を継続（`ChatUserInput.text = ""` を chatService に渡し、内部で default prompt を text part として補う） |
 | テキスト無し + 添付なし | `messageCreate`（既存挙動） | 「メッセージを入力してください。」を返して終了 |
 | 画像非対応モデルに画像 | `messageCreate`（`isMultimodalCapable(modelId, "image") === false`） | 警告 embed（現モデル名 + 推奨アクション）→ 送信中止 |
 | 画像 × モデル詳細取得不可（`isMultimodalCapable` が `null`） | 同上 | 透過（送信続行）→ OpenRouter 側のエラーに委ねる |
@@ -253,7 +276,9 @@ fields: [
 
 **設計メモ:**
 
-- Discord CDN の添付 URL は署名付きで有効期限あり（`ex`/`is`/`hm`）。受信 → 即時 OpenRouter 送信なら通常問題にならない。観測されたら別 change で fetch → data URL 化を追加
+- Discord CDN の添付 URL は署名付きで有効期限あり（`ex`/`is`/`hm`）。画像 (`image_url`) は CDN URL 直渡しで OpenRouter 側の fetch が動作。PDF (`file`) は本 change で Bot 側 fetch → base64 data URL 化を採用済み（smoke test で URL 直渡しが parse 失敗するため）
+- PDF サイズ上限: 1 ファイル `MAX_PDF_BYTES = 20MB`、1 メッセージあたり合計 `MAX_TOTAL_PDF_BYTES = 40MB`。超過は `FILE_TOO_LARGE` で reject。Discord は通常 25MB（boost で 50/100MB）まで添付可能だが、base64 化のメモリ増分（約 33%）と OpenRouter payload を抑えるため上限を設ける。Discord は 1 メッセージに最大 10 attachments を許可するため、集約上限が無いとメモリ DoS リスクが残る
+- PDF fetch タイムアウト: 30 秒（`AbortSignal.timeout`）。Discord CDN がハングしてもユーザを長く待たせない
 - サポート画像形式: png, jpeg, gif, webp（OpenRouter 公式 docs に列挙された MIME のみ。`image/jpg` は対応外で、Discord も通常 `image/jpeg` を返す）
 - サポート文書形式: PDF（`application/pdf`）。初期は `cloudflare-ai` エンジン
 - `pricing.image` は本 change では表示しない（embed への投影は将来検討）
@@ -263,10 +288,10 @@ fields: [
 
 | 対象 | テストファイル | 観点 |
 | ---- | -------------- | ---- |
-| `attachmentParser.parseAttachments` | `tests/unit/services/attachmentParser.test.ts`（新規） | 画像のみ / PDF のみ / 混在 / `UNSUPPORTED_MIME` / `MISSING_MIME`（`contentType: null`）/ empty collection |
+| `attachmentParser.parseAttachments` | `tests/unit/services/attachmentParser.test.ts`（新規） | 画像のみ（fetch されない） / PDF のみ（mock fetch → data URL 化）/ 混在 / PDF fetch 失敗 (`FETCH_FAILED` ok=false / throw)  / 単体サイズ超過 (`FILE_TOO_LARGE`、fetch されない) / 集約サイズ超過 (3 個目で `MAX_TOTAL_PDF_BYTES` 超え→当該のみ reject) / サイズ境界値（=`MAX_PDF_BYTES` は通す） / `UNSUPPORTED_MIME` / `MISSING_MIME`（`contentType: null`）/ empty collection |
 | `OpenRouterClient.chat{,Stream}` | `tests/unit/llm/openrouter.test.ts` | `plugins` undefined 時に body のキー自体が存在しないこと、`plugins` あり時の payload、`content` 配列（text + image_url + file 混在）の round-trip |
 | `OpenRouterClient.listModelsWithPricing` | 同上 | `architecture.input_modalities` / `architecture.output_modalities` の mapping、`architecture` 欠落時の `[]` フォールバック、top-level の null をそのまま無視すること |
-| `ChatService.generateResponse{,Stream}` | `tests/unit/services/chatService.test.ts` | `parts` 空（既存挙動）/ あり時の `messages[0].content` 配列化 / `file` 含む時のみ `plugins` 付与 / `text` 空 + `parts` ありで `parts` のみで送信 |
+| `ChatService.generateResponse{,Stream}` | `tests/unit/services/chatService.test.ts` | `parts` 空（既存挙動）/ あり時の `messages[0].content` 配列化 / `file` 含む時のみ `plugins` 付与 / `text` 空 + 画像 / `text` 空 + PDF / `text` 空 + 混在 でそれぞれの default prompt が text part として先頭に補われる |
 | `ModelService.isMultimodalCapable` | `tests/unit/services/modelService.test.ts` | `(modelId, "image")` / `(modelId, "file")` で `true` / `false` / `null`（`getModelDetails` が `null` を返すケース） |
 | `formatModalities` | `tests/unit/utils/modelDetailsFormatter.test.ts` | text-only / multimodal / 空配列ガード（"不明"） |
 | `messageCreate` ハンドラ | `tests/unit/bot/events/messageCreate.test.ts` | 画像 + 対応モデル、画像 + 非対応モデル（警告 + chatService 未呼び出し）、PDF、`UNSUPPORTED_MIME`、`MISSING_MIME`、添付のみ（text 空 + 画像）、添付なし regression |
@@ -301,7 +326,7 @@ fields: [
 
 ### Phase 4: attachmentParser + ChatService API 拡張
 
-- [ ] `src/services/attachmentParser.ts` 新規（`AttachmentRejectReason` 含む、`MISSING_MIME` で `contentType: null` を区別）
+- [ ] `src/services/attachmentParser.ts` 新規（async、`AttachmentRejectReason` で `UNSUPPORTED_MIME` / `MISSING_MIME` / `FETCH_FAILED` / `FILE_TOO_LARGE` を区別、PDF は内部で fetch（30 秒タイムアウト）→ base64 → data URL 化、`MAX_PDF_BYTES = 20MB` / `MAX_TOTAL_PDF_BYTES = 40MB` で単体・集約サイズを事前判定）
 - [ ] `src/services/chatService.ts` `ChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与、`text` 空 + `parts` あり対応
 - [ ] `tests/unit/services/attachmentParser.test.ts` 新規（`UNSUPPORTED_MIME` / `MISSING_MIME` を区別）
 - [ ] `tests/unit/services/chatService.test.ts` 拡張（text-only / image / PDF / 混在 / `text=""` + `parts` あり）
@@ -326,7 +351,7 @@ fields: [
 
 ## Open Questions
 
-- Discord 署名 URL の有効期限切れリスク: 通常は問題ないが、OpenRouter 内部リトライによる遅延で 403 が発生し得る。観測されたら別 change で fetch → data URL 化を追加
+- 画像 (`image_url`) の Discord 署名 URL 有効期限切れリスク: 通常は問題ないが、OpenRouter 内部リトライによる遅延で 403 が発生し得る。PDF はすでに Bot 側 fetch → data URL 化済みのため対象外。画像でも観測されたら fetch → data URL 化を追加
 - `pricing.image` を embed 表示するか: 画像対応モデルの課金は `prompt + per-image` のため、明示の方が親切だが本 change スコープ外
 - PDF 解析エンジン切替の UX: 当面は env var すら expose しない。`settings-hierarchy` change でガイルド単位設定として持つ可能性
 - `annotations[].file.hash` を使った PDF 再パース回避: 別 change で扱う最適化

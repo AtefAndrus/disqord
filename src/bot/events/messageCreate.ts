@@ -86,19 +86,26 @@ export function createMessageCreateHandler(
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
 
-    // 添付ファイルをパース（画像 / PDF / 拒否を分類）
-    const attachmentResult = parseAttachments(message.attachments);
+    // 添付ファイルをパース（画像はそのまま、PDF は data URL 化）
+    const attachmentResult = await parseAttachments(message.attachments);
 
     if (attachmentResult.rejected.length > 0) {
       const rejectionLines = attachmentResult.rejected
-        .map((r) =>
-          r.reason === "MISSING_MIME"
-            ? `- ${r.filename}: MIME を判定できませんでした`
-            : `- ${r.filename}: サポート外の形式です`,
-        )
+        .map((r) => {
+          switch (r.reason) {
+            case "MISSING_MIME":
+              return `- ${r.filename}: MIME を判定できませんでした`;
+            case "FETCH_FAILED":
+              return `- ${r.filename}: ファイルの取得に失敗しました`;
+            case "FILE_TOO_LARGE":
+              return `- ${r.filename}: PDF のサイズ上限 (1ファイル 20MB / 合計 40MB) を超えています`;
+            default:
+              return `- ${r.filename}: サポート外の形式です`;
+          }
+        })
         .join("\n");
       const errorEmbed = createErrorEmbed(
-        `サポートされていない添付ファイルが含まれています。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
+        `添付ファイルを処理できませんでした。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
         "添付ファイルエラー",
       );
       await message.reply({

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { type Attachment, Collection, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
@@ -156,6 +156,19 @@ describe("createMessageCreateHandler", () => {
     spyOn(console, "info").mockImplementation(() => {});
     spyOn(console, "warn").mockImplementation(() => {});
     spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  let originalFetch: typeof globalThis.fetch;
+  let mockFetch: ReturnType<typeof mock>;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    mockFetch = mock();
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
   });
 
   test("Botからのメッセージは無視する", async () => {
@@ -479,7 +492,7 @@ describe("createMessageCreateHandler", () => {
       expect(mockChatService.generateResponseStream).toHaveBeenCalled();
     });
 
-    test("PDF 添付 → モデル判定なしで chatService を呼ぶ (parts に file)", async () => {
+    test("PDF 添付 → fetch して data URL 化、モデル判定なしで chatService を呼ぶ", async () => {
       mockMessage.attachments = makeAttachments([
         {
           id: "1",
@@ -488,6 +501,11 @@ describe("createMessageCreateHandler", () => {
           contentType: "application/pdf",
         },
       ]);
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () =>
+          Promise.resolve(new Uint8Array([0x50, 0x44, 0x46]).buffer satisfies ArrayBuffer),
+      });
 
       const handler = createMessageCreateHandler(
         mockChatService,
@@ -497,6 +515,7 @@ describe("createMessageCreateHandler", () => {
 
       await handler(mockMessage as never);
 
+      expect(mockFetch.mock.calls[0]?.[0]).toBe("https://cdn.discord.test/spec.pdf");
       expect(mockModelService.isMultimodalCapable).not.toHaveBeenCalled();
       expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
         "guild-123",
@@ -505,12 +524,78 @@ describe("createMessageCreateHandler", () => {
           parts: [
             {
               type: "file",
-              file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+              file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
             },
           ],
         },
         "msg-123",
       );
+    });
+
+    test("PDF fetch 失敗時は FETCH_FAILED 警告（文言含む）を返し chatService 未呼び出し", async () => {
+      mockMessage.attachments = makeAttachments([
+        {
+          id: "1",
+          name: "expired.pdf",
+          url: "https://cdn.discord.test/expired.pdf",
+          contentType: "application/pdf",
+        },
+      ]);
+      mockFetch.mockRejectedValueOnce(new Error("network down"));
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockReply).toHaveBeenCalled();
+      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
+        embeds: Array<{ data: { title: string; description: string } }>;
+      };
+      expect(replyArg.embeds[0]?.data.title).toBe("添付ファイルエラー");
+      expect(replyArg.embeds[0]?.data.description).toContain("ファイルの取得に失敗しました");
+      expect(replyArg.embeds[0]?.data.description).toContain("expired.pdf");
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    });
+
+    test("FILE_TOO_LARGE: PDF サイズが上限超過 → 警告 (文言含む) を返し chatService 未呼び出し", async () => {
+      const oversized: Parameters<typeof makeAttachments>[0] = [
+        {
+          id: "1",
+          name: "huge.pdf",
+          url: "https://cdn.discord.test/huge.pdf",
+          contentType: "application/pdf",
+        },
+      ];
+      mockMessage.attachments = makeAttachments(oversized);
+      // size を直接書き換え（makeAttachments のデフォルトは小さい）
+      const attachment = mockMessage.attachments.first();
+      if (attachment) {
+        (attachment as unknown as { size: number }).size = 21 * 1024 * 1024;
+      }
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockReply).toHaveBeenCalled();
+      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
+        embeds: Array<{ data: { title: string; description: string } }>;
+      };
+      expect(replyArg.embeds[0]?.data.title).toBe("添付ファイルエラー");
+      expect(replyArg.embeds[0]?.data.description).toContain("PDF のサイズ上限");
+      expect(replyArg.embeds[0]?.data.description).toContain("20MB");
+      expect(replyArg.embeds[0]?.data.description).toContain("40MB");
+      expect(replyArg.embeds[0]?.data.description).toContain("huge.pdf");
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
     });
 
     test("UNSUPPORTED_MIME 添付 → 警告を返し chatService 未呼び出し", async () => {
@@ -557,7 +642,7 @@ describe("createMessageCreateHandler", () => {
       expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
     });
 
-    test("テキスト空 + 画像添付 → 早期 return せず chatService を text='' で呼ぶ", async () => {
+    test("テキスト空 + 画像添付 → 早期 return せず chatService を text='' で呼ぶ (default prompt は chatService 側で補う)", async () => {
       mockMessage.content = "<@123456789>";
       mockMessage.attachments = makeAttachments([
         {
@@ -577,6 +662,8 @@ describe("createMessageCreateHandler", () => {
 
       await handler(mockMessage as never);
 
+      // messageCreate は text="" のまま chatService に渡す。
+      // default prompt 補完は chatService.buildChatRequest の責務 (chatService.test.ts で検証)
       expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
         "guild-123",
         {

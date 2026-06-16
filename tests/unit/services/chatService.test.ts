@@ -62,7 +62,7 @@ describe("ChatService", () => {
     });
   });
 
-  test("text が空 + parts あり の場合は parts のみで送る", async () => {
+  test("text が空 + 画像 parts → default prompt (画像) を text part として補う", async () => {
     await chatService.generateResponse("guild-123", {
       text: "",
       parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
@@ -73,9 +73,60 @@ describe("ChatService", () => {
       messages: [
         {
           role: "user",
-          content: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
+          content: [
+            { type: "text", text: "添付された画像について説明してください。" },
+            { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+          ],
         },
       ],
+    });
+  });
+
+  test("text が空 + file parts → default prompt (PDF) を text part として補う", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "",
+      parts: [
+        {
+          type: "file",
+          file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
+        },
+      ],
+    });
+
+    expect(mockLLMClient.chat).toHaveBeenCalledWith({
+      model: "test-model:fixture",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "添付された文書を要約してください。" },
+            {
+              type: "file",
+              file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
+            },
+          ],
+        },
+      ],
+      plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }],
+    });
+  });
+
+  test("text が空 + 画像 + file 混在 → default prompt (混在) を text part として補う", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "",
+      parts: [
+        { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+        {
+          type: "file",
+          file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
+        },
+      ],
+    });
+
+    const call = (mockLLMClient.chat as ReturnType<typeof mock>).mock.calls[0]?.[0];
+    expect(call.messages[0].content[0]).toEqual({
+      type: "text",
+      text: "添付ファイルについて説明してください。",
     });
   });
 

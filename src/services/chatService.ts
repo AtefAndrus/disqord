@@ -30,6 +30,14 @@ export interface IChatService {
   cancelRequest(requestId: MessageId): boolean;
 }
 
+function pickDefaultPrompt(parts: ChatMessageContent[]): string {
+  const hasImage = parts.some((p) => p.type === "image_url");
+  const hasFile = parts.some((p) => p.type === "file");
+  if (hasImage && hasFile) return "添付ファイルについて説明してください。";
+  if (hasImage) return "添付された画像について説明してください。";
+  return "添付された文書を要約してください。";
+}
+
 function buildChatRequest(model: string, input: ChatUserInput): ChatCompletionRequest {
   const parts = input.parts ?? [];
   const hasFile = parts.some((p) => p.type === "file");
@@ -37,10 +45,11 @@ function buildChatRequest(model: string, input: ChatUserInput): ChatCompletionRe
   let content: ChatMessage["content"];
   if (parts.length === 0) {
     content = input.text;
-  } else if (input.text.length === 0) {
-    content = parts;
   } else {
-    content = [{ type: "text", text: input.text }, ...parts];
+    // OpenRouter / 一部モデルは text part を含まない content 配列で接続を切るため、
+    // text が空の場合は default prompt を補う
+    const text = input.text.length > 0 ? input.text : pickDefaultPrompt(parts);
+    content = [{ type: "text", text }, ...parts];
   }
 
   return {
