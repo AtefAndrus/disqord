@@ -1,6 +1,8 @@
 import type { Client } from "discord.js";
+import { createAdminHandlers } from "./http/adminEndpoints";
 import { parseReleasePayload, verifyGitHubSignature } from "./http/webhookHandler";
 import type { IReleaseNotificationService } from "./services/releaseNotificationService";
+import type { LogFileWriter } from "./utils/logFile";
 import { logger } from "./utils/logger";
 
 export interface HealthStatus {
@@ -17,14 +19,29 @@ export interface HttpServerOptions {
   port: number;
   githubWebhookSecret?: string;
   releaseNotificationService?: IReleaseNotificationService;
+  adminApiSecret?: string;
+  logFileWriter?: LogFileWriter;
 }
 
 export function startHttpServer(options: HttpServerOptions): ReturnType<typeof Bun.serve> {
-  const { client, port, githubWebhookSecret, releaseNotificationService } = options;
+  const {
+    client,
+    port,
+    githubWebhookSecret,
+    releaseNotificationService,
+    adminApiSecret,
+    logFileWriter,
+  } = options;
   const startTime = Date.now();
+
+  const adminHandlers = createAdminHandlers({ adminApiSecret, logFileWriter });
 
   const server = Bun.serve({
     port,
+    routes: {
+      "/admin/metrics": (req) => adminHandlers.handleAdminMetrics(req),
+      "/admin/logs": (req) => adminHandlers.handleAdminLogs(req),
+    },
     async fetch(req) {
       const url = new URL(req.url);
 
@@ -64,7 +81,6 @@ async function handleGitHubWebhook(
   secret?: string,
   notificationService?: IReleaseNotificationService,
 ): Promise<Response> {
-  // Check if webhook secret is configured
   if (!secret) {
     logger.warn("GitHub webhook received but secret is not configured");
     return new Response(JSON.stringify({ error: "Webhook not configured" }), {
@@ -73,7 +89,6 @@ async function handleGitHubWebhook(
     });
   }
 
-  // Get raw body for signature verification
   const rawBody = await req.text();
   const signature = req.headers.get("X-Hub-Signature-256");
 
@@ -85,7 +100,6 @@ async function handleGitHubWebhook(
     });
   }
 
-  // Verify signature
   const isValid = await verifyGitHubSignature(rawBody, signature, secret);
   if (!isValid) {
     logger.warn("GitHub webhook signature verification failed");
@@ -95,7 +109,6 @@ async function handleGitHubWebhook(
     });
   }
 
-  // Check event type
   const eventType = req.headers.get("X-GitHub-Event");
   if (eventType !== "release") {
     logger.info("Ignoring non-release GitHub event", { eventType });
@@ -105,7 +118,6 @@ async function handleGitHubWebhook(
     });
   }
 
-  // Parse payload
   let body: unknown;
   try {
     body = JSON.parse(rawBody);
@@ -124,7 +136,6 @@ async function handleGitHubWebhook(
     });
   }
 
-  // Process notification
   if (!notificationService) {
     logger.warn("Release notification service not configured");
     return new Response(JSON.stringify({ error: "Notification service not configured" }), {

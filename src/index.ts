@@ -14,10 +14,24 @@ import { ChatService } from "./services/chatService";
 import { ModelService } from "./services/modelService";
 import { ReleaseNotificationService } from "./services/releaseNotificationService";
 import { SettingsService } from "./services/settingsService";
-import { logger } from "./utils/logger";
+import { createLogFileWriter } from "./utils/logFile";
+import { logger, setLogFileWriter } from "./utils/logger";
+import { metrics } from "./utils/metrics";
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
+
+  const logFileWriter = createLogFileWriter({
+    dir: config.logDir,
+    maxBytes: config.logMaxBytes,
+    env: config.nodeEnv,
+  });
+  setLogFileWriter(logFileWriter);
+  metrics.attach({
+    databasePath: config.databasePath,
+    logFileWriter,
+  });
+
   logger.info("Configuration loaded", { nodeEnv: config.nodeEnv });
 
   const db = getDatabase();
@@ -50,6 +64,8 @@ async function bootstrap(): Promise<void> {
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
 
+  metrics.attach({ client });
+
   await registerCommands(config.applicationId, config.discordToken);
   logger.info("Slash commands registered");
 
@@ -63,6 +79,8 @@ async function bootstrap(): Promise<void> {
     port: config.healthPort,
     githubWebhookSecret: config.githubWebhookSecret,
     releaseNotificationService,
+    adminApiSecret: config.adminApiSecret,
+    logFileWriter,
   });
 
   const shutdown = (signal: string): void => {
@@ -70,6 +88,8 @@ async function bootstrap(): Promise<void> {
     httpServer.stop();
     client.destroy();
     db.close();
+    logFileWriter.flush();
+    logFileWriter.close();
     logger.info("Shutdown complete");
     process.exit(0);
   };

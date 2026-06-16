@@ -1,10 +1,11 @@
-import { timingSafeEqual } from "node:crypto";
 import type { GitHubReleasePayload } from "../types/github";
 import { logger } from "../utils/logger";
+import { hmacSha256Hex, timingSafeEqualHex } from "./hmac";
 
 /**
  * Verify GitHub Webhook signature using HMAC-SHA256.
- * Uses Web Crypto API for compatibility with Bun runtime.
+ * Delegates the HMAC computation and timing-safe comparison to the shared
+ * helper in `./hmac` so the same primitive is reused by the admin API.
  */
 export async function verifyGitHubSignature(
   payload: string,
@@ -15,33 +16,11 @@ export async function verifyGitHubSignature(
     return false;
   }
 
-  const expectedSignature = signature.slice(7); // Remove "sha256=" prefix
+  const expectedSignature = signature.slice(7);
 
   try {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
-
-    const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-
-    const computedSignature = Array.from(new Uint8Array(signatureBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-
-    // Use timing-safe comparison to prevent timing attacks
-    const expected = Buffer.from(expectedSignature, "hex");
-    const computed = Buffer.from(computedSignature, "hex");
-
-    if (expected.length !== computed.length) {
-      return false;
-    }
-
-    return timingSafeEqual(expected, computed);
+    const computedSignature = await hmacSha256Hex(secret, payload);
+    return timingSafeEqualHex(expectedSignature, computedSignature);
   } catch (error) {
     logger.error("Signature verification failed", { error });
     return false;
@@ -58,7 +37,6 @@ export function parseReleasePayload(body: unknown): GitHubReleasePayload | null 
 
   const payload = body as Record<string, unknown>;
 
-  // Validate required fields
   if (typeof payload.action !== "string") {
     return null;
   }

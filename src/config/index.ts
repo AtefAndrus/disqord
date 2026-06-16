@@ -56,6 +56,9 @@ const configSchema = z.object({
   defaultModel: z.string().default("deepseek/deepseek-v4-flash:free"),
   healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
   githubWebhookSecret: z.string().optional(),
+  adminApiSecret: z.string().optional(),
+  logDir: z.string().optional(),
+  logMaxBytes: z.coerce.number().int().min(1024).default(10_485_760),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -70,6 +73,9 @@ export function loadConfig(): AppConfig {
     defaultModel: process.env.DEFAULT_MODEL,
     healthPort: process.env.HEALTH_PORT,
     githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
+    adminApiSecret: process.env.ADMIN_API_SECRET,
+    logDir: process.env.LOG_DIR,
+    logMaxBytes: process.env.LOG_MAX_BYTES,
   });
 
   return parsed;
