@@ -101,6 +101,85 @@ describe("OpenRouterClient", () => {
       });
     });
 
+    test("plugins が未指定の場合は body の JSON に含まれない", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [] }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Test" }],
+      };
+      await client.chat(request);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as Record<
+        string,
+        unknown
+      >;
+      expect("plugins" in body).toBe(false);
+    });
+
+    test("plugins が指定された場合は body の JSON に正しく載る", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [] }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Summarize" }],
+        plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }],
+      };
+      await client.chat(request);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
+    });
+
+    test("content 配列 (text + image_url + file 混在) が round-trip する", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ choices: [] }),
+      });
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Describe these" },
+              { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+              {
+                type: "file",
+                file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+              },
+            ],
+          },
+        ],
+        plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }],
+      };
+      await client.chat(request);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        messages: ChatCompletionRequest["messages"];
+        plugins: ChatCompletionRequest["plugins"];
+      };
+      expect(body.messages[0]?.content).toEqual([
+        { type: "text", text: "Describe these" },
+        { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+        {
+          type: "file",
+          file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+        },
+      ]);
+      expect(body.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
+    });
+
     test("レート制限時はRateLimitErrorをスローする", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -465,6 +544,13 @@ describe("OpenRouterClient", () => {
                 created: 1640000000,
                 context_length: 4096,
                 pricing: { prompt: "0", completion: "0" },
+                architecture: {
+                  input_modalities: ["text", "image"],
+                  output_modalities: ["text"],
+                  modality: "text+image->text",
+                  tokenizer: "Other",
+                },
+                supported_parameters: ["temperature", "stop"],
               },
               {
                 id: "model-2",
@@ -486,6 +572,9 @@ describe("OpenRouterClient", () => {
           created: 1640000000,
           contextLength: 4096,
           pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+          supportedParameters: ["temperature", "stop"],
         },
         {
           id: "model-2",
@@ -493,6 +582,8 @@ describe("OpenRouterClient", () => {
           created: 1650000000,
           contextLength: 8192,
           pricing: { prompt: "0.001", completion: "0.002" },
+          inputModalities: [],
+          outputModalities: [],
         },
       ]);
     });

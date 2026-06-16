@@ -61,6 +61,8 @@ export function createMockLLMClient(): ILLMClient {
           created: 1640000000,
           contextLength: 4096,
           pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text"],
+          outputModalities: ["text"],
         },
         {
           id: "model-2",
@@ -68,6 +70,8 @@ export function createMockLLMClient(): ILLMClient {
           created: 1650000000,
           contextLength: 8192,
           pricing: { prompt: "0.001", completion: "0.002" },
+          inputModalities: ["text"],
+          outputModalities: ["text"],
         },
       ]),
     ),

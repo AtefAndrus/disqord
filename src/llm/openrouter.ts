@@ -44,7 +44,17 @@ interface OpenRouterModelResponse {
     pricing: {
       prompt: string;
       completion: string;
+      image?: string;
+      request?: string;
     };
+    architecture?: {
+      input_modalities?: string[];
+      output_modalities?: string[];
+      modality?: string;
+      tokenizer?: string;
+      instruct_type?: string | null;
+    };
+    supported_parameters?: string[];
   }[];
 }
 
@@ -110,6 +120,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
+      const { plugins, ...rest } = request;
       const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
@@ -117,7 +128,8 @@ export class OpenRouterClient implements ILLMClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...request,
+          ...rest,
+          ...(plugins && { plugins }),
           usage: {
             include: true,
           },
@@ -149,6 +161,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
+      const { plugins, ...rest } = request;
       const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
@@ -156,7 +169,8 @@ export class OpenRouterClient implements ILLMClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...request,
+          ...rest,
+          ...(plugins && { plugins }),
           stream: true,
           usage: {
             include: true,
@@ -265,6 +279,9 @@ export class OpenRouterClient implements ILLMClient {
       created: model.created,
       contextLength: model.context_length,
       pricing: model.pricing,
+      inputModalities: model.architecture?.input_modalities ?? [],
+      outputModalities: model.architecture?.output_modalities ?? [],
+      ...(model.supported_parameters && { supportedParameters: model.supported_parameters }),
     }));
   }
 

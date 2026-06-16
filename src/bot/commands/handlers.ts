@@ -87,7 +87,7 @@ export function createCommandHandlers(
       const details = await modelService.getModelDetails(model);
 
       if (details) {
-        const { formatContextLength, formatPrice } = await import(
+        const { formatContextLength, formatModalities, formatPrice } = await import(
           "../../utils/modelDetailsFormatter"
         );
 
@@ -104,6 +104,11 @@ export function createCommandHandlers(
             },
             { name: "入力価格", value: formatPrice(details.pricing.prompt), inline: true },
             { name: "出力価格", value: formatPrice(details.pricing.completion), inline: true },
+            {
+              name: "対応モダリティ",
+              value: formatModalities(details.inputModalities, details.outputModalities),
+              inline: false,
+            },
           ],
           timestamp: null,
         });
