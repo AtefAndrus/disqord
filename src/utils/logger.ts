@@ -1,9 +1,19 @@
+import type { LogFileWriter } from "./logFile";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
+
+let writer: LogFileWriter | null = null;
+
+export function setLogFileWriter(w: LogFileWriter | null): void {
+  writer = w;
+}
 
 function log(level: LogLevel, message: string, meta?: unknown) {
   const timestamp = new Date().toISOString();
   const serialized = meta ? ` ${JSON.stringify(meta)}` : "";
-  console[level](`[${timestamp}] [${level.toUpperCase()}] ${message}${serialized}`);
+  const line = `[${timestamp}] [${level.toUpperCase()}] ${message}${serialized}`;
+  console[level](line);
+  writer?.write(line);
 }
 
 export const logger = {

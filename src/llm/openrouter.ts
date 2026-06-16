@@ -19,6 +19,7 @@ import type {
   StreamFinalResult,
 } from "../types";
 import { logger } from "../utils/logger";
+import { metrics } from "../utils/metrics";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -107,26 +108,32 @@ export class OpenRouterClient implements ILLMClient {
       throw new RateLimitError("Rate limited. Please try again later.", retryAfterSeconds);
     }
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...request,
-        usage: {
-          include: true,
+    metrics.increment("openrouter.requests");
+    try {
+      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          ...request,
+          usage: {
+            include: true,
+          },
+        }),
+      });
 
-    if (!response.ok) {
-      await this.handleErrorResponse(response);
+      if (!response.ok) {
+        await this.handleErrorResponse(response);
+      }
+
+      const data = (await response.json()) as ChatCompletionResponse;
+      return data;
+    } catch (err) {
+      metrics.increment("openrouter.errors");
+      throw err;
     }
-
-    const data = (await response.json()) as ChatCompletionResponse;
-    return data;
   }
 
   async *chatStream(
@@ -140,91 +147,97 @@ export class OpenRouterClient implements ILLMClient {
       throw new RateLimitError("Rate limited. Please try again later.", retryAfterSeconds);
     }
 
-    const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        ...request,
-        stream: true,
-        usage: {
-          include: true,
-        },
-      }),
-      signal,
-    });
-
-    if (!response.ok) {
-      await this.handleErrorResponse(response);
-    }
-
-    if (!response.body) {
-      throw new UnknownApiError("Response body is null", 0);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullText = "";
-    let lastModel: string | undefined;
-    let lastProvider: string | undefined;
-    let lastUsage: ChatCompletionResponse["usage"] | undefined;
-
+    metrics.increment("openrouter.requests");
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...request,
+          stream: true,
+          usage: {
+            include: true,
+          },
+        }),
+        signal,
+      });
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") {
-            yield {
-              done: true,
-              fullText,
-              usage: lastUsage,
-              model: lastModel,
-              provider: lastProvider,
-            };
-            return;
-          }
-
-          try {
-            const chunk = JSON.parse(data) as StreamDelta;
-            const content = chunk.choices[0]?.delta?.content;
-
-            if (chunk.model) lastModel = chunk.model;
-            if (chunk.provider) lastProvider = chunk.provider;
-            if (chunk.usage) lastUsage = chunk.usage;
-
-            if (content) {
-              fullText += content;
-              yield { content, done: false };
-            }
-          } catch {
-            // JSON parse error, skip this line
-          }
-        }
+      if (!response.ok) {
+        await this.handleErrorResponse(response);
       }
 
-      // Handle case where stream ends without [DONE]
-      yield {
-        done: true,
-        fullText,
-        usage: lastUsage,
-        model: lastModel,
-        provider: lastProvider,
-      };
-    } finally {
-      reader.releaseLock();
+      if (!response.body) {
+        throw new UnknownApiError("Response body is null", 0);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullText = "";
+      let lastModel: string | undefined;
+      let lastProvider: string | undefined;
+      let lastUsage: ChatCompletionResponse["usage"] | undefined;
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data: ")) continue;
+
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") {
+              yield {
+                done: true,
+                fullText,
+                usage: lastUsage,
+                model: lastModel,
+                provider: lastProvider,
+              };
+              return;
+            }
+
+            try {
+              const chunk = JSON.parse(data) as StreamDelta;
+              const content = chunk.choices[0]?.delta?.content;
+
+              if (chunk.model) lastModel = chunk.model;
+              if (chunk.provider) lastProvider = chunk.provider;
+              if (chunk.usage) lastUsage = chunk.usage;
+
+              if (content) {
+                fullText += content;
+                yield { content, done: false };
+              }
+            } catch {
+              // JSON parse error, skip this line
+            }
+          }
+        }
+
+        // Handle case where stream ends without [DONE]
+        yield {
+          done: true,
+          fullText,
+          usage: lastUsage,
+          model: lastModel,
+          provider: lastProvider,
+        };
+      } finally {
+        reader.releaseLock();
+      }
+    } catch (err) {
+      metrics.increment("openrouter.errors");
+      throw err;
     }
   }
 

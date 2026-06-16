@@ -7,6 +7,7 @@ import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
+import { metrics } from "../../utils/metrics";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 
@@ -55,6 +56,7 @@ export function createInteractionCreateHandler(
 
     try {
       const { commandName } = interaction;
+      metrics.increment(`command.${commandName}`);
 
       switch (commandName) {
         case "help":
@@ -120,6 +122,7 @@ export function createInteractionCreateHandler(
           logger.warn("Unknown command", { commandName });
       }
     } catch (error) {
+      metrics.increment("command.errors");
       logger.error("Command execution failed", { error });
       try {
         const reply =

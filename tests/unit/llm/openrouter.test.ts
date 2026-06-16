@@ -12,6 +12,7 @@ import {
 } from "../../../src/errors";
 import { OpenRouterClient } from "../../../src/llm/openrouter";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "../../../src/types";
+import { metrics } from "../../../src/utils/metrics";
 
 describe("OpenRouterClient", () => {
   let client: OpenRouterClient;
@@ -23,6 +24,7 @@ describe("OpenRouterClient", () => {
     originalFetch = globalThis.fetch;
     mockFetch = mock();
     globalThis.fetch = mockFetch as unknown as typeof fetch;
+    metrics.reset();
 
     spyOn(console, "debug").mockImplementation(() => {});
     spyOn(console, "info").mockImplementation(() => {});
@@ -32,6 +34,7 @@ describe("OpenRouterClient", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    metrics.reset();
   });
 
   describe("chat", () => {
@@ -374,6 +377,32 @@ describe("OpenRouterClient", () => {
       // Second call should throw RateLimitError without making a fetch
       await expect(client.chat(request)).rejects.toBeInstanceOf(RateLimitError);
       expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // Local rate-limit cooldown must not inflate metrics: only the first
+      // call actually hit fetch and threw, so requests=1 and errors=1.
+      const snap = metrics.snapshot();
+      expect(snap.counters["openrouter.requests"]).toBe(1);
+      expect(snap.counters["openrouter.errors"]).toBe(1);
+    });
+
+    test("成功した chat 呼び出しは openrouter.requests のみ計上する", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            id: "ok",
+            choices: [{ message: { role: "assistant", content: "hi" } }],
+          } satisfies ChatCompletionResponse),
+      });
+
+      await client.chat({
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      });
+
+      const snap = metrics.snapshot();
+      expect(snap.counters["openrouter.requests"]).toBe(1);
+      expect(snap.counters["openrouter.errors"]).toBeUndefined();
     });
   });
 

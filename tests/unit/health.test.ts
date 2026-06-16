@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { Client } from "discord.js";
-import { type HealthStatus, startHealthServer } from "../../src/health";
+import { type HealthStatus, startHealthServer, startHttpServer } from "../../src/health";
+import { canonicalizeQuery } from "../../src/http/adminAuth";
+import { hmacSha256Hex } from "../../src/http/hmac";
 
 function createMockClient(isReady: boolean, ping: number): Client {
   return {
@@ -78,6 +80,79 @@ describe("Health Server", () => {
       const response = await fetch(`http://localhost:${TEST_PORT + 4}/`);
 
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe("Admin endpoints (integrated through Bun.serve)", () => {
+    const ADMIN_SECRET = "integration-test-secret";
+
+    async function signed(method: string, port: number, path: string): Promise<Request> {
+      const ts = Date.now();
+      const u = new URL(`http://localhost:${port}${path}`);
+      const message = `${method}\n${u.pathname}\n${canonicalizeQuery(u.searchParams)}\n${ts}`;
+      const sig = await hmacSha256Hex(ADMIN_SECRET, message);
+      return new Request(u.toString(), {
+        method,
+        headers: {
+          "X-Admin-Timestamp": String(ts),
+          "X-Admin-Signature": `sha256=${sig}`,
+        },
+      });
+    }
+
+    test("GET /admin/metrics returns 200 JSON when secret matches", async () => {
+      const port = TEST_PORT + 5;
+      server = startHttpServer({
+        client: createMockClient(true, 42),
+        port,
+        adminApiSecret: ADMIN_SECRET,
+      });
+      const res = await fetch(await signed("GET", port, "/admin/metrics"));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toBe("application/json");
+    });
+
+    test("GET /admin/metrics returns 503 when secret is not configured", async () => {
+      const port = TEST_PORT + 6;
+      server = startHttpServer({ client: createMockClient(true, 42), port });
+      const res = await fetch(await signed("GET", port, "/admin/metrics"));
+      expect(res.status).toBe(503);
+    });
+
+    test("POST /admin/metrics returns 405 with Allow: GET", async () => {
+      const port = TEST_PORT + 7;
+      server = startHttpServer({
+        client: createMockClient(true, 42),
+        port,
+        adminApiSecret: ADMIN_SECRET,
+      });
+      const res = await fetch(`http://localhost:${port}/admin/metrics`, { method: "POST" });
+      expect(res.status).toBe(405);
+      expect(res.headers.get("Allow")).toBe("GET");
+    });
+
+    test("DELETE /admin/logs returns 405 with Allow: GET", async () => {
+      const port = TEST_PORT + 8;
+      server = startHttpServer({
+        client: createMockClient(true, 42),
+        port,
+        adminApiSecret: ADMIN_SECRET,
+      });
+      const res = await fetch(`http://localhost:${port}/admin/logs`, { method: "DELETE" });
+      expect(res.status).toBe(405);
+      expect(res.headers.get("Allow")).toBe("GET");
+    });
+
+    test("PUT /admin/metrics never falls through to the 404 fetch fallback", async () => {
+      const port = TEST_PORT + 9;
+      server = startHttpServer({
+        client: createMockClient(true, 42),
+        port,
+        adminApiSecret: ADMIN_SECRET,
+      });
+      const res = await fetch(`http://localhost:${port}/admin/metrics`, { method: "PUT" });
+      expect(res.status).not.toBe(404);
+      expect(res.status).toBe(405);
     });
   });
 });
