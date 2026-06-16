@@ -120,6 +120,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
+      const { plugins, ...rest } = request;
       const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
@@ -127,7 +128,8 @@ export class OpenRouterClient implements ILLMClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...request,
+          ...rest,
+          ...(plugins && { plugins }),
           usage: {
             include: true,
           },
@@ -159,6 +161,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
+      const { plugins, ...rest } = request;
       const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
         method: "POST",
         headers: {
@@ -166,7 +169,8 @@ export class OpenRouterClient implements ILLMClient {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...request,
+          ...rest,
+          ...(plugins && { plugins }),
           stream: true,
           usage: {
             include: true,
