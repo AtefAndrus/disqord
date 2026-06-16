@@ -11,6 +11,15 @@ export function formatContextLength(length: number): string {
 }
 
 /**
+ * モダリティ配列を「入力: text, image / 出力: text」形式にフォーマット
+ * 空配列は "不明" を返す（メタデータ欠落 / architecture フィールド未提供のケース）
+ */
+export function formatModalities(input: string[], output: string[]): string {
+  const formatSide = (m: string[]): string => (m.length === 0 ? "不明" : m.join(", "));
+  return `入力: ${formatSide(input)} / 出力: ${formatSide(output)}`;
+}
+
+/**
  * 価格を"$X.XX/1M"形式にフォーマット
  * OpenRouter APIは「1トークンあたりのUSD」で返すため100万倍して表示
  * "0"の場合は"無料"と表示

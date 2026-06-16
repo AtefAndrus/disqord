@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { formatContextLength, formatPrice } from "../../../src/utils/modelDetailsFormatter";
+import {
+  formatContextLength,
+  formatModalities,
+  formatPrice,
+} from "../../../src/utils/modelDetailsFormatter";
 
 describe("formatContextLength", () => {
   it("1000以上の場合K単位で表示", () => {
@@ -63,5 +67,37 @@ describe("formatPrice", () => {
     it("$0.0001/1M（4桁精度）", () => {
       expect(formatPrice("0.0000000001")).toBe("$0.0001/1M");
     });
+  });
+});
+
+describe("formatModalities", () => {
+  it("text-only モデル", () => {
+    expect(formatModalities(["text"], ["text"])).toBe("入力: text / 出力: text");
+  });
+
+  it("画像入力対応モデル", () => {
+    expect(formatModalities(["text", "image"], ["text"])).toBe("入力: text, image / 出力: text");
+  });
+
+  it("画像とファイル両対応モデル", () => {
+    expect(formatModalities(["text", "image", "file"], ["text"])).toBe(
+      "入力: text, image, file / 出力: text",
+    );
+  });
+
+  it("出力モダリティが複数のモデル", () => {
+    expect(formatModalities(["text"], ["text", "image"])).toBe("入力: text / 出力: text, image");
+  });
+
+  it("入力モダリティ空配列（メタ欠落）は不明を返す", () => {
+    expect(formatModalities([], ["text"])).toBe("入力: 不明 / 出力: text");
+  });
+
+  it("出力モダリティ空配列（メタ欠落）は不明を返す", () => {
+    expect(formatModalities(["text"], [])).toBe("入力: text / 出力: 不明");
+  });
+
+  it("両方空配列は両方不明", () => {
+    expect(formatModalities([], [])).toBe("入力: 不明 / 出力: 不明");
   });
 });
