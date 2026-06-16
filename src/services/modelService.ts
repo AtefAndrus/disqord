@@ -21,7 +21,11 @@ export interface ModelDetails {
     completion: string;
   };
   isFree: boolean;
+  inputModalities: string[];
+  outputModalities: string[];
 }
+
+export type Modality = "image" | "file";
 
 export interface IModelService {
   getAllModels(options?: { noCache?: boolean }): Promise<OpenRouterModel[]>;
@@ -31,6 +35,7 @@ export interface IModelService {
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
   getModelName(modelId: string): Promise<string | null>;
   getModelDetails(modelId: string): Promise<ModelDetails | null>;
+  isMultimodalCapable(modelId: string, kind: Modality): Promise<boolean | null>;
   refreshCache(): Promise<void>;
   getCacheStatus(): CacheStatus;
 }
@@ -121,7 +126,20 @@ export class ModelService implements IModelService {
         completion: model.pricing.completion,
       },
       isFree,
+      inputModalities: model.inputModalities,
+      outputModalities: model.outputModalities,
     };
+  }
+
+  async isMultimodalCapable(modelId: string, kind: Modality): Promise<boolean | null> {
+    const details = await this.getModelDetails(modelId);
+    if (!details) {
+      return null;
+    }
+    if (details.inputModalities.length === 0) {
+      return null;
+    }
+    return details.inputModalities.includes(kind);
   }
 
   async refreshCache(): Promise<void> {

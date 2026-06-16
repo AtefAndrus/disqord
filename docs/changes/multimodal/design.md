@@ -39,11 +39,11 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "f
 | PDF 解析エンジン | `cloudflare-ai` 固定（無料の Markdown 変換） | 課金なしで開始可能。精度が必要なら `mistral-ocr`（$2/1000ページ）、モデルがネイティブ対応なら `native`。`pdf-text` は deprecated（`cloudflare-ai` にリダイレクト） |
 | `plugins` の送出タイミング | PDF content part が含まれる場合のみ送出 | `plugins` を省略しても PDF パースは走るが、意図表明と実装分岐を単純化するため明示送出 |
 | `image_url.detail` フィールド | 送らない（OpenRouter default `"auto"` に委譲） | 当面のユーザ要件なし。後で `/config` に出す余地は残す |
-| 非マルチモーダルモデル × 画像 | 送信前 `ModelService.isMultimodalCapable(modelId, "image")` で判定。`true` → 続行、`false` → 警告 + 中止、`null`（モデル詳細取得不可で不明） → 透過し OpenRouter 400 に委ねる | 二重防衛で UX と堅牢性を両立。tri-state で「非対応」と「不明」を区別 |
+| 非マルチモーダルモデル × 画像 | 送信前 `ModelService.isMultimodalCapable(modelId, "image")` で判定。`true` → 続行、`false` → 警告 + 中止、`null`（モデル詳細取得不可 or `architecture` メタ欠落で `inputModalities` が空） → 透過し OpenRouter 400 に委ねる | 二重防衛で UX と堅牢性を両立。tri-state で「非対応確定」「不明」「対応」を区別。メタ欠落を `false` に潰さない |
 | 非マルチモーダルモデル × PDF | 透過（事前判定なし） | OpenRouter file-parser が非ネイティブモデルにテキスト化して渡す |
 | 添付拒否（MIME） | サポート外 MIME を含むメッセージは警告 embed → 送信中止。テキストだけのフォールバックはしない | 「画像/PDF で質問」という意図を silently 落とすのは害になる |
 | 添付サイズ上限 | 設けない（Discord 側の制約に律する） | Bot 独自の上限はユーザ体験を複雑化させる。OpenRouter が 400/413/422 を返したら既存エラー経路で透過（詳細はエラーパス表） |
-| テキスト無しメッセージ（添付のみ） | 許可。`IChatUserInput.text` に空文字を渡し、`messages[0].content` を `parts` のみで組む | 「画像/PDF だけで聞きたい」というユースケースは自然。事前の `messageCreate` 早期 return（content 空 + 添付なし）は維持し、添付がある場合は処理を進める |
+| テキスト無しメッセージ（添付のみ） | 許可。`ChatUserInput.text` に空文字を渡し、`messages[0].content` を `parts` のみで組む | 「画像/PDF だけで聞きたい」というユースケースは自然。事前の `messageCreate` 早期 return（content 空 + 添付なし）は維持し、添付がある場合は処理を進める |
 | 画像枚数の上限 | 設けない（Discord 自体が 1 メッセージあたり最大 10 attachments） | 自前で count を持つ理由がない |
 
 ## Design
@@ -53,7 +53,7 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "f
 - 修正 `src/types/index.ts` — `ChatMessage`, `ChatCompletionRequest`, `OpenRouterModel` 拡張。新型 `ChatMessageContent` / `ChatPlugin`
 - 修正 `src/llm/openrouter.ts` — `OpenRouterModelResponse` 拡張、`listModelsWithPricing` マッピング更新、`chat` / `chatStream` の payload で `plugins` 透過
 - 修正 `src/services/modelService.ts` — `ModelDetails` に modality 追加、`isMultimodalCapable()` 追加
-- 修正 `src/services/chatService.ts` — `IChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与
+- 修正 `src/services/chatService.ts` — `ChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与
 - 修正 `src/bot/events/messageCreate.ts` — `attachmentParser` 呼び出し、事前 capability チェック、新シグネチャで chatService を呼ぶ
 - 修正 `src/utils/modelDetailsFormatter.ts` — `formatModalities()` 追記（**既存ファイル**。新規ではない）
 - 修正 `src/bot/commands/handlers.ts` — `modelSet` embed に対応モダリティ field を追加
@@ -64,31 +64,31 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "f
 
 ```ts
 // src/types/index.ts
-export interface ITextContentPart {
+export interface TextContentPart {
   type: "text";
   text: string;
 }
 
-export interface IImageContentPart {
+export interface ImageContentPart {
   type: "image_url";
   image_url: { url: string };
 }
 
-export interface IFileContentPart {
+export interface FileContentPart {
   type: "file";
   file: { filename: string; file_data: string };
 }
 
 export type ChatMessageContent =
-  | ITextContentPart
-  | IImageContentPart
-  | IFileContentPart;
+  | TextContentPart
+  | ImageContentPart
+  | FileContentPart;
 
-export interface IFileParserPlugin {
+export interface FileParserPlugin {
   id: "file-parser";
   pdf?: { engine: "cloudflare-ai" | "mistral-ocr" | "native" };
 }
-export type ChatPlugin = IFileParserPlugin;
+export type ChatPlugin = FileParserPlugin;
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
@@ -147,7 +147,7 @@ interface OpenRouterModelResponse {
 // src/services/attachmentParser.ts
 export type AttachmentRejectReason = "UNSUPPORTED_MIME" | "MISSING_MIME";
 
-export interface IAttachmentParseResult {
+export interface AttachmentParseResult {
   parts: ChatMessageContent[];
   hasPdf: boolean;
   hasImage: boolean;
@@ -160,7 +160,7 @@ export const PDF_PARSER_PLUGIN: ChatPlugin;
 
 export function parseAttachments(
   attachments: Collection<string, Attachment>,
-): IAttachmentParseResult;
+): AttachmentParseResult;
 ```
 
 `Attachment.contentType` は `string | null` のため、`null` の添付は `MISSING_MIME` として `rejected` に積み、`UNSUPPORTED_MIME`（既知だが Bot がサポート外）と区別する。拡張子フォールバック判定は本 change では入れず、ログ・警告メッセージでユーザに MIME 不明である旨を伝える。
@@ -172,12 +172,12 @@ export function parseAttachments(
 **`ChatService` API:**
 
 ```ts
-export interface IChatUserInput {
+export interface ChatUserInput {
   text: string;
   parts?: ChatMessageContent[];
 }
 
-// generateResponse / generateResponseStream は (guildId, input: IChatUserInput, ...) を取る
+// generateResponse / generateResponseStream は (guildId, input: ChatUserInput, ...) を取る
 ```
 
 実装の中核:
@@ -185,7 +185,7 @@ export interface IChatUserInput {
 ```ts
 const parts = input.parts ?? [];
 const hasFile = parts.some((p) => p.type === "file");
-const textPart: ITextContentPart[] =
+const textPart: TextContentPart[] =
   input.text.length > 0 ? [{ type: "text", text: input.text }] : [];
 const content: ChatMessage["content"] =
   parts.length > 0 ? [...textPart, ...parts] : input.text;
@@ -241,7 +241,7 @@ fields: [
 | ---- | -------- | ---- |
 | サポート外 MIME 添付（`UNSUPPORTED_MIME`） | `attachmentParser.parseAttachments` | 警告 embed（ファイル名 + reason）→ 送信中止 |
 | MIME 欠落（`Attachment.contentType` が null、`MISSING_MIME`） | 同上 | 警告 embed（「MIME を判定できなかった添付があります」）→ 送信中止 |
-| テキスト無し + 添付あり | `messageCreate` | 早期 return せず処理を継続（`IChatUserInput.text = ""`、`parts` のみで送信） |
+| テキスト無し + 添付あり | `messageCreate` | 早期 return せず処理を継続（`ChatUserInput.text = ""`、`parts` のみで送信） |
 | テキスト無し + 添付なし | `messageCreate`（既存挙動） | 「メッセージを入力してください。」を返して終了 |
 | 画像非対応モデルに画像 | `messageCreate`（`isMultimodalCapable(modelId, "image") === false`） | 警告 embed（現モデル名 + 推奨アクション）→ 送信中止 |
 | 画像 × モデル詳細取得不可（`isMultimodalCapable` が `null`） | 同上 | 透過（送信続行）→ OpenRouter 側のエラーに委ねる |
@@ -284,8 +284,8 @@ fields: [
 
 - [ ] `src/types/index.ts` に `ChatMessageContent` 系 / `ChatPlugin` / `OpenRouterModel`（`inputModalities` / `outputModalities` / `supportedParameters?`）拡張
 - [ ] `src/llm/openrouter.ts` `OpenRouterModelResponse` に `architecture?` ネスト + top-level `supported_parameters?` 追加、`listModelsWithPricing` で `architecture?.input_modalities ?? []` 形のマッピングを実装
-- [ ] `src/services/modelService.ts` `ModelDetails` 拡張 + `isMultimodalCapable(modelId: string, kind: "image" | "file"): Promise<boolean | null>` 追加（`null` = 判定不能 / モデル詳細取得失敗）
-- [ ] `tests/helpers/mockFactories.ts` fixture 更新（`architecture` ネスト形）
+- [ ] `src/services/modelService.ts` `ModelDetails` 拡張 + `isMultimodalCapable(modelId: string, kind: "image" | "file"): Promise<boolean | null>` 追加（`null` = 判定不能 / モデル詳細取得失敗 / `architecture` メタ欠落で `inputModalities` 空）
+- [ ] `tests/helpers/mockFactories.ts` fixture 更新（post-mapping の `OpenRouterModel` に `inputModalities` / `outputModalities` を追加。API レスポンス形 `architecture` ネストは `tests/unit/llm/openrouter.test.ts` 側で扱う）
 - [ ] 既存テストの型追従、`isMultimodalCapable(modelId, kind)` のユニットテスト追加
 
 ### Phase 2: モダリティ表示
@@ -302,7 +302,7 @@ fields: [
 ### Phase 4: attachmentParser + ChatService API 拡張
 
 - [ ] `src/services/attachmentParser.ts` 新規（`AttachmentRejectReason` 含む、`MISSING_MIME` で `contentType: null` を区別）
-- [ ] `src/services/chatService.ts` `IChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与、`text` 空 + `parts` あり対応
+- [ ] `src/services/chatService.ts` `ChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与、`text` 空 + `parts` あり対応
 - [ ] `tests/unit/services/attachmentParser.test.ts` 新規（`UNSUPPORTED_MIME` / `MISSING_MIME` を区別）
 - [ ] `tests/unit/services/chatService.test.ts` 拡張（text-only / image / PDF / 混在 / `text=""` + `parts` あり）
 

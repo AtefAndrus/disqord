@@ -11,6 +11,8 @@ describe("ModelService", () => {
       created: 1640000000,
       contextLength: 4096,
       pricing: { prompt: "0", completion: "0" },
+      inputModalities: ["text", "image"],
+      outputModalities: ["text"],
     },
     {
       id: "free-model-2",
@@ -18,6 +20,8 @@ describe("ModelService", () => {
       created: 1650000000,
       contextLength: 8192,
       pricing: { prompt: "0", completion: "0" },
+      inputModalities: ["text"],
+      outputModalities: ["text"],
     },
     {
       id: "paid-model-1",
@@ -25,6 +29,8 @@ describe("ModelService", () => {
       created: 1660000000,
       contextLength: 16384,
       pricing: { prompt: "0.001", completion: "0.002" },
+      inputModalities: ["text", "image", "file"],
+      outputModalities: ["text"],
     },
     {
       id: "paid-model-2",
@@ -32,6 +38,8 @@ describe("ModelService", () => {
       created: 1670000000,
       contextLength: 32768,
       pricing: { prompt: "0.01", completion: "0.02" },
+      inputModalities: ["text"],
+      outputModalities: ["text"],
     },
   ];
 
@@ -193,6 +201,8 @@ describe("ModelService", () => {
         contextLength: 16384,
         pricing: { prompt: "0.001", completion: "0.002" },
         isFree: false,
+        inputModalities: ["text", "image", "file"],
+        outputModalities: ["text"],
       });
     });
 
@@ -206,6 +216,46 @@ describe("ModelService", () => {
       const details = await modelService.getModelDetails("non-existing-model");
 
       expect(details).toBeNull();
+    });
+  });
+
+  describe("isMultimodalCapable", () => {
+    test("returns true when model supports the requested modality", async () => {
+      expect(await modelService.isMultimodalCapable("free-model-1", "image")).toBe(true);
+      expect(await modelService.isMultimodalCapable("paid-model-1", "image")).toBe(true);
+      expect(await modelService.isMultimodalCapable("paid-model-1", "file")).toBe(true);
+    });
+
+    test("returns false when model does not support the requested modality", async () => {
+      expect(await modelService.isMultimodalCapable("free-model-2", "image")).toBe(false);
+      expect(await modelService.isMultimodalCapable("free-model-1", "file")).toBe(false);
+      expect(await modelService.isMultimodalCapable("paid-model-2", "image")).toBe(false);
+    });
+
+    test("returns null when model is unknown (tri-state: cannot determine)", async () => {
+      expect(await modelService.isMultimodalCapable("non-existing-model", "image")).toBeNull();
+    });
+
+    test("returns null when model metadata is incomplete (empty inputModalities)", async () => {
+      const incompleteModels: OpenRouterModel[] = [
+        {
+          id: "metadata-missing",
+          name: "Metadata Missing",
+          created: 1680000000,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: [],
+          outputModalities: [],
+        },
+      ];
+      const incompleteClient: ILLMClient = {
+        ...mockLLMClient,
+        listModelsWithPricing: mock(() => Promise.resolve(incompleteModels)),
+      };
+      const service = new ModelService(incompleteClient);
+
+      expect(await service.isMultimodalCapable("metadata-missing", "image")).toBeNull();
+      expect(await service.isMultimodalCapable("metadata-missing", "file")).toBeNull();
     });
   });
 });

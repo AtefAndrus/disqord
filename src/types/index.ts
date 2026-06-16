@@ -22,17 +22,47 @@ export interface OpenRouterModel {
   pricing: {
     prompt: string;
     completion: string;
+    image?: string;
+    request?: string;
   };
+  inputModalities: string[];
+  outputModalities: string[];
+  supportedParameters?: string[];
 }
+
+export interface TextContentPart {
+  type: "text";
+  text: string;
+}
+
+export interface ImageContentPart {
+  type: "image_url";
+  image_url: { url: string };
+}
+
+export interface FileContentPart {
+  type: "file";
+  file: { filename: string; file_data: string };
+}
+
+export type ChatMessageContent = TextContentPart | ImageContentPart | FileContentPart;
+
+export interface FileParserPlugin {
+  id: "file-parser";
+  pdf?: { engine: "cloudflare-ai" | "mistral-ocr" | "native" };
+}
+
+export type ChatPlugin = FileParserPlugin;
 
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | ChatMessageContent[];
 }
 
 export interface ChatCompletionRequest {
   model: string;
   messages: ChatMessage[];
+  plugins?: ChatPlugin[];
 }
 
 export interface ChatCompletionResponse {

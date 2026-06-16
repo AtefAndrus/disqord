@@ -103,6 +103,7 @@ describe("createMessageCreateHandler", () => {
       validateModelSelection: mock(() => Promise.resolve({ valid: true })),
       getModelName: mock(() => Promise.resolve("Test Model (fixture)")),
       getModelDetails: mock(() => Promise.resolve(null)),
+      isMultimodalCapable: mock(() => Promise.resolve<boolean | null>(null)),
       refreshCache: mock(() => Promise.resolve()),
       getCacheStatus: mock(() => ({
         lastUpdatedAt: new Date(),

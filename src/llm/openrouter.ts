@@ -44,7 +44,17 @@ interface OpenRouterModelResponse {
     pricing: {
       prompt: string;
       completion: string;
+      image?: string;
+      request?: string;
     };
+    architecture?: {
+      input_modalities?: string[];
+      output_modalities?: string[];
+      modality?: string;
+      tokenizer?: string;
+      instruct_type?: string | null;
+    };
+    supported_parameters?: string[];
   }[];
 }
 
@@ -265,6 +275,9 @@ export class OpenRouterClient implements ILLMClient {
       created: model.created,
       contextLength: model.context_length,
       pricing: model.pricing,
+      inputModalities: model.architecture?.input_modalities ?? [],
+      outputModalities: model.architecture?.output_modalities ?? [],
+      ...(model.supported_parameters && { supportedParameters: model.supported_parameters }),
     }));
   }
 

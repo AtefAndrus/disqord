@@ -465,6 +465,13 @@ describe("OpenRouterClient", () => {
                 created: 1640000000,
                 context_length: 4096,
                 pricing: { prompt: "0", completion: "0" },
+                architecture: {
+                  input_modalities: ["text", "image"],
+                  output_modalities: ["text"],
+                  modality: "text+image->text",
+                  tokenizer: "Other",
+                },
+                supported_parameters: ["temperature", "stop"],
               },
               {
                 id: "model-2",
@@ -486,6 +493,9 @@ describe("OpenRouterClient", () => {
           created: 1640000000,
           contextLength: 4096,
           pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+          supportedParameters: ["temperature", "stop"],
         },
         {
           id: "model-2",
@@ -493,6 +503,8 @@ describe("OpenRouterClient", () => {
           created: 1650000000,
           contextLength: 8192,
           pricing: { prompt: "0.001", completion: "0.002" },
+          inputModalities: [],
+          outputModalities: [],
         },
       ]);
     });
