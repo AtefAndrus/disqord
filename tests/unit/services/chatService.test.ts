@@ -21,11 +21,11 @@ describe("ChatService", () => {
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {
-    await chatService.generateResponse("guild-123", "Hello");
+    await chatService.generateResponse("guild-123", { text: "Hello" });
     expect(mockSettingsService.getGuildSettings).toHaveBeenCalledWith("guild-123");
   });
 
-  test("LLMClientにギルドのデフォルトモデルを使用してリクエスト", async () => {
+  test("LLMClientにギルドのデフォルトモデルを使用してリクエスト (text-only)", async () => {
     const customSettings = createMockGuildSettings({
       guildId: "guild-123",
       defaultModel: "custom-model",
@@ -34,12 +34,88 @@ describe("ChatService", () => {
       customSettings,
     );
 
-    await chatService.generateResponse("guild-123", "Hello");
+    await chatService.generateResponse("guild-123", { text: "Hello" });
 
     expect(mockLLMClient.chat).toHaveBeenCalledWith({
       model: "custom-model",
       messages: [{ role: "user", content: "Hello" }],
     });
+  });
+
+  test("parts ありの場合は content を配列で送る (text + 画像)", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "Describe",
+      parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
+    });
+
+    expect(mockLLMClient.chat).toHaveBeenCalledWith({
+      model: "test-model:fixture",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe" },
+            { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+          ],
+        },
+      ],
+    });
+  });
+
+  test("text が空 + parts あり の場合は parts のみで送る", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "",
+      parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
+    });
+
+    expect(mockLLMClient.chat).toHaveBeenCalledWith({
+      model: "test-model:fixture",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
+        },
+      ],
+    });
+  });
+
+  test("file パートを含む場合のみ plugins が付与される", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "Summarize",
+      parts: [
+        {
+          type: "file",
+          file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+        },
+      ],
+    });
+
+    expect(mockLLMClient.chat).toHaveBeenCalledWith({
+      model: "test-model:fixture",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Summarize" },
+            {
+              type: "file",
+              file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+            },
+          ],
+        },
+      ],
+      plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }],
+    });
+  });
+
+  test("画像のみの場合は plugins を付与しない", async () => {
+    await chatService.generateResponse("guild-123", {
+      text: "Look",
+      parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } }],
+    });
+
+    const call = (mockLLMClient.chat as ReturnType<typeof mock>).mock.calls[0];
+    expect(call?.[0]).not.toHaveProperty("plugins");
   });
 
   test("LLMClientからのレスポンスを返す", async () => {
@@ -49,7 +125,7 @@ describe("ChatService", () => {
     };
     (mockLLMClient.chat as ReturnType<typeof mock>).mockResolvedValueOnce(response);
 
-    const result = await chatService.generateResponse("guild-123", "Hi");
+    const result = await chatService.generateResponse("guild-123", { text: "Hi" });
 
     expect(result.text).toBe("Hello, user!");
     expect(result.metadata).toBeDefined();
@@ -63,7 +139,7 @@ describe("ChatService", () => {
     };
     (mockLLMClient.chat as ReturnType<typeof mock>).mockResolvedValueOnce(response);
 
-    const result = await chatService.generateResponse("guild-123", "Hi");
+    const result = await chatService.generateResponse("guild-123", { text: "Hi" });
 
     expect(result.text).toBe("");
   });
@@ -75,7 +151,7 @@ describe("ChatService", () => {
     } as unknown as ChatCompletionResponse;
     (mockLLMClient.chat as ReturnType<typeof mock>).mockResolvedValueOnce(response);
 
-    const result = await chatService.generateResponse("guild-123", "Hi");
+    const result = await chatService.generateResponse("guild-123", { text: "Hi" });
 
     expect(result.text).toBe("");
   });
@@ -84,13 +160,57 @@ describe("ChatService", () => {
     const error = new Error("LLM error");
     (mockLLMClient.chat as ReturnType<typeof mock>).mockRejectedValueOnce(error);
 
-    await expect(chatService.generateResponse("guild-123", "Hi")).rejects.toThrow("LLM error");
+    await expect(chatService.generateResponse("guild-123", { text: "Hi" })).rejects.toThrow(
+      "LLM error",
+    );
   });
 
   test("SettingsServiceがエラーをスローした場合はそのまま伝播", async () => {
     const error = new Error("Settings error");
     (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockRejectedValueOnce(error);
 
-    await expect(chatService.generateResponse("guild-123", "Hi")).rejects.toThrow("Settings error");
+    await expect(chatService.generateResponse("guild-123", { text: "Hi" })).rejects.toThrow(
+      "Settings error",
+    );
+  });
+
+  test("generateResponseStream も multimodal request (content 配列 + plugins) を chatStream に渡す", async () => {
+    const stream = chatService.generateResponseStream(
+      "guild-123",
+      {
+        text: "Summarize",
+        parts: [
+          {
+            type: "file",
+            file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+          },
+        ],
+      },
+      "req-1",
+    );
+    // generator を駆動して chatStream を呼ばせる
+    for await (const _ of stream) {
+      // mock の chatStream は 3 chunk を yield する
+    }
+
+    expect(mockLLMClient.chatStream).toHaveBeenCalledWith(
+      {
+        model: "test-model:fixture",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Summarize" },
+              {
+                type: "file",
+                file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+              },
+            ],
+          },
+        ],
+        plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }],
+      },
+      expect.any(AbortSignal),
+    );
   });
 });

@@ -223,7 +223,7 @@ describe("createMessageCreateHandler", () => {
     // generateResponseStreamが呼ばれる
     expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
       "guild-123",
-      "Hello",
+      { text: "Hello" },
       "msg-123",
     );
 

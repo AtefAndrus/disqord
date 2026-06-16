@@ -254,7 +254,7 @@ fields: [
 **設計メモ:**
 
 - Discord CDN の添付 URL は署名付きで有効期限あり（`ex`/`is`/`hm`）。受信 → 即時 OpenRouter 送信なら通常問題にならない。観測されたら別 change で fetch → data URL 化を追加
-- サポート画像形式: png, jpeg/jpg, gif, webp
+- サポート画像形式: png, jpeg, gif, webp（OpenRouter 公式 docs に列挙された MIME のみ。`image/jpg` は対応外で、Discord も通常 `image/jpeg` を返す）
 - サポート文書形式: PDF（`application/pdf`）。初期は `cloudflare-ai` エンジン
 - `pricing.image` は本 change では表示しない（embed への投影は将来検討）
 - `annotations[].file.hash` キャッシュは将来最適化（Open Questions 参照）

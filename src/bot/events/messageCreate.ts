@@ -119,7 +119,11 @@ export function createMessageCreateHandler(
       const startTime = Date.now();
 
       try {
-        const stream = chatService.generateResponseStream(message.guild.id, content, message.id);
+        const stream = chatService.generateResponseStream(
+          message.guild.id,
+          { text: content },
+          message.id,
+        );
 
         for await (const chunk of stream) {
           if (chunk.done) {
