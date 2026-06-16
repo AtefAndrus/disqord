@@ -3,6 +3,8 @@ import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from "discord.js
 import { ApplicationCommandOptionType } from "discord.js";
 import {
   generateCommandTable,
+  generateDefaultModelLine,
+  generateEnvExample,
   generateEnvVarsTable,
   replaceMarkerSection,
 } from "../../../scripts/generate-readme";
@@ -195,5 +197,60 @@ describe("replaceMarkerSection", () => {
   test("開始マーカーのみの場合もエラー", () => {
     const partial = "<!-- AUTO:HALF:START -->\ncontent";
     expect(() => replaceMarkerSection(partial, "HALF", "new")).toThrow("Marker not found: HALF");
+  });
+});
+
+describe("generateEnvExample", () => {
+  test("デフォルト値ありは NAME=value、なしは NAME= で出力", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "TOKEN", required: true, description: "トークン" },
+      { name: "PORT", required: false, description: "ポート", default: "3000" },
+    ];
+    const result = generateEnvExample(vars);
+    expect(result).toContain("TOKEN=\n");
+    expect(result).toContain("PORT=3000\n");
+  });
+
+  test("末尾改行が含まれる", () => {
+    const vars: EnvVarDefinition[] = [{ name: "TOKEN", required: true, description: "トークン" }];
+    const result = generateEnvExample(vars);
+    expect(result.endsWith("\n")).toBe(true);
+  });
+
+  test("envVarDefinitions の順序を保持する", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "A", required: true, description: "a" },
+      { name: "B", required: true, description: "b" },
+      { name: "C", required: true, description: "c" },
+    ];
+    const result = generateEnvExample(vars);
+    const aIdx = result.indexOf("A=");
+    const bIdx = result.indexOf("B=");
+    const cIdx = result.indexOf("C=");
+    expect(aIdx).toBeLessThan(bIdx);
+    expect(bIdx).toBeLessThan(cIdx);
+  });
+});
+
+describe("generateDefaultModelLine", () => {
+  test("DEFAULT_MODEL エントリから行を生成", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "DEFAULT_MODEL", required: false, description: "デフォルトモデル", default: "x/y:z" },
+    ];
+    expect(generateDefaultModelLine(vars)).toBe("- Default model: `x/y:z`");
+  });
+
+  test("DEFAULT_MODEL エントリが無い場合はエラー", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "OTHER", required: true, description: "other" },
+    ];
+    expect(() => generateDefaultModelLine(vars)).toThrow("DEFAULT_MODEL definition");
+  });
+
+  test("DEFAULT_MODEL に default 値が無い場合もエラー", () => {
+    const vars: EnvVarDefinition[] = [
+      { name: "DEFAULT_MODEL", required: true, description: "デフォルトモデル" },
+    ];
+    expect(() => generateDefaultModelLine(vars)).toThrow("DEFAULT_MODEL definition");
   });
 });

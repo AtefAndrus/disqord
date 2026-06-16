@@ -1,5 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
+import { envVarDefinitions } from "./envVars";
+
+function envDefault(name: string): string {
+  const def = envVarDefinitions.find((v) => v.name === name)?.default;
+  if (!def) {
+    throw new Error(`Default value for ${name} not found in envVarDefinitions`);
+  }
+  return def;
+}
 
 /**
  * Load .env file manually.
@@ -53,7 +62,7 @@ const configSchema = z.object({
   nodeEnv: z.enum(["development", "production"]).default("development"),
   databasePath: z.string().default("data/disqord.db"),
   applicationId: z.string().min(1),
-  defaultModel: z.string().default("deepseek/deepseek-v4-flash:free"),
+  defaultModel: z.string().min(1),
   healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
   githubWebhookSecret: z.string().optional(),
   adminApiSecret: z.string().optional(),
@@ -70,7 +79,7 @@ export function loadConfig(): AppConfig {
     nodeEnv: process.env.NODE_ENV ?? "development",
     databasePath: process.env.DATABASE_PATH ?? "data/disqord.db",
     applicationId: process.env.DISCORD_APPLICATION_ID,
-    defaultModel: process.env.DEFAULT_MODEL,
+    defaultModel: process.env.DEFAULT_MODEL ?? envDefault("DEFAULT_MODEL"),
     healthPort: process.env.HEALTH_PORT,
     githubWebhookSecret: process.env.GITHUB_WEBHOOK_SECRET,
     adminApiSecret: process.env.ADMIN_API_SECRET,
