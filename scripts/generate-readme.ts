@@ -89,6 +89,18 @@ export function generateEnvVarsTable(vars: EnvVarDefinition[]): string {
   return lines.join("\n");
 }
 
+export function generateEnvExample(vars: EnvVarDefinition[]): string {
+  return `${vars.map((v) => `${v.name}=${v.default ?? ""}`).join("\n")}\n`;
+}
+
+export function generateDefaultModelLine(vars: EnvVarDefinition[]): string {
+  const def = vars.find((v) => v.name === "DEFAULT_MODEL")?.default;
+  if (!def) {
+    throw new Error("DEFAULT_MODEL definition with default value missing in envVarDefinitions");
+  }
+  return `- Default model: \`${def}\``;
+}
+
 export function replaceMarkerSection(
   content: string,
   section: string,
@@ -113,7 +125,6 @@ export function replaceMarkerSection(
 
 function main(): void {
   const rootDir = resolve(import.meta.dir, "..");
-  const readmePath = resolve(rootDir, "README.md");
 
   // Load command definitions
   const { commandDefinitions } = require(resolve(rootDir, "src/bot/commands/index.ts"));
@@ -124,18 +135,28 @@ function main(): void {
   // Load env var definitions
   const { envVarDefinitions } = require(resolve(rootDir, "src/config/envVars.ts"));
 
+  // README.md
+  const readmePath = resolve(rootDir, "README.md");
   let readme = readFileSync(readmePath, "utf-8");
-
-  // Replace COMMANDS section
-  const commandTable = generateCommandTable(commands);
-  readme = replaceMarkerSection(readme, "COMMANDS", commandTable);
-
-  // Replace ENV_VARS section
-  const envVarsTable = generateEnvVarsTable(envVarDefinitions);
-  readme = replaceMarkerSection(readme, "ENV_VARS", envVarsTable);
-
+  readme = replaceMarkerSection(readme, "COMMANDS", generateCommandTable(commands));
+  readme = replaceMarkerSection(readme, "ENV_VARS", generateEnvVarsTable(envVarDefinitions));
   writeFileSync(readmePath, readme);
-  console.log("README.md updated.");
+
+  // CLAUDE.md
+  const claudeMdPath = resolve(rootDir, "CLAUDE.md");
+  let claudeMd = readFileSync(claudeMdPath, "utf-8");
+  claudeMd = replaceMarkerSection(
+    claudeMd,
+    "DEFAULT_MODEL",
+    generateDefaultModelLine(envVarDefinitions),
+  );
+  writeFileSync(claudeMdPath, claudeMd);
+
+  // .env.example
+  const envExamplePath = resolve(rootDir, ".env.example");
+  writeFileSync(envExamplePath, generateEnvExample(envVarDefinitions));
+
+  console.log("README.md, CLAUDE.md, .env.example updated.");
 }
 
 // Only run when executed directly (not when imported for testing)

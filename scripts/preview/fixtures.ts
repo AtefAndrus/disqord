@@ -37,7 +37,7 @@ function pack(
   };
 }
 
-const DEMO_MODEL = "deepseek/deepseek-v4-flash:free";
+const DEMO_MODEL = "demo/preview-model:placeholder";
 
 const settings: GuildSettings = {
   guildId: "100000000000000000",
@@ -69,7 +69,7 @@ const LONG_ANSWER = (() => {
     "OpenRouter は複数の LLM プロバイダを単一 API で扱えるルーティング層です。" +
     "モデル ID を切り替えるだけで DeepSeek・Llama・GPT 系などへリクエストを振り分けられます。\n";
   const code =
-    '```ts\nconst res = await client.chat({\n  model: "deepseek/deepseek-v4-flash:free",\n  messages,\n});\n```\n';
+    '```ts\nconst res = await client.chat({\n  model: "provider/model-id",\n  messages,\n});\n```\n';
   let body = "## 長文応答の分割プレビュー\n\n";
   for (let i = 0; i < 28; i++) {
     body += `${i + 1}. ${para}`;

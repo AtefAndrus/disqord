@@ -10,6 +10,12 @@ export const envVarDefinitions: EnvVarDefinition[] = [
   { name: "DISCORD_APPLICATION_ID", required: true, description: "Discord Application ID" },
   { name: "OPENROUTER_API_KEY", required: true, description: "OpenRouter API Key" },
   {
+    name: "NODE_ENV",
+    required: false,
+    description: "アプリ動作モード（development または production）",
+    default: "development",
+  },
+  {
     name: "DATABASE_PATH",
     required: false,
     description: "SQLiteパス",

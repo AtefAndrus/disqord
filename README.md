@@ -41,6 +41,7 @@ docker run -d \
 | DISCORD_TOKEN | Yes | Discord Bot Token |
 | DISCORD_APPLICATION_ID | Yes | Discord Application ID |
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |
+| NODE_ENV | No | アプリ動作モード（development または production）（デフォルト: `development`） |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: `data/disqord.db`） |
 | DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `deepseek/deepseek-v4-flash:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |

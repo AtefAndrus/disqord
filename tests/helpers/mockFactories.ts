@@ -11,7 +11,7 @@ export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
     upsert: mock((guildId: string, settings: Partial<GuildSettings>) =>
       Promise.resolve({
         guildId,
-        defaultModel: settings.defaultModel ?? "google/gemini-2.0-flash-exp:free",
+        defaultModel: settings.defaultModel ?? "test-model:fixture",
         freeModelsOnly: settings.freeModelsOnly ?? false,
         releaseChannelId: settings.releaseChannelId ?? null,
         showLlmDetails: settings.showLlmDetails ?? true,
@@ -81,7 +81,7 @@ export function createMockSettingsService(): ISettingsService {
     getGuildSettings: mock((guildId: string) =>
       Promise.resolve({
         guildId,
-        defaultModel: "google/gemini-2.0-flash-exp:free",
+        defaultModel: "test-model:fixture",
         freeModelsOnly: false,
         releaseChannelId: null,
         showLlmDetails: true,
@@ -105,7 +105,7 @@ export function createMockSettingsService(): ISettingsService {
     setFreeModelsOnly: mock((guildId: string, freeModelsOnly: boolean) =>
       Promise.resolve({
         guildId,
-        defaultModel: "google/gemini-2.0-flash-exp:free",
+        defaultModel: "test-model:fixture",
         freeModelsOnly,
         releaseChannelId: null,
         showLlmDetails: true,
@@ -117,7 +117,7 @@ export function createMockSettingsService(): ISettingsService {
     setReleaseChannel: mock((guildId: string, channelId: string | null) =>
       Promise.resolve({
         guildId,
-        defaultModel: "google/gemini-2.0-flash-exp:free",
+        defaultModel: "test-model:fixture",
         freeModelsOnly: false,
         releaseChannelId: channelId,
         showLlmDetails: true,
@@ -137,7 +137,7 @@ export function createMockSettingsService(): ISettingsService {
 export function createMockGuildSettings(overrides?: Partial<GuildSettings>): GuildSettings {
   return {
     guildId: "test-guild-id",
-    defaultModel: "google/gemini-2.0-flash-exp:free",
+    defaultModel: "test-model:fixture",
     freeModelsOnly: false,
     releaseChannelId: null,
     showLlmDetails: true,
