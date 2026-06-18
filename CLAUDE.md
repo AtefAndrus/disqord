@@ -13,26 +13,39 @@ Discord Bot that communicates with LLMs through OpenRouter.
 | Document | 役割 | 参照タイミング |
 | -------- | ---- | -------------- |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 | git-cliff で自動生成。リリース時に `bun run changelog` で更新 |
-| [progress.md](docs/progress.md) | バックログ | **最初に参照**。未完了タスクを把握 |
+| [progress.md](docs/progress.md) | バックログ（自動生成） | **最初に参照**。frontmatter から自動生成 |
 | [infrastructure-setup.md](docs/infrastructure-setup.md) | インフラ設定手順 | Webhook設定時のみ参照 |
 | [changes/TEMPLATE.md](docs/changes/TEMPLATE.md) | Change設計テンプレート | 新機能の設計書作成時にコピー |
 | `docs/changes/<name>/design.md` | 個別機能の設計書 | 該当機能の実装時に参照 |
 
 ### 更新ルール
 
-#### progress.md（バックログ・インデックス）
+#### progress.md（バックログ・インデックス）**[自動生成]**
 
-- **新機能検討時**: バックログに追加
-  - 機能名、優先度（高/中/低）、changeフォルダへのリンクを記載
-  - 優先度に応じた位置に挿入（上が高優先度）
-  - タスク詳細は changeフォルダの Tasks セクションに記載（progress.md には書かない）
-- **実装完了時（リリース時）**: バックログから該当項目を削除
-  - 変更履歴は CHANGELOG.md（git-cliff 自動生成）で管理
+- progress.md のバックログテーブルは `docs/changes/*/design.md` の YAML frontmatter から自動生成
+- **手動で編集しない** こと。frontmatter を編集すれば commit 時に自動反映
+- 「バックログ」は active/unreleased な change フォルダの一覧を指す（未着手だけでなく実装済み・未リリースも含む）
 
 #### docs/changes/（機能別設計書）
 
 - **新機能検討時**: `docs/changes/<feature-name>/design.md` を `TEMPLATE.md` からコピーして作成
   - フォルダ名は kebab-case 英語（例: `web-search`, `model-compare`）。design.md のタイトル見出しは日本語の機能名で書く
+  - YAML frontmatter を先頭に記載する（必須）:
+
+    ```yaml
+    ---
+    title: "日本語の機能名"
+    status: planned        # planned | in-progress | implemented
+    priority: high         # high | medium | low
+    summary: "一行の概要"  # 任意
+    ---
+    ```
+
+  - ステータス遷移:
+    - **新機能検討時**: design.md を作成し `status: planned` で開始
+    - **実装開始時**: `status` を `in-progress` に更新
+    - **実装完了時（main マージ後）**: `status` を `implemented` に更新
+    - **リリース時**: changesフォルダを削除（progress.md から自動消滅。CHANGELOG.md が変更履歴を担う）
   - 必須セクション: Why / Goals・Non-Goals / Decisions / Design / Tasks
   - 任意セクション: 「依存 / 関連 change」「Open Questions / Risks」「参照」（不要なら節ごと削除）。参照の見出しは日本語「参照」に統一する（「References」は使わない）
   - 詳細設計は段階的に追記可能（一度に完成させる必要なし）
@@ -41,18 +54,21 @@ Discord Bot that communicates with LLMs through OpenRouter.
   - 同時リリースの複数サブ機能（小〜中規模）→ 1 フォルダ・単一 `design.md`、Design 内を `---` で機能別小節に分割
   - 同時リリースの複数サブ機能（大規模かつ共有コアあり）→ 1 フォルダ・複数ファイル。`design.md` をインデックス（共有 Why/Decisions/依存 + リンク）にし、サブ機能を `design.<subfeature>.md` に分割。フォルダはリリース単位として不可分（他 change からの参照は `design.md` に向けてリンク安定性を保つ）
   - サブ機能を別々にリリースしたくなったら、ファイル分割ではなくフォルダ分割（別 change）にする
-- **実装完了時**: changesフォルダを削除（Tasks の最終項目に削除を明記しておく）
+- **リリース時**: changesフォルダを削除（Tasks の最終項目に削除を明記しておく）
   - Git履歴がアーカイブとして機能するため、別途保存は不要
 
-#### README.md（自動生成セクション）
+#### 自動生成ファイル/セクション
 
-- README.md の一部セクションは `<!-- AUTO:SECTION:START/END -->` マーカーで囲まれており、pre-commit hook で自動生成される
+- 以下のファイル/セクションは `<!-- AUTO:SECTION:START/END -->` マーカーで囲まれており、pre-commit hook で自動生成される
 - **手動で編集しない** こと。ソースを編集すれば commit 時に自動反映される
 
-| セクション | 編集先 |
-| ---------- | ------ |
-| コマンド一覧 | `src/bot/commands/` の各コマンド定義 |
-| 環境変数 | `src/config/envVars.ts` |
+| セクション / ファイル | 編集先 |
+| -------------------- | ------ |
+| README.md コマンド一覧 | `src/bot/commands/` の各コマンド定義 |
+| README.md 環境変数 | `src/config/envVars.ts` |
+| CLAUDE.md デフォルトモデル | `src/config/envVars.ts` の `DEFAULT_MODEL` |
+| .env.example | `src/config/envVars.ts` |
+| docs/progress.md バックログ | `docs/changes/*/design.md` の YAML frontmatter |
 
 ## Tech Stack
 
@@ -165,7 +181,7 @@ Format: `[type] short description`
 
 Use the `/release` skill to automate the release process. Example: `/release 1.5.0`
 
-The skill handles: version bump, CHANGELOG.md generation, progress.md update, commit, tag, push, and GitHub release creation with hand-crafted release notes.
+The skill handles: version bump, CHANGELOG.md generation, changesフォルダ削除（progress.md 自動反映）, commit, tag, push, and GitHub release creation with hand-crafted release notes.
 
 ### Release Notes Guidelines
 

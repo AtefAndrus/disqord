@@ -1,3 +1,10 @@
+---
+title: "Bot 管理 API（admin endpoints）"
+status: implemented
+priority: high
+summary: "HMAC 認証付き管理エンドポイント（ログ取得・メトリクス）"
+---
+
 # Bot 管理 API（admin endpoints）
 
 ## Why
@@ -258,7 +265,6 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 - [ ] `docs/admin-api.md` 作成（curl 例 / JSON shape / ローカル & 本番設定手順）
 - [ ] `bun test && bun typecheck && bun lint` パス
 - [ ] ローカル E2E（`bun dev` + 上記 curl で 200 / 405 / 503 を目視）
-- [ ] `progress.md` のバックログから削除（リリース時）
 - [ ] `docs/changes/admin-endpoints/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

@@ -1,3 +1,10 @@
+---
+title: "デフォルトモデル定数の SSOT 化"
+status: in-progress
+priority: medium
+summary: "envVars.ts を DEFAULT_MODEL の単一ソース化"
+---
+
 # Default Model 定数の SSOT 化
 
 ## Why

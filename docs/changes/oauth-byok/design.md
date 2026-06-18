@@ -1,3 +1,10 @@
+---
+title: "OAuth BYOK（ユーザー別 OpenRouter キー）"
+status: planned
+priority: high
+summary: ""
+---
+
 # OAuth BYOK（OpenRouter キー接続）
 
 ## Why

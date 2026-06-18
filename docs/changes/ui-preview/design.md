@@ -1,3 +1,10 @@
+---
+title: "Bot UI プレビュー（visual refine）"
+status: implemented
+priority: low
+summary: "プレビュー描画基盤（残タスクは任意項目のみ）"
+---
+
 # Bot UI プレビュー（visual refine）
 
 ## Why

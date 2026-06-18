@@ -1,3 +1,10 @@
+---
+title: "LLM チャット返信の Components V2 化"
+status: planned
+priority: high
+summary: ""
+---
+
 # LLM チャット返信の Components V2 化
 
 ## Why

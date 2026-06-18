@@ -1,3 +1,10 @@
+---
+title: "マルチモーダル対応"
+status: implemented
+priority: high
+summary: "画像・PDF 添付の LLM 入力対応"
+---
+
 # マルチモーダル対応
 
 ## Why

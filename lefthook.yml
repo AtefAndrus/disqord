@@ -2,7 +2,7 @@ pre-commit:
   piped: true
   commands:
     01_generate-readme:
-      run: bun scripts/generate-readme.ts && git add README.md CLAUDE.md .env.example
+      run: bun scripts/generate-readme.ts && git add README.md CLAUDE.md .env.example docs/progress.md
     02_lint:
       run: bun run lint
     03_lint-md:

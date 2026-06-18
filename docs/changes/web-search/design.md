@@ -1,3 +1,10 @@
+---
+title: "Web 検索 + ツイート展開"
+status: planned
+priority: medium
+summary: ""
+---
+
 # Web 検索 + ツイート展開
 
 ## Why

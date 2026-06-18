@@ -1,3 +1,10 @@
+---
+title: "CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT"
+status: implemented
+priority: high
+summary: "CI 新設・workflow hardening・mise SSOT 化"
+---
+
 # CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT
 
 ## Why

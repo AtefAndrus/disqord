@@ -1,6 +1,8 @@
 {
   "config": {
     "default": true,
+    // frontmatter の title を仮想 H1 として扱わない（design.md は frontmatter + # 見出し併用）
+    "MD025": { "front_matter_title": "" },
     // 行長制限は無効（ドキュメントの可読性優先）
     "MD013": false,
     // インラインHTMLは許可

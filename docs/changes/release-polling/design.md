@@ -1,3 +1,10 @@
+---
+title: "リリース更新通知のポーリング化"
+status: planned
+priority: medium
+summary: ""
+---
+
 # リリース更新通知のポーリング化
 
 ## Why
@@ -164,7 +171,6 @@ push（GitHub Webhook）方式は、リポジトリの Webhook 設定権限を�
 - [ ] `bun test && bun typecheck && bun lint` パス
 - [ ] ローカル E2E（初回はシードで通知しない → 新リリースで通知 → 同一リリースで二重通知なし → latest 巻き戻りで再通知なし）
 - [ ] README 自動生成セクション（環境変数）の反映確認、`.env.example` 反映確認
-- [ ] progress.md からバックログ削除（リリース完了時）
 - [ ] `docs/changes/release-polling/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

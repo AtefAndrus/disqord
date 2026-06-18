@@ -6,68 +6,27 @@
 
 ## バックログ（優先度順）
 
-上から優先度が高い順に並べる。バージョン番号はリリース時に決定する。
 各機能の詳細設計は [docs/changes/](changes/) を参照。
 
-### CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT
-
-優先度: 高 / 設計: [ci-pipeline](changes/ci-pipeline/design.md)
-
-### Bot 管理 API（admin endpoints）
-
-優先度: 高 / 設計: [admin-endpoints](changes/admin-endpoints/design.md)
-
-### OAuth BYOK（ユーザー別 OpenRouter キー）
-
-優先度: 高 / 設計: [oauth-byok](changes/oauth-byok/design.md)
-
-### 対話UX改善
-
-優先度: 高 / 設計: [conversation-context](changes/conversation-context/design.md)
-
-### マルチモーダル対応
-
-優先度: 高 / 設計: [multimodal](changes/multimodal/design.md)
-
-### LLM チャット返信の Components V2 化
-
-優先度: 高 / 設計: [chat-response-v2](changes/chat-response-v2/design.md)（multimodal 完了後に着手）
-
-### リリース更新通知のポーリング化
-
-優先度: 中 / 設計: [release-polling](changes/release-polling/design.md)（push 廃止・セルフホスト対応。admin-endpoints の Tunnel 依存と関連）
-
-### コード実行（microsandbox）
-
-優先度: 中 / 設計: [code-execution](changes/code-execution/design.md)
-
-### デフォルトモデル定数の SSOT 化
-
-優先度: 中 / 設計: [default-model-ssot](changes/default-model-ssot/design.md)
-
-### Web Search
-
-優先度: 中 / 設計: [web-search](changes/web-search/design.md)
-
-### 複数モデル並列
-
-優先度: 中 / 設計: [model-compare](changes/model-compare/design.md)
-
-### 設定階層化 + パラメータ + プロンプト
-
-優先度: 中 / 設計: [settings-hierarchy](changes/settings-hierarchy/design.md)
-
-### 権限管理 + 使用統計
-
-優先度: 低 / 設計: [permissions-stats](changes/permissions-stats/design.md)
-
-### ログ集約サービスのセルフホスト
-
-優先度: 中 / 設計: Phase 2 着手時に作成（候補は VictoriaLogs / Grafana Loki monolithic / OpenObserve）
-
-### Bot UI プレビュー（visual refine）
-
-優先度: 低 / 設計: [ui-preview](changes/ui-preview/design.md)（プロトタイプ実装済み。残タスクは任意項目のみ）
+<!-- AUTO:PROGRESS:START -->
+| 機能 | 優先度 | ステータス | 概要 |
+| ---- | ------ | ---------- | ---- |
+| [Bot 管理 API（admin endpoints）](changes/admin-endpoints/design.md) | 高 | implemented | HMAC 認証付き管理エンドポイント（ログ取得・メトリクス） |
+| [LLM チャット返信の Components V2 化](changes/chat-response-v2/design.md) | 高 | planned |  |
+| [CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT](changes/ci-pipeline/design.md) | 高 | implemented | CI 新設・workflow hardening・mise SSOT 化 |
+| [対話UX改善](changes/conversation-context/design.md) | 高 | planned |  |
+| [マルチモーダル対応](changes/multimodal/design.md) | 高 | implemented | 画像・PDF 添付の LLM 入力対応 |
+| [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned |  |
+| [コード実行（microsandbox 統合）](changes/code-execution/design.md) | 中 | planned |  |
+| [デフォルトモデル定数の SSOT 化](changes/default-model-ssot/design.md) | 中 | in-progress | envVars.ts を DEFAULT_MODEL の単一ソース化 |
+| [ログ集約サービスのセルフホスト](changes/log-aggregation/design.md) | 中 | planned | VictoriaLogs / Loki / OpenObserve 等によるログ集約基盤 |
+| [複数モデル並列](changes/model-compare/design.md) | 中 | planned |  |
+| [リリース更新通知のポーリング化](changes/release-polling/design.md) | 中 | planned |  |
+| [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned |  |
+| [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | planned |  |
+| [権限管理 + 使用統計](changes/permissions-stats/design.md) | 低 | planned |  |
+| [Bot UI プレビュー（visual refine）](changes/ui-preview/design.md) | 低 | implemented | プレビュー描画基盤（残タスクは任意項目のみ） |
+<!-- AUTO:PROGRESS:END -->
 
 ---
 

@@ -1,3 +1,10 @@
+---
+title: "[機能名]"
+status: planned
+priority: medium
+summary: ""
+---
+
 # [機能名]
 
 ## Why
