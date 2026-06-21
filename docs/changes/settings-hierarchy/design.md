@@ -2,7 +2,7 @@
 title: "設定階層化 + LLMパラメータ + カスタムプロンプト"
 status: planned
 priority: medium
-summary: ""
+summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト"
 ---
 
 # 設定階層化 + LLMパラメータ + カスタムプロンプト

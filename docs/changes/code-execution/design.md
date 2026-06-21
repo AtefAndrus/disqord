@@ -2,7 +2,7 @@
 title: "コード実行（microsandbox 統合）"
 status: planned
 priority: medium
-summary: ""
+summary: "microsandbox による安全なコード実行（/run・LLM tool 統合）"
 ---
 
 # コード実行（microsandbox 統合）

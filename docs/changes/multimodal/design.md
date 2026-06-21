@@ -314,34 +314,34 @@ fields: [
 
 ### Phase 1: 型・モデルメタ拡張（挙動変更なし）
 
-- [ ] `src/types/index.ts` に `ChatMessageContent` 系 / `ChatPlugin` / `OpenRouterModel`（`inputModalities` / `outputModalities` / `supportedParameters?`）拡張
-- [ ] `src/llm/openrouter.ts` `OpenRouterModelResponse` に `architecture?` ネスト + top-level `supported_parameters?` 追加、`listModelsWithPricing` で `architecture?.input_modalities ?? []` 形のマッピングを実装
-- [ ] `src/services/modelService.ts` `ModelDetails` 拡張 + `isMultimodalCapable(modelId: string, kind: "image" | "file"): Promise<boolean | null>` 追加（`null` = 判定不能 / モデル詳細取得失敗 / `architecture` メタ欠落で `inputModalities` 空）
-- [ ] `tests/helpers/mockFactories.ts` fixture 更新（post-mapping の `OpenRouterModel` に `inputModalities` / `outputModalities` を追加。API レスポンス形 `architecture` ネストは `tests/unit/llm/openrouter.test.ts` 側で扱う）
-- [ ] 既存テストの型追従、`isMultimodalCapable(modelId, kind)` のユニットテスト追加
+- [x] `src/types/index.ts` に `ChatMessageContent` 系 / `ChatPlugin` / `OpenRouterModel`（`inputModalities` / `outputModalities` / `supportedParameters?`）拡張
+- [x] `src/llm/openrouter.ts` `OpenRouterModelResponse` に `architecture?` ネスト + top-level `supported_parameters?` 追加、`listModelsWithPricing` で `architecture?.input_modalities ?? []` 形のマッピングを実装
+- [x] `src/services/modelService.ts` `ModelDetails` 拡張 + `isMultimodalCapable(modelId: string, kind: "image" | "file"): Promise<boolean | null>` 追加（`null` = 判定不能 / モデル詳細取得失敗 / `architecture` メタ欠落で `inputModalities` 空）
+- [x] `tests/helpers/mockFactories.ts` fixture 更新（post-mapping の `OpenRouterModel` に `inputModalities` / `outputModalities` を追加。API レスポンス形 `architecture` ネストは `tests/unit/llm/openrouter.test.ts` 側で扱う）
+- [x] 既存テストの型追従、`isMultimodalCapable(modelId, kind)` のユニットテスト追加
 
 ### Phase 2: モダリティ表示
 
-- [ ] `src/utils/modelDetailsFormatter.ts` に `formatModalities()` 追記
-- [ ] `src/bot/commands/handlers.ts` `modelSet` embed に「対応モダリティ」field 追加
-- [ ] `tests/unit/utils/modelDetailsFormatter.test.ts` に `formatModalities` テスト追加
+- [x] `src/utils/modelDetailsFormatter.ts` に `formatModalities()` 追記
+- [x] `src/bot/commands/handlers.ts` `modelSet` embed に「対応モダリティ」field 追加
+- [x] `tests/unit/utils/modelDetailsFormatter.test.ts` に `formatModalities` テスト追加
 
 ### Phase 3: OpenRouter クライアントの plugins 透過
 
-- [ ] `src/llm/openrouter.ts` の `chat` / `chatStream` で `plugins` を明示透過、undefined 時に body から欠落させる
-- [ ] `tests/unit/llm/openrouter.test.ts` に plugins 有無 / `content` 配列 round-trip テスト追加
+- [x] `src/llm/openrouter.ts` の `chat` / `chatStream` で `plugins` を明示透過、undefined 時に body から欠落させる
+- [x] `tests/unit/llm/openrouter.test.ts` に plugins 有無 / `content` 配列 round-trip テスト追加
 
 ### Phase 4: attachmentParser + ChatService API 拡張
 
-- [ ] `src/services/attachmentParser.ts` 新規（async、`AttachmentRejectReason` で `UNSUPPORTED_MIME` / `MISSING_MIME` / `FETCH_FAILED` / `FILE_TOO_LARGE` を区別、PDF は内部で fetch（30 秒タイムアウト）→ base64 → data URL 化、`MAX_PDF_BYTES = 20MB` / `MAX_TOTAL_PDF_BYTES = 40MB` で単体・集約サイズを事前判定）
-- [ ] `src/services/chatService.ts` `ChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与、`text` 空 + `parts` あり対応
-- [ ] `tests/unit/services/attachmentParser.test.ts` 新規（`UNSUPPORTED_MIME` / `MISSING_MIME` を区別）
-- [ ] `tests/unit/services/chatService.test.ts` 拡張（text-only / image / PDF / 混在 / `text=""` + `parts` あり）
+- [x] `src/services/attachmentParser.ts` 新規（async、`AttachmentRejectReason` で `UNSUPPORTED_MIME` / `MISSING_MIME` / `FETCH_FAILED` / `FILE_TOO_LARGE` を区別、PDF は内部で fetch（30 秒タイムアウト）→ base64 → data URL 化、`MAX_PDF_BYTES = 20MB` / `MAX_TOTAL_PDF_BYTES = 40MB` で単体・集約サイズを事前判定）
+- [x] `src/services/chatService.ts` `ChatUserInput` 導入、`generateResponse{,Stream}` シグネチャ変更、PDF 時 `plugins` 付与、`text` 空 + `parts` あり対応
+- [x] `tests/unit/services/attachmentParser.test.ts` 新規（`UNSUPPORTED_MIME` / `MISSING_MIME` を区別）
+- [x] `tests/unit/services/chatService.test.ts` 拡張（text-only / image / PDF / 混在 / `text=""` + `parts` あり）
 
 ### Phase 5: messageCreate 統合（ユーザ向け挙動変更）
 
-- [ ] `src/bot/events/messageCreate.ts` に `attachmentParser` + `isMultimodalCapable(modelId, "image")` 事前チェック + 新 chatService 呼び出し。添付のみ（text 空）は早期 return せず処理続行
-- [ ] `tests/unit/bot/events/messageCreate.test.ts` 拡張（添付あり / `UNSUPPORTED_MIME` / `MISSING_MIME` / 非対応モデル × 画像 / 添付のみ（text 空 + 画像） / 添付なし regression）
+- [x] `src/bot/events/messageCreate.ts` に `attachmentParser` + `isMultimodalCapable(modelId, "image")` 事前チェック + 新 chatService 呼び出し。添付のみ（text 空）は早期 return せず処理続行
+- [x] `tests/unit/bot/events/messageCreate.test.ts` 拡張（添付あり / `UNSUPPORTED_MIME` / `MISSING_MIME` / 非対応モデル × 画像 / 添付のみ（text 空 + 画像） / 添付なし regression）
 
 ### Phase 6: ドキュメント・クリーンアップ（リリース時）
 

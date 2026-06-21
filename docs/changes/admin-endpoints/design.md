@@ -242,29 +242,29 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 
 ### Phase 1: HMAC helper 切り出し
 
-- [ ] `src/http/hmac.ts` 新規 + `tests/unit/hmac.test.ts`（既知ベクタ + 長さ不一致 + 正常系）
-- [ ] `src/http/webhookHandler.ts` を helper 経由にリファクタ。既存 `tests/unit/webhookHandler.test.ts` を無修正で緑通過
+- [x] `src/http/hmac.ts` 新規 + `tests/unit/hmac.test.ts`（既知ベクタ + 長さ不一致 + 正常系）
+- [x] `src/http/webhookHandler.ts` を helper 経由にリファクタ。既存 `tests/unit/webhookHandler.test.ts` を無修正で緑通過
 
 ### Phase 2: ログ / メトリクス基盤
 
-- [ ] `src/utils/logFile.ts` 新規 + `tests/unit/utils/logFile.test.ts`（rotate / getRecent / `LOG_DIR` 未設定 no-op / 書込みエラー封じ込め）
-- [ ] `src/utils/metrics.ts` 新規 + `tests/unit/utils/metrics.test.ts`（increment / snapshot 形 / dbBytes 集計）
-- [ ] `src/utils/logger.ts` に `logFileWriter.write` 追記
-- [ ] `src/llm/openrouter.ts` / `src/bot/events/interactionCreate.ts` にカウンタ挿入
+- [x] `src/utils/logFile.ts` 新規 + `tests/unit/utils/logFile.test.ts`（rotate / getRecent / `LOG_DIR` 未設定 no-op / 書込みエラー封じ込め）
+- [x] `src/utils/metrics.ts` 新規 + `tests/unit/utils/metrics.test.ts`（increment / snapshot 形 / dbBytes 集計）
+- [x] `src/utils/logger.ts` に `logFileWriter.write` 追記
+- [x] `src/llm/openrouter.ts` / `src/bot/events/interactionCreate.ts` にカウンタ挿入
 
 ### Phase 3: HTTP エンドポイント
 
-- [ ] `src/config/envVars.ts` / `src/config/index.ts` に env var 追加
-- [ ] `src/http/adminAuth.ts` 新規 + `tests/unit/adminAuth.test.ts`
-- [ ] `src/http/adminEndpoints.ts` 新規 + `tests/unit/adminEndpoints.test.ts`
-- [ ] `src/health.ts` に `routes` で `/admin/*` 追加（全 method 受け、非 GET は明示 405 + `Allow: GET`）
-- [ ] `src/index.ts` で `metrics.attach` / DI / shutdown 配線
+- [x] `src/config/envVars.ts` / `src/config/index.ts` に env var 追加
+- [x] `src/http/adminAuth.ts` 新規 + `tests/unit/adminAuth.test.ts`
+- [x] `src/http/adminEndpoints.ts` 新規 + `tests/unit/adminEndpoints.test.ts`
+- [x] `src/health.ts` に `routes` で `/admin/*` 追加（全 method 受け、非 GET は明示 405 + `Allow: GET`）
+- [x] `src/index.ts` で `metrics.attach` / DI / shutdown 配線
 
 ### Phase 4: ドキュメント / 仕上げ
 
-- [ ] `docs/admin-api.md` 作成（curl 例 / JSON shape / ローカル & 本番設定手順）
-- [ ] `bun test && bun typecheck && bun lint` パス
-- [ ] ローカル E2E（`bun dev` + 上記 curl で 200 / 405 / 503 を目視）
+- [x] `docs/admin-api.md` 作成（curl 例 / JSON shape / ローカル & 本番設定手順）
+- [x] `bun test && bun typecheck && bun lint` パス
+- [x] ローカル E2E（`bun dev` + 上記 curl で 200 / 405 / 503 を目視）
 - [ ] `docs/changes/admin-endpoints/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

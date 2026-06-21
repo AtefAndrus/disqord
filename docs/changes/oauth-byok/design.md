@@ -2,7 +2,7 @@
 title: "OAuth BYOK（ユーザー別 OpenRouter キー）"
 status: planned
 priority: high
-summary: ""
+summary: "OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK）"
 ---
 
 # OAuth BYOK（OpenRouter キー接続）

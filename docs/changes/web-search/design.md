@@ -2,7 +2,7 @@
 title: "Web 検索 + ツイート展開"
 status: planned
 priority: medium
-summary: ""
+summary: "OpenRouter server tools による Web 検索と fxtwitter ツイート展開"
 ---
 
 # Web 検索 + ツイート展開

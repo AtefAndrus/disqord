@@ -103,7 +103,7 @@ export function generateDefaultModelLine(vars: EnvVarDefinition[]): string {
 
 // --- Frontmatter / Progress types and functions ---
 
-export type DesignStatus = "planned" | "in-progress" | "implemented";
+export type DesignStatus = "investigating" | "planned" | "in-progress" | "implemented";
 export type DesignPriority = "high" | "medium" | "low";
 
 export interface DesignFrontmatter {
@@ -118,7 +118,12 @@ export interface ProgressEntry {
   frontmatter: DesignFrontmatter;
 }
 
-const VALID_STATUSES: ReadonlySet<string> = new Set(["planned", "in-progress", "implemented"]);
+const VALID_STATUSES: ReadonlySet<string> = new Set([
+  "investigating",
+  "planned",
+  "in-progress",
+  "implemented",
+]);
 const VALID_PRIORITIES: ReadonlySet<string> = new Set(["high", "medium", "low"]);
 const KNOWN_KEYS: ReadonlySet<string> = new Set(["title", "status", "priority", "summary"]);
 

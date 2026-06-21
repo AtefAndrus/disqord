@@ -2,7 +2,7 @@
 title: "LLM チャット返信の Components V2 化"
 status: planned
 priority: high
-summary: ""
+summary: "LLM チャット返信を Components V2（Container/Section）化"
 ---
 
 # LLM チャット返信の Components V2 化

@@ -1,8 +1,8 @@
 ---
 title: "[機能名]"
-status: planned
-priority: medium
-summary: ""
+status: investigating  # investigating | planned | in-progress | implemented
+priority: medium       # high | medium | low
+summary: ""            # 一行の概要（任意）
 ---
 
 # [機能名]

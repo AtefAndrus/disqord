@@ -1,6 +1,6 @@
 ---
 title: "デフォルトモデル定数の SSOT 化"
-status: in-progress
+status: implemented
 priority: medium
 summary: "envVars.ts を DEFAULT_MODEL の単一ソース化"
 ---
@@ -140,19 +140,19 @@ pre-commit:
 
 - [x] **(既完了)** `src/config/envVars.ts` に SSOT として `DEFAULT_MODEL` エントリ定義（survey で確認）
 - [x] **(既完了)** `src/db/repositories/guildSettings.ts:76+` の `upsert()` で `config.defaultModel` を明示 INSERT（survey で確認、DI 経路 `src/index.ts:40` 経由）
-- [ ] `src/config/index.ts:56` の zod fallback `.default("deepseek/deepseek-v4-flash:free")` 削除（`z.string().min(1)` に）
-- [ ] `src/utils/embedBuilder.ts:28` の `getColorForModel` docstring を `"provider/model-id"` に置換
-- [ ] `tests/unit/bot/events/messageCreate.test.ts:77, 330` の `getGuildSettings` モック fixture (`defaultModel` フィールド) を `"test-model:fixture"` に変更
-- [ ] `tests/helpers/mockFactories.ts:14, 84, 108, 120, 140` の 5 箇所の `google/gemini-2.0-flash-exp:free` を `"test-model:fixture"` に置換
-- [ ] `scripts/preview/fixtures.ts:40` の `DEMO_MODEL` を `"demo/preview-model:placeholder"` に固定
-- [ ] `CLAUDE.md` の Default model 行に `<!-- AUTO:DEFAULT_MODEL:START/END -->` マーカー追加
-- [ ] `scripts/generate-readme.ts` を CLAUDE.md 対応に拡張
-- [ ] `scripts/generate-readme.ts` に `.env.example` 生成ロジック追加 (envVarDefinitions ベース、required → 空値、default あり → `NAME=<default>`)
-- [ ] `tests/unit/scripts/generateReadme.test.ts` に CLAUDE.md AUTO セクション / `.env.example` 生成のテスト追加
-- [ ] `lefthook.yml` の generate-readme command で `git add CLAUDE.md .env.example` 追加
-- [ ] `src/db/schema.ts:7` の新規 `CREATE TABLE` 句から DEFAULT 句削除 (既存テーブルは触らない)
-- [ ] `bun typecheck && bun test` クリーン確認
-- [ ] pre-commit hook で CLAUDE.md / `.env.example` が正しく自動更新されることを手動確認
+- [x] `src/config/index.ts:56` の zod fallback `.default("deepseek/deepseek-v4-flash:free")` 削除（`z.string().min(1)` に）
+- [x] `src/utils/embedBuilder.ts:28` の `getColorForModel` docstring を `"provider/model-id"` に置換
+- [x] `tests/unit/bot/events/messageCreate.test.ts:77, 330` の `getGuildSettings` モック fixture (`defaultModel` フィールド) を `"test-model:fixture"` に変更
+- [x] `tests/helpers/mockFactories.ts:14, 84, 108, 120, 140` の 5 箇所の `google/gemini-2.0-flash-exp:free` を `"test-model:fixture"` に置換
+- [x] `scripts/preview/fixtures.ts:40` の `DEMO_MODEL` を `"demo/preview-model:placeholder"` に固定
+- [x] `CLAUDE.md` の Default model 行に `<!-- AUTO:DEFAULT_MODEL:START/END -->` マーカー追加
+- [x] `scripts/generate-readme.ts` を CLAUDE.md 対応に拡張
+- [x] `scripts/generate-readme.ts` に `.env.example` 生成ロジック追加 (envVarDefinitions ベース、required → 空値、default あり → `NAME=<default>`)
+- [x] `tests/unit/scripts/generateReadme.test.ts` に CLAUDE.md AUTO セクション / `.env.example` 生成のテスト追加
+- [x] `lefthook.yml` の generate-readme command で `git add CLAUDE.md .env.example` 追加
+- [x] `src/db/schema.ts:7` の新規 `CREATE TABLE` 句から DEFAULT 句削除 (既存テーブルは触らない)
+- [x] `bun typecheck && bun test` クリーン確認
+- [x] pre-commit hook で CLAUDE.md / `.env.example` が正しく自動更新されることを手動確認
 - [ ] docs/changes/default-model-ssot/ 削除（リリース完了時）
 
 ## Open Questions / Risks

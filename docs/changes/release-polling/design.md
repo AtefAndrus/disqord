@@ -2,7 +2,7 @@
 title: "リリース更新通知のポーリング化"
 status: planned
 priority: medium
-summary: ""
+summary: "リリース通知を GitHub Webhook からポーリング方式へ移行"
 ---
 
 # リリース更新通知のポーリング化

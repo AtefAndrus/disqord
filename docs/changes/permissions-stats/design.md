@@ -2,7 +2,7 @@
 title: "権限管理 + 使用統計"
 status: planned
 priority: low
-summary: ""
+summary: "チャンネル/ロール権限管理と使用統計（/stats）"
 ---
 
 # 権限管理 + 使用統計

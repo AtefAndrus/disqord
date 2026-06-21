@@ -382,6 +382,16 @@ status: planned
     expect(() => parseFrontmatter(content)).toThrow("priority");
   });
 
+  test("investigating を有効な status として受理", () => {
+    const content = `---
+title: テスト
+status: investigating
+priority: high
+---`;
+    const result = parseFrontmatter(content);
+    expect(result.status).toBe("investigating");
+  });
+
   test("不正な status で throw", () => {
     const content = `---
 title: テスト

@@ -2,7 +2,7 @@
 title: "複数モデル並列"
 status: planned
 priority: medium
-summary: ""
+summary: "/compare で複数モデルへ並列リクエストし回答を比較"
 ---
 
 # 複数モデル並列

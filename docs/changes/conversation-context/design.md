@@ -2,7 +2,7 @@
 title: "対話UX改善"
 status: planned
 priority: high
-summary: ""
+summary: "会話履歴・回答再生成・編集再生成による対話 UX 改善"
 ---
 
 # 対話UX改善

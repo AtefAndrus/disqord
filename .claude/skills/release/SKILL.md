@@ -1,6 +1,6 @@
 ---
 name: release
-description: Create a new release (update changelog, tag, GitHub release with hand-crafted notes)
+description: Run the DisQord release process. Use when cutting a new version (e.g. `/release 1.5.0`) — bumps the version, regenerates CHANGELOG.md, prunes released change docs, commits, tags, pushes, and publishes a GitHub release with hand-crafted Japanese notes.
 disable-model-invocation: true
 argument-hint: "[version e.g. 1.5.0]"
 ---
