@@ -1,0 +1,282 @@
+---
+title: "バックグラウンドタスク基盤"
+status: investigating
+priority: medium
+summary: "重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤"
+---
+
+# バックグラウンドタスク基盤
+
+> このドキュメントは将来構想の **stub**（`status: investigating`）。全体方針と境界を固める段階で、各 API 形状や型は実装着手時に確定する。
+
+## Why
+
+DisQord のチャット経路は現状、Discord イベントハンドラ（`messageCreate`）の中で `chatService.generateResponseStream()` を **同期的に `await` し続ける**設計になっている（`src/bot/events/messageCreate.ts`: `for await (const chunk of stream)` でストリーム完了までハンドラが返らない）。応答が速いうちはこれで足りるが、今後入れたい重い処理ではこのモデルが破綻する:
+
+- [model-compare](../model-compare/design.md): 2-4 モデルへ並列リクエストし、すべての応答が揃うまで待つ。
+- [web-search](../web-search/design.md) で server tool（`openrouter:web_search` / `web_fetch`）が 1 リクエスト内で複数回サーバ側実行されると、1 ターンが長くなる。
+- [code-execution](../code-execution/design.md) のサンドボックス実行や、[tool-calling-foundation](../tool-calling-foundation/design.md) のマルチターン tool ループ（最大 `MAX_TURNS` 回の往復）。
+- 将来の `openrouter:fusion`（panel→judge を回す。1 ターン 1 回だが内部で複数モデルを動かすため遅い）。
+
+discord.js の `interaction.deferReply()` + `editReply()` は、**interaction のタイミング制約**（3 秒以内の初回 ack と 15 分の interaction token）を解決する仕組みである。defer 後に detached promise で処理を切り離してリスナーから return することは技術的には可能だが、defer/edit が提供するのは「interaction を 15 分間つなぎ続ける token」だけで、**ジョブのライフサイクル管理・同時実行制御・single-flight・cancel・timeout・終端の一意配送は何も持たない**。本基盤が解決したいのはそこである:
+
+- 通常の mention / 自動応答チャットは interaction ではなく**メッセージ起点**のため、そもそも interaction token に縛られず `channel.send` / `message.edit` で結果を返せる（token 非依存の配送）。
+- 重い処理をイベントハンドラ内に**ワークフローとして抱え込まず**、ジョブとして明示管理し、同時実行数・cancel・timeout・終端配送を一元化する。
+
+（補足: ネットワーク / ストリーム待ちの `await` 自体は JS のイベントループを占有しない〔yield する〕。問題は「占有」ではなく、ハンドラ内に長時間ワークフローを抱え込み、同時実行数・終端を管理しないまま無制限に走らせてしまう点にある。）
+
+## 依存 / 関連 change
+
+- 連携: [tool-calling-foundation](../tool-calling-foundation/design.md) — tool ループ（`runToolLoop()`）は重く、本基盤の最初の利用候補。tool ループ自身の cancellation（`AbortSignal`）と本基盤のジョブ cancel は連結する。
+- 連携: [chat-response-v2](../chat-response-v2/design.md) — 完了結果の Discord 描画（Container / progress 表示）は V2 の updater を利用する。本基盤は「結果をどう配送するか（送信先メッセージ / 編集対象）」だけを持ち、描画自体は updater に委ねる。
+- 利用候補: [model-compare](../model-compare/design.md) / [web-search](../web-search/design.md) / [code-execution](../code-execution/design.md)。
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- 「ack を即返し、処理を Discord イベントハンドラの外で継続し、完了後に `channel.send` / `message.edit` で結果を配送する」実行枠組みを提供する。
+- **in-memory ジョブマップ**: `{ channelId, messageId }`（トリガとなったユーザメッセージ）をキーに、実行中ジョブ（`AbortController` + メタ）を保持する。1 トリガメッセージ = 1 ジョブの単一フライト。
+- **同時実行上限**: グローバルな**受付済みスロット**キャップ（admitted slots、`creating-target` も含む）を設け、**上限到達時は新規ジョブを拒否**（ユーザに「混雑中」を即返す）。無制限キューは持たない。
+- **ライフサイクル**: 受付 → 実行 → 終端。終端は 2 系統に分ける — **ユーザ終端**（完了 / 失敗 / キャンセル / タイムアウトを 1 回だけ配送）と**実行終端**（`run` が実際に settle したときにマップ除去 + cap 解放）。cancel / timeout はユーザ終端を即行うが、実行終端（cap 解放）は `run` の settle まで待つ。**ユーザ終端の「1 回だけ配送」は `DeliveryTarget` が生成できた後にのみ成立する**: `createDeliveryTarget()` 自体が失敗 / timeout した accepted ジョブは配送先が存在しないため log のみで終端し（placeholder 未生成・ユーザには元メッセージのみ残る）、ユーザ配送は行わない（下記 Decisions・Open Questions）。
+- 既存の停止ボタン（`stop_response_<messageId>` → `cancelRequest`）と整合する cancel 経路を持つ。
+- **単一 Bun プロセス前提**（下記 Non-Goals / Decisions）での簡潔な実装。
+
+**Non-Goals:**
+
+- 永続化されたジョブキュー / 分散ワーカー / 複数プロセス間でのジョブ共有。本基盤は **in-memory のみ**で、プロセス再起動でジョブは消える（実行途中なら未完で破棄）。永続スケジューリングは [cron](../cron/design.md) の責務であり、本基盤とは別物。
+- 無制限の待機キュー。上限到達時は queue ではなく **reject**（容量を超えた負荷を貯め込まない）。
+- 各重い処理の中身（モデル比較ロジック / tool ループ / サンドボックス）。本基盤は「実行の入れ物」だけを持ち、処理本体は呼び出し側（各 change）が `() => Promise<Result>` として渡す。
+- 結果の Discord 描画ロジック。描画は [chat-response-v2](../chat-response-v2/design.md) の updater / 各 change の builder に委ねる。
+- DM 経路。現状 `client.ts` は `DirectMessages` intent / `Partials` を持たず、`messageCreate` は guild 外を早期 return するため、本基盤も guild チャンネル前提とする。
+
+**将来別 change 候補:**
+
+- 永続ジョブ / クラッシュ復旧（再起動後の再開）→ DB 永続化を伴う別 change（[cron](../cron/design.md) の at-most-once claim パターンを参照）。
+- 進捗の途中経過配送（長時間ジョブの「○○ 実行中…」更新）の汎用化 → updater 連携が固まってから別途。
+
+## Decisions
+
+| 判断事項 | 選択 | 理由 |
+| -------- | ---- | ---- |
+| ジョブストア | プロセス内 `Map`（永続化なし） | 単一 Bun プロセス前提。既存 `chatService.activeRequests`（`Map<MessageId, AbortController>`）と同じ in-memory モデルの一般化で、追加依存ゼロ。永続化が要るなら別 change |
+| 起動経路 | v1 は**メッセージ起点のみ**（mention / 自動応答チャンネル）。slash-command / component interaction 起点は対象外 | slash-command interaction には「トリガユーザメッセージ ID」が無く、component interaction の `interaction.message.id` は bot / placeholder メッセージで、ユーザトリガとは別物。キー設計が曖昧になるため v1 では除外（Open Questions で一般化を検討） |
+| ジョブキー | `{ channelId, messageId }`（トリガユーザメッセージ）。複合キーを文字列化（例 `` `${channelId}:${messageId}` ``）して `Map` キーにする。**キーは admission / lookup / cancel 用**で、配送先ではない | messageId は Discord 全体で実用上一意だが、channelId を含めてキー衝突や cancel の誤ヒットを防ぐ。bot はトリガユーザメッセージを edit できないため、**配送先は別途 `DeliveryTarget`** が持つ（placeholder の `edit` か新規 `send` か） |
+| 停止ボタンのキー復元 | 既存 customId は `stop_response_<messageId>`（messageId のみ）。v1 は **placeholder / 停止ボタンがトリガと同一チャンネルに出る**ことを前提に、`channelId` を `interaction.channelId` から復元してキーを再構成する。**この不変条件を型ではなく target 生成直後（post-target validation）に enforce**: `DeliveryTarget` は admission 後の `createDeliveryTarget()` が返すため submit 時にはまだ存在しない。よって fulfill 直後・`run` 開始前に検証し、`hasStopButton && created.target.channelId !== job.channelId` なら **target 生成失敗扱い**（`cleanupLateOnce("invalid-target")` で placeholder を delete/edit + `releaseSlotOnce` + `releaseMapToTombstoneOnce` + `run` 開始せず。flow と揃え orphan-capable は tombstone 化）。停止ボタンが別チャンネルに出ると `interaction.channelId` からのキー復元が誤ヒットし cancel が静かに壊れるため、起動前に弾く。この不変条件が崩れる用途が必要なら **customId に channelId を含める**（`stop_response_<channelId>_<messageId>` 等）形へ拡張。**さらに同一チャンネルだけでは不十分（necessary-not-sufficient）**: `creating-target` cancel/timeout は cleanup より先に `mapHeld` を解放するため、孤児 placeholder の `stop_response_<messageId>` がまだ生きているうちに**同一キーの新規ジョブが再受付**されると、古いボタンのクリックが新ジョブを誤 cancel しうる。**v1 でも再受付窓はゼロではない**: 通常のメンションは 1 messageId 1 回だが、**Discord gateway の重複配信（resume/再接続）・caller retry・no-run 解放後の replay** が同一 `{channelId, messageId}` で `submit` を再度呼びうる（single-flight は同時重複は弾くが、early `mapHeld` 解放後の遅延再受付は弾けない）。**v1 の最小緩和**: 孤児 cleanup 中の `{channelId, messageId}` に **有界 TTL の tombstone**（cap は消費しない・single-flight だけ延長）を張り、late cleanup の settle / TTL まで同一キー再受付を抑止する。より完全には [conversation-regeneration](../conversation-regeneration/design.md) / [fork](../fork/design.md) で同一トリガ再 submit を入れる際に **customId へ job-instance nonce/generation**（`stop_response_<messageId>_<nonce>`）を足し `cancel` で照合する（Open Questions） | 既存 customId を壊さずに済む。tombstone は cap を握らず single-flight だけ延長するので「hung cleanup が cap を恒久占有しない」設計と両立する。post-target ガードで将来の逸脱を `run` 開始前に検出でき、nonce は再 submit を本格導入する change の前提条件として記録 |
+| 単一フライト | 同一キーに既存ジョブがあれば**新規を拒否**（重複起動しない） | 同じトリガに対する二重実行・二重課金を防ぐ。既存 `activeRequests` も messageId 単位で 1 controller |
+| 同時実行制御 | グローバルな **受付済みジョブスロット数（admitted slots）**の上限（カウンタ）。**上限到達で新規 reject**（キューしない）。cap は **admission 時（`creating-target` 入り）に ++** し、**実行解放経路（run settle / no-run 終端 / grace）で --** する。`creating-target`（placeholder 生成中・`run` 未開始）も capacity を消費する | 重い処理（複数モデル / tool ループ / サンドボックス）が無制限に走るとレート / コスト / メモリが破綻。バックプレッシャは「即拒否」で表現し、ユーザに早く返す。cap を admission 時に取ることで、placeholder 生成が stall している間も over-admit を防ぐ（「実行中（running）数」ではなく「受付済みスロット数」を bound する点に注意） |
+| 拒否時の UX | 「混雑中。しばらく後に再試行してください」を即返す（ack と同経路） | キュー待ちでハンドラを占有しない。負荷を貯めない |
+| ack / placeholder の所有 | **初回 ack / placeholder の送信 I/O は `submit` の責務外**。呼び出し側が遅延コールバック `createDeliveryTarget()` で行い、`submit` は**受付（duplicate / busy 判定）が通った後にだけ**それを呼ぶ。終端の `deliver()`（Discord send / edit）は `submit` が exactly-once で呼び、失敗は握って log する | 受付を placeholder 生成より前に置くことで、busy / duplicate 拒否時に stale な placeholder や二重応答を作らない。初回 I/O と終端 I/O の所有を明確に分ける |
+| ack と実行の分離 | ハンドラはジョブを **登録だけ**して即返る。実行は `await` せず切り離す（detached promise + 集中エラーハンドリング） | これが defer/editReply との本質的な違い（token 非依存の配送 + ジョブ管理）。終端 / 同時実行を一元管理する |
+| 結果配送 | `submit` に渡された `deliveryTarget` に対し、完了時に `channel.send`（新規 follow-up）または placeholder メッセージの `edit`。失敗 / キャンセル / タイムアウトも同じ配送経路でユーザに 1 回だけ返す | mention / 自動応答チャンネルの通常チャットは interaction ではなくメッセージ起点のため、interaction token（15 分）に縛られず `channel.send` / `message.edit` を使える。配送は exactly-once（多重送信しない） |
+| 3 つの独立した状態 | **`slotHeld`（cap カウント）/ `mapHeld`（`Map` エントリ = single-flight）/ `executionSettled`（`run` が実際に終わった）**を別々に管理する。ユーザ配送（`deliverOnce`）はこの 3 つと独立。**解放は resource ごとに冪等な別ヘルパ**（`releaseSlotOnce()` = cap--、`releaseMapOnce()` = `Map` 除去、`markExecutionSettled()` = `run().finally` のみ）。単一の「実行解放したか」フラグに束ねない | 「ユーザに終端を返した」「cap を返した」「single-flight を解いた」「`run` が本当に終わった」はすべて別タイミングで起こりうる。1 つの「除去」に束ねると、grace（cap だけ返す）と `run().finally`（cap + map）の役割が衝突し、二重デクリメントや single-flight の早すぎる解放、または grace 後の `finally` での map 除去スキップを招く。resource ごとに冪等ガードを分けると各遷移がちょうど 1 回に閉じる |
+| 通常時の実行解放 | `run` が settle したら `run().finally` で `releaseSlotOnce()`（cap--）+ `releaseMapOnce()`（`Map` 除去）+ `markExecutionSettled()`（`executionSettled=true`）+ `graceTimer` cleanup を**それぞれちょうど 1 回**。cancel / timeout のユーザ配送が先に走っても、ここまで cap と single-flight を保持 | `abort()` は signal を発火するだけで `run` を止めない。即 cap / map を解放すると、signal を無視/遅延する `run`（OpenRouter / tool ループ / サンドボックス）がまだリソースを消費・副作用継続中に同一キーの新規ジョブを受け付けてしまう |
+| grace 超過時（非協調 `run`） | abort 後 `BACKGROUND_ABORT_GRACE_MS` を過ぎても `run` が未 settle なら、**cap だけ先に返す**（`releaseSlotOnce()`）。`mapHeld` は保持し続ける（同一キーの副作用がまだ走るため single-flight を維持）。`run().finally` が後で来ても `releaseSlotOnce` は既に発火済みなので二重 cap-- せず、`releaseMapOnce()`（map 除去）と `markExecutionSettled()` だけ走る | 非協調 `run` で cap が恒久リークするのを防ぐ最終手段。ただし **grace 後は cap がその実行を厳密には bound しない**（cap は新規受付の枯渇防止が目的、実行を物理的に止めるものではない）。single-flight は副作用継続中なので維持。cap と map を別ヘルパにすることで grace（cap のみ）と `finally`（残りの map）が衝突せず各遷移が 1 回に閉じる |
+| cancel | ジョブごとに `AbortController`。**`cancel(key)` は同期に `{ outcome: "hit" \| "miss" \| "already-terminal"; runAfterAck?(): void }` を返す**: lookup → `claimTerminal({kind:"cancelled"})`（**無条件**）+ **`state==="creating-target"`（run 未開始）のときだけ** `claimNoRunReason("cancelled")` までを**同期**で行い（`claimTerminal` は **`claimed: boolean` を返す。最初の claim だけ true、既 terminal は false**。`claimNoRunReason` は first-cause で `noRunReason` を 1 回だけ確定し、`creating-target` の遅延 `targetCreateTimeout` が `noRunReason="timeout"` で上書きするのを防ぐ — cleanup/log/placeholder 文言が first-terminal-cause と一致する。`running` ジョブの cancel では `noRunReason` を立てない＝「set ⟺ run 未開始 no-run 終端」の不変条件を保つ）、`runAfterAck` は **claim を勝ち取った時だけ**返す。miss / `already-terminal`（`claimTerminal` が false。配送済み/cap leak/別原因を問わず既 claim、**または tombstone hit**＝その key の job は既に終端・cleanup 中）では `runAfterAck` は無し（`abort`・grace・配送を**二重に回さない**。tombstone hit は `already-terminal` を返して **legacy `cancelRequest` fallback に流さず** 別 job を巻き込まない）。lookup は **active job と tombstone の両方**を見る。`runAfterAck` は **冪等（exactly-once）**で、呼び出し側は **ack の settle または短い ack-wait deadline のどちらか早い方**で 1 回呼ぶ: `void Promise.race([interaction.deferUpdate().catch(logAckFail), ackWaitDeadline(BACKGROUND_ACK_WAIT_MS)]).finally(() => r.runAfterAck?.())`。これで (i) 通常は ack flush 後に side effect が走り重い abort listener が ack を逃さず、(ii) `deferUpdate()` が **reject でも hang でも**有界 deadline で `runAfterAck` が必ず 1 回走る（claim 済み cancelled が宙吊りにならない。`finally` だけだと hang した ack で永久に呼ばれず、その後 timeout も already-terminal で skip して非協調 `run` が cap/map を恒久占有する）。`setTimeout(0)`/`queueMicrotask` は ack flush 前に走りうるため代替にしない。**`runAfterAck` は実行時に state を再読**する（`await deferUpdate()` の間に `run` が settle して cap/map 解放・timer clear・配送済みになりうるため、cancel() 時に選んだ branch をそのまま信じない）: **`running` かつ `!executionSettled && mapHeld`** → `abortReason="cancelled"` を set → `controller.abort("cancelled")`（`signal.reason` を伝播。settle 済みなら idempotent no-op）→ `armGraceTimerOnce()`（自身も `!executionSettled && mapHeld && state==="running"` を再確認して arm。settle 済みなら arm しない＝orphan graceTimer で誤 leak log を出さない）→ `deliverOnce()`（`userDelivered` 冪等。run-settle ブランチが gap 中に既に配送済みなら no-op）。**`creating-target`**（`run` 未開始）→ `noRunReason` は cancel() 同期部で `claimNoRunReason("cancelled")` 済み → `cancelSentinel` を resolve（target-create race を即決着し runner を exit）→ `targetCreateController.abort()`（in-flight send 抑止）→ `clearTargetCreateTimerOnce()` → `releaseSlotOnce` + `releaseMapToTombstoneOnce`（先に解放。孤児 cleanup 完了/TTL まで同一キー再受付を抑止）。**late cleanup の観測者は runner が単一所有する**（cancel 側は `createPromise.then` を**追加 attach しない**）: runner が no-run 分岐で読む `noRunReason` を見て遅延 fulfill 時に `void cleanupLateOnce("cancelled")` を 1 回だけ呼ぶ（観測者の二重 attach を避け、`lateCleanupDone` ガード + `cleanupLate` 自体の冪等で二重化）。**grace は arm せず `deliverOnce` も呼ばない**（target 無し・`run` 未開始）。`signal` は tool ループ等へ伝播 | `abort()` は signal を発火するだけで `run` を settle させない。加えて `AbortController.abort()` は **abort listener を同期実行**するため重い同期 listener は ack を逃しうる。一次保証は **listener を O(1) に保つこと（test で担保）**、二次保証は `runAfterAck` を **ack resolve 後**に呼ぶ post-ack continuation（`setTimeout(0)`/microtask は flush 前に走りうるので不可）。`claimed` を返さないと既 terminal な再クリックが abort/grace/配送を二重に回す。`creating-target` には `run` も target も無いので grace/deliver を回すと stale timer・leak log・target 無し配送になる。cap は `running` では `run` settle まで解放しない。cancel は「実行結果不明」セマンティクス（[tool-calling-foundation](../tool-calling-foundation/design.md) と同じく、副作用安全性は処理本体の責務） |
+| タイムアウト | wall-clock 上限。タイマ開始は **`createDeliveryTarget` 完了後（`run` 開始時）**。超過コールバックは **`if (!claimTerminal({kind:"timeout"}).claimed) return;`**（success/cancel が先に claim 済みなら stale callback として何もしない）→ `controller.abort("timeout")` → **`armGraceTimerOnce()`**（`run` が timeout abort を無視して未 settle のままだと cap が恒久リークするため、cancel と同様 grace watchdog を arm。`armGraceTimerOnce` は `!executionSettled && mapHeld && state==="running"` を再確認して arm）→ **即ユーザ配送 `deliverOnce()`**（claim 済み outcome、cap 解放は run settle 時の解放ブランチ or grace）。wall-clock timeout はイベントループがブロックされていれば best-effort | detached 実行のユーザ終端が無限に残らないようにする。cancel と同様、`abort()` だけでは settle しないため配送を即行い、非協調 `run` 用に grace も arm する。**claim を勝ち取れなければ no-op**（先に終端した原因を上書きしない）。timer は単一プロセスのイベントループ上で動くため、`run` が CPU バウンドでブロックすると発火が遅れる |
+| `createDeliveryTarget` のタイムアウト + 遅延解決 | detached runner は target 生成を **`await Promise.race([createPromise, targetCreateTimeout(`BACKGROUND_TARGET_CREATE_TIMEOUT_MS`,`targetCreateTimer`), cancelSentinel])`** で待つ（生の `await createPromise` にしない）。これにより `createDeliveryTarget()` が abort を無視して**永久に未 settle**でも、timeout / cancel sentinel が race を決着させ **runner は決定的に exit**する（runner closure が無限 pending しない）。timeout が勝ったら `claimNoRunReason("timeout")`（first-cause。cancel が先に claim 済みなら no-op し cancel の理由を尊重）→ **(1) target-create signal を `abort()` して in-flight `channel.send` の抑止を試み → (2) `clearTargetCreateTimerOnce()` → (3) cap 解放 + `releaseMapToTombstoneOnce`（map→tombstone）→ (4) log**（`run` は開始しない、ユーザ配送なし）。**late cleanup の所有は createPromise が race のどちらに転んだかで一意に分かれる**（観測者は二重にしない）: **(B) no-run 終端（timeout/cancel）が race に勝った**＝`createPromise` がまだ pending の場合のみ、runner が late-observer `void createPromise.then(handleLateFulfill, log)` を **1 本だけ** attach し settle まで保持する（遅延 fulfill → `handleLateFulfill` が `noRunReason` を読んで `cleanupLateOnce(noRunReason)`、遅延 reject → log）。**(A) `createPromise` が race に勝った**場合は runner が `created` を手にして fulfill 後ゲートに進むので、gate が `cleanupLateOnce` を直接呼ぶ（terminalClaimed / post-target 検証失敗）か、正常なら run へ進む（cleanup なし）。**このため late-observer は (B) でしか attach されず、正常 running 経路で good な placeholder を誤って cleanup しない**（`noRunReason` 未 set なら `handleLateFulfill` は no-op という防御も置く）。`cleanupLateOnce` は manager 側の `lateCleanupDone` フラグで **at-most-once** にガードし、`ICreatedTarget.cleanupLate` 自身の冪等と二重化して (A)/(B) のどちらからでもちょうど 1 回に閉じる。observer は **settle まで 1 本だけ・detach しない**（途中で deadline 観測を打ち切ると、その後に `channel.send` が resolve した停止ボタン付き placeholder を後始末できず late-resolution-safe が崩れる）。長時間 pending は **watchdog が log するだけ**で observer は外さない。`Promise.race` の timeout は **underlying な `channel.send` の Discord REST を取り消さない**ため、`createDeliveryTarget` には **job の `controller` とは別の dedicated な target-create `AbortSignal`** を渡し、timeout/cancel 時にこれを abort して send 自体の抑止も試みる（job cancel と「stall 時の send 抑止」を混同しないよう controller を分ける）。manager は data の `DeliveryTarget` しか持てないので、後始末能力は `createDeliveryTarget` が返す `cleanupLate` に委ねる | 受付後 `creating-target` で placeholder 送信が無限に hang すると `run` timeout に到達せず cap がリークするので race で runner を必ず exit させる。一方 late cleanup は **settle まで観測**しないと停止ボタン付き孤児を取りこぼすので observer は外さない（never-settle な create を渡すのは caller bug 扱いで、その場合の残留は pending closure 1 本のみ）。`targetCreateTimer` を解放経路で必ず clear して stale timer が開始済みジョブを誤って解放しないようにする |
+| `creating-target` 中の cancel | 停止ボタン / programmatic cancel が `run` 開始前（`creating-target`）に来たら、`deliverOnce` には **target がまだ無い**ため、(a) terminal を claim（`claimTerminal({kind:"cancelled"})`）+ `claimNoRunReason("cancelled")`（cancel() 同期部・first-cause）→ (b) `cancelSentinel` を resolve して target-create race を即決着（runner が `await createPromise` で永久 block しない）→ (c) target-create signal を abort（send 抑止を試みる）→ (d) `run` は開始しない → (e) `clearTargetCreateTimerOnce()` → (f) **cap + map を先に解放**（`releaseSlotOnce` + `releaseMapToTombstoneOnce`：map は tombstone 化して孤児 cleanup/TTL まで同一キー再受付を抑止）。late cleanup は **runner が単一所有する late-observer** が `noRunReason` を読んで行う（cancel 側は observer を追加 attach しない）: target が後で fulfill したら `void cleanupLateOnce("cancelled")`（bounded・no-throw・`lateCleanupDone` ガード）、reject なら log。ユーザ向け配送は target が無いので **placeholder 無し**（cancel 元の interaction は `deferUpdate` で ack 済み）。target が既に resolve 済み（`running`）なら通常 cancel 経路（`deliverOnce()` で claim 済み outcome を配送） | `deliverOnce` は target 依存だが `creating-target` には target が無い。この window の cancel を未定義にすると、孤児 placeholder + cap/map リーク + 未終端ジョブが残る。**cap/map 解放を `cleanupLate`（Discord I/O）の await より前に置く**ことで、cleanup が hang しても `run` 未開始ジョブが cap/map を握り続けない。terminal claim と late-cleanup でこの状態を閉じる |
+| 非 settle ジョブの watchdog | `abort()` 後も `run` が settle しないジョブには **grace period**（`BACKGROUND_ABORT_GRACE_MS`、`graceTimer`）を設け、超過で **cap のみ**返す（上記「grace 超過時」）+ log（leaked ラベル: `state` は変えず、**`state==="running" && !slotHeld && !executionSettled`** から導出。no-run 終端は `state==="creating-target"` のまま slot/map を解放し executionSettled を立てないため、`state==="running"` 条件で非協調 running ジョブと区別する）。**発火時に `!executionSettled && slotHeld` を再確認**してから `releaseSlotOnce()`（state ではなくこの 2 フラグで判定。`deliverOnce` で配送済みでも `state==="running"` のままなので cap を確実に返す。run が grace 内に settle 済みなら `releaseSlotOnce` 既発火で冪等 no-op）。`mapHeld` は保持。**`graceTimer` は `run().finally`（grace 前の settle）/ map 除去経路で必ず clear**し、settle 済みジョブに後から発火して誤 leak log や二重解放を起こさない。tool ループ / サンドボックスは `AbortSignal` を伝播し、可能なら killable isolation（例 `sandbox.kill()`）で grace 内に settle することを推奨（[tool-calling-foundation](../tool-calling-foundation/design.md) は killable を保証せず「実行結果不明」セマンティクス。[code-execution](../code-execution/design.md) はサンドボックス kill を持つ） | `run` が `AbortSignal` を無視して永久に走ると cap スロットが恒久リークする。ユーザ終端は既に配送済みのため、最終手段として有界 grace 後に cap を返す（副作用は止められないが、新規受付の枯渇は防ぐ）。single-flight は副作用継続中なので維持 |
+| 終端の分類 | `AbortController` は signal を発火するだけで、`run` 内の reject は一般的な `AbortError` に見える。**abort 前に終端意図を記録**（`controller.abort("cancelled" \| "timeout")` の reason、または別フィールド `abortReason`）し、`deliverOnce` が最初に到達した終端原因で分類する。完了 / 失敗 / cancel / timeout の race は first-terminal-cause で確定 | abort だけでは cancel と timeout を区別できず、完了と abort も競合する。分類規則がないと誤った終端を配送する |
+| terminal claim の単一性 | 終端原因の記録は **`claimTerminal(outcome)` に集約**し、同期に **`terminalClaimed=true` + `claimedOutcome`（`JobOutcome`: success 値 / error / cancelled / timeout を丸ごと凍結）をセットする。`userDelivered` は触らない**（配送は `deliverOnce` の独立した責務）。cancel/timeout は `abortReason` も補助的に立てる。**最初の claim が勝ち、`claimedOutcome` は以降の cancel / timeout / resolve / error で上書きしない**（cancel→timeout / timeout→cancel / 配送後の遅延 resolve、さらに **resolve が先に claim した後の遅延 cancel** いずれも no-op）。`deliverOnce` は **`claimedOutcome`**（自身の `kind` 引数ではなく凍結値）を配送するため、`deliverOnce("timeout")` が先に走っても claim 済みの `cancelled`／`success(value)` を配送する。`run` settle まで map を保持するため遅延 cancel/timeout コールバックがジョブを再発見しうるが、claim 済みなら状態を変えない | 配送後も map が残るため、後から来る停止ボタン / timeout / `run` resolve が outcome を上書きすると、既に配送した終端と矛盾する。`abortReason` だけでは success 値や error を凍結できない（success が先に claim した後に cancel が来るケースを誤分類する）ので `claimedOutcome` を真実とする。`terminalClaimed`（凍結）と `userDelivered`（配送の冪等）を別フラグにし、claim を 1 回に閉じて first-terminal-cause を不変にする |
+| ユーザ終端の一意性 | `deliverOnce` は claim 済み outcome を**ちょうど 1 回**配送する: まだ `terminalClaimed` でなければ `claimTerminal(kind)` を呼んで凍結 → **`userDelivered`（`terminalClaimed` とは別フラグ）を同期にガード確認 → `userDelivered=true` セット → timer cleanup（`timeoutTimer`、`run` 開始前のみ存在する target-create timer も）を**すべて await 前に**行い、その後で `await deliver(target, claimedOutcome)`（失敗は握って log）。実行解放（`releaseSlotOnce` + `releaseMapOnce` + `markExecutionSettled`）は `run().finally` で**別途**走る | `userDelivered` の確認と set の間に `await` があると、競合する完了 / cancel / timeout が割り込んで二重配送する。配送ガードを同期に閉じることで exactly-once を保証。`terminalClaimed`（原因の凍結）と `userDelivered`（配送の冪等）を分けるので、cancel/timeout が先に claim → 後で detached に配送しても二重配送せず、cap/map は `run` settle まで保持される |
+| 配送失敗時 | `deliver()`（`channel.send` / `edit`）が Discord エラー（権限欠如等）で失敗しても、**ユーザ配送の試行は完了扱い**（`userDelivered=true` のまま）にして log に残し、配送リトライはしない。**ただし cap / map（実行解放）には触れない**: 解放は通常どおり `run().finally`（または `createDeliveryTarget` 失敗 / `creating-target` cancel の no-run 経路）でのみ行う | 終端の確実性を優先（再送は別議論）。cancel / timeout のユーザ配送は `run` settle 前に走るため、配送失敗を理由に map を除去すると副作用継続中に single-flight が壊れ同一キーの二重起動を許す。配送の冪等と実行解放を分離しているのでここは独立に閉じる |
+| 既存チャットとの関係 | 通常の単発チャットは現状の同期ストリームのまま据え置き可。本基盤は「重いと分かっている処理」のみ対象にできる（呼び出し側が選択） | 既存挙動の不必要な変更を避ける。適用範囲は実装時に決める（Open Questions） |
+
+## Design
+
+### 想定する処理フロー
+
+v1 は**メッセージ起点の重い経路に限定**する（下記「キー設計」）。**受付判定（admission）を placeholder 生成より前に行う**ため、配送先は遅延コールバック `createDeliveryTarget()` で渡す（duplicate / busy で弾かれた場合は placeholder を作らない）。
+
+```text
+messageCreate（重い処理を要する経路）
+  └─ const r = jobManager.submit({ channelId, messageId, createDeliveryTarget, run, classify?, deliver })
+        【admission（同期に確定して即 return）】
+        ├─ 同一キーが実行中（active job）または孤児 cleanup 中（tombstone 生存中）→ return { rejected: "duplicate" }（placeholder 未作成）
+        ├─ 受付済みスロット数 >= MAX_CONCURRENT → return { rejected: "busy" }（placeholder 未作成。creating-target も計上）
+        │     ↑ 呼び出し側が r を見て「処理中です」/「混雑中」を即 ack
+        └─ 受付 → AbortController（run 用）+ targetCreateController 作成 + cancelSentinel/resolveCancelSentinel 作成（**同期**。admission の gap で cancel が来ても sentinel を resolve できる）+ Map 登録 + cap++（state: creating-target）→ return { accepted }
+              【detached（return 後に非同期で進む）】
+              ├─ **runner 先頭の同期ゲート**: createDeliveryTarget を呼ぶ前に terminalClaimed を確認。admission〜runner 起動の gap に cancel（programmatic / 孤児ボタン / shutdown）が来ていたら createDeliveryTarget を呼ばず **gate 自身が冪等な no-run 解放**（clearTargetCreateTimerOnce + releaseSlotOnce + releaseMapToTombstoneOnce）を実行して exit（component cancel は release を runAfterAck に遅延するため「cancel が解放済み」と前提しない。*Once なので gate と runAfterAck のどちらが先でも 1 回）。stale placeholder を作らない
+              ├─ createPromise = createDeliveryTarget(targetCreateController.signal)  ← placeholder 送信 + cleanupLate を返す
+              │     winner = await Promise.race([createPromise, targetCreateTimeout(targetCreateTimer), cancelSentinel])  ← 生の await にしない（never-settle でも runner を exit させる）
+              │     ※ no-throw envelope（同期 throw / reject も「target 生成失敗」へ）
+              │     ※ どの no-run 終端でも claimNoRunReason(reason)（first-cause）→ clearTargetCreateTimerOnce() → releaseSlotOnce → releaseMapToTombstoneOnce（orphan 可能性のある no-run は active entry を消す前に tombstone を同期 install。送信前確定失敗のみ plain release 可）
+              │     timeout / cancel が勝（createPromise なお pending）→ claimNoRunReason（timeout/cancelled・first-cause）+ targetCreateController.abort() + clearTargetCreateTimerOnce() + releaseSlotOnce + releaseMapToTombstoneOnce + log（配送先なし・run 開始せず）
+              │           → この (B) 経路でのみ runner が late-observer を 1 本 attach し settle まで保持（detach しない・watchdog は log のみ）:
+              │             遅延 fulfill → handleLateFulfill が noRunReason を読み cleanupLateOnce(noRunReason)（detached・bounded・no-throw・lateCleanupDone でガード）/ 遅延 reject → log
+              │           （createPromise が race に勝った (A) は下の fulfill 後ゲートが cleanupLateOnce を直接呼ぶ。observer は attach しない＝good な placeholder を誤 cleanup しない）
+              ├─ fulfill 後の同期ゲート（await 後にそのまま run へ進まない。no-run 経路は claimNoRunReason → clearTargetCreateTimerOnce → releaseSlotOnce → releaseMapToTombstoneOnce を先に同期で済ませ、cleanupLateOnce は detached）:
+              │     ├─ terminalClaimed?（creating-target 中に cancel された。createPromise が race に勝って fulfill 済み = (A) なので observer ではなく gate が直接処理）→ clearTargetCreateTimerOnce() + releaseSlotOnce + releaseMapToTombstoneOnce → void cleanupLateOnce(noRunReason ?? "cancelled")（detached・bounded・no-throw・lateCleanupDone でガード。run 開始せず・deliverOnce なし）
+              │     ├─ hasStopButton && created.target.channelId !== job.channelId → post-target 検証失敗扱い: claimNoRunReason("invalid-target") + clearTargetCreateTimerOnce() + releaseSlotOnce + releaseMapToTombstoneOnce → void cleanupLateOnce("invalid-target")（detached。停止ボタンのキー復元が壊れるため run 開始せず）
+              │     └─ 正常 → clearTargetCreateTimerOnce() → state: running へ
+              ├─ state: running、timeoutTimer 開始、run(signal) を実行（runPromise を保持）
+              │     ├─ deliver ブランチ: void runPromise.then(v => deliverOnce(classify?.(v) ?? success, target), e => deliverOnce("error", target)) → cancel/timeout は abort 経由で即 deliverOnce（claim 済み outcome を配送。tool ループは ToolLoopResult.status を error/cancelled へ写像）
+              │     └─ deliver は実行解放を await しない（deliver が遅い/hang しても下の解放ブランチは run settle で発火）
+              └─ 解放ブランチ: void runPromise.then(releaseExecutionOnce, releaseExecutionOnce)  ← reject でも rejection を握る（unhandled rejection を出さない）
+                                  releaseExecutionOnce = releaseSlotOnce + releaseMapOnce + markExecutionSettled + graceTimer/timeoutTimer clear（no-throw・冪等）
+                                  ※生の run promise に直接 attach（deliverOnce を await した後ではない）。ユーザ配送（deliverOnce）とは別ブランチ・別冪等
+
+interactionCreate（停止ボタン stop_response_<messageId>）
+  └─ const r = jobManager.cancel({ channelId, messageId })  ← 同期に { outcome, runAfterAck? } を返す
+        【同期】lookup（active job + tombstone）→ claimTerminal({kind:"cancelled"})（claimed?）→ outcome 決定:
+              ├─ claim を勝ち取った → outcome:"hit" + runAfterAck（state 別の detached step）を返す
+              ├─ 既 terminal（claimTerminal が false: 配送済み/cap leak/別原因問わず既 claim）→ outcome:"already-terminal"・runAfterAck なし（abort/grace/配送を二重に回さない）
+              ├─ tombstone hit（その key の job は既に終端・cleanup 中の残骸）→ outcome:"already-terminal"・runAfterAck なし（legacy fallback に流さない＝別 job を巻き込まない）
+              └─ active job も tombstone も無し → outcome:"miss"
+        呼び出し側:
+              ├─ outcome === "miss" → エフェメラル reply（既存と同形）
+              └─ else → void Promise.race([deferUpdate().catch(logAckFail), ackWaitDeadline(BACKGROUND_ACK_WAIT_MS)]).finally(() => r.runAfterAck?.())
+                          ← ack settle か短い deadline の早い方で 1 回（reject/hang でも有界に必ず走る。setTimeout(0)/microtask は flush 前に走りうるため不可）
+                          ← ackWaitDeadline は cancellable: ack が先勝ちしたら finally で timer を clear（または .unref()）。連打停止で pending timer を溜めない/shutdown を遅らせない
+        runAfterAck（冪等・exactly-once。実行時に state 再読。await deferUpdate の間に run が settle しうる）:
+              ├─ running && !executionSettled && mapHeld → abortReason="cancelled" set → controller.abort("cancelled")（signal.reason 伝播。settle 済みは idempotent no-op）→ armGraceTimerOnce()（自身も !executionSettled && mapHeld && running を再確認）→ deliverOnce()（claim 済み outcome。run-settle ブランチが先に配送済みなら冪等 no-op）。cap は run settle 時の解放ブランチ
+              └─ creating-target → claimNoRunReason("cancelled")（first-cause。cancel() の同期部で既に claim 済みのはず）→ cancelSentinel を resolve（runner の race を即決着）→ targetCreateController.abort()（send 抑止）→ clearTargetCreateTimerOnce() → releaseSlotOnce + releaseMapToTombstoneOnce。late cleanup は runner の単一 late-observer が noRunReason を読んで行う（ここでは observer を追加 attach しない）。grace/deliverOnce なし（target 無し・run 未開始）
+```
+
+> `submit` の戻り（`SubmitResult`）は **admission の同期結果**（accepted / rejected）。placeholder / 実行 / 配送はその後 detached で進む。初回 ack / placeholder の送信 I/O は呼び出し側が `createDeliveryTarget(signal)` 内で行い、`submit` は受付が通った後にだけそれを呼ぶ（`signal` は late-cancel 用に渡す）。`createDeliveryTarget()` が失敗 / timeout した場合は配送先が存在しないため、ユーザ配送はせず log に残して実行スロット + Map を解放する（`run` は開始しない）。終端の `deliver()`（Discord send / edit）は exactly-once で呼び、失敗は握って log する。
+
+### ジョブマップとキャップ（骨子）
+
+```ts
+type AbortReason = "cancelled" | "timeout";
+
+// 配送先（ジョブキーとは別物。bot はトリガユーザメッセージを edit できない）
+type DeliveryTarget =
+  | { mode: "edit"; channelId: string; placeholderMessageId: string }
+  | { mode: "send"; channelId: string };
+// state は「実行フェーズ」だけを表す（cap/map/配送/leak の状態は独立フラグで持つ）
+type JobState = "creating-target" | "running" | "settled";
+// creating-target: createDeliveryTarget 実行中（run 未開始）
+// running: run 実行中（settle 前。deliverOnce が走っても running のまま — 配送状態は state ではなく userDelivered で持つ）
+// settled: run が settle 済み（releaseExecutionOnce 完了）
+// 「配送済み（delivered）」「cap リーク（leaked）」は state の値ではなく、独立フラグから導出する log ラベル:
+//   delivered = userDelivered、leaked = `state==="running" && !slotHeld && !executionSettled`（no-run 終端は creating-target のまま解放するので running 条件で除外する）。
+// 解放・arm のガードは state ではなく独立フラグで判定する: grace fire は `!executionSettled && slotHeld`、
+// cancel/timeout の running-branch 前提は `state==="running"`（= run 開始済み・未 settle の意味のみ）+ `!executionSettled && mapHeld`。
+// deliverOnce を「state を delivered へ遷移」させないことで、配送後も grace watchdog が `state==="running"` で正しく cap を返せる。
+
+interface IBackgroundJob {
+  channelId: string;
+  messageId: string;          // トリガとなったユーザメッセージ（v1 はメッセージ起点のみ）
+  controller: AbortController;            // run / job cancel 用の signal
+  targetCreateController: AbortController; // createDeliveryTarget 専用（stall 時の send 抑止。job cancel と分離）
+  resolveCancelSentinel?: () => void;     // creating-target 中の cancel/timeout で target-create race を即決着（runner を非 block で exit）
+  noRunReason?: "timeout" | "cancelled" | "invalid-target"; // no-run 終端の原因。claimNoRunReason(reason) で first-cause 確定（cancel は cancel() 同期部で claim し、遅延 targetCreateTimeout が上書きしない）。runner の単一 late-observer がこれを読んで cleanupLateOnce(reason) を 1 回呼ぶ（観測者を二重に attach しない）。set されていることは「run 未開始の no-run 終端」を意味する（leak ラベル導出に使う）
+  state: JobState;
+  startedAt: number;
+  targetCreateTimer?: ReturnType<typeof setTimeout>; // createDeliveryTarget の上限（run 開始で clear）
+  timeoutTimer?: ReturnType<typeof setTimeout>;      // run の wall-clock timeout（run 開始で arm）
+  graceTimer?: ReturnType<typeof setTimeout>;        // abort 後の非 settle watchdog（settle で clear）
+  terminalClaimed: boolean;  // claimTerminal の冪等ガード（first-terminal-cause を凍結。userDelivered とは別）
+  claimedOutcome?: JobOutcome<unknown>; // claimTerminal が凍結した確定 outcome（success 値/error/cancelled/timeout）。deliverOnce はこれを配送
+  abortReason?: AbortReason; // cancel/timeout の場合の abort() reason。claimedOutcome の cancelled/timeout に対応する補助
+  userDelivered: boolean;    // deliverOnce（ユーザ配送）の冪等ガード。terminalClaimed と独立
+  slotHeld: boolean;         // cap カウントを占有中か（releaseSlotOnce の冪等ガード。grace でも false にしうる）
+  mapHeld: boolean;          // Map エントリ = single-flight を保持中か（releaseMapOnce の冪等ガード）
+  executionSettled: boolean; // run が実際に settle したか（markExecutionSettled の冪等ガード）
+  lateCleanupDone: boolean;  // cleanupLateOnce の at-most-once ガード（gate 直接呼びと late-observer のどちらからでも 1 回に閉じる）
+}
+
+// createDeliveryTarget は target だけでなく late-cleanup 能力も返す（manager は data の DeliveryTarget しか持てないため）
+interface ICreatedTarget {
+  target: DeliveryTarget;
+  hasStopButton: boolean;                 // 停止ボタン付き placeholder か（孤児になると操作可能なゴミになる）
+  // timeout/cancel/検証失敗（停止ボタンが別チャンネル等）後に遅延 fulfill した placeholder を delete/「中断しました」へ edit
+  // invalid-target は timeout/cancel と区別して log・文言を正しくする（誤って「タイムアウト」「中断」と表示しない）
+  // **冪等（at-most-once）**: runner が単一所有する late-observer から 1 回だけ呼ぶ契約だが、防御として実装側でも内部ガードし、2 回呼ばれても二重 delete/edit の Discord I/O を出さない（呼び出し側 callback なので no-throw envelope で囲む）
+  cleanupLate(reason: "timeout" | "cancelled" | "invalid-target"): Promise<void>;
+}
+
+interface ISubmitOptions<R> {
+  channelId: string;
+  messageId: string;
+  timeoutMs?: number;
+  // 配送先は受付通過後に submit が呼ぶ遅延コールバック（busy/duplicate なら placeholder を作らない）
+  // signal を受けて underlying な channel.send を late-cancel する。data だけでなく cleanupLate も返す
+  // **atomic 契約**: placeholder 送信（Discord side effect）が一度でも成功したら、必ず ICreatedTarget（= cleanupLate ハンドル）を resolve すること。
+  //   送信成功後に内部処理が失敗しても throw/reject してはならない（manager は cleanupLate ハンドルを受け取れず孤児 placeholder を後始末できない）。
+  //   送信後の失敗は (a) degraded な ICreatedTarget を resolve して manager の late-cleanup に委ねる か (b) callback 自身が placeholder を rollback（delete）してから reject する のいずれか。
+  //   reject/throw は「Discord side effect が無い（送信前）」場合のみ許される＝target 生成失敗（run 開始せず cap/map 解放）。
+  // **two-phase 推奨**: REST send は **サーバ側 commit 後に client 側で reject/timeout** しうる（message ID を受け取れず cleanupLate を返せない曖昧ケース）。
+  //   そこで「停止ボタン無しの素の placeholder を先に send → message ID 確定 + post-target 検証通過後に edit で停止ボタンを付与」する二段構えにする。
+  //   こうすれば曖昧な send 失敗で残るのは **非インタラクティブな placeholder（停止ボタン無し）止まり**で、孤児ボタンが新ジョブを誤 cancel する事故にならない。hasStopButton は「ボタン付与 edit が成功したか」を反映。
+  createDeliveryTarget(signal: AbortSignal): Promise<ICreatedTarget>; // placeholder 送信 + late-cleanup 能力
+  run(signal: AbortSignal): Promise<R>;       // 非同期/協調的な重い処理。signal を伝播すること
+  // run の resolved 値を outcome に正規化（既定は success だが、run が判別共用体を返すなら caller が error/cancelled へ写像）
+  // 省略時は { kind:"success", value }。tool ループは ToolLoopResult を見て classify する（下記「run 結果の正規化」）
+  // 同期 throw / reject は manager が { kind:"error" } へ封じ込める（caller callback は no-throw envelope で囲む）
+  classify?(value: R): JobOutcome<R>;
+  deliver(target: DeliveryTarget, outcome: JobOutcome<R>): Promise<void>; // 終端を 1 回だけ配送
+}
+
+// submit は admission を「同期に」確定して即返す（placeholder / run / 配送は return 後 detached）
+type SubmitResult =
+  | { status: "accepted" }
+  | { status: "rejected"; reason: "busy" | "duplicate" };
+
+type JobOutcome<R> =
+  | { kind: "success"; value: R }
+  | { kind: "error"; error: unknown }
+  | { kind: "cancelled" }
+  | { kind: "timeout" };
+```
+
+- キーは `` `${channelId}:${messageId}` `` を `Map` のキーにする（複合キーの文字列化）。
+- **admission は同期**: `submit` は duplicate / cap 判定を同期に行い `SubmitResult` を即返す。受付時に `Map` 登録 + cap++ までを同期で済ませ（`state="creating-target"`）、`createDeliveryTarget()` / `run` は return 後に detached で進める。これにより同一 tick の連続 `submit` でも cap 判定が atomic になる（単一スレッドのイベントループ前提）。
+- **cap / map の解放タイミング**: 通常は `run` settle 時に `releaseExecutionOnce`（= `releaseSlotOnce()` cap + `releaseMapOnce()` `Map` エントリ + `markExecutionSettled()` + `graceTimer`/`timeoutTimer` clear）を 1 回。**解放は生の `run()` promise に直接 attach する**: `void runPromise.then(...deliverOnce...)`（配送ブランチ）と `void runPromise.then(releaseExecutionOnce, releaseExecutionOnce)`（解放ブランチ）を**別々に** `runPromise` へ attach し、`deliverOnce` を `await` してから解放する形（`try { await run(); await deliverOnce() } finally { release }`）には**しない**。さもないと `deliver` の Discord I/O が遅い/hang したときに完了済みジョブが cap / single-flight を占有し続ける。解放ブランチは **reject ハンドラを付けて（`.then(release, release)` か `.finally(release).catch(noop)`）unhandled rejection を出さない**（`Promise.prototype.finally` は元の rejection を再 throw するため、`void runPromise.finally(release)` のままだと `run` が reject したとき unhandled rejection になる。`releaseExecutionOnce` 自体も no-throw）。`deliverOnce`（ユーザ配送）が cancel/timeout で先に走っても、`run` が settle するまで cap / single-flight を保持する。例外は **grace 超過**（`releaseSlotOnce` だけ先に呼び map は保持）と **`createDeliveryTarget()` 失敗/timeout・creating-target 中 cancel・post-target 検証失敗**（`run` 未開始なので `clearTargetCreateTimerOnce()` → `releaseSlotOnce` + map 解放をその場で呼ぶ。**placeholder が in-flight/late-fulfill しうる orphan-capable な no-run は `releaseMapOnce` ではなく `releaseMapToTombstoneOnce`** で map を tombstone 化する。送信前に確定失敗した（side effect 無し）ケースのみ plain `releaseMapOnce` 可）。解放は **resource ごとに別冪等ヘルパ**（`releaseSlotOnce` / `releaseMapOnce`〔または tombstone 版〕 / `markExecutionSettled`）なので、grace で cap を返した後の解放ブランチは cap-- を二重実行せず map 除去 + settle 確定だけ行う。単一の「実行解放したか」フラグには束ねない。
+- **`targetCreateTimer` の clear**: `targetCreateTimer` は **すべての no-run 終端**（正常 fulfill→running 遷移、createDeliveryTarget 失敗/reject/timeout、creating-target 中 cancel、fulfill 後ゲートの terminalClaimed、post-target 検証失敗）で `clearTargetCreateTimerOnce()`（冪等）により解放する。armed のまま残すと、cap/map 解放後に stale な timeout コールバックが発火して誤 log・二重 cleanup・既に解放済みジョブの再解放を招く。`timeoutTimer`/`graceTimer` の clear も同様に解放ブランチ・各 no-settle 経路で行う。
+- **admission〜runner の gap ガード**: `submit` は `Map` 登録より前（admission の同期部）で `cancelSentinel` / `resolveCancelSentinel` を作る。これにより accepted return 直後・runner 起動前に `cancel()`（programmatic / 孤児ボタン / shutdown）が来ても sentinel を resolve できる。**runner の先頭は `createDeliveryTarget` を呼ぶ前の同期ゲート**で `terminalClaimed`（gap 中に cancel された）を確認し、true なら `createDeliveryTarget` を呼ばず、**gate 自身が冪等な no-run 解放**（`clearTargetCreateTimerOnce` + `releaseSlotOnce` + `releaseMapToTombstoneOnce`）を実行して exit する。component cancel は実際の release を `runAfterAck`（post-ack）に遅延するので「cancel が既に解放した」とは前提せず gate が解放の owner になる（*Once なので gate と `runAfterAck` のどちらが先に走っても解放はちょうど 1 回）。これで「gap cancel → 後から runner が placeholder を作る」stale placeholder と「gate が exit したが誰も解放しない」leak の両方を防ぐ。
+- **tombstone と first-cause helper**: 孤児になりうる placeholder を持つ no-run 解放は `releaseMapToTombstoneOnce(key)` で `Map` の active entry を **有界 TTL（`BACKGROUND_TOMBSTONE_TTL_MS`）の tombstone に置換**する（cap は消費しない＝「hung cleanup が cap を恒久占有しない」設計と両立。single-flight だけ延長）。admission は **active job と tombstone の両方**を見て duplicate 判定する。tombstone は `cleanupLateOnce` の settle か TTL 到来で除去するが、**除去時に entry identity（生成世代）を比較**し、古い cleanup が後発の active job / 新 tombstone を誤って消さないようにする。`noRunReason` は `claimNoRunReason(reason)` で **first-cause** 確定（cancel が `cancel()` 同期部で先取りし、遅延 `targetCreateTimeout` の `"timeout"` で上書きさせない）。
+- **run 結果の正規化**: `run` が resolve した値は既定で `{ kind:"success", value }` 扱い。ただし [tool-calling-foundation](../tool-calling-foundation/design.md) の `runToolLoop()` は **`Promise<ToolLoopResult>`（判別共用体 `final`/`cancelled`/`error`）を resolve し、reject は不変条件違反のみ**なので、`run` が resolve した = job 成功とは限らない。tool ループを載せる呼び出し側は `classify?(value)` で `ToolLoopResult.status` を `JobOutcome`（`final`→success / `error`→error / `cancelled`→cancelled）へ写像する。`classify` 省略時のみ無条件 success。これにより resolve した domain error/cancel を success と誤配送しない。なお job 側の `cancelled`/`timeout` は abort 経由で `deliverOnce` が分類するため、`classify` は **正常 resolve した値**の写像のみ担う。
+- **終端分類**: cancel / timeout はまず `claimTerminal({kind:"cancelled"|"timeout"})` で `terminalClaimed` + `claimedOutcome`（+ 補助 `abortReason`）を凍結してから `abort()` する。正常 resolve は `claimTerminal(classify(value))`、非 abort throw は `claimTerminal({kind:"error",error})`。`run` の reject が一般 `AbortError` でも、終端原因は `claimedOutcome` で確定し、`deliverOnce` はそれを配送する。`terminalClaimed`（凍結・first-terminal-cause）と `userDelivered`（配送の冪等・2 回目以降無視 + `timeoutTimer`/`targetCreateTimer` cleanup）は**別フラグ**で、claimTerminal は userDelivered を触らない。実行解放は resource ごとの `releaseSlotOnce` / `releaseMapOnce` / `markExecutionSettled` で冪等。
+
+### 変更対象ファイル（想定）
+
+- 新規: `src/services/backgroundJobManager.ts` — ジョブマップ + キャップ + ライフサイクル（`submit` / `cancel` / 内部 `settleOnce`）。`IBackgroundJobManager` をインタフェース化し DI で注入。
+- 新規: `src/config/envVars.ts` への追加 — `BACKGROUND_MAX_CONCURRENT`（既定値は実装時）/ `BACKGROUND_JOB_TIMEOUT_MS` / `BACKGROUND_TARGET_CREATE_TIMEOUT_MS`（placeholder 生成上限）/ `BACKGROUND_ABORT_GRACE_MS`（abort 後の非 settle ジョブの cap 強制解放まで）/ `BACKGROUND_ACK_WAIT_MS`（cancel の post-ack continuation を待つ有界 deadline。hung `deferUpdate()` で cancellation が宙吊りにならないため。deadline timer は ack 先勝ち時に clear する cancellable 実装にする）/ `BACKGROUND_TOMBSTONE_TTL_MS`（孤児 cleanup 中の同一キー再受付を抑止する tombstone の有界 TTL）。
+- 修正: `src/bot/events/messageCreate.ts` — 重い経路を `jobManager.submit(...)` 経由にし、ack だけ返して切り離す（適用範囲は Open Questions）。
+- 修正: `src/bot/events/interactionCreate.ts` — 停止ボタンは component interaction なので 3 秒以内に応答する。`jobManager.cancel` は **lookup + `claimTerminal` までを同期**に行い `{ outcome, runAfterAck? }`（`runAfterAck` は冪等）を即返す。`outcome !== "miss"` なら **`void Promise.race([interaction.deferUpdate().catch(logAckFail), ackWaitDeadline(BACKGROUND_ACK_WAIT_MS)]).finally(() => r.runAfterAck?.())`**（`controller.abort()` + `deliverOnce` を ack settle 後に走らせ重い abort listener が ack を逃さないが、`deferUpdate()` が reject/hang でも有界 deadline で `runAfterAck` が必ず 1 回走り claim 済み cancelled の宙吊りを防ぐ。`setTimeout(0)`/microtask は flush 前に走りうるため不可）。**既存のブランチ形を踏襲**: `jobManager.cancel`（lookup は active job + tombstone）を先に試し、**`outcome === "miss"`（active も tombstone も無し）のときだけ** `chatService.cancelRequest` にフォールバック（移行期）。**tombstone hit は `already-terminal`** を返すので legacy fallback に流れず別 job を巻き込まない。**hit / already-terminal は `deferUpdate()`、miss はエフェメラル `reply`**（既存と同じ）。最終的な cancelled / error 配送は interaction token ではなく `channel.send` / placeholder `edit` で行う。全応答が jobManager 経由に移行したら fallback を撤去。
+- 新規: `tests/unit/services/backgroundJobManager.test.ts` — 単一フライト拒否 / キャップ到達拒否（**拒否時は `createDeliveryTarget` を呼ばない＝placeholder を作らない**）/ `createDeliveryTarget` 失敗時は配送せず cap 解放（`run` を開始しない）/ 正常完了配送 / throw 時の error 配送 / **`run` の同期 throw でも未終端で残らない** / cancel / timeout / **cancel/timeout 後も `run` が settle するまで cap が解放されない（スロットを占有し続ける）** / **abort 後 `run` が永久に settle しない場合 grace 超過で cap だけ解放され map（single-flight）は保持される** / **grace で cap 返済後に `run().finally` が来ても二重 cap-- せず map 除去 + settle 確定だけ走る（`releaseSlotOnce`/`releaseMapOnce` 各冪等）** / **grace 前に `run` が settle したら `graceTimer` が clear され誤 leak log が出ない** / **`createDeliveryTarget` が stall したら timeout で cap+map 解放（run 開始せず・`targetCreateTimer` 解放経路で clear）** / **timeout 後に遅延 resolve した placeholder が late-cleanup される** / **timeout 後に `createDeliveryTarget` が遅延 reject しても unhandled rejection にならず log される** / **`run` が resolve した domain error/cancel（`ToolLoopResult.status`）を `classify` で error/cancelled に写像し success と誤配送しない** / **`classify` が throw しても error 終端を必ず配送する** / **cancel と timeout が同じ `AbortError` でも正しく分類される** / **`run` が伝播 signal の `reason` で `"cancelled"` / `"timeout"` を観測できる（`controller.abort("cancelled"|"timeout")`）** / **cancel/timeout 後に `run` が遅延 resolve しても再配送しない** / **`creating-target` 中の cancel: run を開始せず終端し、後で fulfill した placeholder を `cleanupLate("cancelled")` する + cap/map 解放 + grace を arm しない** / **cancel claim 後に `createDeliveryTarget` が遅延 resolve しても fulfill 後ゲートが `terminalClaimed` を見て run を開始しない** / **post-target 検証: `hasStopButton` かつ `target.channelId !== job.channelId` の placeholder は target 失敗扱いで `cleanupLate("invalid-target")` + cap/map 解放 + run 開始せず** / **`deliver` が遅い/hang しても cap/map は run settle 時の解放ブランチで解放され、deliver を待たない** / **`run` が reject しても解放ブランチ（`.then(release, release)`）から unhandled rejection が出ない** / **first-terminal-cause: `run` が success で先に claim した後に遅延 cancel が来ても `claimedOutcome`（success 値）を配送する（cancelled に上書きしない）** / **`targetCreateTimer` が no-run 全終端（失敗/timeout/creating-target cancel/terminalClaimed gate/post-target 検証失敗）で clear され stale 発火しない** / **`createDeliveryTarget` / `classify` / `deliver` / `cleanupLate` の同期 throw でも未終端・リークにならない** / **`createDeliveryTarget` の atomic 契約: placeholder 送信が成功した後に callback が throw/reject した場合は孤児が残らない（callback が rollback 済み、または degraded target を resolve して manager が late-cleanup できる）— send 後の throw を target 生成失敗として握り潰し孤児を作らないこと** / **`cancel()` が `abort()`・配送を await せず同期に `{ outcome, runAfterAck? }` を返し、abort/配送は `runAfterAck`（post-ack）でのみ走る（component interaction の ack を逃さない）** / **timeout で `run` が未 settle のまま grace 超過 → cap だけ解放・map 保持（timeout も grace を arm する）** / **`creating-target` / post-target 検証失敗で `cleanupLate` が hang しても cap/map は先に解放済み（cleanup は detached）** / **既 terminal なジョブへの再 cancel（連打停止ボタン）は `outcome:"already-terminal"`・`runAfterAck` 無しで abort/grace/配送を二重に回さない** / **`deferUpdate()` が reject しても `finally` で `runAfterAck` が呼ばれ cancel が宙吊りにならない** / **cancel claim 後 `runAfterAck` 実行前に `run` が settle（cap/map 解放済み）→ `runAfterAck` が abort/grace を no-op し orphan graceTimer / 誤 leak log を出さない** / **timeout の stale callback が success/cancel の後に発火しても `claimTerminal` で負けて no-op** / **`run` が `cancelled` を resolve したら map は run settle で解放される（single-flight は run settle まで。副作用継続は呼び出し側責務）** / **`creating-target` cancel/timeout で `createDeliveryTarget` が永久に未 settle でも `Promise.race`（cancelSentinel/timeout）で runner が決定的に exit する** / **race で負けた `createPromise` が後で fulfill したら（observer を detach していないので）停止ボタン付き placeholder が `cleanupLate` される＝late-resolution-safe** / **`cleanupLateOnce` は gate 直接呼び（createPromise が race 勝 = (A)）と late-observer（no-run が race 勝 = (B)）のどちらからでも `lateCleanupDone` でちょうど 1 回。cancel が `noRunReason` を set しても自前で observer を追加 attach せず、二重 delete/edit にならない** / **正常 running 経路（noRunReason 未 set）では late-observer が attach されず（または no-op）good な placeholder を誤 cleanup しない** / **同一キーの孤児 cleanup 中に再 submit（gateway 重複配信/retry/replay）されても tombstone（TTL）で新ジョブを受け付けず、古いボタンが新ジョブを誤 cancel しない。TTL 経過後は再受付可** / **tombstone 除去は entry identity（世代）を比較し、古い cleanup の settle が後発の active job / 新 tombstone を消さない** / **admission〜runner 起動の gap に cancel が来たら runner 先頭の同期ゲートが `createDeliveryTarget` を呼ばず stale placeholder を作らず、gate 自身が冪等に no-run 解放して exit（gate と runAfterAck のどちらが先でも cap/map leak しない）** / **tombstone hit の cancel は `outcome:"already-terminal"` を返し legacy `cancelRequest` fallback に流れない（別 job を巻き込まない）** / **`running` ジョブの cancel では `noRunReason` を立てない（set ⟺ run 未開始 の不変条件）** / **`creating-target` で cancel が先に claim した後に `targetCreateTimeout` が発火しても `noRunReason` は `"cancelled"` のまま（first-cause）で cleanup/log/placeholder 文言が timeout にならない** / **leak ラベルは `state==="running" && !slotHeld && !executionSettled` で導出し、no-run 解放（creating-target のまま）を leaked と誤計上しない** / **`createDeliveryTarget` が素の placeholder を send した後 client 側 reject（曖昧 commit）でも、停止ボタンは付与 edit 後にしか出ないため孤児インタラクティブボタンが残らない（two-phase）** / **grace 超過時の cap 解放は `state`（`deliverOnce` 後も `running`）ではなく `!executionSettled && slotHeld` で判定し、cancel/timeout 配送済みでも cap が確実に返る** / **`deferUpdate()` が hang しても `BACKGROUND_ACK_WAIT_MS` 後に `runAfterAck` が 1 回走り cancellation が宙吊りにならない** / **`runAfterAck` が ack settle と deadline の両方で起動されても冪等に 1 回だけ実行する** / **first-terminal-cause の単一性: cancel→timeout / timeout→cancel / 配送後の遅延 resolve で `abortReason`・outcome を上書きしない** / **`claimTerminal`（`terminalClaimed` を凍結）が `userDelivered` を抑止せず、cancel claim 後も `deliverOnce` がユーザ配送をちょうど 1 回行う** / **競合する `deliverOnce("timeout")` が先に走っても claim 済みの `"cancelled"` を配送する** / **ユーザ配送がちょうど 1 回 + 実行解放がちょうど 1 回** / **timer cleanup（`timeoutTimer`/`targetCreateTimer`/`graceTimer` 全経路）** / cap デクリメント（リークなし）/ cancel と完了の競合（first-terminal-cause）/ **cancel/timeout の `deliver` が失敗しても map（single-flight）を除去せず cap/map は `run().finally` まで保持（配送失敗が実行解放を即発火しない）**。
+
+### 設計メモ
+
+- **単一プロセス前提**: ジョブは in-memory。プロセス再起動で全ジョブが消える。実行途中だった重い処理は未完で破棄され、配送されない（呼び出し側はこれを許容できる処理のみ本基盤に載せる）。永続性が要件になったら DB 永続 + 起動時復旧の別 change を立てる（[cron](../cron/design.md) の at-most-once claim を参照）。
+- **`run` の契約（CPU バウンドの扱い）**: detached promise にしても、単一 Bun プロセスのイベントループ上で動く以上、**CPU バウンドな同期処理を background へ逃がせるわけではない**（`await` は yield するが、同期ループはイベントループをブロックし、新規 Discord イベント / cancel 処理 / timeout timer / `deliver` まで止める）。よって `run` は **非同期かつ協調的**であること、`AbortSignal` を伝播することを契約とし、CPU バウンドな処理はサブプロセス / worker / サンドボックス（[code-execution](../code-execution/design.md)）へ逃がす。本基盤が逃がすのは「I/O 待ちが長い処理をハンドラから切り離す」点であって、CPU 並列化ではない。
+- **`run` settle と single-flight の契約**: single-flight（`mapHeld`）は **`run` promise が settle するまで**しか保護しない。「`run` settle = 副作用も完了」とは限らない: [tool-calling-foundation](../tool-calling-foundation/design.md) の `runToolLoop()` は **abort 後に `{status:"cancelled"}` を resolve しても、放棄した handler の副作用が後から完了しうる**（execution-result-unknown）。`runToolLoop()` をそのまま `run` に渡すと、resolve 時点で `releaseMapOnce()` が走り、放棄 handler の副作用が継続中に同一キーの新規ジョブを受け付けうる。契約は次のいずれか: (a) `run` promise を **spawn した副作用が止まる / settle する / overlap-safe になるまで settle させない**（例: `runToolLoop()` を副作用 settle promise でラップ）、または (b) handler 側が **idempotency / killable isolation** で重複実行に耐える（single-flight は `run` settle までしか保証しないことを呼び出し側が許容）。grace 超過で map を保持し続けるのも (a) が成立しないケースのための最終手段だが、grace 自体は cap のみ返す点に注意（map は保持）。
+- **caller callback の no-throw envelope**: `run` / `createDeliveryTarget` / `classify` / `deliver` / `cleanupLate` はいずれも呼び出し側のコードで、**同期 throw でも reject でも未終端 / リークを起こさせない**。
+  - `run`: 非 async で**同期 throw** すると `run(signal).then(...)` の前に例外が抜けるため、detached ランナーは `Promise.resolve().then(() => run(signal))` か async IIFE（`(async () => { try { … } catch { … } finally { … } })()`）で囲み、同期 throw も `catch`→`deliverOnce("error")` に落とす。`finally` で実行解放。
+  - `createDeliveryTarget`: 同様に `Promise.resolve().then(() => createDeliveryTarget(signal))` で囲む。同期 throw / reject / timeout はすべて「target 生成失敗」として `run` を開始せず `claimNoRunReason` + `releaseSlotOnce` + map 解放 + `targetCreateTimer` clear（送信前確定失敗〔side effect 無し〕は plain `releaseMapOnce`、placeholder が in-flight/late-fulfill しうる orphan-capable は `releaseMapToTombstoneOnce`）。**ただし throw/reject は manager から見て「placeholder は生成されなかった」と等価に扱う**ため（manager は `cleanupLate` ハンドルを受け取れない）、`createDeliveryTarget` 側に **atomic 契約**を課す: placeholder 送信が成功したら必ず `ICreatedTarget` を resolve し、送信後の失敗は degraded target を resolve するか callback 自身が placeholder を rollback してから reject する（上記 `ISubmitOptions` のコメント）。これを守らないと「送信成功→callback throw」で停止ボタン付き孤児が後始末不能になる（設計が防ごうとしている孤児がまさに残る）。
+  - `classify`: resolve 値の写像は `try/catch` で囲み、throw したら `{ kind:"error", error }` にフォールバック（ユーザ終端配送を必ず行う）。
+  - `deliver` / `cleanupLate`: Discord I/O 失敗は握って log し、終端 / 解放は止めない。
+  - いずれも `void` で受けて unhandled rejection を出さない。各 callback の同期 throw test を置く。
+- **既存 `chatService.activeRequests` との関係**: 現状の messageId 単位 abort マップは本基盤の特殊形。統合するか別管理にするかは実装時に決める（二重管理を避けるなら chatService の abort 登録を jobManager 経由に寄せる案がある）。
+- **キャップの単位**: グローバル 1 本のキャップで始める。将来 guild / user 単位の細分化が要るなら拡張だが、v1 は持たない。
+
+## Tasks
+
+- [ ] `IBackgroundJobManager` / ジョブキー / `SubmitResult` / `JobOutcome` / `classify` / `ICreatedTarget`（`cleanupLate`/`hasStopButton`）の型確定
+- [ ] `backgroundJobManager.ts`: ジョブマップ + グローバルキャップ + `submit`（同期 admission: 単一フライト / busy 拒否）+ 遅延 `createDeliveryTarget(signal)`（`targetCreateTimer` + `cleanupLate` による late-resolution-safe 後始末 + creating-target 中 cancel）+ detached `run`（全 caller callback を no-throw envelope で封じ込め）+ `classify`（throw は error へフォールバック）による resolve 値の outcome 正規化 + `cancel`（同期に `{ outcome:"hit"|"miss"|"already-terminal", runAfterAck? }` を返却、`abort()`+配送は呼び出し側が `await deferUpdate()` 後に `runAfterAck()` で起動、既 terminal は runAfterAck 無し）+ `claimTerminal`（`claimed:boolean` を返し `terminalClaimed` + `claimedOutcome` を 1 回だけ凍結・上書き禁止・`userDelivered` は触らない）+ `deliverOnce`（`userDelivered` を同期ガードし `claimedOutcome` をちょうど 1 回配送）+ 解放ブランチ `void runPromise.then(releaseExecutionOnce, releaseExecutionOnce)`（`releaseSlotOnce`/`releaseMapOnce`/`markExecutionSettled`、cap が `run` settle まで占有・配送失敗で即解放しない・reject も握る）+ job timeout（`timeoutTimer`、超過で `armGraceTimerOnce`）+ 非 settle ジョブの grace watchdog（`graceTimer`、settle で clear）+ no-run 全経路の `clearTargetCreateTimerOnce` + 停止ボタン target の post-target `channelId === job.channelId` ガード + `cleanupLateOnce`（`lateCleanupDone` で gate/late-observer をちょうど 1 回。late-observer は no-run が race 勝のときだけ attach）+ 孤児 cleanup 中の同一キー再受付を抑止する有界 TTL tombstone（cap 非消費・identity 比較で除去）+ `claimNoRunReason`（first-cause）+ admission で sentinel を同期作成 + runner 先頭の gap-cancel ゲート
+- [ ] `envVars.ts`: `BACKGROUND_MAX_CONCURRENT` / `BACKGROUND_JOB_TIMEOUT_MS` / `BACKGROUND_TARGET_CREATE_TIMEOUT_MS` / `BACKGROUND_ABORT_GRACE_MS` / `BACKGROUND_ACK_WAIT_MS` / `BACKGROUND_TOMBSTONE_TTL_MS` 追加
+- [ ] `messageCreate` / `interactionCreate` の配線（重い経路の submit 化、停止ボタンの cancel 統合）
+- [ ] unit test（単一フライト / キャップ / 各終端 / 終端一意性 / リークなし / 競合）
+- [ ] `docs/changes/background-task/` 削除（リリース完了時、git 履歴がアーカイブ）
+
+## Open Questions / Risks
+
+- **適用範囲**: どの経路を本基盤に載せるか（全チャットか、model-compare / code-execution / tool ループのような明示的に重い処理だけか）。通常の単発チャットを載せると ack→follow-up の体験が変わるため、まず重い処理に限定する案が有力。実装着手時に確定。
+- **既存 abort マップとの統合**: `chatService.activeRequests` と本基盤のジョブマップを一本化するか並存させるか。移行期は停止ボタンを `jobManager.cancel` → `chatService.cancelRequest` の順にフォールバックさせる（上記）。最終的に通常チャットも jobManager に寄せて二重管理を解消するかは配線時に決める。
+- **キャップ値とタイムアウト値**: `BACKGROUND_MAX_CONCURRENT` / `BACKGROUND_JOB_TIMEOUT_MS` の妥当な既定値。code-execution は別途 `SANDBOX_MAX_CONCURRENT` を持つため、二段のキャップが重複しないよう整理が要る。
+- **配送形態（placeholder edit vs follow-up send）**: 所有は呼び出し側に確定（`deliveryTarget` を渡す）。残るのは、完了時に placeholder を `edit` するか新規 `channel.send` で返すかの選択、および長文分割（既存の splitText 系）や chat-response-v2 の Container 構造との相性。
+- **interaction 起点の一般化**: v1 はメッセージ起点のみ。slash-command / component interaction 起点を載せる場合のキー設計（`{ sourceKind, sourceId, channelId }` 等への一般化）と、interaction token（15 分）/ `followUp` 配送との整合を別途設計する。
+- **graceful shutdown**: プロセス終了時に実行中ジョブをどう扱うか（全 abort + 「中断されました」配送を試みるか、単に破棄か）。
+- **target 生成失敗時のユーザ通知**: `createDeliveryTarget()` が失敗 / timeout した accepted ジョブは配送先が無く現状 log のみ（ユーザ終端なし）。メッセージ起点なので manager 経由ではなく caller 側で `channel.send` の簡易フォールバック通知（「応答の準備に失敗しました」）を出す hook を将来追加するか、現状の「placeholder 無しで silent 終端」を許容するかは適用時に決める。
+- **停止ボタンの job-instance 同定**: `stop_response_<messageId>` は job 個体を識別しないため、孤児ボタン（`creating-target` cancel で `mapHeld` を cleanup より先に解放した残骸）が生きているうちに同一トリガで再 submit されると、古いボタンが新ジョブを誤 cancel しうる。**v1 でも gateway 重複配信 / caller retry / no-run 解放後 replay で再受付窓が開く**ため、v1 は孤児 cleanup 中の `{channelId, messageId}` に有界 TTL の tombstone（cap 非消費・single-flight 延長）を張って同一キー再受付を抑止する案を基本線にする。[conversation-regeneration](../conversation-regeneration/design.md) / [fork](../fork/design.md) が同一トリガ再 submit を本格導入する際は customId へ job-instance nonce（`stop_response_<messageId>_<nonce>`）を足し `cancel` で照合する。tombstone TTL の値・nonce 採用時の customId 形（channelId 同梱の要否）は配線時に確定。
+- **cancel のセマンティクス**: cancel は「実行が確実に停止した」とは主張しない（[tool-calling-foundation](../tool-calling-foundation/design.md) と同じく、副作用安全性は処理本体側の責務）。
+
+## 参照
+
+- [tool-calling-foundation](../tool-calling-foundation/design.md) — `AbortSignal` 伝播 / cancel の「実行結果不明」セマンティクス / 終端の一意性という同型の設計課題
+- [OpenRouter Server Tools Overview](https://openrouter.ai/docs/guides/features/server-tools/overview) — server tool は 1 リクエスト内で複数回サーバ側実行されうる（重い処理の一因）
+- 既存実装: `src/services/chatService.ts`（`activeRequests: Map<MessageId, AbortController>` / `cancelRequest`）、`src/bot/events/messageCreate.ts`（同期 `for await` ストリーム）、`src/bot/events/interactionCreate.ts`（`stop_response_<messageId>` 停止ボタン）
