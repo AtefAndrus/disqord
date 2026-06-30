@@ -72,10 +72,15 @@ summary: "/compare で複数モデルへ並列リクエストし回答を比較"
 - **モデルごとに別 message**（1 message = 1 モデルの Container）にする。TextDisplay は 1 message の全 TextDisplay 合計 4000 字制約があるため、複数モデルの回答を 1 message に集約しない。先頭に「比較結果」見出し message を 1 つ置く。各モデルの長文応答はさらに chat-response-v2 の `splitTextIntoMessages` で分割する。components 数（Container 内 10 / メッセージ全体 40）は各 message 単位で余裕
 - Non-Goals どおり比較表示はストリーミングしない（各モデル完了後にまとめて Container 送信）
 
+**設計メモ（`openrouter:fusion` との違い）**:
+
+- OpenRouter の server tool `openrouter:fusion` は本 change と**別物**。fusion は panel モデル群→judge の**構造化合議**（合意/矛盾の `analysis` + 各モデルの raw `responses`）を OpenRouter サーバ側で行い、LLM がツールとして判断起動する。本 change は DisQord 側で `Promise.allSettled` 並列リクエストし、各モデルの応答を **side-by-side 表示**するだけで分析はしない。目的（横並び比較 vs 合議分析）・実行場所・起動方法が異なるため、置換関係にはない（併存しうる）。詳細は [server-tools](../server-tools/design.md) を参照。
+
 **参照**:
 
 - [Promise.allSettled()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled)
 - [chat-response-v2](../chat-response-v2/design.md) - `chatContainerBuilder` / Components V2 の組み方・mention safety・分割ロジック
+- [server-tools](../server-tools/design.md) - `openrouter:fusion`（合議 server tool）は本 change と目的が異なる
 
 ## Tasks
 
