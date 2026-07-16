@@ -16,7 +16,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       # bun の minor 線が mise.toml(SSOT) / Dockerfile / package.json で一致するか検証（bun 不要・純テキスト）
@@ -30,7 +30,7 @@ jobs:
             echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
           fi
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           version: "2026.6.1" # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
           install_args: bun # bun のみ。git-cliff は CI に入れない
@@ -43,14 +43,14 @@ jobs:
   actions-security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - name: actionlint
         run: |
           docker run --rm -v "$PWD:/repo" --workdir /repo \
             docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
-      - uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+      - uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
         with:
           version: "1.25.2" # zizmor CLI 版を固定（既定 latest=可変）
           advanced-security: false # SARIF/GHAS アップロード無効化（security-events: write 昇格を回避）
@@ -59,7 +59,7 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
       - run: docker build -t disqord:ci .
