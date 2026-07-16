@@ -22,6 +22,9 @@ import { logger } from "../utils/logger";
 import { metrics } from "../utils/metrics";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_APP_URL = "https://github.com/AtefAndrus/disqord";
+const OPENROUTER_APP_TITLE = "DisQord";
+const OPENROUTER_APP_CATEGORIES = "general-chat";
 
 export interface ILLMClient {
   chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
@@ -126,6 +129,9 @@ export class OpenRouterClient implements ILLMClient {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
+          "HTTP-Referer": OPENROUTER_APP_URL,
+          "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+          "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
         },
         body: JSON.stringify({
           ...rest,
@@ -167,6 +173,9 @@ export class OpenRouterClient implements ILLMClient {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
+          "HTTP-Referer": OPENROUTER_APP_URL,
+          "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+          "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
         },
         body: JSON.stringify({
           ...rest,
