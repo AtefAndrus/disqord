@@ -76,6 +76,9 @@ describe("OpenRouterClient", () => {
           headers: {
             Authorization: "Bearer test-api-key",
             "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/AtefAndrus/disqord",
+            "X-OpenRouter-Title": "DisQord",
+            "X-OpenRouter-Categories": "general-chat",
           },
         }),
       );
@@ -482,6 +485,34 @@ describe("OpenRouterClient", () => {
       const snap = metrics.snapshot();
       expect(snap.counters["openrouter.requests"]).toBe(1);
       expect(snap.counters["openrouter.errors"]).toBeUndefined();
+    });
+  });
+
+  describe("chatStream", () => {
+    test("正しいエンドポイントとヘッダーでfetchを呼び出す", async () => {
+      mockFetch.mockResolvedValueOnce(new Response("data: [DONE]\n\n", { status: 200 }));
+
+      const request: ChatCompletionRequest = {
+        model: "test-model",
+        messages: [{ role: "user", content: "Hi" }],
+      };
+      for await (const _chunk of client.chatStream(request)) {
+        // ストリームを最後まで消費する
+      }
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://openrouter.ai/api/v1/chat/completions",
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            Authorization: "Bearer test-api-key",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/AtefAndrus/disqord",
+            "X-OpenRouter-Title": "DisQord",
+            "X-OpenRouter-Categories": "general-chat",
+          },
+        }),
+      );
     });
   });
 
