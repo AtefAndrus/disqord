@@ -10,7 +10,7 @@
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
 | [Bot 管理 API（admin endpoints）](changes/admin-endpoints/design.md) | 高 | implemented | HMAC 認証付き管理エンドポイント（ログ取得・メトリクス） |
-| [LLM チャット返信の Components V2 化](changes/chat-response-v2/design.md) | 高 | planned | LLM チャット返信を Components V2（Container/Section）化 |
+| [LLM チャット返信の Components V2 化](changes/chat-response-v2/design.md) | 高 | in-progress | LLM チャット返信を Components V2（Container/Section）化 |
 | [CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT](changes/ci-pipeline/design.md) | 高 | implemented | CI 新設・workflow hardening・mise SSOT 化 |
 | [対話UX改善（会話履歴ストア）](changes/conversation-context/design.md) | 高 | planned | DB 永続の論理ターン/セッション履歴・境界検出・構造化メディア・保持。再生成系は別 change |
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |

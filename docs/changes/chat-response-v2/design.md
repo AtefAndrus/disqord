@@ -1,6 +1,6 @@
 ---
 title: "LLM チャット返信の Components V2 化"
-status: planned
+status: in-progress
 priority: high
 summary: "LLM チャット返信を Components V2（Container/Section）化"
 ---
@@ -287,25 +287,25 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 ### Phase A: builder の新設 (multimodal 未着手でも先行可能)
 
-- [ ] `src/utils/chatContainerBuilder.ts` の API 設計確定 (build* 4 種 + splitTextIntoMessages)
-- [ ] chunking ロジック実装 (`MAX_TOTAL_CHARS_PER_MESSAGE=3800` = 1 message の全 TextDisplay 合計。badge/footer 文字数を差し引いた残りが本文予算)
-- [ ] build* 関数群実装
-- [ ] unit test (`tests/unit/utils/chatContainerBuilder.test.ts`)
+- [x] `src/utils/chatContainerBuilder.ts` の API 設計確定 (build* 4 種 + splitTextIntoMessages)
+- [x] chunking ロジック実装 (`MAX_TOTAL_CHARS_PER_MESSAGE=3800` = 1 message の全 TextDisplay 合計。badge/footer 文字数を差し引いた残りが本文予算)
+- [x] build* 関数群実装
+- [x] unit test (`tests/unit/utils/chatContainerBuilder.test.ts`)
 
 ### Phase B: messageCreate.ts の置き換え (multimodal 完了後)
 
-- [ ] `messageCreate.ts` を V2 ベースに書き換え
-- [ ] `updateStreamingMessages` → V2 版に
-- [ ] 停止ボタンを Section accessory として配置
-- [ ] エラー path も V2 化
-- [ ] `embedBuilder.ts` の chat 専用関数を削除
-- [ ] `buttonBuilder.ts` を Section accessory 用に調整
+- [x] `messageCreate.ts` を V2 ベースに書き換え
+- [x] `updateStreamingMessages` → V2 版に
+- [x] 停止ボタンを Section accessory として配置
+- [x] エラー path も V2 化
+- [x] `embedBuilder.ts` の chat 専用関数を削除
+- [x] `buttonBuilder.ts` を Section accessory 用に調整
 
 ### Phase C: テスト整備
 
-- [ ] `messageCreate.test.ts` の mock 検証を V2 化
-- [ ] `embedBuilder.test.ts` から削除関数の test を除去
-- [ ] `interactionCreate.test.ts` の停止ボタン test を V2 化
+- [x] `messageCreate.test.ts` の mock 検証を V2 化
+- [x] `embedBuilder.test.ts` から削除関数の test を除去
+- [ ] `interactionCreate.test.ts` の停止ボタン test を V2 化 (該当テストファイルが存在せず、`interactionCreate.ts` 自体も停止ボタンの message 更新には関与しないため対象外。詳細は Design 節参照)
 - [ ] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + ファイル) の 6 シナリオ
 
 ### Phase D: multimodal 統合

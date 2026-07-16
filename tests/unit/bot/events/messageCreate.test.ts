@@ -1,5 +1,14 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { type Attachment, Collection, MessageType } from "discord.js";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
+import { type Attachment, Collection, MessageFlags, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IChatService } from "../../../../src/services/chatService";
@@ -9,6 +18,68 @@ import type { ISettingsService } from "../../../../src/services/settingsService"
 interface MockBotMessage {
   id: string;
   edit: ReturnType<typeof mock>;
+  delete: ReturnType<typeof mock>;
+}
+
+interface ContainerComponentJSON {
+  type: number;
+  content?: string;
+  components?: ContainerComponentJSON[];
+}
+
+interface ContainerJSON {
+  type: number;
+  accent_color?: number;
+  components: ContainerComponentJSON[];
+}
+
+interface ComponentsV2CallArg {
+  components: Array<{ toJSON: () => ContainerJSON }>;
+  flags: number;
+  allowedMentions: { parse: readonly string[]; repliedUser?: boolean };
+}
+
+/** mock関数の最後の呼び出しの第1引数（Components V2 payload）を取得する */
+function lastCallArg(fn: ReturnType<typeof mock>): ComponentsV2CallArg {
+  const calls = fn.mock.calls;
+  return calls[calls.length - 1]?.[0] as ComponentsV2CallArg;
+}
+
+/** Components V2 payload の第1引数（Container）をJSONにシリアライズする */
+function toContainerJSON(payload: ComponentsV2CallArg): ContainerJSON {
+  return payload.components[0].toJSON();
+}
+
+/** Container 内の全 TextDisplay（Section内の子も含む）のcontentを抽出する */
+function extractTextContents(container: ContainerJSON): string[] {
+  const out: string[] = [];
+  for (const component of container.components) {
+    if (component.type === 10 && component.content) {
+      out.push(component.content);
+    }
+    if (component.type === 9 && component.components) {
+      for (const child of component.components) {
+        if (child.type === 10 && child.content) {
+          out.push(child.content);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Container が Section（type 9、停止ボタン用）を含むか */
+function hasSection(container: ContainerJSON): boolean {
+  return container.components.some((c) => c.type === 9);
+}
+
+/**
+ * Components V2 payload から本文（badge/footerを除いた最後のTextDisplay）を取り出す。
+ * buildFinalContainer 系（badge + 本文 [+ footer]）の構造を前提とする。
+ */
+function bodyOf(payload: ComponentsV2CallArg): string {
+  const contents = extractTextContents(toContainerJSON(payload));
+  return contents.at(-1) ?? "";
 }
 
 interface MockMessage {
@@ -71,6 +142,29 @@ function createErrorStreamGenerator(error: Error) {
   };
 }
 
+/**
+ * setSystemTime でシステム時計を進めながらチャンクをyieldするstream generator。
+ * STREAM_UPDATE_INTERVAL (2秒) の経過判定を実時間の待機なしに決定的にテストするために使う。
+ */
+function createTimedStreamGenerator(
+  steps: Array<{ content: string; advanceMs: number }>,
+  finalFullText: string,
+) {
+  return async function* () {
+    for (const step of steps) {
+      setSystemTime(new Date(Date.now() + step.advanceMs));
+      yield { content: step.content, done: false as const };
+    }
+    yield {
+      done: true as const,
+      fullText: finalFullText,
+      usage: undefined,
+      model: undefined,
+      provider: undefined,
+    };
+  };
+}
+
 describe("createMessageCreateHandler", () => {
   let mockChatService: IChatService;
   let mockSettingsService: ISettingsService;
@@ -79,12 +173,27 @@ describe("createMessageCreateHandler", () => {
   let mockReply: ReturnType<typeof mock>;
   let mockSend: ReturnType<typeof mock>;
   let mockBotMessage: MockBotMessage;
+  // 2番目以降にsendされたbotMessage（1→2 message遷移等の検証に使用）
+  let extraBotMessages: MockBotMessage[];
+  // 指定したidのbotMessageの delete() を意図的に失敗させるための述語（指摘4のテスト用）
+  let deleteShouldFail: (id: string) => boolean;
+
+  function createMockBotMessage(id: string): MockBotMessage {
+    return {
+      id,
+      edit: mock(() => Promise.resolve()),
+      delete: mock(() =>
+        deleteShouldFail(id)
+          ? Promise.reject(new Error(`delete failed: ${id}`))
+          : Promise.resolve(),
+      ),
+    };
+  }
 
   beforeEach(() => {
-    mockBotMessage = {
-      id: "bot-msg-123",
-      edit: mock(() => Promise.resolve()),
-    };
+    deleteShouldFail = () => false;
+    extraBotMessages = [];
+    mockBotMessage = createMockBotMessage("bot-msg-123");
 
     mockChatService = {
       generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
@@ -133,7 +242,18 @@ describe("createMessageCreateHandler", () => {
     };
 
     mockReply = mock(() => Promise.resolve());
-    mockSend = mock(() => Promise.resolve(mockBotMessage));
+    // 1回目のsendは初期placeholder(mockBotMessage)、2回目以降は新規botMessageを都度生成する
+    let sendCallCount = 0;
+    mockSend = mock(() => {
+      if (sendCallCount === 0) {
+        sendCallCount++;
+        return Promise.resolve(mockBotMessage);
+      }
+      const extra = createMockBotMessage(`bot-msg-extra-${sendCallCount}`);
+      extraBotMessages.push(extra);
+      sendCallCount++;
+      return Promise.resolve(extra);
+    });
 
     mockMessage = {
       id: "msg-123",
@@ -169,6 +289,8 @@ describe("createMessageCreateHandler", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    // setSystemTime を使うテストが時計を書き換えたままにしないよう、実時間に戻す
+    setSystemTime();
   });
 
   test("Botからのメッセージは無視する", async () => {
@@ -210,7 +332,7 @@ describe("createMessageCreateHandler", () => {
     expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
-  test("空のコンテンツは入力エラーEmbedを返す", async () => {
+  test("空のコンテンツは入力エラーContainerを返す", async () => {
     mockMessage.content = "<@123456789>";
     const handler = createMessageCreateHandler(
       mockChatService,
@@ -220,20 +342,14 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embeds: expect.arrayContaining([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              color: 0xed4245, // RED
-              title: "入力エラー",
-              description: "メッセージを入力してください。",
-            }),
-          }),
-        ]),
-        allowedMentions: { repliedUser: false },
-      }),
-    );
+    expect(mockReply).toHaveBeenCalledTimes(1);
+    const replyArg = lastCallArg(mockReply);
+    expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(replyArg.allowedMentions).toEqual({ parse: [], repliedUser: false });
+    const container = toContainerJSON(replyArg);
+    expect(container.accent_color).toBe(0xed4245); // RED
+    expect(extractTextContents(container).join("\n")).toContain("## ⚠️ 入力エラー");
+    expect(extractTextContents(container).join("\n")).toContain("メッセージを入力してください。");
     expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
@@ -246,13 +362,13 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // 初期メッセージはEmbed形式で送信される
-    expect(mockSend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embeds: expect.any(Array),
-        components: expect.any(Array),
-      }),
-    );
+    // 初期メッセージはComponents V2形式（停止ボタン付きSection）で送信される
+    const initialSendArg = (mockSend as ReturnType<typeof mock>).mock.calls[0]?.[0] as
+      | ComponentsV2CallArg
+      | undefined;
+    expect(initialSendArg?.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(initialSendArg?.allowedMentions).toEqual({ parse: [] });
+    expect(initialSendArg && hasSection(toContainerJSON(initialSendArg))).toBe(true);
 
     // generateResponseStreamが呼ばれる（parts は空配列）
     expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
@@ -261,15 +377,14 @@ describe("createMessageCreateHandler", () => {
       "msg-123",
     );
 
-    // 最終更新でEmbedが設定される
+    // 最終更新でComponents V2 Containerが設定され、Section（停止ボタン）は付かない
     expect(mockBotMessage.edit).toHaveBeenCalled();
-    const editCalls = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls;
-    const lastEditCall = editCalls[editCalls.length - 1];
-    expect(lastEditCall?.[0]).toHaveProperty("embeds");
-    expect(lastEditCall?.[0].components).toEqual([]);
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(hasSection(toContainerJSON(lastEditArg))).toBe(false);
   });
 
-  test("AppErrorの場合は赤色EmbedでuserMessageを表示する", async () => {
+  test("AppErrorの場合は赤色ContainerでuserMessageを表示する", async () => {
     const error = new RateLimitError("Rate limited by API", 30);
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
       createErrorStreamGenerator(error),
@@ -282,22 +397,17 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embeds: expect.arrayContaining([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              color: 0xed4245, // RED
-              description: "リクエスト制限に達しました。30秒後に再度お試しください。",
-            }),
-          }),
-        ]),
-        allowedMentions: { repliedUser: false },
-      }),
+    const replyArg = lastCallArg(mockReply);
+    expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(replyArg.allowedMentions).toEqual({ parse: [], repliedUser: false });
+    const container = toContainerJSON(replyArg);
+    expect(container.accent_color).toBe(0xed4245); // RED
+    expect(extractTextContents(container).join("\n")).toContain(
+      "リクエスト制限に達しました。30秒後に再度お試しください。",
     );
   });
 
-  test("一般的なErrorの場合は赤色Embedで汎用メッセージを表示する", async () => {
+  test("一般的なErrorの場合は赤色Containerで汎用メッセージを表示する", async () => {
     const error = new Error("Unknown error");
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
       createErrorStreamGenerator(error),
@@ -310,23 +420,17 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embeds: expect.arrayContaining([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              color: 0xed4245, // RED
-              description:
-                "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。",
-            }),
-          }),
-        ]),
-        allowedMentions: { repliedUser: false },
-      }),
+    const replyArg = lastCallArg(mockReply);
+    expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(replyArg.allowedMentions).toEqual({ parse: [], repliedUser: false });
+    const container = toContainerJSON(replyArg);
+    expect(container.accent_color).toBe(0xed4245); // RED
+    expect(extractTextContents(container).join("\n")).toContain(
+      "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。",
     );
   });
 
-  test("カスタムAppErrorの場合は赤色EmbedでそのuserMessageを表示する", async () => {
+  test("カスタムAppErrorの場合は赤色ContainerでそのuserMessageを表示する", async () => {
     const error = new AppError("Technical message", "カスタムエラーメッセージ", 500);
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
       createErrorStreamGenerator(error),
@@ -339,19 +443,12 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        embeds: expect.arrayContaining([
-          expect.objectContaining({
-            data: expect.objectContaining({
-              color: 0xed4245, // RED
-              description: "カスタムエラーメッセージ",
-            }),
-          }),
-        ]),
-        allowedMentions: { repliedUser: false },
-      }),
-    );
+    const replyArg = lastCallArg(mockReply);
+    expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
+    expect(replyArg.allowedMentions).toEqual({ parse: [], repliedUser: false });
+    const container = toContainerJSON(replyArg);
+    expect(container.accent_color).toBe(0xed4245); // RED
+    expect(extractTextContents(container).join("\n")).toContain("カスタムエラーメッセージ");
   });
 
   test("自動応答チャンネルで応答する", async () => {
@@ -463,10 +560,9 @@ describe("createMessageCreateHandler", () => {
       await handler(mockMessage as never);
 
       expect(mockReply).toHaveBeenCalled();
-      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
-        embeds: unknown[];
-      };
-      expect(replyArg.embeds).toBeDefined();
+      const replyArg = lastCallArg(mockReply);
+      expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(extractTextContents(toContainerJSON(replyArg)).length).toBeGreaterThan(0);
       expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
     });
 
@@ -552,12 +648,11 @@ describe("createMessageCreateHandler", () => {
       await handler(mockMessage as never);
 
       expect(mockReply).toHaveBeenCalled();
-      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
-        embeds: Array<{ data: { title: string; description: string } }>;
-      };
-      expect(replyArg.embeds[0]?.data.title).toBe("添付ファイルエラー");
-      expect(replyArg.embeds[0]?.data.description).toContain("ファイルの取得に失敗しました");
-      expect(replyArg.embeds[0]?.data.description).toContain("expired.pdf");
+      const replyArg = lastCallArg(mockReply);
+      const text = extractTextContents(toContainerJSON(replyArg)).join("\n");
+      expect(text).toContain("添付ファイルエラー");
+      expect(text).toContain("ファイルの取得に失敗しました");
+      expect(text).toContain("expired.pdf");
       expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
     });
 
@@ -586,14 +681,13 @@ describe("createMessageCreateHandler", () => {
       await handler(mockMessage as never);
 
       expect(mockReply).toHaveBeenCalled();
-      const replyArg = (mockReply as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
-        embeds: Array<{ data: { title: string; description: string } }>;
-      };
-      expect(replyArg.embeds[0]?.data.title).toBe("添付ファイルエラー");
-      expect(replyArg.embeds[0]?.data.description).toContain("PDF のサイズ上限");
-      expect(replyArg.embeds[0]?.data.description).toContain("20MB");
-      expect(replyArg.embeds[0]?.data.description).toContain("40MB");
-      expect(replyArg.embeds[0]?.data.description).toContain("huge.pdf");
+      const replyArg = lastCallArg(mockReply);
+      const text = extractTextContents(toContainerJSON(replyArg)).join("\n");
+      expect(text).toContain("添付ファイルエラー");
+      expect(text).toContain("PDF のサイズ上限");
+      expect(text).toContain("20MB");
+      expect(text).toContain("40MB");
+      expect(text).toContain("huge.pdf");
       expect(mockFetch).not.toHaveBeenCalled();
       expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
     });
@@ -675,7 +769,7 @@ describe("createMessageCreateHandler", () => {
     });
   });
 
-  test("AbortErrorの場合は停止メッセージをEmbedで表示する", async () => {
+  test("AbortErrorの場合は停止メッセージをComponents V2で表示する", async () => {
     const abortError = new Error("Request was aborted");
     abortError.name = "AbortError";
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
@@ -690,10 +784,386 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // AbortErrorの場合はreplyではなくeditでEmbed形式の停止メッセージを表示
-    const editCalls = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls;
-    const lastEditCall = editCalls[editCalls.length - 1];
-    expect(lastEditCall?.[0]).toHaveProperty("embeds");
-    expect(lastEditCall?.[0].components).toEqual([]);
+    // AbortErrorの場合はreplyではなくeditでComponents V2形式の停止メッセージを表示、Sectionは無い
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+    const container = toContainerJSON(lastEditArg);
+    expect(hasSection(container)).toBe(false);
+    expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
+  });
+
+  describe("ストリーミング再調整ロジック（コードレビュー指摘 3・5）", () => {
+    test("1→2 messageに増える際、旧messageはSectionなしでedit・新messageはSectionありでsendされる", async () => {
+      setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+      const bigChunk = "x".repeat(4000); // 単一チャンクで1 messageの本文予算(~3762字)を超える
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      // ストリーミング更新サイクルで最初に発生するeditは旧message(index0)向けで、Sectionが外れている
+      const firstEditArg = (mockBotMessage.edit as ReturnType<typeof mock>).mock
+        .calls[0]?.[0] as ComponentsV2CallArg;
+      expect(firstEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(firstEditArg.allowedMentions).toEqual({ parse: [] });
+      expect(hasSection(toContainerJSON(firstEditArg))).toBe(false);
+
+      // 初期placeholder送信の次に発生するsendは新message(index1)向けで、Sectionが付いている
+      const secondSendArg = (mockSend as ReturnType<typeof mock>).mock
+        .calls[1]?.[0] as ComponentsV2CallArg;
+      expect(secondSendArg.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(secondSendArg.allowedMentions).toEqual({ parse: [] });
+      expect(hasSection(toContainerJSON(secondSendArg))).toBe(true);
+    });
+
+    test("streaming更新でeditが失敗した場合、そのサイクル内では新規message(Section付き)をsendしない", async () => {
+      setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+      const bigChunk = "x".repeat(4000);
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      );
+      // ストリーミングサイクル中最初のeditを失敗させる（429等を想定）
+      (mockBotMessage.edit as ReturnType<typeof mock>).mockImplementationOnce(() =>
+        Promise.reject(new Error("simulated 429")),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      // break していなければ、editが失敗した直後にそのサイクル内でSection付きの新message(index1)を
+      // sendしてしまう（buildStreamingContainerはisLast=trueならSectionを付与するため）。
+      // break していれば、そのサイクルでのsendは発生せず、新message自体は最終render(buildFinalContainer、
+      // Sectionなし)で作られるため、初期placeholder以降のsendにSection付きのものは存在しないはず。
+      const sendCallsAfterInitial = (mockSend as ReturnType<typeof mock>).mock.calls.slice(1);
+      const sendWithSection = sendCallsAfterInitial.some((call) =>
+        hasSection(toContainerJSON(call[0] as ComponentsV2CallArg)),
+      );
+      expect(sendWithSection).toBe(false);
+
+      // ハンドラ全体としては異常終了せず、エラーreplyも送られない（次サイクル/最終renderで自己修復する）
+      expect(mockReply).not.toHaveBeenCalled();
+    });
+
+    test("1→2 message遷移でsendが失敗した場合、旧messageにSection(停止ボタン)を復元する", async () => {
+      setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+      const bigChunk = "x".repeat(4000); // 単一チャンクで1 messageの本文予算(~3762字)を超える
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      );
+
+      // streamingサイクルで新message(index1)を作るsendだけを失敗させ、以降は成功させる
+      let sendCallIndex = 0;
+      (mockSend as ReturnType<typeof mock>).mockImplementation(() => {
+        sendCallIndex++;
+        if (sendCallIndex === 1) {
+          return Promise.resolve(mockBotMessage); // 初期placeholder
+        }
+        if (sendCallIndex === 2) {
+          // streamingサイクルの新message送信を失敗させる
+          return Promise.reject(new Error("simulated send failure (e.g. 429/5xx)"));
+        }
+        const extra = createMockBotMessage(`bot-msg-extra-${sendCallIndex}`);
+        extraBotMessages.push(extra);
+        return Promise.resolve(extra);
+      });
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      // streamingサイクル内でmockBotMessageは最低2回editされる:
+      // 1回目 = 旧末尾のSectionを剥がすedit(isLast=false)、
+      // 2回目 = sendが失敗した直後にbreakする前のSection復元edit(isLast=true)。
+      const editCalls = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls;
+      expect(editCalls.length).toBeGreaterThanOrEqual(2);
+
+      const strippedEditArg = editCalls[0]?.[0] as ComponentsV2CallArg;
+      expect(hasSection(toContainerJSON(strippedEditArg))).toBe(false);
+
+      const restoredEditArg = editCalls[1]?.[0] as ComponentsV2CallArg;
+      expect(restoredEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(restoredEditArg.allowedMentions).toEqual({ parse: [] });
+      expect(hasSection(toContainerJSON(restoredEditArg))).toBe(true);
+
+      // 復元は先頭message(isFirst)でもあるため、Model badgeも保持される
+      expect(extractTextContents(toContainerJSON(restoredEditArg))[0]).toContain("**Model:**");
+
+      // send失敗はcatch内でbest-effort処理されるため、ハンドラ全体としては異常終了しない
+      expect(mockReply).not.toHaveBeenCalled();
+    });
+
+    test("全てのsend/edit payloadにIsComponentsV2フラグとallowedMentions.parse:[]が付与される", async () => {
+      const longResponse = "y".repeat(10000);
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createMockStreamGenerator(longResponse),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const allSendArgs = (mockSend as ReturnType<typeof mock>).mock.calls.map(
+        (c) => c[0] as ComponentsV2CallArg,
+      );
+      const allEditArgs = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.map(
+        (c) => c[0] as ComponentsV2CallArg,
+      );
+      const allExtraEditArgs = extraBotMessages.flatMap((m) =>
+        (m.edit as ReturnType<typeof mock>).mock.calls.map((c) => c[0] as ComponentsV2CallArg),
+      );
+
+      expect(allSendArgs.length).toBeGreaterThan(1); // 長文なので複数messageに分割される
+      for (const arg of [...allSendArgs, ...allEditArgs, ...allExtraEditArgs]) {
+        expect(arg.flags).toBe(MessageFlags.IsComponentsV2);
+        expect(arg.allowedMentions).toEqual(expect.objectContaining({ parse: [] }));
+      }
+    });
+  });
+
+  test('空応答で完了した場合はsetContent("")で例外にならず、「（応答なし）」を含む最終Containerでeditする', async () => {
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createMockStreamGenerator(""),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+
+    // 例外が投げられず正常完了すること自体もこのawaitが検証する
+    await handler(mockMessage as never);
+
+    expect(mockReply).not.toHaveBeenCalled(); // エラー経路に落ちない
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+    const container = toContainerJSON(lastEditArg);
+    expect(extractTextContents(container).join("\n")).toContain("（応答なし）");
+  });
+
+  describe("致命的エラー時のクリーンアップ（コードレビュー指摘 1・4）", () => {
+    test("非AbortErrorがストリーム途中で発生した場合、部分textをSectionなしのContainerとして保持してからエラーreplyする", async () => {
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        async function* () {
+          yield { content: "partial response text", done: false as const };
+          throw new Error("fatal upstream failure");
+        },
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      // クリーンアップ: 「生成中...」+ 停止ボタン(Section) は残らず、部分テキストを保持したまま Section なしで edit される
+      expect(mockBotMessage.edit).toHaveBeenCalled();
+      const cleanupEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(cleanupEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+      const cleanupContainer = toContainerJSON(cleanupEditArg);
+      expect(hasSection(cleanupContainer)).toBe(false);
+      expect(extractTextContents(cleanupContainer).join("\n")).toContain("partial response text");
+
+      // クリーンアップの後、エラーreplyも送られる
+      expect(mockReply).toHaveBeenCalled();
+      const replyArg = lastCallArg(mockReply);
+      const replyContainer = toContainerJSON(replyArg);
+      expect(replyContainer.accent_color).toBe(0xed4245); // RED
+    });
+
+    test("非AbortErrorが大量の部分text(複数message分)受信後に発生した場合、chunks全体をedit/sendして復元してからエラーreplyする", async () => {
+      // reconciliation(2秒間隔のstreaming更新)が一度も走る前に、1 messageに収まらない量のテキストが
+      // 届いてからthrowするケース。既存botMessagesは初期placeholderの1件のみ。
+      const bigPartial = "z".repeat(8000);
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        async function* () {
+          yield { content: bigPartial, done: false as const };
+          throw new Error("fatal upstream failure after large partial output");
+        },
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      // 既存message(mockBotMessage)はeditされ、Sectionは無い
+      const editArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(editArg.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(hasSection(toContainerJSON(editArg))).toBe(false);
+
+      // 不足分は新規message(s)としてsendされる（calls[0]は初期placeholder送信）
+      const overflowSendArgs = (mockSend as ReturnType<typeof mock>).mock.calls
+        .slice(1)
+        .map((c) => c[0] as ComponentsV2CallArg);
+      expect(overflowSendArgs.length).toBeGreaterThan(0);
+      for (const arg of overflowSendArgs) {
+        expect(arg.flags).toBe(MessageFlags.IsComponentsV2);
+        expect(arg.allowedMentions).toEqual({ parse: [] });
+        expect(hasSection(toContainerJSON(arg))).toBe(false);
+      }
+
+      // edit分 + 新規send分の本文を連結すると、元のfullTextを過不足なく再現する
+      const reconstructed = [editArg, ...overflowSendArgs].map(bodyOf).join("");
+      expect(reconstructed).toBe(bigPartial);
+
+      expect(mockReply).toHaveBeenCalled();
+    });
+
+    test("最終renderの複数send中に1つが失敗した場合、クリーンアップは既に成功した送信済みmessageを重複送信しない", async () => {
+      // 3 message構成になる長さの最終応答。message0はedit、message1(あふれ1つ目)はsend成功、
+      // message2(あふれ2つ目)のsendが失敗して致命的エラー経路に落ちるシナリオを再現する。
+      const longText = "w".repeat(11000);
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createMockStreamGenerator(longText),
+      );
+
+      let sendCallIndex = 0;
+      (mockSend as ReturnType<typeof mock>).mockImplementation(() => {
+        sendCallIndex++;
+        if (sendCallIndex === 1) {
+          return Promise.resolve(mockBotMessage); // 初期placeholder
+        }
+        if (sendCallIndex === 2) {
+          // 最終renderのあふれ1つ目（message1）は成功させる
+          const extra = createMockBotMessage("bot-msg-extra-1");
+          extraBotMessages.push(extra);
+          return Promise.resolve(extra);
+        }
+        // 3回目以降（最終renderのあふれ2つ目、および万一の再送）は失敗させる
+        return Promise.reject(new Error("simulated send failure (e.g. 429/5xx)"));
+      });
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      // message1(2回目のsendで作られたmessage)の本文が、以降のsend呼び出しで再度送信されていないこと
+      // （botMessagesにpushされずクリーンアップから「未送信」と誤認されると、この内容が再送されてしまう）
+      const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
+      const message1Body = bodyOf(sendCalls[1]?.[0] as ComponentsV2CallArg);
+      const laterSendBodies = sendCalls.slice(2).map((c) => bodyOf(c[0] as ComponentsV2CallArg));
+      expect(laterSendBodies).not.toContain(message1Body);
+
+      // 代わりに、クリーンアップはmessage1を「既存message」として認識しeditで更新する
+      expect(extraBotMessages.length).toBe(1);
+      expect(extraBotMessages[0].edit).toHaveBeenCalled();
+
+      expect(mockReply).toHaveBeenCalled();
+    });
+
+    test("フォールバック cleanup 経路で delete が失敗した場合、中立プレースホルダーへのeditにフォールバックする", async () => {
+      // mockBotMessage("bot-msg-123")のdeleteを強制失敗させる
+      deleteShouldFail = (id) => id === "bot-msg-123";
+
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
+        async function* () {
+          throw new Error("fatal upstream failure before first chunk");
+        },
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      // delete が試みられて失敗し、中立プレースホルダーへのeditにフォールバックする
+      expect(mockBotMessage.delete).toHaveBeenCalled();
+      const neutralizeEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(neutralizeEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+      const neutralContainer = toContainerJSON(neutralizeEditArg);
+      expect(hasSection(neutralContainer)).toBe(false);
+      expect(extractTextContents(neutralContainer).join("\n")).toContain(
+        "（このメッセージは不要になりました）",
+      );
+
+      expect(mockReply).toHaveBeenCalled();
+    });
+
+    test("非AbortErrorが最初のチャンク受信前に発生した場合（部分textなし）、botMessageをdeleteしてからエラーreplyする", async () => {
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
+        async function* () {
+          throw new Error("fatal upstream failure before first chunk");
+        },
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      await handler(mockMessage as never);
+
+      // 部分textが無いため「生成中...」placeholderをeditで保持する意味が無く、deleteされる
+      expect(mockBotMessage.delete).toHaveBeenCalled();
+      expect(mockBotMessage.edit).not.toHaveBeenCalled();
+      expect(mockReply).toHaveBeenCalled();
+    });
+
+    test("最終render時、余剰messageのdeleteが失敗した場合は中立プレースホルダーへのeditで残置を防ぐ", async () => {
+      setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+      // streaming中に2 messageへ増えた後、最終確定テキストが短くなり1 messageに収まるケースを再現
+      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+        createTimedStreamGenerator(
+          [{ content: "x".repeat(4000), advanceMs: 2100 }],
+          "short final text",
+        ),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+
+      // streamingサイクルで生成される2番目のmessageのidを狙ってdelete失敗させる
+      deleteShouldFail = (id) => id === "bot-msg-extra-1";
+
+      await handler(mockMessage as never);
+
+      expect(extraBotMessages.length).toBe(1);
+      const surplusMessage = extraBotMessages[0];
+      expect(surplusMessage.delete).toHaveBeenCalled();
+
+      // delete失敗後、中立プレースホルダーへのeditが試みられ、Sectionは無い
+      const neutralizeEditArg = lastCallArg(surplusMessage.edit as ReturnType<typeof mock>);
+      expect(neutralizeEditArg.flags).toBe(MessageFlags.IsComponentsV2);
+      const neutralContainer = toContainerJSON(neutralizeEditArg);
+      expect(hasSection(neutralContainer)).toBe(false);
+      expect(extractTextContents(neutralContainer).join("\n")).toContain(
+        "（このメッセージは不要になりました）",
+      );
+    });
   });
 });
