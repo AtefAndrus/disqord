@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { EmbedBuilder } from "discord.js";
 import { EmbedColors } from "../../../src/types/embed";
-import {
-  createEmbed,
-  createErrorEmbed,
-  createSuccessEmbed,
-  splitTextToMultipleMessages,
-} from "../../../src/utils/embedBuilder";
+import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../../src/utils/embedBuilder";
 
 describe("embedBuilder", () => {
   describe("createEmbed", () => {
@@ -66,70 +61,6 @@ describe("embedBuilder", () => {
       expect(embed.data.author?.name).toBe("Test Author");
       expect(embed.data.author?.icon_url).toBe("https://example.com/avatar.png");
       expect(embed.data.author?.url).toBe("https://example.com");
-    });
-  });
-
-  describe("splitTextToMultipleMessages", () => {
-    test("4096文字以内のテキストは1メッセージ1 Embedになる", () => {
-      const text = "a".repeat(4000);
-      const messages = splitTextToMultipleMessages(text, {
-        color: EmbedColors.BLURPLE,
-      });
-
-      expect(messages.length).toBe(1);
-      expect(messages[0].length).toBe(1);
-      expect(messages[0][0].data.description).toBe(text);
-      expect(messages[0][0].data.footer).toBeUndefined(); // 1ページの場合footerなし
-    });
-
-    test("9000バイト超のテキストは複数メッセージに分割される（各メッセージ1 Embed）", () => {
-      const text = "a".repeat(10000); // ASCII: 10000バイト
-      const messages = splitTextToMultipleMessages(text, {
-        color: EmbedColors.BLURPLE,
-      });
-
-      const expectedMessages = Math.ceil(10000 / 9000); // 2メッセージ
-      expect(messages.length).toBe(expectedMessages);
-      expect(messages[0].length).toBe(1); // 各メッセージに1 Embed
-      expect(messages[1].length).toBe(1);
-      expect(messages[0][0].data.footer?.text).toBe("ページ 1/2");
-      expect(messages[1][0].data.footer?.text).toBe("ページ 2/2");
-    });
-
-    test("大量テキストは9000バイト単位で複数メッセージに分割される（各メッセージ1 Embed）", () => {
-      const text = "a".repeat(100000); // 100000バイト（ASCII）
-      const messages = splitTextToMultipleMessages(text, {
-        color: EmbedColors.BLURPLE,
-      });
-
-      const expectedMessages = Math.ceil(100000 / 9000); // 12メッセージ
-
-      expect(messages.length).toBe(expectedMessages); // 12メッセージ
-      expect(messages[0].length).toBe(1); // 各メッセージに1 Embed
-      expect(messages[11].length).toBe(1);
-
-      // ページ番号確認（全体通し）
-      expect(messages[0][0].data.footer?.text).toBe("ページ 1/12");
-      expect(messages[5][0].data.footer?.text).toBe("ページ 6/12");
-      expect(messages[11][0].data.footer?.text).toBe("ページ 12/12");
-    });
-
-    test("baseConfigの設定が各Embedに適用される", () => {
-      const text = "a".repeat(10000);
-      const testDate = new Date();
-      const messages = splitTextToMultipleMessages(text, {
-        color: EmbedColors.RED,
-        title: "Test Title",
-        timestamp: testDate,
-      });
-
-      messages.forEach((messageEmbeds) => {
-        expect(messageEmbeds.length).toBe(1); // 各メッセージに1 Embed
-        const embed = messageEmbeds[0];
-        expect(embed.data.color).toBe(EmbedColors.RED);
-        expect(embed.data.title).toBe("Test Title");
-        expect(embed.data.timestamp).toBeDefined();
-      });
     });
   });
 

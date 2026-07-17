@@ -5,26 +5,35 @@ import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import type { StreamFinalResult } from "../../types";
-import { createStopButton } from "../../utils/buttonBuilder";
 import {
-  createErrorEmbed,
-  createStreamingEmbed,
-  getColorForModel,
-  splitTextIntoChunks,
-  splitTextToMultipleMessages,
-} from "../../utils/embedBuilder";
+  badgeText,
+  buildErrorContainer,
+  buildFinalContainer,
+  buildStoppedContainer,
+  buildStoppedFooterText,
+  buildStreamingContainer,
+  estimateFinalFooterBudget,
+  type FinalMetadata,
+  measureTextBudget,
+  STREAMING_LABEL,
+  splitTextIntoMessages,
+  toComponentsV2EditPayload,
+  toComponentsV2Payload,
+  toComponentsV2ReplyPayload,
+  ZERO_TEXT_BUDGET,
+} from "../../utils/chatContainerBuilder";
+import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 
 const STREAM_UPDATE_INTERVAL = 2000; // 2秒
-const EMBED_DESC_LIMIT = 4096; // Embed description制限
 
 function shouldRespond(
   message: Message,
   botId: string,
   autoReplyChannels: string[],
 ): { respond: boolean; isMention: boolean } {
-  // メンションがある場合は応答
-  if (message.mentions.has(botId)) {
+  // メンションがある場合は応答（@everyone/@here は discord.js 仕様で has() が true を返してしまうため除外）
+  if (message.mentions.has(botId, { ignoreEveryone: true })) {
     return { respond: true, isMention: true };
   }
 
@@ -104,23 +113,17 @@ export function createMessageCreateHandler(
           }
         })
         .join("\n");
-      const errorEmbed = createErrorEmbed(
+      const errorContainer = buildErrorContainer(
         `添付ファイルを処理できませんでした。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
         "添付ファイルエラー",
       );
-      await message.reply({
-        embeds: [errorEmbed],
-        allowedMentions: { repliedUser: false },
-      });
+      await message.reply(toComponentsV2ReplyPayload(errorContainer));
       return;
     }
 
     if (!content && attachmentResult.parts.length === 0) {
-      const errorEmbed = createErrorEmbed("メッセージを入力してください。", "入力エラー");
-      await message.reply({
-        embeds: [errorEmbed],
-        allowedMentions: { repliedUser: false },
-      });
+      const errorContainer = buildErrorContainer("メッセージを入力してください。", "入力エラー");
+      await message.reply(toComponentsV2ReplyPayload(errorContainer));
       return;
     }
 
@@ -138,29 +141,31 @@ export function createMessageCreateHandler(
     if (attachmentResult.hasImage) {
       const capable = await modelService.isMultimodalCapable(settings.defaultModel, "image");
       if (capable === false) {
-        const errorEmbed = createErrorEmbed(
+        const errorContainer = buildErrorContainer(
           `現在のモデル \`${settings.defaultModel}\` は画像入力に対応していません。\n\`/disqord model set\` で画像対応モデルに切り替えてください。`,
           "モデル非対応",
         );
-        await message.reply({
-          embeds: [errorEmbed],
-          allowedMentions: { repliedUser: false },
-        });
+        await message.reply(toComponentsV2ReplyPayload(errorContainer));
         return;
       }
     }
 
-    try {
-      // 初期メッセージ送信（Embed形式、停止ボタン付き）
-      const initialEmbed = createStreamingEmbed("生成中...", modelName, color, "生成中...");
-      const botMessages: Message[] = [
-        await message.channel.send({
-          embeds: [initialEmbed],
-          components: [createStopButton(message.id)],
-        }),
-      ];
+    // 致命的エラー時のクリーンアップで参照するため、外側 catch と共有できるようにホイストする
+    let botMessages: Message[] = [];
+    let fullText = "";
 
-      let fullText = "";
+    try {
+      // 初期メッセージ送信（Components V2、停止ボタン付き Section）
+      const initialContainer = buildStreamingContainer({
+        text: "生成中...",
+        modelName,
+        color,
+        isFirst: true,
+        isLast: true,
+        triggerMessageId: message.id,
+      });
+      botMessages = [await message.channel.send(toComponentsV2Payload(initialContainer))];
+
       let lastUpdate = Date.now();
       let finalResult: StreamFinalResult | null = null;
       const startTime = Date.now();
@@ -182,80 +187,84 @@ export function createMessageCreateHandler(
 
           const now = Date.now();
           if (now - lastUpdate >= STREAM_UPDATE_INTERVAL) {
-            await updateStreamingMessages(
-              botMessages,
-              fullText,
-              modelName,
-              color,
-              message,
-              "生成中...",
-            );
+            await updateStreamingMessages(botMessages, fullText, modelName, color, message);
             lastUpdate = now;
           }
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
-          // 停止時: フッター付きEmbedで表示
-          const elapsedMs = Date.now() - startTime;
-          const footerText = `${modelName} | ${(elapsedMs / 1000).toFixed(1)}s | Stopped`;
-
-          await updateStreamingMessages(
+          // 停止時: Section を外し、経過秒数 + 受信済み文字数の footer TextDisplay を表示
+          // （usage チャンクは届かず GET /api/v1/generation も 404 のため、確定情報として文字数を使う）
+          const elapsedSeconds = (Date.now() - startTime) / 1000;
+          // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
+          const receivedChars = Array.from(fullText).length;
+          await updateStoppedMessages(
             botMessages,
             fullText || "（応答なし）",
             modelName,
             color,
+            elapsedSeconds,
+            receivedChars,
             message,
-            footerText,
-            true, // 停止ボタンを削除
           );
           return;
         }
         throw error;
       }
 
-      // 最終更新（Embed形式、フッター付き、ボタン削除）
+      // 最終更新（Components V2、footer 付き、Section なし）
       const latency = Date.now() - startTime;
-
-      const messageGroups = splitTextToMultipleMessages(
-        finalResult?.fullText ?? fullText,
-        {
-          color,
-          timestamp: new Date(),
-          author: {
-            name: modelName,
-          },
-        },
-        {
-          showDetails: settings.showLlmDetails,
-          model: finalResult?.model,
-          provider: finalResult?.provider,
-          latency,
-          usage: finalResult?.usage,
-        },
+      const metadata: FinalMetadata = {
+        showDetails: settings.showLlmDetails,
+        model: finalResult?.model,
+        provider: finalResult?.provider,
+        latency,
+        usage: finalResult?.usage,
+      };
+      // OpenRouter が空文字列で完了した場合、setContent("") の同期 throw を避けるためフォールバックする
+      const finalText = (finalResult?.fullText ?? fullText) || "（応答なし）";
+      const footerBudget = estimateFinalFooterBudget(metadata);
+      const chunks = splitTextIntoMessages(
+        finalText,
+        measureTextBudget(badgeText(modelName)),
+        footerBudget,
       );
 
       // 既存メッセージを更新し、必要に応じて新しいメッセージを追加
-      for (let i = 0; i < messageGroups.length; i++) {
+      for (let i = 0; i < chunks.length; i++) {
+        const isFirst = i === 0;
+        const isLast = i === chunks.length - 1;
+        const container = buildFinalContainer({
+          text: chunks[i],
+          modelName,
+          color,
+          isFirst,
+          isLast,
+          metadata,
+          pageInfo: { page: i + 1, total: chunks.length },
+        });
+
         if (i < botMessages.length) {
-          await botMessages[i].edit({
-            embeds: messageGroups[i],
-            components: [],
-          });
+          await botMessages[i].edit(toComponentsV2EditPayload(container));
         } else {
-          await message.channel.send({ embeds: messageGroups[i] });
+          // 致命的エラー時のクリーンアップが送信済みmessageを再取得できるよう、streaming/stopped経路と
+          // 同様にbotMessagesへ追跡する（追跡しないと後続chunkのsend失敗時に既送信分が重複送信されうる）
+          const newMessage = await message.channel.send(toComponentsV2Payload(container));
+          botMessages.push(newMessage);
         }
       }
 
       // 余分なメッセージを削除（生成途中で複数メッセージになったが、最終的に少なくなった場合）
-      for (let i = messageGroups.length; i < botMessages.length; i++) {
-        try {
-          await botMessages[i].delete();
-        } catch {
-          // 削除失敗は無視
-        }
+      for (let i = chunks.length; i < botMessages.length; i++) {
+        await deleteOrNeutralize(botMessages[i], modelName, color);
       }
     } catch (error) {
-      logger.error("Failed to generate response", { error, guildId: message.guild.id });
+      // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
+      const errorId = crypto.randomUUID().slice(0, 8);
+      logger.error("Failed to generate response", { errorId, error, guildId: message.guild.id });
+
+      // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
+      await cleanupBotMessagesOnFatalError(botMessages, fullText, modelName, color, message);
 
       const userMessage =
         error instanceof AppError
@@ -263,21 +272,163 @@ export function createMessageCreateHandler(
           : "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
 
       try {
-        const errorEmbed = createErrorEmbed(userMessage);
-        await message.reply({
-          embeds: [errorEmbed],
-          allowedMentions: { repliedUser: false },
-        });
+        const errorContainer = buildErrorContainer(`${userMessage}\n\nエラーID: \`${errorId}\``);
+        await message.reply(toComponentsV2ReplyPayload(errorContainer));
       } catch (replyError) {
-        logger.error("Failed to send error message", { replyError, guildId: message.guild.id });
+        logger.error("Failed to send error message", {
+          replyError,
+          errorId,
+          guildId: message.guild.id,
+        });
       }
     }
   };
 }
 
 /**
- * ストリーミング中のメッセージを更新
- * 長文の場合は複数メッセージに分割
+ * message の delete を試み、失敗したら「Section なしの中立プレースホルダー」への edit にフォールバックする。
+ * Section 付き stale メッセージ（「生成中...」+ 死んだ停止ボタン等）が恒久残置しないための best-effort 処理。
+ * どちらも失敗した場合は warn ログのみで諦める。
+ */
+async function deleteOrNeutralize(
+  botMessage: Message,
+  modelName: string,
+  color: number,
+): Promise<void> {
+  try {
+    await botMessage.delete();
+  } catch (deleteError) {
+    logger.warn("Failed to delete bot message, attempting to neutralize instead", {
+      deleteError,
+      messageId: botMessage.id,
+    });
+    try {
+      const neutralContainer = buildFinalContainer({
+        text: "（このメッセージは不要になりました）",
+        modelName,
+        color,
+        isFirst: false,
+        isLast: false,
+        metadata: { showDetails: false },
+      });
+      await botMessage.edit(toComponentsV2EditPayload(neutralContainer));
+    } catch (neutralizeError) {
+      logger.warn("Failed to neutralize bot message", {
+        neutralizeError,
+        messageId: botMessage.id,
+      });
+    }
+  }
+}
+
+/**
+ * ストリーミング中に AbortError 以外の致命的エラーが発生した場合、
+ * 「生成中...」プレースホルダー + 停止ボタン（Section）が残置されないよう best-effort でクリーンアップする。
+ * 部分テキストは splitTextIntoMessages で再分割した chunks 全体を Section なしの Container として保持し
+ * （footer なし）、既存 message は edit、不足分は新規 send する。chunks より botMessages が多い場合の
+ * 余剰は delete（失敗時は中立プレースホルダーへ edit）。fullText が空なら全 message を削除する。
+ * クリーンアップ自体の失敗は warn ログのみで無視する（エラー reply は呼び出し元が別途送る）。
+ */
+async function cleanupBotMessagesOnFatalError(
+  botMessages: Message[],
+  fullText: string,
+  modelName: string,
+  color: number,
+  originalMessage: Message,
+): Promise<void> {
+  if (botMessages.length === 0) {
+    return;
+  }
+
+  if (!fullText) {
+    for (const botMessage of botMessages) {
+      await deleteOrNeutralize(botMessage, modelName, color);
+    }
+    return;
+  }
+
+  const metadata: FinalMetadata = { showDetails: false };
+  const chunks = splitTextIntoMessages(
+    fullText,
+    measureTextBudget(badgeText(modelName)),
+    ZERO_TEXT_BUDGET,
+  );
+  const messageCount = Math.max(chunks.length, botMessages.length);
+
+  for (let i = 0; i < messageCount; i++) {
+    if (i < chunks.length) {
+      const isFirst = i === 0;
+      const isLast = i === chunks.length - 1;
+      const container = buildFinalContainer({
+        text: chunks[i],
+        modelName,
+        color,
+        isFirst,
+        isLast,
+        metadata,
+      });
+      try {
+        if (i < botMessages.length) {
+          await botMessages[i].edit(toComponentsV2EditPayload(container));
+        } else if ("send" in originalMessage.channel) {
+          await originalMessage.channel.send(toComponentsV2Payload(container));
+        }
+      } catch (error) {
+        logger.warn("Failed to clean up bot message after fatal error", { error, index: i });
+      }
+    } else {
+      await deleteOrNeutralize(botMessages[i], modelName, color);
+    }
+  }
+}
+
+/**
+ * message の Section（停止ボタン）を isLast: true で再 edit し、復元を試みる。
+ * message 増加遷移中に send/edit が失敗し、停止ボタンがどこにも無い状態のまま次 chunk 到着まで
+ * 固まる（無期限にキャンセル不能になる）のを防ぐための best-effort 処理。
+ * 復元自体の失敗も warn ログのみで無視する（次サイクルで自己修復を試みる）。
+ */
+async function restoreStreamingSection(
+  botMessage: Message,
+  text: string,
+  isFirst: boolean,
+  modelName: string,
+  color: number,
+  triggerMessageId: string,
+): Promise<void> {
+  try {
+    const container = buildStreamingContainer({
+      text,
+      modelName,
+      color,
+      isFirst,
+      isLast: true,
+      triggerMessageId,
+    });
+    await botMessage.edit(toComponentsV2EditPayload(container));
+  } catch (restoreError) {
+    logger.warn("Failed to restore stop button section on stripped message", {
+      restoreError,
+      messageId: botMessage.id,
+    });
+  }
+}
+
+/**
+ * ストリーミング中のメッセージを更新する。
+ * 長文の場合は複数メッセージに分割し、停止ボタン（Section）は最新メッセージのみに配置する。
+ * edit/send の失敗（429 等）は throw させず、当該サイクルの残り処理を break で打ち切って次サイクルへ
+ * 委ねる（discord.js 内蔵の rate limit queue に基本委ねる）。失敗した message より後ろを触らずに
+ * 打ち切ることで「停止ボタンは常に高々 1 個」の不変条件を守る（例: message[0] の Section 除去 edit が
+ * 失敗した状態で message[1] の send だけ成功すると停止ボタンが 2 個になってしまう）。次サイクルで全
+ * message が再 edit されるため自己修復する。
+ *
+ * message 増加遷移（1→2 等）では、旧末尾 message から Section を先に外してから新 message を send する
+ * ため、その send が失敗すると停止ボタンがどこにも無い状態になり、次 chunk 到着まで（ストールすれば
+ * 無期限に）キャンセル不能になってしまう。これを避けるため、旧末尾 message 以降で「isLast: false へ
+ * edit/send 済み（＝ Section を失ったまま）」の最新 index を追跡し、break する前に best-effort で
+ * その message へ Section を復元する。edit 自体の失敗による break（旧末尾 message にまだ触れていない
+ * ケース）は対象外とする — 実末尾 message には前サイクルの Section が残っており、ボタンは可用のまま。
  */
 async function updateStreamingMessages(
   botMessages: Message[],
@@ -285,29 +436,99 @@ async function updateStreamingMessages(
   modelName: string,
   color: number,
   originalMessage: Message,
-  footer: string,
-  removeButtons = false,
 ): Promise<void> {
-  const chunks = splitTextIntoChunks(fullText, EMBED_DESC_LIMIT);
-  const stopButton = removeButtons ? [] : [createStopButton(originalMessage.id)];
+  const chunks = splitTextIntoMessages(
+    fullText,
+    measureTextBudget(badgeText(modelName)),
+    measureTextBudget(STREAMING_LABEL),
+  );
+
+  // 前サイクルまで Section（停止ボタン）を保持していた message の index
+  const oldLastIndex = botMessages.length - 1;
+  // 旧末尾以降で Section を失ったまま留まっている最新の message index（未発生なら null）
+  let sectionLostAtIndex: number | null = null;
 
   for (let i = 0; i < chunks.length; i++) {
+    const isFirst = i === 0;
     const isLast = i === chunks.length - 1;
-    const chunkFooter = chunks.length > 1 ? `ページ ${i + 1}/${chunks.length} | ${footer}` : footer;
-    const embed = createStreamingEmbed(chunks[i], modelName, color, chunkFooter);
+    const container = buildStreamingContainer({
+      text: chunks[i],
+      modelName,
+      color,
+      isFirst,
+      isLast,
+      triggerMessageId: originalMessage.id,
+    });
+
+    try {
+      if (i < botMessages.length) {
+        await botMessages[i].edit(toComponentsV2EditPayload(container));
+      } else if ("send" in originalMessage.channel) {
+        const newMessage = await originalMessage.channel.send(toComponentsV2Payload(container));
+        botMessages.push(newMessage);
+      }
+
+      if (i >= oldLastIndex) {
+        sectionLostAtIndex = isLast ? null : i;
+      }
+    } catch (error) {
+      logger.warn("Failed to update streaming message, aborting this cycle to retry next cycle", {
+        error,
+        index: i,
+      });
+
+      if (sectionLostAtIndex !== null && sectionLostAtIndex < botMessages.length) {
+        await restoreStreamingSection(
+          botMessages[sectionLostAtIndex],
+          chunks[sectionLostAtIndex],
+          sectionLostAtIndex === 0,
+          modelName,
+          color,
+          originalMessage.id,
+        );
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * 停止（AbortError）時のメッセージを更新する。
+ * Section を持たず、経過秒数 + 受信済み文字数の footer TextDisplay のみを末尾メッセージに表示する。
+ */
+async function updateStoppedMessages(
+  botMessages: Message[],
+  fullText: string,
+  modelName: string,
+  color: number,
+  elapsedSeconds: number,
+  receivedChars: number,
+  originalMessage: Message,
+): Promise<void> {
+  const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
+  const chunks = splitTextIntoMessages(
+    fullText,
+    measureTextBudget(badgeText(modelName)),
+    measureTextBudget(footerText),
+  );
+
+  for (let i = 0; i < chunks.length; i++) {
+    const isFirst = i === 0;
+    const isLast = i === chunks.length - 1;
+    const container = buildStoppedContainer({
+      text: chunks[i],
+      modelName,
+      color,
+      isFirst,
+      isLast,
+      elapsedSeconds,
+      receivedChars,
+    });
 
     if (i < botMessages.length) {
-      // 既存メッセージを更新
-      await botMessages[i].edit({
-        embeds: [embed],
-        components: isLast ? stopButton : [],
-      });
+      await botMessages[i].edit(toComponentsV2EditPayload(container));
     } else if ("send" in originalMessage.channel) {
-      // 新しいメッセージを追加
-      const newMessage = await originalMessage.channel.send({
-        embeds: [embed],
-        components: isLast ? stopButton : [],
-      });
+      const newMessage = await originalMessage.channel.send(toComponentsV2Payload(container));
       botMessages.push(newMessage);
     }
   }
