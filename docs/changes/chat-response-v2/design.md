@@ -54,8 +54,8 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 実装タイミング | multimodal change の後に着手 | multimodal で扱う画像入出力の表現要件 (MediaGallery / File) が固まってから V2 builder を設計、二度手間回避 |
-| メッセージ構造 | 各 message = 1 Container、Model badge / 本文 / metadata の TextDisplay + 必要に応じ Separator + 末尾 message のみ Section + Button。**1 message 内の全 TextDisplay 合計 ≤ 3800 字** | community 事例 (discord.js toolkit / TripBot) と一致。文字数上限は per-component ではなく **1 message の全 TextDisplay 合計 4000 字**（discord.js guide）なので、本文・badge・footer を合算して管理する |
-| 長文分割の単位 | **1 message の全 TextDisplay 合計で 3800 字**（Discord 上限 4000 字から 200 字マージン）。Model badge・本文・metadata footer を**合算**してこの予算に収め、超過分は次の message へ。本文の実効上限 ≈ 3800 −(badge+footer) ≈ 3700 字/message | discord.js guide が「全 text display components の合計 4000 字」と明記（**per-component ではなく 1 message 合計**）。したがって 1 message ≈ 1 本文チャンク（~3700 字）で分割する。components 数は message 全体 40 枠に十分収まる |
+| メッセージ構造 | 各 message = 1 Container、Model badge / 本文 / metadata の TextDisplay + 必要に応じ Separator + 末尾 message のみ Section + Button。**1 message 内の全 TextDisplay 合計 ≤ 3800 字 かつ ≤ 9000 UTF-8 バイト** | community 事例 (discord.js toolkit / TripBot) と一致。上限は per-component ではなく **1 message の全 TextDisplay 合計 4000 字**（discord.js guide）に加え、実測で判明した **UTF-8 バイト内部制限（≈10.17KB、超過は HTTP 500）** があるため、本文・badge・footer を文字数・バイト数の両方で合算管理する |
+| 長文分割の単位 | **1 message の全 TextDisplay 合計で 3800 字かつ 9000 UTF-8 バイト**（文字上限 4000・バイト上限実測 ≈10.17KB からのマージン）。Model badge・本文・metadata footer を**合算**して両予算に収め、超過分は次の message へ。日本語主体（≈3 bytes/字）では バイト予算が先に効き 1 message ≈ 3000 字弱 | discord.js guide の「全 text display components の合計 4000 字」に加え、実測で日本語 3393 字（10179B）が HTTP 500 になることを確認（Open Questions 参照）。分割は `TextBudget { chars, bytes }` の両予算で判定する。components 数は message 全体 40 枠に十分収まる |
 | ストリーミング edit | 既存ロジック (2 秒間隔) を踏襲、V2 で組んだ Container を毎回 edit | sticky flag 制約と整合。初期送信から V2、edit も V2、最終も V2 |
 | 初期 placeholder | `Container { TextDisplay("生成中...") + Section[Stop button] }` | 現状の `createStreamingEmbed("生成中...")` 相当を V2 化 |
 | 停止ボタン位置 (生成中) | 最終 message に `Section + accessory: Button(Danger)` を末尾配置。**この Section が唯一の Section 使用箇所**。Section 子は `TextDisplay("生成中...")` 1 つ | Discord Section は accessory 必須なので、ボタンが要る間しか Section を使えない |
@@ -66,7 +66,7 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | エラー表示 | `Container { accent_color: red, TextDisplay(エラー本文) }` | `createErrorEmbed` の役割を V2 で再現 |
 | 停止時表示 | 最終 message から Section を削除、代わりに `Separator + TextDisplay("🛑 Stopped \| xx.xs \| Tokens: ...")` を末尾配置 | 上記 Metadata footer と同じ理由で Section は外す |
 | Mention safety | **全 `channel.send` / `message.edit` / `message.reply` 経路で `allowedMentions: { parse: [] }` を強制**。`message.reply()` 経路では追加で `repliedUser: false` を併用 (元投稿者の意図しない ping を防ぐ、現状の messageCreate.ts:92 と同じ) | TextDisplay は legacy embed.description と違い content と同じ ping 挙動。送信ヘルパに必ず allowedMentions を含めて、edit 経路で漏れないよう builder の型シグネチャ側で強制する |
-| `embedBuilder.ts` の扱い | 退役。chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages`) を削除、slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` / `splitTextIntoChunks` は残す | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
+| `embedBuilder.ts` の扱い | 退役。chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages`) を削除、slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す。`splitTextIntoChunks` は当初 chat chunking 用に残す想定だったが、UTF-8 バイト制限対応（Open Questions 参照）のため `chatContainerBuilder.ts` 内の `splitTextByCharsAndBytes`（文字数・バイト数両対応）に置換され、`embedBuilder.ts` からは削除済み | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
 | 新規 builder ファイル | `src/utils/chatContainerBuilder.ts` を新設 | embed-V2 を完全に分離。V2 関連の型 (`ContainerBuilder`, `TextDisplayBuilder`, etc.) を集中させる |
 | 多言語化 / i18n | しない (現状の hardcoded ja を踏襲) | 別 spec が立つまで現状維持 |
 | MediaGallery (画像出力) | multimodal change の出力部と接続。V2 Container 内に `MediaGallery` を組み込む API を builder に持たせる | multimodal の入力画像表示と統合 |
@@ -90,11 +90,11 @@ ChatContainerBuilder (NEW)
         ├ buildFinalContainer(text, model, color, metadata, isLast): ContainerBuilder
         ├ buildErrorContainer(message): ContainerBuilder
         ├ buildStoppedContainer(text, model, color, isLast): ContainerBuilder
-        └ splitTextIntoMessages(text, badgeChars, footerChars): string[]
-                                          ↑           ↑
-                                          │           └ その message の footer 文字数（合計予算から差し引く）
-                                          └ その message の Model badge 文字数（合計予算から差し引く）
-            ※ 戻り値 = message ごとの本文（1 message の全 TextDisplay 合計 ≤ 3800 字を保証）
+        └ splitTextIntoMessages(text, badge: TextBudget, footer: TextBudget): string[]
+                                          ↑                ↑
+                                          │                └ その message の footer の文字数・バイト数（両予算から差し引く）
+                                          └ その message の Model badge の文字数・バイト数（両予算から差し引く）
+            ※ 戻り値 = message ごとの本文（1 message の全 TextDisplay 合計 ≤ 3800 字 かつ ≤ 9000 UTF-8 バイトを保証）
         │
         ▼
 channel.send / message.edit / message.reply
@@ -198,7 +198,7 @@ Container (accent: model color)
 **修正:**
 
 - `src/bot/events/messageCreate.ts` — `embedBuilder.ts` 依存を `chatContainerBuilder` に置換、`updateStreamingMessages` を V2 ベースに書き換え、`channel.send`/`edit` 呼び出しの `embeds:` を `components:` + `flags: MessageFlags.IsComponentsV2` + **`allowedMentions: { parse: [] }`** に変更。`custom_id` には現状実装と同じく `triggerMessageId` (入力ユーザの `message.id`、Bot 返信送信前に既知) を埋める
-- `src/utils/embedBuilder.ts` — chat 専用関数 (`createStreamingEmbed`, `splitTextToMultipleMessages`) を削除。slash command で使う `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` / `splitTextIntoChunks` は残す
+- `src/utils/embedBuilder.ts` — chat 専用関数 (`createStreamingEmbed`, `splitTextToMultipleMessages`) を削除。slash command で使う `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す。`splitTextIntoChunks` は当初残す想定だったが、UTF-8 バイト制限対応のため `chatContainerBuilder.ts` の `splitTextByCharsAndBytes` に置換され削除済み（Open Questions 参照）
 - `src/utils/buttonBuilder.ts` — `createStopButton` を ActionRow → 単独 ButtonBuilder に変更 (Section accessory として使うため)、または新たに `createStopButtonAccessory()` を追加して旧関数併存
 - `src/bot/events/interactionCreate.ts` — `handleButtonInteraction` の停止処理ロジックはそのまま (`custom_id: stop_response_*` パース不変、抽出された ID は `triggerMessageId` = ユーザ入力 msg.id として `chatService.cancelRequest()` に渡す既存実装と一致)、ただし停止後の message 更新で V2 container を edit するように調整
 - 関連 unit test 群:
@@ -208,26 +208,36 @@ Container (accent: model color)
 
 ### TextDisplay chunking ロジック
 
-**制約**: Discord は **1 message 内の全 TextDisplay の合計文字数を 4000 字**に制限する（per-component ではなく、discord.js guide の仕様）。よって分割は「1 message = 合計 3800 字」を単位にする。Model badge と metadata footer もこの合計に含むため、本文の実効予算はそれらを引いた残り。
+**制約**: Discord は **1 message 内の全 TextDisplay の合計文字数を 4000 字**に制限する（per-component ではなく、discord.js guide の仕様）。よって分割は「1 message = 合計 3800 字」を単位にする。**加えて、実 API 検証により文書化されていない UTF-8 バイト数ベースの内部制限（実測境界 ≈ 10.17KB、超過時は HTTP 500）が別途存在することが判明した**（詳細は Open Questions / Risks 参照）。日本語主体 (≈3 bytes/字) の応答は文字数制限だけでは容易にこのバイト制限を超過するため、**文字数予算とバイト数予算を両方満たす**よう分割する。Model badge と metadata footer もこれら両方の合計に含むため、本文の実効予算はそれらを引いた残り。
 
 ```ts
 // chatContainerBuilder.ts
-const MAX_TOTAL_CHARS_PER_MESSAGE = 3800; // 1 message の全 TextDisplay 合計（Discord 4000 から安全マージン）
+const MAX_TOTAL_CHARS_PER_MESSAGE = 3800; // 1 message の全 TextDisplay 合計文字数（Discord 4000 から安全マージン）
+const MAX_TOTAL_BYTES_PER_MESSAGE = 9000; // 1 message の全 TextDisplay 合計 UTF-8 バイト数（実測 ≈10.17KB から安全マージン、旧 embed 実装と同値）
+
+// badge・footer はそれぞれの文字数・バイト数を { chars, bytes } の TextBudget として保持する
+interface TextBudget {
+  chars: number;
+  bytes: number;
+}
 
 // 本文を「1 message に載る本文量」ごとに分割。各要素 = 1 message の本文。
-// badgeChars / footerChars はその message に同居する badge・footer の文字数（合計予算から差し引く）。
+// badge / footer はその message に同居する badge・footer の TextBudget（文字数・バイト数を
+// 両方の合計予算から差し引く）。
 export function splitTextIntoMessages(
   text: string,
-  badgeChars: number,
-  footerChars: number,
+  badge: TextBudget,
+  footer: TextBudget,
 ): string[] {
-  const bodyBudget = MAX_TOTAL_CHARS_PER_MESSAGE - badgeChars - footerChars;
-  // 改行優先で bodyBudget 単位に分割（現状の splitTextIntoChunks ロジック流用）。各 chunk が 1 message の本文。
-  return splitByCharCount(text, bodyBudget);
+  const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
+  const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
+  // 改行優先（コードポイント単位、サロゲートペア非分断）で「文字数 ≤ bodyBudgetChars かつ
+  // UTF-8バイト数 ≤ bodyBudgetBytes」を満たす位置ごとに分割。各 chunk が 1 message の本文。
+  return splitTextByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
 }
 ```
 
-注: **Model badge `**Model:** xxx` と metadata footer も合計 4000 字予算に含まれる**。badge は ~30 字・footer は ~80 字程度なので、本文の実効上限は 1 message あたり ~3700 字前後。components 数（badge + 本文 + Separator + footer/Section ≈ 4〜5）は message 全体 40 枠に十分収まる。本文を複数 TextDisplay に割っても合計予算は変わらないため、1 message は基本 1 本文 TextDisplay で良い。
+注: **Model badge `**Model:** xxx` と metadata footer も合計予算（文字数・バイト数の両方）に含まれる**。badge は ~30 字・footer は ~80 字程度なので、本文の実効上限は ASCII 主体なら 1 message あたり ~3700 字前後、日本語主体ならバイト予算（9000 バイトから badge/footer 分を引いた残り、≈3 bytes/字換算で ~3000 字前後）が先に効く。components 数（badge + 本文 + Separator + footer/Section ≈ 4〜5）は message 全体 40 枠に十分収まる。本文を複数 TextDisplay に割っても合計予算は変わらないため、1 message は基本 1 本文 TextDisplay で良い。
 
 ### Streaming flow の擬似コード
 
@@ -270,7 +280,7 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 `updateStreamingMessages` は:
 
-1. `splitTextIntoMessages(fullText, badgeChars, footerChars)` で必要 message 数を計算（各 message の全 TextDisplay 合計 ≤ 3800 字）
+1. `splitTextIntoMessages(fullText, badge, footer)`（`badge`/`footer` は `{ chars, bytes }` の `TextBudget`）で必要 message 数を計算（各 message の全 TextDisplay 合計が文字数 ≤ 3800 字 かつ UTF-8 バイト数 ≤ 9000 バイトの両方を満たす。詳細は Open Questions / Risks 参照）
 2. 不足分は新規送信、余剰分は削除
 3. 各 message を V2 Container で edit
 4. 「最後の message にのみ Section + Stop Button」「他の message は Section なし」のルールに従う
@@ -320,6 +330,7 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 ## Open Questions / Risks
 
 - **TextDisplay の char limit（確定: 1 message 合計 4000 字）**: discord.js guide が「The amount of text across all text display components cannot exceed 4000 characters」と明記＝**per-component ではなく 1 message 内の全 TextDisplay 合計 4000 字**。本設計はこれを前提に `MAX_TOTAL_CHARS_PER_MESSAGE=3800`（200 字マージン）で **1 message ≈ 本文 3700 字**に分割する（badge/footer も合計予算に含む）。公式 Component Reference 自体には数値の明記がないため、Phase C の手動回帰で長文 (1万字以上) を実機に流し、合計 4000 で正しく次 message に送られることを最終確認する。
+- **TextDisplay の byte limit（実測で確定: 文書化されていない UTF-8 約 10.17KB の内部制限が別途存在）**: ユーザテストで日本語長文 (5 ページ分割) の streaming edit・最終 render・クリーンアップの全経路で HTTP 500 (JSON エラーコードなし) が発生。実 API のバイセクトで、単一 TextDisplay の Container を POST した際の境界を確認: ASCII 3999 字 (3999 bytes) → 200 / 日本語 3000 字 (9000 bytes) → 200 / 日本語 3387 字 (10161 bytes) → 200 / **日本語 3393 字 (10179 bytes) → 500**（以降も 500）。つまり Discord は文書化された「全 TextDisplay 合計 4000 字」制限とは別に、**UTF-8 バイト数ベースの内部制限（実測境界 ≈ 10.17KB）を持ち、超過時は 400 ではなく 500 を返す**。`MAX_TOTAL_CHARS_PER_MESSAGE=3800` は文字数のみの予算のため、日本語主体 (≈3 bytes/字) の応答では 1 message ≈ 11KB になり必ず超過していた。旧 embed 実装が `MAX_BYTE_LENGTH=9000` で分割していたのはこの制限への対処だったと推定される。対策として `chatContainerBuilder.ts` に `MAX_TOTAL_BYTES_PER_MESSAGE=9000`（旧 embed 実装と同値の安全マージン）を新設し、`splitTextIntoMessages` を「文字数 3800 以下 **かつ** UTF-8 バイト数 9000 以下」の両方を満たすようコードポイント単位（サロゲートペア非分断）で分割するよう修正済み。
 - **components 数の枠（ネスト子も数える）**: 完了時 = Container + badge + 本文 + Separator + footer TextDisplay = **5**、生成中 = Container + badge + 本文 + Separator + Section + Section内TextDisplay + Button = **7**。いずれも下記の上限内。本文を複数 TextDisplay に割っても合計文字 4000 制約が先に効くため、通常 1 本文 TextDisplay。
 - **Container 内の component 数上限 = 10**: discord-api-types の `APIContainerComponent` JSDoc に「A Container is a top-level layout component that holds **up to 10 components**」と明記（Discord 公式 docs 準拠）。Section は別途 1–3 子の制約。**メッセージ全体は 40 components**（ネスト子も含む）。現設計（1 Container = 5〜7 components）は Container 10・メッセージ 40 のいずれにも余裕がある。
 - **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。`STREAM_UPDATE_INTERVAL = 2000ms` の debounce 内で同サイクル処理するため、Discord channel-level PATCH rate limit (5/5s) には収まるはず。429 受信時は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect)。

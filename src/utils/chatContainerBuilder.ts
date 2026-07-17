@@ -9,14 +9,23 @@ import {
 import type { MessageId } from "../types";
 import { EmbedColors } from "../types/embed";
 import { createStopButton } from "./buttonBuilder";
-import { splitTextIntoChunks } from "./embedBuilder";
 
 /**
  * 1 message の全 TextDisplay 合計文字数上限。
- * Discord の実上限は 4000 字（per-component ではなく1 message 内の全 TextDisplay 合計）。
+ * Discord の文書化された上限は 4000 字（per-component ではなく1 message 内の全 TextDisplay 合計）。
  * 200 字の安全マージンを引いた値をここで使用する。
  */
 export const MAX_TOTAL_CHARS_PER_MESSAGE = 3800;
+
+/**
+ * 1 message の全 TextDisplay 合計 UTF-8 バイト数上限。
+ * 実 API 検証の結果、Discord は文書化された「4000 字」制限とは別に UTF-8 バイト数ベースの内部制限を
+ * 持つことが判明した（実測境界 ≈ 10.17KB、超過時は 400 ではなく HTTP 500 を返す）。日本語主体
+ * (≈3 bytes/字) の応答は文字数制限だけでは容易に超過するため、バイト予算も併用する。
+ * 安全マージンを見て 9000 バイト（旧 embed 実装の MAX_BYTE_LENGTH と同値）とする。
+ * 詳細は docs/changes/chat-response-v2/design.md の Open Questions / Risks を参照。
+ */
+export const MAX_TOTAL_BYTES_PER_MESSAGE = 9000;
 
 /** ストリーミング中、Section 内に表示する固定ラベル */
 export const STREAMING_LABEL = "生成中...";
@@ -28,8 +37,30 @@ export const STREAMING_LABEL = "生成中...";
  */
 export const EMPTY_TEXT_PLACEHOLDER = "（応答なし）";
 
-/** ページ番号 prefix（"ページ 99/99 | "相当）の予約文字数。footer 文字数見積りに使用 */
-const PAGE_PREFIX_RESERVE = 20;
+/** ページ番号 prefix（"ページ 99/99 | "相当）の予約文字数・バイト数。footer 予算見積りに使用 */
+const PAGE_PREFIX_RESERVE_CHARS = 20;
+const PAGE_PREFIX_RESERVE_BYTES = 30;
+
+const textEncoder = new TextEncoder();
+
+/** UTF-8 バイト長を計測する */
+function byteLength(text: string): number {
+  return textEncoder.encode(text).length;
+}
+
+/** ある文字列を 1 message に同居させる際に予算から差し引くべき文字数・バイト数 */
+export interface TextBudget {
+  chars: number;
+  bytes: number;
+}
+
+/** 予算の消費が無いことを表す定数（footer が存在しない message 用） */
+export const ZERO_TEXT_BUDGET: TextBudget = { chars: 0, bytes: 0 };
+
+/** 文字列から TextBudget（文字数・UTF-8バイト数）を計測する */
+export function measureTextBudget(text: string): TextBudget {
+  return { chars: text.length, bytes: byteLength(text) };
+}
 
 export interface UsageMetadata {
   prompt_tokens: number;
@@ -65,18 +96,81 @@ export function badgeText(modelName: string): string {
 }
 
 /**
- * 本文を「1 message に載る本文量」ごとに分割する。
- * badgeChars / footerChars はその message に同居しうる badge・footer の文字数見積りで、
- * 合計予算 (MAX_TOTAL_CHARS_PER_MESSAGE) から差し引く。badge は先頭 message、footer は末尾
- * message にしか実際には乗らないが、簡潔さと安全性を優先し全 message に同一予算を適用する。
+ * text を「char 数 <= maxChars かつ UTF-8 byte 数 <= maxBytes」を満たす最大位置ごとに分割する。
+ * 改行優先（cut 位置の 80% 以降に改行があればそこで切る。改行そのものは含めた上で両予算を満たす）。
+ * コードポイント単位でイテレートするため、サロゲートペア（絵文字等）や結合文字の途中で切れることはない。
+ *
+ * 契約: maxChars / maxBytes が 1 コードポイント分未満（例: 0 や、その文字のサイズより小さい値）の
+ * 極端な場合は、無限ループを避けて必ず前進するため、コードポイント 1 個を 1 chunk として押し出す。
+ * この場合、その chunk は maxChars / maxBytes を超過しうる（呼び出し側の予算計算が呼び出し不能な
+ * ほど小さい値を渡さない限り実運用では到達しない分岐であり、意図的に例外を投げない）。
+ */
+export function splitTextByCharsAndBytes(
+  text: string,
+  maxChars: number,
+  maxBytes: number,
+): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChars && byteLength(remaining) <= maxBytes) {
+      chunks.push(remaining);
+      break;
+    }
+
+    let charCount = 0;
+    let byteCount = 0;
+    let cutIndex = 0; // remaining 内の UTF-16 コードユニット位置
+
+    for (const codePoint of remaining) {
+      const cpChars = codePoint.length; // サロゲートペアなら2
+      const cpBytes = byteLength(codePoint);
+      if (charCount + cpChars > maxChars || byteCount + cpBytes > maxBytes) {
+        break;
+      }
+      charCount += cpChars;
+      byteCount += cpBytes;
+      cutIndex += cpChars;
+    }
+
+    // 1コードポイントも入らない極端なケースの保険（無限ループ防止、コードポイント境界は保つ）。
+    // 上記の契約どおり、この場合は予算超過を許容してでも前進する。
+    if (cutIndex === 0) {
+      const firstCodePoint = remaining[Symbol.iterator]().next().value as string | undefined;
+      cutIndex = firstCodePoint?.length ?? 1;
+    }
+
+    // 改行優先: cutIndex 直前（cutIndex自身は次chunkの先頭候補で未確定のため除外）に改行があり、
+    // それが80%以降の位置なら改行を含めてそこで切る。cutIndex 自身を検索範囲に含めると、直後の
+    // 改行が「まだ含めていないのに含めた」形で誤検出され、両予算を超過しうる（レビュー指摘）。
+    const lastNewline = remaining.lastIndexOf("\n", cutIndex - 1);
+    if (lastNewline > cutIndex * 0.8) {
+      cutIndex = lastNewline + 1;
+    }
+
+    chunks.push(remaining.slice(0, cutIndex));
+    remaining = remaining.slice(cutIndex);
+  }
+
+  return chunks;
+}
+
+/**
+ * 本文を「1 message に載る本文量」ごとに分割する。1 message の全 TextDisplay 合計が
+ * 文字数上限 (MAX_TOTAL_CHARS_PER_MESSAGE) と UTF-8 バイト数上限 (MAX_TOTAL_BYTES_PER_MESSAGE) の
+ * 両方を満たすことを保証する。badge / footer はその message に同居しうる TextBudget（文字数・
+ * バイト数）で、両方の合計予算から差し引く。badge は先頭 message、footer は末尾 message にしか
+ * 実際には乗らないが、簡潔さと安全性を優先し全 message に同一予算を適用する。
  */
 export function splitTextIntoMessages(
   text: string,
-  badgeChars: number,
-  footerChars: number,
+  badge: TextBudget,
+  footer: TextBudget,
 ): string[] {
-  const bodyBudget = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badgeChars - footerChars);
-  const chunks = splitTextIntoChunks(text, bodyBudget);
+  const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
+  const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
+  const chunks = splitTextByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
   return chunks.length > 0 ? chunks : [""];
 }
 
@@ -151,13 +245,17 @@ export function buildStoppedFooterText(elapsedSeconds: number, receivedChars: nu
 }
 
 /**
- * footer 文字数見積り（ページ番号 prefix のマージン + LLM 詳細情報）。
+ * footer の TextBudget 見積り（ページ番号 prefix のマージン + LLM 詳細情報）。
  * ページ番号は message 数が確定するまで有無が分からないため、details の有無によらず常に
- * PAGE_PREFIX_RESERVE を確保する。
+ * ページ prefix 分のマージンを確保する。
  */
-export function estimateFinalFooterChars(metadata: FinalMetadata): number {
+export function estimateFinalFooterBudget(metadata: FinalMetadata): TextBudget {
   const details = buildUsageDetailsText(metadata);
-  return PAGE_PREFIX_RESERVE + (details ? details.length : 0);
+  const detailsBudget = details ? measureTextBudget(details) : ZERO_TEXT_BUDGET;
+  return {
+    chars: PAGE_PREFIX_RESERVE_CHARS + detailsBudget.chars,
+    bytes: PAGE_PREFIX_RESERVE_BYTES + detailsBudget.bytes,
+  };
 }
 
 function addBadgeAndBody(container: ContainerBuilder, params: ChatContainerBaseParams): void {

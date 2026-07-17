@@ -12,13 +12,15 @@ import {
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
-  estimateFinalFooterChars,
+  estimateFinalFooterBudget,
   type FinalMetadata,
+  measureTextBudget,
   STREAMING_LABEL,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
   toComponentsV2ReplyPayload,
+  ZERO_TEXT_BUDGET,
 } from "../../utils/chatContainerBuilder";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
@@ -221,8 +223,12 @@ export function createMessageCreateHandler(
       };
       // OpenRouter が空文字列で完了した場合、setContent("") の同期 throw を避けるためフォールバックする
       const finalText = (finalResult?.fullText ?? fullText) || "（応答なし）";
-      const footerChars = estimateFinalFooterChars(metadata);
-      const chunks = splitTextIntoMessages(finalText, badgeText(modelName).length, footerChars);
+      const footerBudget = estimateFinalFooterBudget(metadata);
+      const chunks = splitTextIntoMessages(
+        finalText,
+        measureTextBudget(badgeText(modelName)),
+        footerBudget,
+      );
 
       // 既存メッセージを更新し、必要に応じて新しいメッセージを追加
       for (let i = 0; i < chunks.length; i++) {
@@ -342,7 +348,11 @@ async function cleanupBotMessagesOnFatalError(
   }
 
   const metadata: FinalMetadata = { showDetails: false };
-  const chunks = splitTextIntoMessages(fullText, badgeText(modelName).length, 0);
+  const chunks = splitTextIntoMessages(
+    fullText,
+    measureTextBudget(badgeText(modelName)),
+    ZERO_TEXT_BUDGET,
+  );
   const messageCount = Math.max(chunks.length, botMessages.length);
 
   for (let i = 0; i < messageCount; i++) {
@@ -429,8 +439,8 @@ async function updateStreamingMessages(
 ): Promise<void> {
   const chunks = splitTextIntoMessages(
     fullText,
-    badgeText(modelName).length,
-    STREAMING_LABEL.length,
+    measureTextBudget(badgeText(modelName)),
+    measureTextBudget(STREAMING_LABEL),
   );
 
   // 前サイクルまで Section（停止ボタン）を保持していた message の index
@@ -496,7 +506,11 @@ async function updateStoppedMessages(
   originalMessage: Message,
 ): Promise<void> {
   const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
-  const chunks = splitTextIntoMessages(fullText, badgeText(modelName).length, footerText.length);
+  const chunks = splitTextIntoMessages(
+    fullText,
+    measureTextBudget(badgeText(modelName)),
+    measureTextBudget(footerText),
+  );
 
   for (let i = 0; i < chunks.length; i++) {
     const isFirst = i === 0;

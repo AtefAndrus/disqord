@@ -10,15 +10,44 @@ import {
   buildStoppedFooterText,
   buildStreamingContainer,
   buildUsageDetailsText,
-  estimateFinalFooterChars,
+  estimateFinalFooterBudget,
   type FinalMetadata,
+  MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
+  measureTextBudget,
   STREAMING_LABEL,
+  splitTextByCharsAndBytes,
   splitTextIntoMessages,
+  type TextBudget,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
   toComponentsV2ReplyPayload,
+  ZERO_TEXT_BUDGET,
 } from "../../../src/utils/chatContainerBuilder";
+
+const textEncoder = new TextEncoder();
+
+function byteLength(text: string): number {
+  return textEncoder.encode(text).length;
+}
+
+function budget(chars: number, bytes: number): TextBudget {
+  return { chars, bytes };
+}
+
+/** chunk境界がサロゲートペアの途中（lone surrogate）で始まる/終わっていないかを調べる */
+function hasLoneSurrogateAtBoundary(chunks: string[]): boolean {
+  for (const chunk of chunks) {
+    if (chunk.length === 0) continue;
+    const firstCode = chunk.charCodeAt(0);
+    const lastCode = chunk.charCodeAt(chunk.length - 1);
+    // 低サロゲートで始まる = 直前の高サロゲートが別chunkに分断された
+    if (firstCode >= 0xdc00 && firstCode <= 0xdfff) return true;
+    // 高サロゲートで終わる = 後続の低サロゲートが別chunkに分断された
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) return true;
+  }
+  return false;
+}
 
 interface ContainerComponentJSON {
   type: number;
@@ -67,14 +96,15 @@ describe("chatContainerBuilder", () => {
   describe("splitTextIntoMessages", () => {
     test("予算内のテキストは1チャンクになる", () => {
       const text = "a".repeat(100);
-      const chunks = splitTextIntoMessages(text, 0, 0);
+      const chunks = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
       expect(chunks).toEqual([text]);
     });
 
-    test("badgeChars/footerChars分だけ本文予算が減る", () => {
+    test("badge/footerの文字数・バイト数分だけ本文予算が減る", () => {
       const text = "a".repeat(MAX_TOTAL_CHARS_PER_MESSAGE); // 予算ちょうど
-      const chunksNoBudgetCost = splitTextIntoMessages(text, 0, 0);
-      const chunksWithBudgetCost = splitTextIntoMessages(text, 50, 50); // 合計100字分の予算を消費
+      const chunksNoBudgetCost = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+      // 合計100字/100バイト分の予算を消費
+      const chunksWithBudgetCost = splitTextIntoMessages(text, budget(50, 50), budget(50, 50));
       expect(chunksNoBudgetCost.length).toBe(1);
       expect(chunksWithBudgetCost.length).toBeGreaterThan(1);
     });
@@ -85,30 +115,112 @@ describe("chatContainerBuilder", () => {
       const before = "a".repeat(45);
       const after = "b".repeat(45);
       const text = `${before}\n${after}`;
-      const chunks = splitTextIntoMessages(text, 0, MAX_TOTAL_CHARS_PER_MESSAGE - bodyBudget);
+      const footerBudget = budget(
+        MAX_TOTAL_CHARS_PER_MESSAGE - bodyBudget,
+        MAX_TOTAL_BYTES_PER_MESSAGE - bodyBudget,
+      );
+      const chunks = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, footerBudget);
 
       expect(chunks[0]).toBe(`${before}\n`);
       expect(chunks[1]).toBe(after);
     });
 
-    test("長文（1万字超）は複数チャンクに分割され、結合すると元のテキストに一致する", () => {
+    test("ASCII長文（1万字超）は文字数上限(3800字)前後で分割され、結合すると元に一致する（バイト制限の影響を受けない）", () => {
       const text = "x".repeat(10000);
-      const chunks = splitTextIntoMessages(text, 30, 80);
+      const badgeBudget = budget(30, 30);
+      const footerBudget = budget(80, 80);
+      const chunks = splitTextIntoMessages(text, badgeBudget, footerBudget);
 
       expect(chunks.length).toBeGreaterThan(1);
       expect(chunks.join("")).toBe(text);
       for (const chunk of chunks) {
         expect(chunk.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(MAX_TOTAL_BYTES_PER_MESSAGE);
+      }
+
+      // ASCII (1 byte/字) では byte 予算 (9000) は char 予算 (3800) より緩いはずなので、
+      // byte 予算のせいで過度に保守的な分割にならないこと（最初のchunkが本文予算の8割以上を使う）を確認する
+      const bodyBudgetChars = MAX_TOTAL_CHARS_PER_MESSAGE - badgeBudget.chars - footerBudget.chars;
+      expect(chunks[0].length).toBeGreaterThanOrEqual(bodyBudgetChars * 0.8);
+    });
+
+    test("日本語長文（12000字）は各chunkが9000バイト以下になるよう分割される（文字数上限だけでは不十分）", () => {
+      // 文字数上限(3800字)だけで分割すると、日本語(約3bytes/字)は1 chunk ≈ 11.4KBになり、
+      // 実測されたDiscordのUTF-8バイト内部制限(≈10.17KB)を超えて HTTP 500 になる。
+      const text = "あ".repeat(12000);
+      const chunks = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.join("")).toBe(text);
+      for (const chunk of chunks) {
+        expect(byteLength(chunk)).toBeLessThanOrEqual(MAX_TOTAL_BYTES_PER_MESSAGE);
+        expect(chunk.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+      }
+    });
+
+    test("日本語/ASCII混在テキストも各chunkが文字数・バイト数の両上限を満たす", () => {
+      const paragraph = "日本語のテキストとASCII textが混在する段落です。".repeat(300);
+      const chunks = splitTextIntoMessages(paragraph, budget(30, 90), budget(80, 200));
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.join("")).toBe(paragraph);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(MAX_TOTAL_BYTES_PER_MESSAGE);
       }
     });
 
     test("空文字列は1要素（空文字列）の配列になる", () => {
-      expect(splitTextIntoMessages("", 0, 0)).toEqual([""]);
+      expect(splitTextIntoMessages("", ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET)).toEqual([""]);
     });
 
-    test("badge+footerが予算を超える場合でも最低1文字は確保する（無限ループしない）", () => {
-      const chunks = splitTextIntoMessages("abcdef", MAX_TOTAL_CHARS_PER_MESSAGE, 500);
+    test("badge+footerが予算を大幅に超える場合でも本文予算を最低1（chars/bytes）に固定して前進する（無限ループしない）", () => {
+      // splitTextIntoMessages の Math.max(1, ...) クランプにより bodyBudgetChars/Bytes は 1 になる
+      const chunks = splitTextIntoMessages(
+        "abcdef",
+        budget(MAX_TOTAL_CHARS_PER_MESSAGE, MAX_TOTAL_BYTES_PER_MESSAGE),
+        budget(500, 500),
+      );
       expect(chunks.join("")).toBe("abcdef");
+    });
+  });
+
+  describe("splitTextByCharsAndBytes", () => {
+    test("絵文字（サロゲートペア）を跨いで切らない", () => {
+      // "😀" (U+1F600) は UTF-16で2コードユニット（サロゲートペア）、UTF-8で4バイト
+      const emoji = "😀";
+      const text = "a".repeat(10) + emoji.repeat(5) + "b".repeat(10);
+      // バイト予算を絵文字の境界付近に設定し、分割点が絵文字の途中に来やすい状況を作る
+      const chunks = splitTextByCharsAndBytes(text, 1000, 17);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.join("")).toBe(text); // 結合すると元に戻る（文字の消失・重複が無い）
+      expect(hasLoneSurrogateAtBoundary(chunks)).toBe(false);
+    });
+
+    test("改行が予算超過の原因になった直後の1字である場合、改行優先ロジックが両予算を超過させない（レビュー指摘1・境界ケース）", () => {
+      // "aaaa\nb" を maxChars=4, maxBytes=4 で分割すると、コードポイントループは
+      // "aaaa"(4字/4byte)でcutIndex=4に止まる（次の"\n"を足すと5字で予算超過するため）。
+      // ここで改行優先ロジックが lastIndexOf の検索範囲に cutIndex 自身（"\n"の位置）まで含めてしまうと、
+      // 「まだ含めていないはずの直後の改行」を誤って見つけ、"aaaa\n"(5字/5byte)を返して両予算を
+      // 1 超過するバグがあった。cutIndex-1 までの検索に修正済み。
+      const chunks = splitTextByCharsAndBytes("aaaa\nb", 4, 4);
+
+      expect(chunks.join("")).toBe("aaaa\nb");
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(4);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(4);
+      }
+      expect(chunks[0]).toBe("aaaa");
+    });
+
+    test("契約: 1コードポイントも入らないほど予算が小さい場合でも前進し、予算超過を許容してコードポイント単位で丸ごと1chunkにする（throwしない）", () => {
+      const emoji = "😀"; // 4バイト
+      const chunks = splitTextByCharsAndBytes(emoji.repeat(3), 1000, 1); // 1バイトでは絵文字1個も入らない
+      expect(chunks.join("")).toBe(emoji.repeat(3));
+      expect(hasLoneSurrogateAtBoundary(chunks)).toBe(false);
+      // 契約どおり、この極端なケースでは各chunkがmaxBytes(1)を超過することを許容する
+      expect(byteLength(chunks[0])).toBeGreaterThan(1);
     });
   });
 
@@ -431,16 +543,19 @@ describe("chatContainerBuilder", () => {
     });
   });
 
-  describe("estimateFinalFooterChars", () => {
-    test("detailsが無くても、複数message時のページ番号表示に備え常にページprefixマージン(20)を確保する", () => {
-      expect(estimateFinalFooterChars({ showDetails: false })).toBe(20);
-      expect(estimateFinalFooterChars({ showDetails: true })).toBe(20);
+  describe("estimateFinalFooterBudget", () => {
+    test("detailsが無くても、複数message時のページ番号表示に備え常にページprefixマージンを確保する", () => {
+      expect(estimateFinalFooterBudget({ showDetails: false })).toEqual(budget(20, 30));
+      expect(estimateFinalFooterBudget({ showDetails: true })).toEqual(budget(20, 30));
     });
 
-    test("detailsがある場合はdetails文字数 + ページprefixマージン", () => {
+    test("detailsがある場合はdetailsの文字数・バイト数 + ページprefixマージン", () => {
       const metadata: FinalMetadata = { showDetails: true, usage };
       const details = buildUsageDetailsText(metadata) ?? "";
-      expect(estimateFinalFooterChars(metadata)).toBe(details.length + 20);
+      const detailsBudget = measureTextBudget(details);
+      expect(estimateFinalFooterBudget(metadata)).toEqual(
+        budget(detailsBudget.chars + 20, detailsBudget.bytes + 30),
+      );
     });
   });
 

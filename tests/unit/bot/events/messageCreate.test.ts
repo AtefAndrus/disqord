@@ -603,6 +603,59 @@ describe("createMessageCreateHandler", () => {
     expect(message0Text).toMatch(/ページ 1\/\d+/);
   });
 
+  test("日本語長文応答は、streaming途中を含む全send/edit payloadでUTF-8バイト内部制限に収まるよう分割される", async () => {
+    // 文字数上限(3800字)だけで分割すると、日本語(約3bytes/字)は1 chunk ≈ 11.4KBになり、
+    // 実測されたDiscordのUTF-8バイト内部制限(≈10.17KB)を超えてHTTP 500になる。
+    // createMockStreamGenerator（時計を進めない）だとupdateStreamingMessagesが一度も走らず
+    // 最終renderのeditしか検証できないため、createTimedStreamGeneratorで複数のstreamingサイクルを
+    // 実際に発生させ、途中のeditも含めて検証する。
+    setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+    const longJapaneseResponse = "あ".repeat(12000);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createTimedStreamGenerator(
+        [
+          { content: "あ".repeat(4000), advanceMs: 2100 },
+          { content: "あ".repeat(4000), advanceMs: 2100 },
+          { content: "あ".repeat(4000), advanceMs: 2100 },
+        ],
+        longJapaneseResponse,
+      ),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    // 複数messageに分割されていること
+    const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(1);
+
+    // streaming途中のedit・最終renderのeditを含む全send/edit呼び出し(mock.calls全件)について、
+    // 各payloadの「全TextDisplay(Section内の子も含む)の合計」が文字数3800以下 かつ
+    // UTF-8バイト数9000以下であること（Discordの制限は per-component ではなく
+    // 1 message の全TextDisplay合計にかかるため、個別ではなく合計で検証する）
+    const textEncoder = new TextEncoder();
+    const allSendArgs = sendCalls.map((c) => c[0] as ComponentsV2CallArg);
+    const allEditArgs = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls.map(
+      (c) => c[0] as ComponentsV2CallArg,
+    );
+    const allExtraEditArgs = extraBotMessages.flatMap((m) =>
+      (m.edit as ReturnType<typeof mock>).mock.calls.map((c) => c[0] as ComponentsV2CallArg),
+    );
+
+    expect(allEditArgs.length).toBeGreaterThan(1); // streaming途中editが実際に発生していること
+
+    for (const payload of [...allSendArgs, ...allEditArgs, ...allExtraEditArgs]) {
+      const container = toContainerJSON(payload);
+      const allText = extractTextContents(container).join("");
+      expect(allText.length).toBeLessThanOrEqual(3800);
+      expect(textEncoder.encode(allText).length).toBeLessThanOrEqual(9000);
+    }
+  });
+
   describe("マルチモーダル入力", () => {
     test("画像添付 + マルチモーダル対応モデル → parts に image_url を含めて chatService を呼ぶ", async () => {
       mockMessage.attachments = makeAttachments([
