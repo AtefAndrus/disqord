@@ -121,32 +121,43 @@ export function buildUsageDetailsText(metadata: FinalMetadata): string | undefin
 }
 
 /**
- * 末尾 message の footer 文字列（ページ番号 + LLM 詳細情報）。
- * LLM 詳細情報が無い場合（showLlmDetails=false 等）は footer 自体を出さない（undefined）。
+ * message の footer 文字列（ページ番号 + LLM 詳細情報）。
+ * ページ番号は pageInfo.total > 1 のとき（複数 message 時）常に含む。LLM 詳細情報は
+ * showLlmDetails=false や usage 未取得時は含めない（buildUsageDetailsText が undefined を返す）。
+ * どちらも無ければ footer 自体を出さない（undefined）。
  */
 export function buildFinalFooterText(
   metadata: FinalMetadata,
   pageInfo?: { page: number; total: number },
 ): string | undefined {
   const details = buildUsageDetailsText(metadata);
-  if (!details) {
-    return undefined;
+  const pageText =
+    pageInfo && pageInfo.total > 1 ? `ページ ${pageInfo.page}/${pageInfo.total}` : undefined;
+
+  if (pageText && details) {
+    return `${pageText} | ${details}`;
   }
-  if (pageInfo && pageInfo.total > 1) {
-    return `ページ ${pageInfo.page}/${pageInfo.total} | ${details}`;
-  }
-  return details;
+  return pageText ?? details;
 }
 
-/** 停止時の footer 文字列（"🛑 Stopped | xx.xs"、usage が無いため Tokens は含めない） */
-export function buildStoppedFooterText(elapsedSeconds: number): string {
-  return `🛑 Stopped | ${elapsedSeconds.toFixed(1)}s`;
+/**
+ * 停止時の footer 文字列（"🛑 Stopped | xx.xs | NNN字"）。
+ * usage は取得できないため Tokens は含めず、代わりに受信済み文字数を確定情報として表示する。
+ * receivedChars が 0 の場合は文字数部を省略する。
+ */
+export function buildStoppedFooterText(elapsedSeconds: number, receivedChars: number): string {
+  const base = `🛑 Stopped | ${elapsedSeconds.toFixed(1)}s`;
+  return receivedChars > 0 ? `${base} | ${receivedChars}字` : base;
 }
 
-/** footer 文字数見積り（LLM 詳細情報 + ページ番号 prefix のマージン） */
+/**
+ * footer 文字数見積り（ページ番号 prefix のマージン + LLM 詳細情報）。
+ * ページ番号は message 数が確定するまで有無が分からないため、details の有無によらず常に
+ * PAGE_PREFIX_RESERVE を確保する。
+ */
 export function estimateFinalFooterChars(metadata: FinalMetadata): number {
   const details = buildUsageDetailsText(metadata);
-  return details ? details.length + PAGE_PREFIX_RESERVE : 0;
+  return PAGE_PREFIX_RESERVE + (details ? details.length : 0);
 }
 
 function addBadgeAndBody(container: ContainerBuilder, params: ChatContainerBaseParams): void {
@@ -193,21 +204,22 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
 
 /**
  * 完了時の Container を構築する。
- * footer（ページ番号 + LLM 詳細情報）は isLast かつ showLlmDetails 有効・usage ありの場合のみ表示する。
- * Section は使わない（ボタン不要な状態のため）。
+ * footer のページ番号（"ページ n/N"）は pageInfo.total > 1 のとき全 message に表示する
+ * （旧 embed 実装の挙動）。LLM 詳細情報（Tokens/Cost 等）は isLast かつ showLlmDetails 有効・
+ * usage ありの場合のみ末尾に追加する。Section は使わない（ボタン不要な状態のため）。
  */
 export function buildFinalContainer(params: FinalContainerParams): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(params.color);
   addBadgeAndBody(container, params);
 
-  if (params.isLast) {
-    const footerText = buildFinalFooterText(params.metadata, params.pageInfo);
-    if (footerText) {
-      container.addSeparatorComponents((sep) =>
-        sep.setDivider(false).setSpacing(SeparatorSpacingSize.Small),
-      );
-      container.addTextDisplayComponents((td) => td.setContent(footerText));
-    }
+  // LLM 詳細情報は末尾 message のみ。非末尾 message は showDetails: false 相当にしてページ番号のみにする
+  const footerMetadata: FinalMetadata = params.isLast ? params.metadata : { showDetails: false };
+  const footerText = buildFinalFooterText(footerMetadata, params.pageInfo);
+  if (footerText) {
+    container.addSeparatorComponents((sep) =>
+      sep.setDivider(false).setSpacing(SeparatorSpacingSize.Small),
+    );
+    container.addTextDisplayComponents((td) => td.setContent(footerText));
   }
 
   return container;
@@ -215,11 +227,14 @@ export function buildFinalContainer(params: FinalContainerParams): ContainerBuil
 
 export interface StoppedContainerParams extends ChatContainerBaseParams {
   elapsedSeconds: number;
+  /** 受信済み文字数（Abort 時点までに届いた実テキスト長）。0 なら footer に含めない */
+  receivedChars: number;
 }
 
 /**
  * 停止時の Container を構築する。
- * usage が無いため Tokens は含めず、経過秒数のみを footer に表示する。Section は使わない。
+ * usage は取得できないため Tokens は含めず、経過秒数と受信済み文字数を footer に表示する。
+ * Section は使わない。
  */
 export function buildStoppedContainer(params: StoppedContainerParams): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(params.color);
@@ -230,7 +245,7 @@ export function buildStoppedContainer(params: StoppedContainerParams): Container
       sep.setDivider(false).setSpacing(SeparatorSpacingSize.Small),
     );
     container.addTextDisplayComponents((td) =>
-      td.setContent(buildStoppedFooterText(params.elapsedSeconds)),
+      td.setContent(buildStoppedFooterText(params.elapsedSeconds, params.receivedChars)),
     );
   }
 

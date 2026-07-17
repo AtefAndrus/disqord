@@ -332,6 +332,44 @@ describe("createMessageCreateHandler", () => {
     expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
   });
 
+  describe("@everyone/@here メンション処理", () => {
+    test("@everyoneのみを含むメッセージには応答しない（ignoreEveryone:trueを渡す）", async () => {
+      // 実際のdiscord.jsでは、@everyoneのみのメッセージはhas(botId, {ignoreEveryone:true})がfalseを返す
+      (mockMessage.mentions.has as ReturnType<typeof mock>).mockImplementation(
+        (_id: string, options?: { ignoreEveryone?: boolean }) => options?.ignoreEveryone !== true,
+      );
+      mockMessage.content = "@everyone こんにちは";
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      expect(mockMessage.mentions.has).toHaveBeenCalledWith("123456789", {
+        ignoreEveryone: true,
+      });
+      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    });
+
+    test("Botへの直接メンションには応答する", async () => {
+      (mockMessage.mentions.has as ReturnType<typeof mock>).mockImplementation(() => true);
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      expect(mockMessage.mentions.has).toHaveBeenCalledWith("123456789", {
+        ignoreEveryone: true,
+      });
+      expect(mockChatService.generateResponseStream).toHaveBeenCalled();
+    });
+  });
+
   test("空のコンテンツは入力エラーContainerを返す", async () => {
     mockMessage.content = "<@123456789>";
     const handler = createMessageCreateHandler(
@@ -430,6 +468,39 @@ describe("createMessageCreateHandler", () => {
     );
   });
 
+  test("予期しないエラー時、エラーreplyにエラーIDが含まれ、ログに同じIDが渡る", async () => {
+    const consoleErrorSpy = spyOn(console, "error");
+    const error = new Error("Unexpected failure");
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createErrorStreamGenerator(error),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    // console.error はspyOnの実装上、以前のテストの呼び出し履歴を引き継ぎうるため、
+    // 最後に一致した呼び出し（＝このテストで実際に発生したもの）を採用する
+    const errorLogCall = consoleErrorSpy.mock.calls.findLast((call) =>
+      String(call[0]).includes("Failed to generate response"),
+    );
+    expect(errorLogCall).toBeDefined();
+    const errorIdMatch = String(errorLogCall?.[0]).match(/"errorId":"([0-9a-f]{8})"/);
+    expect(errorIdMatch).not.toBeNull();
+    const errorId = errorIdMatch?.[1];
+
+    // エラーreply本文の末尾に同じエラーIDが含まれる
+    const replyArg = lastCallArg(mockReply);
+    const replyText = extractTextContents(toContainerJSON(replyArg)).join("\n");
+    expect(replyText).toContain(`エラーID: \`${errorId}\``);
+
+    // 内部エラーメッセージ（error.message 等）がユーザーに漏れない
+    expect(replyText).not.toContain("Unexpected failure");
+  });
+
   test("カスタムAppErrorの場合は赤色ContainerでそのuserMessageを表示する", async () => {
     const error = new AppError("Technical message", "カスタムエラーメッセージ", 500);
     (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
@@ -506,6 +577,30 @@ describe("createMessageCreateHandler", () => {
     const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
     // 最初のsendは「生成中...」、その後に追加メッセージ
     expect(sendCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("長文応答(複数message)は非最終messageにも「ページ n/N」footerを表示する（旧embed挙動の復元）", async () => {
+    const longResponse = "y".repeat(10000);
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      createMockStreamGenerator(longResponse),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    // 複数messageに分割されていること
+    const sendCalls = (mockSend as ReturnType<typeof mock>).mock.calls;
+    expect(sendCalls.length).toBeGreaterThan(1);
+
+    // 先頭message(mockBotMessage)の最終editにも「ページ 1/N」footerが付く
+    // (旧実装ではLLM詳細と同様、最終messageのみにしかfooterが付かなかった)
+    const message0FinalEdit = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const message0Text = extractTextContents(toContainerJSON(message0FinalEdit)).join("\n");
+    expect(message0Text).toMatch(/ページ 1\/\d+/);
   });
 
   describe("マルチモーダル入力", () => {
@@ -790,6 +885,33 @@ describe("createMessageCreateHandler", () => {
     const container = toContainerJSON(lastEditArg);
     expect(hasSection(container)).toBe(false);
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
+  });
+
+  test("AbortError時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
+    const abortError = new Error("Request was aborted");
+    abortError.name = "AbortError";
+    const partialText = "partial😀"; // コードポイント数 8（UTF-16 コードユニット数だと 9）
+    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
+      async function* () {
+        yield { content: partialText, done: false as const };
+        throw abortError;
+      },
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const container = toContainerJSON(lastEditArg);
+    const text = extractTextContents(container).join("\n");
+    // コードポイント数で数える（UTF-16 の `partialText.length` は 9 になる）
+    expect(text).toContain(`${Array.from(partialText).length}字`);
+    expect(text).not.toContain(`${partialText.length}字`);
+    expect(text).not.toContain("Tokens");
   });
 
   describe("ストリーミング再調整ロジック（コードレビュー指摘 3・5）", () => {

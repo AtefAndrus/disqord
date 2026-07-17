@@ -170,16 +170,25 @@ describe("chatContainerBuilder", () => {
       expect(text?.startsWith("ページ")).toBe(false);
     });
 
-    test("showDetails=falseかつ複数ページでもfooter自体を出さない（ページ番号のみの表示はしない）", () => {
+    test("showDetails=falseでも複数ページ時は「ページ n/N」のみのfooterを表示する（旧embed挙動の復元）", () => {
       const metadata: FinalMetadata = { showDetails: false };
-      expect(buildFinalFooterText(metadata, { page: 1, total: 3 })).toBeUndefined();
+      expect(buildFinalFooterText(metadata, { page: 1, total: 3 })).toBe("ページ 1/3");
+    });
+
+    test("usage未取得でも複数ページ時は「ページ n/N」のみのfooterを表示する", () => {
+      const metadata: FinalMetadata = { showDetails: true };
+      expect(buildFinalFooterText(metadata, { page: 2, total: 3 })).toBe("ページ 2/3");
     });
   });
 
   describe("buildStoppedFooterText", () => {
-    test("Tokensを含まず経過秒数のみ表示する", () => {
-      expect(buildStoppedFooterText(12.34)).toBe("🛑 Stopped | 12.3s");
-      expect(buildStoppedFooterText(12.34)).not.toContain("Tokens");
+    test("受信文字数0のときはTokensを含まず経過秒数のみ表示する", () => {
+      expect(buildStoppedFooterText(12.34, 0)).toBe("🛑 Stopped | 12.3s");
+      expect(buildStoppedFooterText(12.34, 0)).not.toContain("Tokens");
+    });
+
+    test("受信文字数がある場合は末尾に「NNN字」を追加する", () => {
+      expect(buildStoppedFooterText(12.34, 840)).toBe("🛑 Stopped | 12.3s | 840字");
     });
   });
 
@@ -268,7 +277,7 @@ describe("chatContainerBuilder", () => {
       expect(findSection(json)).toBeUndefined(); // Sectionは使わない
     });
 
-    test("複数messageの最終messageにのみ `ページ n/N` 付きfooterを表示する", () => {
+    test("複数message時は全messageにページ番号footerを表示し、最終messageのみLLM詳細を追加する（旧embed挙動の復元）", () => {
       const metadata: FinalMetadata = { showDetails: true, usage };
       const firstJson = toJSON(
         buildFinalContainer({
@@ -293,13 +302,41 @@ describe("chatContainerBuilder", () => {
         }),
       );
 
-      // 非最終message（先頭なのでbadgeは付くが）にはfooterが無い
-      expect(textContents(firstJson)).toEqual(["**Model:** gpt-5-mini", "part 1"]);
-      // 最終messageにのみページ番号付きfooter
+      // 非最終messageにも「ページ n/N」footerが付くが、LLM詳細は含まない
+      expect(textContents(firstJson)).toEqual(["**Model:** gpt-5-mini", "part 1", "ページ 1/2"]);
+      // 最終messageは「ページ n/N | <details>」
       expect(textContents(lastJson).at(-1)).toBe(`ページ 2/2 | ${buildUsageDetailsText(metadata)}`);
     });
 
-    test("showLlmDetails=falseのときfooterを表示しない", () => {
+    test("showLlmDetails=falseでも複数message時はページ番号のみのfooterを全messageに表示する", () => {
+      const metadata: FinalMetadata = { showDetails: false };
+      const firstJson = toJSON(
+        buildFinalContainer({
+          text: "part 1",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: false,
+          metadata,
+          pageInfo: { page: 1, total: 2 },
+        }),
+      );
+      const lastJson = toJSON(
+        buildFinalContainer({
+          text: "part 2",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: false,
+          isLast: true,
+          metadata,
+          pageInfo: { page: 2, total: 2 },
+        }),
+      );
+      expect(textContents(firstJson).at(-1)).toBe("ページ 1/2");
+      expect(textContents(lastJson).at(-1)).toBe("ページ 2/2");
+    });
+
+    test("単一message時にshowLlmDetails=falseだとfooterを表示しない", () => {
       const metadata: FinalMetadata = { showDetails: false, usage };
       const json = toJSON(
         buildFinalContainer({
@@ -332,7 +369,7 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildStoppedContainer", () => {
-    test("isLastのときSectionを使わず `🛑 Stopped | xx.xs` のfooterを表示する", () => {
+    test("isLastのときSectionを使わず `🛑 Stopped | xx.xs` のfooterを表示する（受信文字数0）", () => {
       const json = toJSON(
         buildStoppedContainer({
           text: "partial text",
@@ -341,12 +378,28 @@ describe("chatContainerBuilder", () => {
           isFirst: true,
           isLast: true,
           elapsedSeconds: 5.6,
+          receivedChars: 0,
         }),
       );
       expect(findSection(json)).toBeUndefined();
       const contents = textContents(json);
       expect(contents.at(-1)).toBe("🛑 Stopped | 5.6s");
       expect(contents.at(-1)).not.toContain("Tokens");
+    });
+
+    test("受信文字数がある場合はfooterに「NNN字」を含める", () => {
+      const json = toJSON(
+        buildStoppedContainer({
+          text: "partial text",
+          modelName: "gpt-5-mini",
+          color: 0xff0000,
+          isFirst: true,
+          isLast: true,
+          elapsedSeconds: 5.6,
+          receivedChars: 840,
+        }),
+      );
+      expect(textContents(json).at(-1)).toBe("🛑 Stopped | 5.6s | 840字");
     });
 
     test("isLast=falseのときfooterを表示しない", () => {
@@ -358,6 +411,7 @@ describe("chatContainerBuilder", () => {
           isFirst: false,
           isLast: false,
           elapsedSeconds: 5.6,
+          receivedChars: 840,
         }),
       );
       expect(textContents(json)).toEqual(["partial text"]);
@@ -378,12 +432,12 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("estimateFinalFooterChars", () => {
-    test("footerが無い場合は0", () => {
-      expect(estimateFinalFooterChars({ showDetails: false })).toBe(0);
-      expect(estimateFinalFooterChars({ showDetails: true })).toBe(0);
+    test("detailsが無くても、複数message時のページ番号表示に備え常にページprefixマージン(20)を確保する", () => {
+      expect(estimateFinalFooterChars({ showDetails: false })).toBe(20);
+      expect(estimateFinalFooterChars({ showDetails: true })).toBe(20);
     });
 
-    test("footerがある場合はdetails文字数 + ページprefixマージン", () => {
+    test("detailsがある場合はdetails文字数 + ページprefixマージン", () => {
       const metadata: FinalMetadata = { showDetails: true, usage };
       const details = buildUsageDetailsText(metadata) ?? "";
       expect(estimateFinalFooterChars(metadata)).toBe(details.length + 20);

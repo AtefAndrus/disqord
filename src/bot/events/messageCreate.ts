@@ -30,8 +30,8 @@ function shouldRespond(
   botId: string,
   autoReplyChannels: string[],
 ): { respond: boolean; isMention: boolean } {
-  // メンションがある場合は応答
-  if (message.mentions.has(botId)) {
+  // メンションがある場合は応答（@everyone/@here は discord.js 仕様で has() が true を返してしまうため除外）
+  if (message.mentions.has(botId, { ignoreEveryone: true })) {
     return { respond: true, isMention: true };
   }
 
@@ -191,14 +191,18 @@ export function createMessageCreateHandler(
         }
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
-          // 停止時: Section を外し、経過秒数の footer TextDisplay を表示
+          // 停止時: Section を外し、経過秒数 + 受信済み文字数の footer TextDisplay を表示
+          // （usage チャンクは届かず GET /api/v1/generation も 404 のため、確定情報として文字数を使う）
           const elapsedSeconds = (Date.now() - startTime) / 1000;
+          // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
+          const receivedChars = Array.from(fullText).length;
           await updateStoppedMessages(
             botMessages,
             fullText || "（応答なし）",
             modelName,
             color,
             elapsedSeconds,
+            receivedChars,
             message,
           );
           return;
@@ -249,7 +253,9 @@ export function createMessageCreateHandler(
         await deleteOrNeutralize(botMessages[i], modelName, color);
       }
     } catch (error) {
-      logger.error("Failed to generate response", { error, guildId: message.guild.id });
+      // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
+      const errorId = crypto.randomUUID().slice(0, 8);
+      logger.error("Failed to generate response", { errorId, error, guildId: message.guild.id });
 
       // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
       await cleanupBotMessagesOnFatalError(botMessages, fullText, modelName, color, message);
@@ -260,10 +266,14 @@ export function createMessageCreateHandler(
           : "予期しないエラーが発生しました。問題が続く場合は管理者にお問い合わせください。";
 
       try {
-        const errorContainer = buildErrorContainer(userMessage);
+        const errorContainer = buildErrorContainer(`${userMessage}\n\nエラーID: \`${errorId}\``);
         await message.reply(toComponentsV2ReplyPayload(errorContainer));
       } catch (replyError) {
-        logger.error("Failed to send error message", { replyError, guildId: message.guild.id });
+        logger.error("Failed to send error message", {
+          replyError,
+          errorId,
+          guildId: message.guild.id,
+        });
       }
     }
   };
@@ -474,7 +484,7 @@ async function updateStreamingMessages(
 
 /**
  * 停止（AbortError）時のメッセージを更新する。
- * Section を持たず、経過秒数の footer TextDisplay のみを末尾メッセージに表示する。
+ * Section を持たず、経過秒数 + 受信済み文字数の footer TextDisplay のみを末尾メッセージに表示する。
  */
 async function updateStoppedMessages(
   botMessages: Message[],
@@ -482,9 +492,10 @@ async function updateStoppedMessages(
   modelName: string,
   color: number,
   elapsedSeconds: number,
+  receivedChars: number,
   originalMessage: Message,
 ): Promise<void> {
-  const footerText = buildStoppedFooterText(elapsedSeconds);
+  const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
   const chunks = splitTextIntoMessages(fullText, badgeText(modelName).length, footerText.length);
 
   for (let i = 0; i < chunks.length; i++) {
@@ -497,6 +508,7 @@ async function updateStoppedMessages(
       isFirst,
       isLast,
       elapsedSeconds,
+      receivedChars,
     });
 
     if (i < botMessages.length) {
