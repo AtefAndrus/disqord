@@ -195,7 +195,7 @@ The skill handles: version bump, CHANGELOG.md generation, deleting the changes f
 
 - Discord message limit: 2000 characters (split required)
 <!-- AUTO:DEFAULT_MODEL:START -->
-- Default model: `deepseek/deepseek-v4-flash:free`
+- Default model: `google/gemma-4-26b-a4b-it:free`
 <!-- AUTO:DEFAULT_MODEL:END -->
 - SQLite WAL mode enabled
 - The bun minor line in `mise.toml` (`bun = "1.x"`) is the SSOT. When bumping it, align the `Dockerfile` tag/digest and `package.json` `engines.bun` in the same PR (CI's drift-check fails on a mismatch).
