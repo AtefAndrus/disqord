@@ -1,6 +1,6 @@
 ---
 title: "LLM チャット返信の Components V2 化"
-status: in-progress
+status: implemented
 priority: high
 summary: "LLM チャット返信を Components V2（Container/Section）化"
 ---
@@ -316,9 +316,9 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - [x] `messageCreate.test.ts` の mock 検証を V2 化
 - [x] `embedBuilder.test.ts` から削除関数の test を除去
 - [ ] `interactionCreate.test.ts` の停止ボタン test を V2 化 (該当テストファイルが存在せず、`interactionCreate.ts` 自体も停止ボタンの message 更新には関与しないため対象外。詳細は Design 節参照)
-- [ ] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + ファイル) の 6 シナリオ
+- [x] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + PDF 入力) のシナリオを実機確認済み (長文は日本語で UTF-8 バイト制限の分割も確認。multimodal の「出力」は Phase D 対象で未実装)
 
-### Phase D: multimodal 統合
+### Phase D: multimodal 統合 (LLM 出力側の multimodal が未実装のため保留)
 
 - [ ] multimodal change 側の出力画像処理が `MediaGallery` を返す前提で、`chatContainerBuilder` に `media` 引数を追加
 - [ ] 添付ファイル (`File`) の取り扱いも同様
