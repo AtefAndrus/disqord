@@ -43,7 +43,7 @@ docker run -d \
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |
 | NODE_ENV | No | アプリ動作モード（development または production）（デフォルト: `development`） |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: `data/disqord.db`） |
-| DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `deepseek/deepseek-v4-flash:free`） |
+| DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `google/gemma-4-26b-a4b-it:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |
 | GITHUB_WEBHOOK_SECRET | No | GitHub Webhook署名検証用（リリース通知使用時は必須） |
 | ADMIN_API_SECRET | No | 管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503） |

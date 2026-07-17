@@ -25,7 +25,7 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     name: "DEFAULT_MODEL",
     required: false,
     description: "デフォルトモデル",
-    default: "deepseek/deepseek-v4-flash:free",
+    default: "google/gemma-4-26b-a4b-it:free",
   },
   {
     name: "HEALTH_PORT",
