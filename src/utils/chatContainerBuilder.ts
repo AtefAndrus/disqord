@@ -77,6 +77,13 @@ export interface FinalMetadata {
   provider?: string;
   latency?: number;
   usage?: UsageMetadata;
+  /**
+   * Short user-facing annotation for a non-`stop` completion (e.g.
+   * finishReason "length"/"content_filter"). Shown regardless of
+   * `showDetails`, since it describes how the response itself ended rather
+   * than optional LLM diagnostics.
+   */
+  note?: string;
 }
 
 interface ChatContainerBaseParams {
@@ -228,10 +235,10 @@ export function buildFinalFooterText(
   const pageText =
     pageInfo && pageInfo.total > 1 ? `ページ ${pageInfo.page}/${pageInfo.total}` : undefined;
 
-  if (pageText && details) {
-    return `${pageText} | ${details}`;
-  }
-  return pageText ?? details;
+  const parts = [metadata.note, pageText, details].filter(
+    (part): part is string => part !== undefined && part.length > 0,
+  );
+  return parts.length > 0 ? parts.join(" | ") : undefined;
 }
 
 /**
@@ -252,9 +259,13 @@ export function buildStoppedFooterText(elapsedSeconds: number, receivedChars: nu
 export function estimateFinalFooterBudget(metadata: FinalMetadata): TextBudget {
   const details = buildUsageDetailsText(metadata);
   const detailsBudget = details ? measureTextBudget(details) : ZERO_TEXT_BUDGET;
+  // " | " suffix reserved alongside the note itself: an over-estimate is
+  // harmless (the split just reserves a few extra bytes/chars), but an
+  // under-estimate could let the note push a message over Discord's limits.
+  const noteBudget = metadata.note ? measureTextBudget(`${metadata.note} | `) : ZERO_TEXT_BUDGET;
   return {
-    chars: PAGE_PREFIX_RESERVE_CHARS + detailsBudget.chars,
-    bytes: PAGE_PREFIX_RESERVE_BYTES + detailsBudget.bytes,
+    chars: PAGE_PREFIX_RESERVE_CHARS + detailsBudget.chars + noteBudget.chars,
+    bytes: PAGE_PREFIX_RESERVE_BYTES + detailsBudget.bytes + noteBudget.bytes,
   };
 }
 

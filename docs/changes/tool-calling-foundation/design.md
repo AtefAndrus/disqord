@@ -1,6 +1,6 @@
 ---
 title: "ツール呼び出し基盤"
-status: planned
+status: in-progress
 priority: high
 summary: "OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ）"
 ---
@@ -227,14 +227,14 @@ tool calling 対応は `GET /api/v1/models?supported_parameters=tools`（対応�
 
 ## Tasks
 
-- [ ] `src/types/index.ts` に tool 関連型（`ChatMessage` の `tool`/`tool_calls`、`ChatCompletionRequest.tools`、`StreamDelta.tool_calls`、`StreamChoice.finish_reason`）を追加
-- [ ] `openrouter.ts`: request への `tools`/`tool_choice` 付与（**結合後**が空なら omit）、streaming の `finish_reason` と `tool_calls` パース
-- [ ] `src/llm/tools/registry.ts`: `IClientTool`（`isEnabled`/`validate`/`handler(signal)`）/ `IToolContext` / `ToolRegistry.buildTools()` / `get()` / `register()`（重複名・不正名 reject）
-- [ ] `src/llm/toolHandler.ts`: dispatch（isEnabled 再評価・`Promise.race` timeout・throw/timeout でも error 結果）+ `role:"tool"` 組立（id 整合・最大 byte clip）
-- [ ] `src/llm/toolLoop.ts`: streaming マルチターンループ（`n=1`/`choices[0]`、delta 蓄積〔drain 継続 + 保持量上限〕、ストリーム終了判定マトリクス、正規化〔name 欠落/全 drop/重複 id→synthetic/JSON 不正/schema 検証/overflow〕、turn 5 は `tool_choice:"none"`〔tools 再送〕、server/client 結合）
-- [ ] `chatService`/`messageCreate` を `runToolLoop()`（`Promise<ToolLoopResult>`）経由に統一（tool 未登録時は現行と等価）、結果で分岐
-- [ ] `openrouter.ts` SSE parser: frame/carry 最大長強制 + malformed-frame の protocol 失敗化。`tests/unit/llm/openrouter.test.ts` に **raw-stream テスト**（未終端 carry/frame 過大、chunk 境界跨ぎ UTF-8 byte 計算、ちょうど上限、malformed JSON、abort/drain、parser 失敗と同時の cancel 優先）
-- [ ] unit test（上記の各分岐を mock stream で網羅）
+- [x] `src/types/index.ts` に tool 関連型（`ChatMessage` の `tool`/`tool_calls`、`ChatCompletionRequest.tools`、`StreamDelta.tool_calls`、`StreamChoice.finish_reason`）を追加
+- [x] `openrouter.ts`: request への `tools`/`tool_choice` 付与（**結合後**が空なら omit）、streaming の `finish_reason` と `tool_calls` パース
+- [x] `src/llm/tools/registry.ts`: `IClientTool`（`isEnabled`/`validate`/`handler(signal)`）/ `IToolContext` / `ToolRegistry.buildTools()` / `get()` / `register()`（重複名・不正名 reject）
+- [x] `src/llm/tools/toolHandler.ts`: dispatch（isEnabled 再評価・`Promise.race` timeout・throw/timeout でも error 結果）+ `role:"tool"` 組立（id 整合・最大 byte clip）
+- [x] `src/llm/toolLoop.ts`: streaming マルチターンループ（`n=1`/`choices[0]`、delta 蓄積〔drain 継続 + 保持量上限〕、ストリーム終了判定マトリクス、正規化〔name 欠落/全 drop/重複 id→synthetic/JSON 不正/schema 検証/overflow〕、turn 5 は `tool_choice:"none"`〔tools 再送〕、server/client 結合）
+- [x] `chatService`/`messageCreate` を `runToolLoop()`（`Promise<ToolLoopResult>`）経由に統一（tool 未登録時は現行と等価）、結果で分岐
+- [x] `openrouter.ts` SSE parser: frame/carry 最大長強制 + malformed-frame の protocol 失敗化。`tests/unit/llm/openrouter.test.ts` に **raw-stream テスト**（未終端 carry/frame 過大、chunk 境界跨ぎ UTF-8 byte 計算、ちょうど上限、malformed JSON、abort/drain、parser 失敗と同時の cancel 優先）
+- [x] unit test（上記の各分岐を mock stream で網羅）
 - [ ] `docs/changes/tool-calling-foundation/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
