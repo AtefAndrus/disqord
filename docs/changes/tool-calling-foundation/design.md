@@ -1,6 +1,6 @@
 ---
 title: "ツール呼び出し基盤"
-status: in-progress
+status: implemented
 priority: high
 summary: "OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ）"
 ---
