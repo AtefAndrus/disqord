@@ -16,7 +16,7 @@
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [マルチモーダル対応](changes/multimodal/design.md) | 高 | implemented | 画像・PDF 添付の LLM 入力対応 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
-| [ツール呼び出し基盤](changes/tool-calling-foundation/design.md) | 高 | planned | OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ） |
+| [ツール呼び出し基盤](changes/tool-calling-foundation/design.md) | 高 | implemented | OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
 | [コード実行（microsandbox 統合）](changes/code-execution/design.md) | 中 | planned | microsandbox による安全なコード実行（/run・LLM tool 統合） |
 | [回答の再生成・編集/undo・compaction](changes/conversation-regeneration/design.md) | 中 | planned | 会話履歴ストアの上に載る再生成（generation_number）・undo（active）・履歴 compaction（要約圧縮） |

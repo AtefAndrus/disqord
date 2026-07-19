@@ -10,6 +10,7 @@ import { getDatabase } from "./db";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
+import { ToolRegistry } from "./llm/tools/registry";
 import { ChatService } from "./services/chatService";
 import { ModelService } from "./services/modelService";
 import { ReleaseNotificationService } from "./services/releaseNotificationService";
@@ -42,7 +43,11 @@ async function bootstrap(): Promise<void> {
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo, config.defaultModel);
   const modelService = new ModelService(llmClient);
-  const chatService = new ChatService(llmClient, settingsService);
+  // Empty for now — tool-calling-foundation Phase 4 wires the registry into
+  // ChatService/runToolLoop; future changes (code-execution, discord-tool,
+  // web-search, ...) register their tools here.
+  const toolRegistry = new ToolRegistry();
+  const chatService = new ChatService(llmClient, settingsService, toolRegistry);
 
   const commandHandlers = createCommandHandlers(llmClient, settingsService, modelService);
 

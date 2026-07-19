@@ -50,6 +50,7 @@ export function createMockLLMClient(): ILLMClient {
         usage: undefined,
         model: undefined,
         provider: undefined,
+        finishReason: "stop" as const,
       };
     }),
     listModels: mock(() => Promise.resolve(["model-1", "model-2"])),

@@ -4,7 +4,6 @@ import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import type { StreamFinalResult } from "../../types";
 import {
   badgeText,
   buildErrorContainer,
@@ -15,7 +14,6 @@ import {
   estimateFinalFooterBudget,
   type FinalMetadata,
   measureTextBudget,
-  STREAMING_LABEL,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
@@ -24,8 +22,7 @@ import {
 } from "../../utils/chatContainerBuilder";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
-
-const STREAM_UPDATE_INTERVAL = 2000; // 2秒
+import { DiscordStreamingUpdater } from "./streamingUpdater";
 
 function shouldRespond(
   message: Message,
@@ -58,6 +55,23 @@ function shouldRespond(
   }
 
   return { respond: false, isMention: false };
+}
+
+/**
+ * finishReason が "stop" 以外（打ち切り/モデレーション）で終わった最終応答に付ける短い注記。
+ * 履歴に積む raw content 自体は変えず、UI 表示にだけ付加する（設計「終了判定マトリクス」）。
+ */
+function buildFinishReasonNote(
+  finishReason: "stop" | "length" | "content_filter",
+): string | undefined {
+  switch (finishReason) {
+    case "length":
+      return "応答が最大出力長に達したため途中で打ち切られました";
+    case "content_filter":
+      return "プロバイダのコンテンツフィルタにより応答が制限されました";
+    default:
+      return undefined;
+  }
 }
 
 export function createMessageCreateHandler(
@@ -151,8 +165,9 @@ export function createMessageCreateHandler(
     }
 
     // 致命的エラー時のクリーンアップで参照するため、外側 catch と共有できるようにホイストする
-    let botMessages: Message[] = [];
-    let fullText = "";
+    // （初期メッセージ送信前に例外が起きた場合は undefined のまま — cleanupBotMessagesOnFatalError は
+    // 空配列を渡されると何もしない）
+    let updater: DiscordStreamingUpdater | undefined;
 
     try {
       // 初期メッセージ送信（Components V2、停止ボタン付き Section）
@@ -164,71 +179,71 @@ export function createMessageCreateHandler(
         isLast: true,
         triggerMessageId: message.id,
       });
-      botMessages = [await message.channel.send(toComponentsV2Payload(initialContainer))];
+      const initialBotMessage = await message.channel.send(toComponentsV2Payload(initialContainer));
+      updater = new DiscordStreamingUpdater(message, initialBotMessage, modelName, color);
 
-      let lastUpdate = Date.now();
-      let finalResult: StreamFinalResult | null = null;
       const startTime = Date.now();
+      const result = await chatService.generateChatResponse(
+        message.guild.id,
+        { text: content, parts: attachmentResult.parts },
+        message.id,
+        updater,
+        { channelId: message.channel.id, userId: message.author.id },
+      );
 
-      try {
-        const stream = chatService.generateResponseStream(
-          message.guild.id,
-          { text: content, parts: attachmentResult.parts },
-          message.id,
+      if (result.status === "cancelled") {
+        // 最終描画の直前に必ず finalize する: 放棄された（timeout/cancel で await が打ち切られた）
+        // updater 呼び出しがこの後に遅れて解決しても、停止表示を stale な内容で上書きさせない。
+        updater.markFinalized();
+        // 停止時: Section を外し、経過秒数 + 受信済み文字数の footer TextDisplay を表示
+        // （usage チャンクは届かず GET /api/v1/generation も 404 のため、確定情報として文字数を使う）
+        const elapsedSeconds = updater.elapsedSeconds;
+        // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
+        const receivedChars = Array.from(updater.text).length;
+        await updateStoppedMessages(
+          updater.messages,
+          updater.text || "（応答なし）",
+          modelName,
+          color,
+          elapsedSeconds,
+          receivedChars,
+          message,
         );
+        return;
+      }
 
-        for await (const chunk of stream) {
-          if (chunk.done) {
-            finalResult = chunk;
-            break;
-          }
-
-          fullText += chunk.content;
-
-          const now = Date.now();
-          if (now - lastUpdate >= STREAM_UPDATE_INTERVAL) {
-            await updateStreamingMessages(botMessages, fullText, modelName, color, message);
-            lastUpdate = now;
-          }
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          // 停止時: Section を外し、経過秒数 + 受信済み文字数の footer TextDisplay を表示
-          // （usage チャンクは届かず GET /api/v1/generation も 404 のため、確定情報として文字数を使う）
-          const elapsedSeconds = (Date.now() - startTime) / 1000;
-          // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
-          const receivedChars = Array.from(fullText).length;
-          await updateStoppedMessages(
-            botMessages,
-            fullText || "（応答なし）",
-            modelName,
-            color,
-            elapsedSeconds,
-            receivedChars,
-            message,
-          );
-          return;
-        }
-        throw error;
+      if (result.status === "error") {
+        throw result.error;
       }
 
       // 最終更新（Components V2、footer 付き、Section なし）
       const latency = Date.now() - startTime;
       const metadata: FinalMetadata = {
         showDetails: settings.showLlmDetails,
-        model: finalResult?.model,
-        provider: finalResult?.provider,
+        model: result.model,
+        provider: result.provider,
         latency,
-        usage: finalResult?.usage,
+        usage: result.usage,
+        note: buildFinishReasonNote(result.finishReason),
       };
+      // 表示には updater が保持する全表示テキスト（commit 済み過去ターンの preamble + 最終ターンの
+      // content）を使う。result.text は最終ターンの content のみのため、tool_calls を挟んだ場合に
+      // 使うと commit 済み preamble が最終描画から消えてしまう（tool 未登録時は preamble が無く
+      // updater.text === result.text になるため挙動は変わらない）。
       // OpenRouter が空文字列で完了した場合、setContent("") の同期 throw を避けるためフォールバックする
-      const finalText = (finalResult?.fullText ?? fullText) || "（応答なし）";
+      const finalText = updater.text || "（応答なし）";
       const footerBudget = estimateFinalFooterBudget(metadata);
       const chunks = splitTextIntoMessages(
         finalText,
         measureTextBudget(badgeText(modelName)),
         footerBudget,
       );
+
+      const botMessages = updater.messages;
+
+      // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
+      // これから送る確定表示を停止ボタン付きの stale な内容で上書きさせない。
+      updater.markFinalized();
 
       // 既存メッセージを更新し、必要に応じて新しいメッセージを追加
       for (let i = 0; i < chunks.length; i++) {
@@ -263,8 +278,18 @@ export function createMessageCreateHandler(
       const errorId = crypto.randomUUID().slice(0, 8);
       logger.error("Failed to generate response", { errorId, error, guildId: message.guild.id });
 
+      // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
+      // これから行うクリーンアップ表示を停止ボタン付きの stale な内容で上書きさせない。
+      updater?.markFinalized();
+
       // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
-      await cleanupBotMessagesOnFatalError(botMessages, fullText, modelName, color, message);
+      await cleanupBotMessagesOnFatalError(
+        updater?.messages ?? [],
+        updater?.text ?? "",
+        modelName,
+        color,
+        message,
+      );
 
       const userMessage =
         error instanceof AppError
@@ -383,117 +408,7 @@ async function cleanupBotMessagesOnFatalError(
 }
 
 /**
- * message の Section（停止ボタン）を isLast: true で再 edit し、復元を試みる。
- * message 増加遷移中に send/edit が失敗し、停止ボタンがどこにも無い状態のまま次 chunk 到着まで
- * 固まる（無期限にキャンセル不能になる）のを防ぐための best-effort 処理。
- * 復元自体の失敗も warn ログのみで無視する（次サイクルで自己修復を試みる）。
- */
-async function restoreStreamingSection(
-  botMessage: Message,
-  text: string,
-  isFirst: boolean,
-  modelName: string,
-  color: number,
-  triggerMessageId: string,
-): Promise<void> {
-  try {
-    const container = buildStreamingContainer({
-      text,
-      modelName,
-      color,
-      isFirst,
-      isLast: true,
-      triggerMessageId,
-    });
-    await botMessage.edit(toComponentsV2EditPayload(container));
-  } catch (restoreError) {
-    logger.warn("Failed to restore stop button section on stripped message", {
-      restoreError,
-      messageId: botMessage.id,
-    });
-  }
-}
-
-/**
- * ストリーミング中のメッセージを更新する。
- * 長文の場合は複数メッセージに分割し、停止ボタン（Section）は最新メッセージのみに配置する。
- * edit/send の失敗（429 等）は throw させず、当該サイクルの残り処理を break で打ち切って次サイクルへ
- * 委ねる（discord.js 内蔵の rate limit queue に基本委ねる）。失敗した message より後ろを触らずに
- * 打ち切ることで「停止ボタンは常に高々 1 個」の不変条件を守る（例: message[0] の Section 除去 edit が
- * 失敗した状態で message[1] の send だけ成功すると停止ボタンが 2 個になってしまう）。次サイクルで全
- * message が再 edit されるため自己修復する。
- *
- * message 増加遷移（1→2 等）では、旧末尾 message から Section を先に外してから新 message を send する
- * ため、その send が失敗すると停止ボタンがどこにも無い状態になり、次 chunk 到着まで（ストールすれば
- * 無期限に）キャンセル不能になってしまう。これを避けるため、旧末尾 message 以降で「isLast: false へ
- * edit/send 済み（＝ Section を失ったまま）」の最新 index を追跡し、break する前に best-effort で
- * その message へ Section を復元する。edit 自体の失敗による break（旧末尾 message にまだ触れていない
- * ケース）は対象外とする — 実末尾 message には前サイクルの Section が残っており、ボタンは可用のまま。
- */
-async function updateStreamingMessages(
-  botMessages: Message[],
-  fullText: string,
-  modelName: string,
-  color: number,
-  originalMessage: Message,
-): Promise<void> {
-  const chunks = splitTextIntoMessages(
-    fullText,
-    measureTextBudget(badgeText(modelName)),
-    measureTextBudget(STREAMING_LABEL),
-  );
-
-  // 前サイクルまで Section（停止ボタン）を保持していた message の index
-  const oldLastIndex = botMessages.length - 1;
-  // 旧末尾以降で Section を失ったまま留まっている最新の message index（未発生なら null）
-  let sectionLostAtIndex: number | null = null;
-
-  for (let i = 0; i < chunks.length; i++) {
-    const isFirst = i === 0;
-    const isLast = i === chunks.length - 1;
-    const container = buildStreamingContainer({
-      text: chunks[i],
-      modelName,
-      color,
-      isFirst,
-      isLast,
-      triggerMessageId: originalMessage.id,
-    });
-
-    try {
-      if (i < botMessages.length) {
-        await botMessages[i].edit(toComponentsV2EditPayload(container));
-      } else if ("send" in originalMessage.channel) {
-        const newMessage = await originalMessage.channel.send(toComponentsV2Payload(container));
-        botMessages.push(newMessage);
-      }
-
-      if (i >= oldLastIndex) {
-        sectionLostAtIndex = isLast ? null : i;
-      }
-    } catch (error) {
-      logger.warn("Failed to update streaming message, aborting this cycle to retry next cycle", {
-        error,
-        index: i,
-      });
-
-      if (sectionLostAtIndex !== null && sectionLostAtIndex < botMessages.length) {
-        await restoreStreamingSection(
-          botMessages[sectionLostAtIndex],
-          chunks[sectionLostAtIndex],
-          sectionLostAtIndex === 0,
-          modelName,
-          color,
-          originalMessage.id,
-        );
-      }
-      break;
-    }
-  }
-}
-
-/**
- * 停止（AbortError）時のメッセージを更新する。
+ * 停止（キャンセル）時のメッセージを更新する。
  * Section を持たず、経過秒数 + 受信済み文字数の footer TextDisplay のみを末尾メッセージに表示する。
  */
 async function updateStoppedMessages(

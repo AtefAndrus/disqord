@@ -11,7 +11,12 @@ import {
 import { type Attachment, Collection, MessageFlags, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
-import type { IChatService } from "../../../../src/services/chatService";
+import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
+import type {
+  ChatRequestContext,
+  ChatUserInput,
+  IChatService,
+} from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 
@@ -85,7 +90,7 @@ function bodyOf(payload: ComponentsV2CallArg): string {
 interface MockMessage {
   id: string;
   type: MessageType;
-  author: { bot: boolean };
+  author: { bot: boolean; id: string };
   guild: { id: string } | null;
   client: { user: { id: string } | null };
   mentions: { has: ReturnType<typeof mock> };
@@ -118,16 +123,40 @@ function makeAttachments(fixtures: AttachmentFixture[]): Collection<string, Atta
   return collection;
 }
 
-function createMockStreamGenerator(fullText: string) {
-  return async function* () {
-    // チャンクを複数に分割してyield
-    const chunkSize = Math.ceil(fullText.length / 3);
+type ChatResponseFn = (
+  guildId: string,
+  input: ChatUserInput,
+  requestId: string,
+  updater: IToolLoopUpdater,
+  ctx: ChatRequestContext,
+) => Promise<ToolLoopResult>;
+
+/**
+ * chatService.generateChatResponse() のフェイク実装。runToolLoop() 自体は経由せず、
+ * updater へ累積 stageContent を流したうえで status: "final" の ToolLoopResult を返す
+ * （tool 未登録時の実際の1ターン完結挙動を模倣する）。
+ */
+function createMockChatResponseFn(
+  fullText: string,
+  finishReason: "stop" | "length" | "content_filter" = "stop",
+): ChatResponseFn {
+  return async (_guildId, _input, _requestId, updater) => {
+    updater.beginTurn();
+    const chunkSize = Math.max(1, Math.ceil(fullText.length / 3));
+    let acc = "";
     for (let i = 0; i < fullText.length; i += chunkSize) {
-      yield { content: fullText.slice(i, i + chunkSize), done: false as const };
+      acc += fullText.slice(i, i + chunkSize);
+      await updater.stageContent(acc);
     }
-    yield {
-      done: true as const,
-      fullText,
+    if (fullText.length === 0) {
+      await updater.stageContent("");
+    }
+    updater.commitTurn("final");
+    return {
+      status: "final",
+      text: fullText,
+      finishReason,
+      history: [],
       usage: undefined,
       model: undefined,
       provider: undefined,
@@ -135,29 +164,88 @@ function createMockStreamGenerator(fullText: string) {
   };
 }
 
-function createErrorStreamGenerator(error: Error) {
-  // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
-  return async function* () {
-    throw error;
+/**
+ * tool_calls の preamble ターンを commit したうえで、続く最終ターンを別途 commit するフェイク。
+ * runToolLoop の実際の状態機械（updater.beginTurn → stageContent → commitTurn("tool_calls") →
+ * beginTurn → stageContent → commitTurn("final")）をそのままなぞり、ToolLoopResult.text には
+ * 最終ターンの content のみを載せる（tool_calls を挟んだ場合の実際の返り値契約）。
+ */
+function createPreambleThenFinalChatResponseFn(
+  preamble: string,
+  finalTurnText: string,
+  finishReason: "stop" | "length" | "content_filter" = "stop",
+): ChatResponseFn {
+  return async (_guildId, _input, _requestId, updater) => {
+    updater.beginTurn();
+    await updater.stageContent(preamble);
+    updater.commitTurn("tool_calls");
+
+    updater.beginTurn();
+    await updater.stageContent(finalTurnText);
+    updater.commitTurn("final");
+
+    return {
+      status: "final",
+      text: finalTurnText,
+      finishReason,
+      history: [],
+      usage: undefined,
+      model: undefined,
+      provider: undefined,
+    };
+  };
+}
+
+/** 停止ボタン（cancelRequest）経路相当の status: "cancelled" を返すフェイク。 */
+function createCancelledChatResponseFn(partialText = ""): ChatResponseFn {
+  return async (_guildId, _input, _requestId, updater) => {
+    updater.beginTurn();
+    if (partialText) {
+      await updater.stageContent(partialText);
+    }
+    updater.abortTurn("cancelled (test)");
+    return { status: "cancelled", history: [] };
+  };
+}
+
+/** 致命的エラー（非キャンセル）経路相当の status: "error" を返すフェイク。partialText 省略時は無入力のまま失敗する。 */
+function createFatalErrorChatResponseFn(partialText: string, error: unknown): ChatResponseFn {
+  return async (_guildId, _input, _requestId, updater) => {
+    updater.beginTurn();
+    if (partialText) {
+      await updater.stageContent(partialText);
+    }
+    updater.abortTurn("error (test)");
+    return { status: "error", error, history: [] };
   };
 }
 
 /**
- * setSystemTime でシステム時計を進めながらチャンクをyieldするstream generator。
+ * setSystemTime でシステム時計を進めながら updater.stageContent を呼ぶフェイク。
  * STREAM_UPDATE_INTERVAL (2秒) の経過判定を実時間の待機なしに決定的にテストするために使う。
+ * 最終 commit 直前に `finalFullText` を改めて stage する（updater.text と ToolLoopResult.text が
+ * 一致するという実際の契約を保つ。最終描画は updater.text を読むため、両者が食い違うとテストの
+ * 前提が崩れる）。
  */
-function createTimedStreamGenerator(
+function createTimedChatResponseFn(
   steps: Array<{ content: string; advanceMs: number }>,
   finalFullText: string,
-) {
-  return async function* () {
+): ChatResponseFn {
+  return async (_guildId, _input, _requestId, updater) => {
+    updater.beginTurn();
+    let acc = "";
     for (const step of steps) {
       setSystemTime(new Date(Date.now() + step.advanceMs));
-      yield { content: step.content, done: false as const };
+      acc += step.content;
+      await updater.stageContent(acc);
     }
-    yield {
-      done: true as const,
-      fullText: finalFullText,
+    await updater.stageContent(finalFullText);
+    updater.commitTurn("final");
+    return {
+      status: "final",
+      text: finalFullText,
+      finishReason: "stop",
+      history: [],
       usage: undefined,
       model: undefined,
       provider: undefined,
@@ -197,7 +285,7 @@ describe("createMessageCreateHandler", () => {
 
     mockChatService = {
       generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
-      generateResponseStream: mock(createMockStreamGenerator("Mock response")),
+      generateChatResponse: mock(createMockChatResponseFn("Mock response")),
       cancelRequest: mock(() => false),
     };
 
@@ -258,7 +346,7 @@ describe("createMessageCreateHandler", () => {
     mockMessage = {
       id: "msg-123",
       type: MessageType.Default,
-      author: { bot: false },
+      author: { bot: false, id: "author-123" },
       guild: { id: "guild-123" },
       client: { user: { id: "123456789" } },
       mentions: { has: mock(() => true) },
@@ -303,7 +391,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
   test("Guild外のメッセージは無視する", async () => {
@@ -316,7 +404,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
   test("メンションがない場合は無視する", async () => {
@@ -329,7 +417,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
   describe("@everyone/@here メンション処理", () => {
@@ -350,7 +438,7 @@ describe("createMessageCreateHandler", () => {
       expect(mockMessage.mentions.has).toHaveBeenCalledWith("123456789", {
         ignoreEveryone: true,
       });
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("Botへの直接メンションには応答する", async () => {
@@ -366,7 +454,7 @@ describe("createMessageCreateHandler", () => {
       expect(mockMessage.mentions.has).toHaveBeenCalledWith("123456789", {
         ignoreEveryone: true,
       });
-      expect(mockChatService.generateResponseStream).toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).toHaveBeenCalled();
     });
   });
 
@@ -388,7 +476,7 @@ describe("createMessageCreateHandler", () => {
     expect(container.accent_color).toBe(0xed4245); // RED
     expect(extractTextContents(container).join("\n")).toContain("## ⚠️ 入力エラー");
     expect(extractTextContents(container).join("\n")).toContain("メッセージを入力してください。");
-    expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
   test("正常なメッセージに対してストリーミングレスポンスを生成する", async () => {
@@ -408,11 +496,13 @@ describe("createMessageCreateHandler", () => {
     expect(initialSendArg?.allowedMentions).toEqual({ parse: [] });
     expect(initialSendArg && hasSection(toContainerJSON(initialSendArg))).toBe(true);
 
-    // generateResponseStreamが呼ばれる（parts は空配列）
-    expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+    // generateChatResponseが呼ばれる（parts は空配列）
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
       "guild-123",
       { text: "Hello", parts: [] },
       "msg-123",
+      expect.anything(),
+      { channelId: "channel-123", userId: "author-123" },
     );
 
     // 最終更新でComponents V2 Containerが設定され、Section（停止ボタン）は付かない
@@ -424,8 +514,8 @@ describe("createMessageCreateHandler", () => {
 
   test("AppErrorの場合は赤色ContainerでuserMessageを表示する", async () => {
     const error = new RateLimitError("Rate limited by API", 30);
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createErrorStreamGenerator(error),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("", error),
     );
     const handler = createMessageCreateHandler(
       mockChatService,
@@ -447,8 +537,8 @@ describe("createMessageCreateHandler", () => {
 
   test("一般的なErrorの場合は赤色Containerで汎用メッセージを表示する", async () => {
     const error = new Error("Unknown error");
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createErrorStreamGenerator(error),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("", error),
     );
     const handler = createMessageCreateHandler(
       mockChatService,
@@ -471,8 +561,8 @@ describe("createMessageCreateHandler", () => {
   test("予期しないエラー時、エラーreplyにエラーIDが含まれ、ログに同じIDが渡る", async () => {
     const consoleErrorSpy = spyOn(console, "error");
     const error = new Error("Unexpected failure");
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createErrorStreamGenerator(error),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("", error),
     );
 
     const handler = createMessageCreateHandler(
@@ -503,8 +593,8 @@ describe("createMessageCreateHandler", () => {
 
   test("カスタムAppErrorの場合は赤色ContainerでそのuserMessageを表示する", async () => {
     const error = new AppError("Technical message", "カスタムエラーメッセージ", 500);
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createErrorStreamGenerator(error),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("", error),
     );
     const handler = createMessageCreateHandler(
       mockChatService,
@@ -553,13 +643,13 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(mockChatService.generateResponseStream).toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).toHaveBeenCalled();
   });
 
   test("長文応答は複数メッセージに分割される", async () => {
     const longResponse = "a".repeat(10000);
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createMockStreamGenerator(longResponse),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn(longResponse),
     );
 
     const handler = createMessageCreateHandler(
@@ -581,8 +671,8 @@ describe("createMessageCreateHandler", () => {
 
   test("長文応答(複数message)は非最終messageにも「ページ n/N」footerを表示する（旧embed挙動の復元）", async () => {
     const longResponse = "y".repeat(10000);
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createMockStreamGenerator(longResponse),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn(longResponse),
     );
 
     const handler = createMessageCreateHandler(
@@ -611,8 +701,8 @@ describe("createMessageCreateHandler", () => {
     // 実際に発生させ、途中のeditも含めて検証する。
     setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
     const longJapaneseResponse = "あ".repeat(12000);
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createTimedStreamGenerator(
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createTimedChatResponseFn(
         [
           { content: "あ".repeat(4000), advanceMs: 2100 },
           { content: "あ".repeat(4000), advanceMs: 2100 },
@@ -676,13 +766,15 @@ describe("createMessageCreateHandler", () => {
 
       await handler(mockMessage as never);
 
-      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+      expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
         "guild-123",
         {
           text: "Hello",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
         },
         "msg-123",
+        expect.anything(),
+        { channelId: "channel-123", userId: "author-123" },
       );
     });
 
@@ -711,7 +803,7 @@ describe("createMessageCreateHandler", () => {
       const replyArg = lastCallArg(mockReply);
       expect(replyArg.flags).toBe(MessageFlags.IsComponentsV2);
       expect(extractTextContents(toContainerJSON(replyArg)).length).toBeGreaterThan(0);
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("画像添付 + isMultimodalCapable=null (判定不能) → 透過して chatService を呼ぶ", async () => {
@@ -733,7 +825,7 @@ describe("createMessageCreateHandler", () => {
 
       await handler(mockMessage as never);
 
-      expect(mockChatService.generateResponseStream).toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).toHaveBeenCalled();
     });
 
     test("PDF 添付 → fetch して data URL 化、モデル判定なしで chatService を呼ぶ", async () => {
@@ -761,7 +853,7 @@ describe("createMessageCreateHandler", () => {
 
       expect(mockFetch.mock.calls[0]?.[0]).toBe("https://cdn.discord.test/spec.pdf");
       expect(mockModelService.isMultimodalCapable).not.toHaveBeenCalled();
-      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+      expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
         "guild-123",
         {
           text: "Hello",
@@ -773,6 +865,8 @@ describe("createMessageCreateHandler", () => {
           ],
         },
         "msg-123",
+        expect.anything(),
+        { channelId: "channel-123", userId: "author-123" },
       );
     });
 
@@ -801,7 +895,7 @@ describe("createMessageCreateHandler", () => {
       expect(text).toContain("添付ファイルエラー");
       expect(text).toContain("ファイルの取得に失敗しました");
       expect(text).toContain("expired.pdf");
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("FILE_TOO_LARGE: PDF サイズが上限超過 → 警告 (文言含む) を返し chatService 未呼び出し", async () => {
@@ -837,7 +931,7 @@ describe("createMessageCreateHandler", () => {
       expect(text).toContain("40MB");
       expect(text).toContain("huge.pdf");
       expect(mockFetch).not.toHaveBeenCalled();
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("UNSUPPORTED_MIME 添付 → 警告を返し chatService 未呼び出し", async () => {
@@ -859,7 +953,7 @@ describe("createMessageCreateHandler", () => {
       await handler(mockMessage as never);
 
       expect(mockReply).toHaveBeenCalled();
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("MISSING_MIME 添付 (contentType: null) → 警告を返し chatService 未呼び出し", async () => {
@@ -881,7 +975,7 @@ describe("createMessageCreateHandler", () => {
       await handler(mockMessage as never);
 
       expect(mockReply).toHaveBeenCalled();
-      expect(mockChatService.generateResponseStream).not.toHaveBeenCalled();
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
     test("テキスト空 + 画像添付 → 早期 return せず chatService を text='' で呼ぶ (default prompt は chatService 側で補う)", async () => {
@@ -906,22 +1000,22 @@ describe("createMessageCreateHandler", () => {
 
       // messageCreate は text="" のまま chatService に渡す。
       // default prompt 補完は chatService.buildChatRequest の責務 (chatService.test.ts で検証)
-      expect(mockChatService.generateResponseStream).toHaveBeenCalledWith(
+      expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
         "guild-123",
         {
           text: "",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
         },
         "msg-123",
+        expect.anything(),
+        { channelId: "channel-123", userId: "author-123" },
       );
     });
   });
 
-  test("AbortErrorの場合は停止メッセージをComponents V2で表示する", async () => {
-    const abortError = new Error("Request was aborted");
-    abortError.name = "AbortError";
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createErrorStreamGenerator(abortError),
+  test("停止（cancelled）の場合は停止メッセージをComponents V2で表示する", async () => {
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createCancelledChatResponseFn(),
     );
 
     const handler = createMessageCreateHandler(
@@ -932,7 +1026,7 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // AbortErrorの場合はreplyではなくeditでComponents V2形式の停止メッセージを表示、Sectionは無い
+    // 停止（cancelled）の場合はreplyではなくeditでComponents V2形式の停止メッセージを表示、Sectionは無い
     const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
     expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
     const container = toContainerJSON(lastEditArg);
@@ -940,15 +1034,10 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
 
-  test("AbortError時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
-    const abortError = new Error("Request was aborted");
-    abortError.name = "AbortError";
+  test("停止（cancelled）時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
     const partialText = "partial😀"; // コードポイント数 8（UTF-16 コードユニット数だと 9）
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      async function* () {
-        yield { content: partialText, done: false as const };
-        throw abortError;
-      },
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createCancelledChatResponseFn(partialText),
     );
 
     const handler = createMessageCreateHandler(
@@ -967,12 +1056,100 @@ describe("createMessageCreateHandler", () => {
     expect(text).not.toContain("Tokens");
   });
 
+  describe("最終描画: preamble commit + 最終ターンの合成、finishReason 注記", () => {
+    test("tool_calls preamble が commit 済みの場合、最終描画は preamble + 最終ターンの合成テキストになる（result.text だけでは preamble が消える）", async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createPreambleThenFinalChatResponseFn("確認します...\n", "晴れです。"),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(bodyOf(lastEditArg)).toBe("確認します...\n晴れです。");
+    });
+
+    test("tool 未登録相当（preamble 無し）の場合は従来どおり最終ターンの content のみが描画される", async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn("Mock response"),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(bodyOf(lastEditArg)).toBe("Mock response");
+    });
+
+    test('finishReason "length" のとき、最終描画に打ち切り注記が付く', async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn("途中まで...", "length"),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      const contents = extractTextContents(toContainerJSON(lastEditArg));
+      expect(contents.join("\n")).toContain("応答が最大出力長に達したため途中で打ち切られました");
+      // 履歴に積む raw text 自体は変えない（注記は footer 側の別 TextDisplay として付く）
+      expect(contents).toContain("途中まで...");
+    });
+
+    test('finishReason "content_filter" のとき、最終描画にモデレーション注記が付く', async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn("穏当な内容", "content_filter"),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+      expect(text).toContain("プロバイダのコンテンツフィルタにより応答が制限されました");
+    });
+
+    test('finishReason "stop" のときは注記が付かない', async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn("普通の応答", "stop"),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+      expect(text).not.toContain("打ち切られました");
+      expect(text).not.toContain("コンテンツフィルタ");
+    });
+  });
+
   describe("ストリーミング再調整ロジック（コードレビュー指摘 3・5）", () => {
     test("1→2 messageに増える際、旧messageはSectionなしでedit・新messageはSectionありでsendされる", async () => {
       setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
       const bigChunk = "x".repeat(4000); // 単一チャンクで1 messageの本文予算(~3762字)を超える
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createTimedChatResponseFn([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
       );
 
       const handler = createMessageCreateHandler(
@@ -1000,8 +1177,8 @@ describe("createMessageCreateHandler", () => {
     test("streaming更新でeditが失敗した場合、そのサイクル内では新規message(Section付き)をsendしない", async () => {
       setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
       const bigChunk = "x".repeat(4000);
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createTimedChatResponseFn([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
       );
       // ストリーミングサイクル中最初のeditを失敗させる（429等を想定）
       (mockBotMessage.edit as ReturnType<typeof mock>).mockImplementationOnce(() =>
@@ -1032,8 +1209,8 @@ describe("createMessageCreateHandler", () => {
     test("1→2 message遷移でsendが失敗した場合、旧messageにSection(停止ボタン)を復元する", async () => {
       setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
       const bigChunk = "x".repeat(4000); // 単一チャンクで1 messageの本文予算(~3762字)を超える
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createTimedStreamGenerator([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createTimedChatResponseFn([{ content: bigChunk, advanceMs: 2100 }], bigChunk),
       );
 
       // streamingサイクルで新message(index1)を作るsendだけを失敗させ、以降は成功させる
@@ -1082,8 +1259,8 @@ describe("createMessageCreateHandler", () => {
 
     test("全てのsend/edit payloadにIsComponentsV2フラグとallowedMentions.parse:[]が付与される", async () => {
       const longResponse = "y".repeat(10000);
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createMockStreamGenerator(longResponse),
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn(longResponse),
       );
 
       const handler = createMessageCreateHandler(
@@ -1112,8 +1289,8 @@ describe("createMessageCreateHandler", () => {
   });
 
   test('空応答で完了した場合はsetContent("")で例外にならず、「（応答なし）」を含む最終Containerでeditする', async () => {
-    (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-      createMockStreamGenerator(""),
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn(""),
     );
 
     const handler = createMessageCreateHandler(
@@ -1133,12 +1310,12 @@ describe("createMessageCreateHandler", () => {
   });
 
   describe("致命的エラー時のクリーンアップ（コードレビュー指摘 1・4）", () => {
-    test("非AbortErrorがストリーム途中で発生した場合、部分textをSectionなしのContainerとして保持してからエラーreplyする", async () => {
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        async function* () {
-          yield { content: "partial response text", done: false as const };
-          throw new Error("fatal upstream failure");
-        },
+    test("非cancelledエラーがストリーム途中で発生した場合、部分textをSectionなしのContainerとして保持してからエラーreplyする", async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createFatalErrorChatResponseFn(
+          "partial response text",
+          new Error("fatal upstream failure"),
+        ),
       );
 
       const handler = createMessageCreateHandler(
@@ -1164,15 +1341,15 @@ describe("createMessageCreateHandler", () => {
       expect(replyContainer.accent_color).toBe(0xed4245); // RED
     });
 
-    test("非AbortErrorが大量の部分text(複数message分)受信後に発生した場合、chunks全体をedit/sendして復元してからエラーreplyする", async () => {
+    test("非cancelledエラーが大量の部分text(複数message分)受信後に発生した場合、chunks全体をedit/sendして復元してからエラーreplyする", async () => {
       // reconciliation(2秒間隔のstreaming更新)が一度も走る前に、1 messageに収まらない量のテキストが
       // 届いてからthrowするケース。既存botMessagesは初期placeholderの1件のみ。
       const bigPartial = "z".repeat(8000);
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        async function* () {
-          yield { content: bigPartial, done: false as const };
-          throw new Error("fatal upstream failure after large partial output");
-        },
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createFatalErrorChatResponseFn(
+          bigPartial,
+          new Error("fatal upstream failure after large partial output"),
+        ),
       );
 
       const handler = createMessageCreateHandler(
@@ -1210,8 +1387,8 @@ describe("createMessageCreateHandler", () => {
       // 3 message構成になる長さの最終応答。message0はedit、message1(あふれ1つ目)はsend成功、
       // message2(あふれ2つ目)のsendが失敗して致命的エラー経路に落ちるシナリオを再現する。
       const longText = "w".repeat(11000);
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createMockStreamGenerator(longText),
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createMockChatResponseFn(longText),
       );
 
       let sendCallIndex = 0;
@@ -1256,11 +1433,8 @@ describe("createMessageCreateHandler", () => {
       // mockBotMessage("bot-msg-123")のdeleteを強制失敗させる
       deleteShouldFail = (id) => id === "bot-msg-123";
 
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
-        async function* () {
-          throw new Error("fatal upstream failure before first chunk");
-        },
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createFatalErrorChatResponseFn("", new Error("fatal upstream failure before first chunk")),
       );
 
       const handler = createMessageCreateHandler(
@@ -1284,12 +1458,9 @@ describe("createMessageCreateHandler", () => {
       expect(mockReply).toHaveBeenCalled();
     });
 
-    test("非AbortErrorが最初のチャンク受信前に発生した場合（部分textなし）、botMessageをdeleteしてからエラーreplyする", async () => {
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        // biome-ignore lint/correctness/useYield: テスト用にエラーをスローするだけのgenerator
-        async function* () {
-          throw new Error("fatal upstream failure before first chunk");
-        },
+    test("非cancelledエラーが最初のチャンク受信前に発生した場合（部分textなし）、botMessageをdeleteしてからエラーreplyする", async () => {
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createFatalErrorChatResponseFn("", new Error("fatal upstream failure before first chunk")),
       );
 
       const handler = createMessageCreateHandler(
@@ -1309,8 +1480,8 @@ describe("createMessageCreateHandler", () => {
     test("最終render時、余剰messageのdeleteが失敗した場合は中立プレースホルダーへのeditで残置を防ぐ", async () => {
       setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
       // streaming中に2 messageへ増えた後、最終確定テキストが短くなり1 messageに収まるケースを再現
-      (mockChatService.generateResponseStream as ReturnType<typeof mock>).mockImplementation(
-        createTimedStreamGenerator(
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        createTimedChatResponseFn(
           [{ content: "x".repeat(4000), advanceMs: 2100 }],
           "short final text",
         ),

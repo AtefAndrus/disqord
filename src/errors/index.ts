@@ -96,3 +96,39 @@ export class ConfigurationError extends AppError {
     super(message, userMessage, 400);
   }
 }
+
+/**
+ * Raised when the OpenRouter SSE stream violates the expected wire protocol:
+ * malformed `data:` JSON, an oversized frame/carry buffer, a finish_reason
+ * mismatch between choice and delta, or content/tool_call deltas received
+ * after the terminal finish_reason has already been observed.
+ */
+export class StreamProtocolError extends AppError {
+  constructor(message: string) {
+    super(
+      message,
+      "応答ストリームの処理中にエラーが発生しました。しばらくしてから再度お試しください。",
+    );
+  }
+}
+
+/**
+ * Raised by the client tool-calling loop (`runToolLoop`) when the model or
+ * transport violates a client-tool-calling protocol invariant: all
+ * accumulated tool calls were dropped for missing `function.name`, zero
+ * calls survived normalization, tool_call fragments arrived alongside a
+ * `stop`/`length`/`content_filter` finish_reason (preamble treated as
+ * final), the last allowed turn produced `tool_calls` despite
+ * `tool_choice:"none"`, the stream ended without a terminal finish_reason
+ * (disconnect), the model returned an empty response (no content, no tool
+ * calls), an unknown finish_reason was received, or a turn's accumulation
+ * guardrails (distinct call count / byte budget) were exceeded.
+ */
+export class ToolProtocolError extends AppError {
+  constructor(message: string) {
+    super(
+      message,
+      "ツール呼び出しの処理中に問題が発生しました。しばらくしてから再度お試しください。",
+    );
+  }
+}
