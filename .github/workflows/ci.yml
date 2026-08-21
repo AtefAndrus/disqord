@@ -67,7 +67,7 @@ jobs:
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
-          version: "2026.6.1" # mise 本体を固定（既定 latest=可変。Dependabot は更新しないため手動 bump）
+          version: "2026.6.1" # mise 本体を固定（既定 latest=可変）。Renovate が jdx/mise として更新する
           install_args: bun # bun のみ。git-cliff は CI に入れない
       - run: bun install --frozen-lockfile
       - run: bun run lint

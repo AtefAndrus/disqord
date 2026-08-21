@@ -175,7 +175,7 @@ Format: `[type] short description`
 | `[perf]` | Performance improvement | Performance |
 | `[chore]` | Maintenance | Skipped |
 | `[release]` | Release version | Skipped |
-| `build(deps)` | Dependabot auto-generated | Dependencies |
+| `build(deps)` | Bot-generated dependency update (Renovate) | Dependencies |
 
 ## Release Process
 
@@ -199,7 +199,8 @@ The skill handles: version bump, CHANGELOG.md generation, deleting the changes f
 <!-- AUTO:DEFAULT_MODEL:END -->
 - SQLite WAL mode enabled
 - The bun version in `mise.toml` is the SSOT, pinned to an exact patch (`bun = "1.3.14"`). The `Dockerfile` tag is pinned to the same patch (`oven/bun:1.3.14-slim@sha256:...`) and CI's drift-check requires the two to match exactly, rejecting any value that is not a three-part version. Do not go back to a floating spec on either side. mise resolves `1.3` to the newest 1.3.x, so it moves with no edit at all. The Dockerfile pins a digest, so republishing a tag does not move it — but on a mutable tag like `1.3-slim` a digest update raises the real patch while the tag text stays put. Neither drift is visible in the version strings, which is why both sides must carry a three-part version. These are the only two places that decide which bun runs: `mise.toml` for local and CI, the base image for production. `package.json` has no `engines.bun` — bun does not enforce `engines`, and the package is `private` so it never reaches a registry that would.
-- Manual pins outside Dependabot's scope (bump periodically): the actionlint docker image digest in `ci.yml`, the zizmor-action `version` input, and the mise-action `version` input.
+- Dependency updates run through Renovate (`renovate.json5`); there is no `dependabot.yml`. Dependabot alerts stay on, its security updates are off, so vulnerability PRs come from Renovate alone. Note that GitHub does not raise alerts for SHA-pinned actions, so those are covered by version updates rather than by alerts.
+- The only pin Renovate does not yet track is the actionlint docker image digest in `ci.yml`, which is still bumped by hand until the Phase 2 custom manager lands. The zizmor-action and mise-action `version` inputs are handled by the built-in github-actions manager; keep watching them until a real PR confirms it.
 
 ## References
 
