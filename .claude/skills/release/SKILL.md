@@ -33,9 +33,14 @@ Run `bun run format:md` to auto-fix any markdown formatting issues.
 
 ## Step 5: Commit and Tag
 
+リリースコミットは main 上で作る（この手順に限り意図的）。pre-commit のブランチガードが
+main への直コミットを止めるので `LEFTHOOK=0` で明示的にバイパスする。
+対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` のみでソースを含まないため、
+lint / typecheck / test をこのコミットで走らせないことによるリスクは無い。
+
 ```bash
 git add package.json CHANGELOG.md docs/progress.md
-git commit -m "[release] bump version to v$ARGUMENTS"
+LEFTHOOK=0 git commit -m "[release] bump version to v$ARGUMENTS"
 git tag v$ARGUMENTS
 git push && git push --tags
 ```

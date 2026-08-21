@@ -5,7 +5,9 @@ pre-commit:
     # 判断を人手に委ねず既定で止める。意図的に行う場合は LEFTHOOK=0 git commit ...
     00_guard-branch:
       run: |
-        branch=$(git rev-parse --abbrev-ref HEAD)
+        # rev-parse ではなく symbolic-ref を使う。未コミットの main では rev-parse が HEAD を
+        # 解決できず空を返し、case に一致せずガードが fail-open になる
+        branch=$(git symbolic-ref --quiet --short HEAD || true)
         # マージコミット作成中は対象外。main で git pull がマージを作る場合に詰まらせない
         if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then exit 0; fi
         case "$branch" in
