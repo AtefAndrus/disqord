@@ -15,10 +15,14 @@
   semanticCommits: "enabled",
   labels: ["dependencies"],
   packageRules: [
-    // 現行 Dependabot の cooldown 7 日を version 更新に限って再現（pin / digest は対象外）
+    // 供給網対策のクールダウン。version 更新に限る（pin / digest は releaseTimestamp を
+    // 持たず永久 pending になるため対象外。公式の security:minimumReleaseAge* も同じ理由で
+    // lockFileMaintenance / replacement / pin を除外している）。
+    // 値は bunfig.toml の [install] minimumReleaseAge と揃えること。bun 側を長くすると
+    // Renovate が提案した版を bun install が拒否して artifact 更新が壊れる
     {
       matchUpdateTypes: ["major", "minor", "patch"],
-      minimumReleaseAge: "7 days",
+      minimumReleaseAge: "3 days",
     },
     // bun は mise 側 (depName: bun / packageName: oven-sh/bun) と Dockerfile 側 (depName: oven/bun) で
     // depName が異なるため、group:allNonMajor は minor / patch しか束ねない。major は対象外なので

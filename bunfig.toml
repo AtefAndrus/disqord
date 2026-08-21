@@ -1,0 +1,17 @@
+[install]
+# 供給網対策のクールダウン。3 日は npm の unpublish ウィンドウ (72 時間) を覆う長さで、
+# Renovate 公式の security:minimumReleaseAgeNpm と同じ値。
+# renovate.json5 の minimumReleaseAge と必ず揃えること。bun 側を長くすると
+# Renovate が提案した版を bun install が拒否して artifact 更新が壊れる。
+#
+# Renovate 側は PR を提案する時点のゲートで、こちらは install 解決時のゲート。
+# 手動の bun install や lockfile 再生成にも効く点が違う (公式も両方への設定を推奨)。
+# CI の `bun install --frozen-lockfile` と Dockerfile の production install は
+# lockfile 固定のため解決が走らず、このゲートの影響を受けない (実測で確認)。
+#
+# minimumReleaseAgeExcludes は置かない。公式 docs と eeg-server は
+# ["@types/node", "typescript"] を churn 対策の例に挙げるが、本リポジトリは
+# :pinDevDependencies で devDependencies を exact 固定するため範囲解決が起きず、
+# 除外しても効果が無い。範囲を持つのは runtime 依存 (discord.js / zod) だけで、
+# それらは除外すべきでない。
+minimumReleaseAge = 259200 # 3 days in seconds
