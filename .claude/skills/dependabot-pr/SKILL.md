@@ -6,6 +6,11 @@ allowed-tools: Bash(gh pr view *), Bash(gh pr list *), Bash(gh pr checks *), Bas
 
 # Dependabot PR Handler
 
+> **注記（移行中）**: 本リポジトリは Dependabot から Renovate (Mend hosted App) へ移行済みで、`.github/dependabot.yml` は削除されている。
+> したがって以下の手順のうち Dependabot 固有のもの（`@dependabot rebase`、グループPRの既知バグ、手動追従の手順A〜C）は現行運用に適用されない。
+> Renovate 運用向けの書き換えは、実際の Renovate PR を 2 サイクル観測してから行う（[renovate-migration](../../../docs/changes/renovate-migration/design.md) の Phase 1 Tasks）。
+> それまでの間、本 skill を新規の依存更新 PR に適用しないこと。biome 更新時の `$schema` 手当て（Known Issues 4 / Special Cases）も `customManagers:biomeVersions` が自動化するため不要。
+
 ## Overview
 
 このリポジトリの Dependabot は `multi-ecosystem-groups`（`all-dependencies`: bun / github-actions / docker、cooldown 7日）構成で、通常は **1 本のグループPR** にまとまる。

@@ -1,0 +1,54 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:best-practices",
+    "group:allNonMajor", // minor / patch を 1 本に。major は non-major から分離される
+    "group:allDigest", // digest 更新も 1 本にまとめる
+    "customManagers:biomeVersions", // biome.json の $schema を @biomejs/biome に追従させる公式プリセット
+    ":semanticCommitTypeAll(build)", // 末尾に置き config:recommended の fix(deps)/chore(deps) 割り当てを上書き
+  ],
+  timezone: "Asia/Tokyo",
+  // schedule: ["* 0-8 * * 1"],  // 月曜 0-8 時台 (JST)。activated 後に有効化
+  lockFileMaintenance: { enabled: false },
+  // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
+  vulnerabilityAlerts: { minimumGroupSize: 1 },
+  semanticCommits: "enabled",
+  labels: ["dependencies"],
+  packageRules: [
+    // 現行 Dependabot の cooldown 7 日を version 更新に限って再現（pin / digest は対象外）
+    {
+      matchUpdateTypes: ["major", "minor", "patch"],
+      minimumReleaseAge: "7 days",
+    },
+    // bun は mise 側 (depName: bun / packageName: oven-sh/bun) と Dockerfile 側 (depName: oven/bun) で
+    // depName が異なるため、group:allNonMajor は minor / patch しか束ねない。major は対象外なので
+    // 放置すると bun 1.x -> 2.x が 2 本の PR に割れ、どちらも drift-check で落ちる。
+    // 専用グループに入れ separateMajorMinor: false を置いて、更新タイプによらず 1 本に載せる。
+    // bun-types は含めない。ランタイムを選ぶ 2 経路とは別の型定義パッケージで、
+    // drift-check の対象でもなく、独自のレンジで動くため束ねる必然性がない
+    {
+      groupName: "bun toolchain",
+      groupSlug: "bun-toolchain",
+      matchDepNames: ["bun", "oven/bun"],
+      separateMajorMinor: false,
+    },
+    // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
+    {
+      groupName: "zizmor",
+      groupSlug: "zizmor", // groupName から自動生成される値と同じだが、ブランチ名を設定上明示するために置く
+      matchPackageNames: ["ghcr.io/zizmorcore/zizmor", "zizmorcore/zizmor-action"],
+      minimumGroupSize: 2,
+      // group:all をやめて separateMajorMinor が既定の true に戻ったため、このグループ内でも
+      // major と non-major が別ブランチに割れる。片側だけが major に振れると各ブランチの更新は
+      // 1 件になり minimumGroupSize: 2 を満たさず、どちらの PR も出ないまま黙って止まる。
+      // このグループに限って false に戻し、action と CLI が 1 本に載るようにする
+      separateMajorMinor: false,
+    },
+    // クールダウンを外すのは GHCR の CLI だけ。action 側 (github-tags) は releaseTimestamp を
+    // 返すので 7 日待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる
+    {
+      matchPackageNames: ["ghcr.io/zizmorcore/zizmor"],
+      minimumReleaseAge: null,
+    },
+  ],
+}
