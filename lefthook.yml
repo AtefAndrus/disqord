@@ -1,6 +1,21 @@
 pre-commit:
   piped: true
   commands:
+    # main へ直コミットすると push 前に気付いても reset とブランチ作り直しの往復になる。
+    # 判断を人手に委ねず既定で止める。意図的に行う場合は LEFTHOOK=0 git commit ...
+    00_guard-branch:
+      run: |
+        # rev-parse ではなく symbolic-ref を使う。未コミットの main では rev-parse が HEAD を
+        # 解決できず空を返し、case に一致せずガードが fail-open になる
+        branch=$(git symbolic-ref --quiet --short HEAD || true)
+        # マージコミット作成中は対象外。main で git pull がマージを作る場合に詰まらせない
+        if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then exit 0; fi
+        case "$branch" in
+          main|master)
+            echo "main への直コミットは既定で禁止。ブランチを切ること。"
+            echo "意図的に行う場合は LEFTHOOK=0 git commit ..."
+            exit 1 ;;
+        esac
     01_generate-readme:
       run: bun scripts/generate-readme.ts && git add README.md CLAUDE.md .env.example docs/progress.md
     02_lint:
