@@ -19,16 +19,24 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      # bun の minor 線が mise.toml(SSOT) と Dockerfile で一致するか検証（bun 不要・純テキスト）
+      # bun の版が mise.toml(SSOT) と Dockerfile で完全一致するか検証（bun 不要・純テキスト）
       # 比較するのは実際に bun を供給する 2 経路だけ。開発 / CI は mise.toml、本番は Dockerfile の
       # base image が bun を決める。package.json の engines.bun はどちらにも関与せず
       # bun 自身も強制しないため、この検査のためだけに存在する値になっていたので削除した。
+      #
+      # patch まで含めた完全一致を要求する。両側とも exact 指定にしてあり、
+      # 片側だけを可変指定（mise の `1.3` は 1.3 系の最新へ解決し、Docker の `1.3-slim` は
+      # タグ再発行で浮動する）に戻すと、同じ minor 線の中で本番と開発の版が静かにずれる。
+      # 3 要素にマッチしない値は可変指定へ戻った合図なので、その時点で落とす。
       - name: bun version drift check (mise SSOT)
         run: |
-          mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+).*/\1/p' mise.toml)
-          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile | head -n1)
+          mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' mise.toml)
+          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+\.[0-9]+)-slim@.*#\1#p' Dockerfile | head -n1)
           echo "mise=$mise_v dockerfile=$docker_v"
-          if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ]; then
+          if [ -z "$mise_v" ] || [ -z "$docker_v" ]; then
+            echo "::error::bun version must be pinned to an exact patch in both mise.toml and Dockerfile (mise=$mise_v dockerfile=$docker_v)"; exit 1
+          fi
+          if [ "$mise_v" != "$docker_v" ]; then
             echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v)"; exit 1
           fi
       # biome.json の $schema が package.json(SSOT) と一致するか検証（bun 不要・純テキスト）
