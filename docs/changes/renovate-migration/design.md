@@ -145,12 +145,11 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
                     | select(type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))' package.json) || {
       echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3"; exit 1
     }
-    actual=$(jq -r '."$schema"' biome.json)
     expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
-    echo "expected=$expected actual=$actual"
-    if [ "$actual" != "$expected" ]; then
-      echo "::error::biome schema drift (expected=$expected actual=$actual)"; exit 1
-    fi
+    echo "expected=$expected actual=$(jq -r '."$schema"' biome.json)"
+    jq -e --arg expected "$expected" '."$schema" == $expected' biome.json > /dev/null || {
+      echo "::error::biome schema drift (expected=$expected)"; exit 1
+    }
 ```
 
 `$schema` から版を抽出して比べるのではなく、期待 URL を組み立てて値全体と文字列比較する。
@@ -160,6 +159,11 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 `grep` は入力を行単位で照合するため、`2.5.3\njunk` のような多行の値でも 1 行目が一致すれば通過する（実測で確認）。
 `\A` / `\z` は行頭・行末ではなく文字列全体の先頭・末尾にアンカーするので、多行の値をまとめて弾ける。
 レンジ（`^2.5.3` / `~2.5.3`）、prerelease、キー欠落、末尾改行付きの値も同じ検証で落ちる。
+
+`$schema` 側の比較も同じ理由で `jq -e --arg` を使い jq 内で行う。
+シェルのコマンド置換は末尾の改行をすべて落とすため、値を取り出してから比べると
+`https://biomejs.dev/schemas/2.5.3/schema.json\n` のように末尾に改行が付いた値が通過してしまう（実測で確認）。
+jq 内で比較すれば、末尾改行・先頭空白・多行・非文字列型のいずれも一致しないものとして扱われる。
 
 **この check が追加するのは検出ではなく強制である。**
 Biome 自身が `$schema` の版ずれを検出し `The configuration schema version does not match the CLI version` を出す。
@@ -233,7 +237,7 @@ Phase 1:
 - [ ] zizmor-action と mise-action の `with.version` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。公式ドキュメントが保証しているのは対象入力のサポートであって、実環境での置換成功は別の受け入れ条件になる。抽出の確認だけで完了とすると、手動ピンから引き取った 2 箇所が一度も更新されないまま Phase 1 を終えられてしまう。解決するまで Phase 1 を完了としない
   - mise: `group:all` 配下で `minimumGroupSize` の制約がないため、2 サイクル中に更新が来なければ Design「Phase 2」記載の `baseBranchPatterns` 手順で検証ブランチの `version:` だけを旧版に下げれば PR が出る
   - zizmor: 専用グループに `minimumGroupSize: 2` を設定しているため、**`with.version` だけを下げても更新が 1 件にしかならずブランチ作成が延期され、PR が出ない**（`minimumGroupSize` は「x 件以上の更新が揃うまでブランチ作成を延期する」オプション）。合成する場合は `uses: zizmorcore/zizmor-action@<sha> # vX.Y.Z` の SHA とバージョンコメント、および `with.version` の両方を、既知の互換な旧ペアまで下げて更新を 2 件にする。そもそも action と CLI が揃った時だけ更新するのがこのグループの狙いなので、自然な更新を待てば両方が同じ PR に載る
-- [ ] `biome.json` の `$schema` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。抽出の成功だけでは置換経路が通ったことにならない（現状は `package.json` と `$schema` が同版なので更新自体が発生しない）。Biome のリリース間隔なら 2 サイクル中に自然な更新が来る見込みだが、来なければ Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で `$schema` だけ旧版に下げて合成する。解決するまで Phase 1 を完了としない
+- [ ] `biome.json` の `$schema` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。抽出の成功だけでは置換経路が通ったことにならない（現状は `package.json` と `$schema` が同版なので更新自体が発生しない）。確認するのは「`$schema` が置換されること」ではなく「**`@biomejs/biome` の更新と `$schema` の更新が同じ PR に載ること**」である。`$schema` は独立した依存として抽出され `group:all` がまとめる構成なので、両者が別ブランチに分かれて双方 drift check で落ちる経路がありうる（`group:all` は原子的な同期保証ではない。Design 参照）。Biome のリリース間隔なら 2 サイクル中に自然な更新が来る見込みだが、来なければ Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で、`package.json` / `bun.lock` / `biome.json` を揃って旧版に戻し、1 本の PR で 3 つとも更新されることをゲートにする。`$schema` だけ下げる合成では JSONata マネージャ単体の置換しか確認できず、このゲートを満たさない。解決するまで Phase 1 を完了としない
 - [ ] 週次グループ PR を 2 サイクル確認（グルーピング・schedule・minimumReleaseAge の動作、および releaseTimestamp の取得可否）。releaseTimestamp は datasource ごとに確認する: `mise.toml` の bun（mise マネージャ）、`oven/bun`（docker）、mise-action の `jdx/mise`（github-release-attachments）、zizmor-action の `ghcr.io/zizmorcore/zizmor`（docker / GHCR）。`mise.toml` の bun と mise-action の `jdx/mise` は datasource が異なるので、まとめて「mise」と扱わず個別に見る
 - [ ] 2 サイクル中に `mise.toml` の bun が minor 線表記（`1.3`）のまま維持されることを確認する（bun は patch リリースが頻繁なため観測機会は十分ある）。3 要素版（例: `1.3.14`）への書き換え PR が出た場合は、適切な packageRule を追加するか mise の bun 更新を無効化して手動同期（現行運用）へ戻す。解決するまで Phase 1 を完了としない。なお「`1.4` リリース時に bump PR が出るか」「Dockerfile と同じ PR にまとまるか」は次の bun minor リリースまで検証できないため完了条件にしない（提案されなくても現行の手動 bump + drift-check と同等で退行はない）。先行検証したい場合は Phase 2 の `baseBranchPatterns` 手順を流用し、検証ブランチで 3 ファイルを旧 minor 線（Dockerfile は旧タグと対応する digest）に揃えて `1.2 → 1.3` の更新を合成できる
 - [ ] CLAUDE.md の Notes（手動ピン運用メモ。zizmor-action と mise-action の `version` はこの時点で自動化済みになるため削除し、残るのは actionlint イメージ digest のみ）とコミット規約表の `build(deps) | Dependabot auto-generated` 行、および `.claude/skills/dependabot-pr/` を Renovate 運用に更新（bun minor 更新 PR マージ時の `engines.bun` 手動同期手順を含める）。`cliff.toml` の `# Dependabot` コメントと、`ci.yml` の mise-action `version:` 行に付いた「Dependabot は更新しないため手動 bump」コメントも更新（この 2 つは Renovate が実際に更新するようになってから直す。先に書き換えると移行完了までの間だけ記述が誤りになる）

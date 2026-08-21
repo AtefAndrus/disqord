@@ -44,12 +44,13 @@ jobs:
                           | select(type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))' package.json) || {
             echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3"; exit 1
           }
-          actual=$(jq -r '."$schema"' biome.json)
           expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
-          echo "expected=$expected actual=$actual"
-          if [ "$actual" != "$expected" ]; then
-            echo "::error::biome schema drift (expected=$expected actual=$actual)"; exit 1
-          fi
+          echo "expected=$expected actual=$(jq -r '."$schema"' biome.json)"
+          # 比較も jq 内で行う。シェルのコマンド置換は末尾改行を落とすため、
+          # 値を取り出してから比べると末尾に改行が付いた $schema を取りこぼす。
+          jq -e --arg expected "$expected" '."$schema" == $expected' biome.json > /dev/null || {
+            echo "::error::biome schema drift (expected=$expected)"; exit 1
+          }
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
