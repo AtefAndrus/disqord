@@ -19,15 +19,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      # bun の minor 線が mise.toml(SSOT) / Dockerfile / package.json で一致するか検証（bun 不要・純テキスト）
+      # bun の minor 線が mise.toml(SSOT) と Dockerfile で一致するか検証（bun 不要・純テキスト）
+      # 比較するのは実際に bun を供給する 2 経路だけ。開発 / CI は mise.toml、本番は Dockerfile の
+      # base image が bun を決める。package.json の engines.bun はどちらにも関与せず
+      # bun 自身も強制しないため、この検査のためだけに存在する値になっていたので削除した。
       - name: bun version drift check (mise SSOT)
         run: |
           mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+).*/\1/p' mise.toml)
           docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile | head -n1)
-          eng_v=$(jq -r '.engines.bun' package.json | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/')
-          echo "mise=$mise_v dockerfile=$docker_v engines=$eng_v"
-          if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$eng_v" ]; then
-            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
+          echo "mise=$mise_v dockerfile=$docker_v"
+          if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ]; then
+            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v)"; exit 1
           fi
       # biome.json の $schema が package.json(SSOT) と一致するか検証（bun 不要・純テキスト）
       # biome 自身も不一致を検出するが severity が info で exit 0 のため CI は緑のまま通る。
