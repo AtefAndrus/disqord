@@ -85,9 +85,9 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/repo" --workdir /repo \
             docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
-      - uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
         with:
-          version: "1.25.2" # zizmor CLI 版を固定（既定 latest=可変）
+          version: "1.29.0" # zizmor CLI 版を固定（既定 latest=可変）
           advanced-security: false # SARIF/GHAS アップロード無効化（security-events: write 昇格を回避）
           online-audits: false # 外部 API 参照を無効化（offline 運用）
 
