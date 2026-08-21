@@ -24,12 +24,14 @@
     // depName が異なるため、group:allNonMajor は minor / patch しか束ねない。major は対象外なので
     // 放置すると bun 1.x -> 2.x が 2 本の PR に割れ、どちらも drift-check で落ちる。
     // 専用グループに入れ separateMajorMinor: false を置いて、更新タイプによらず 1 本に載せる。
-    // bun-types は含めない。ランタイムを選ぶ 2 経路とは別の型定義パッケージで、
-    // drift-check の対象でもなく、独自のレンジで動くため束ねる必然性がない
+    // bun-types も同じグループに入れる。tsconfig.json の types が ["bun-types"] なので
+    // これが typecheck における Bun API 型の唯一の供給源で、ランタイムから独立して先行すると
+    // 「型は通るが実行時に存在しない API」を受け入れてしまう。drift-check は mise/Dockerfile しか
+    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする
     {
       groupName: "bun toolchain",
       groupSlug: "bun-toolchain",
-      matchDepNames: ["bun", "oven/bun"],
+      matchDepNames: ["bun", "oven/bun", "bun-types"],
       separateMajorMinor: false,
     },
     // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
