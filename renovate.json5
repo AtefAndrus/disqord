@@ -8,6 +8,19 @@
     ":semanticCommitTypeAll(build)", // 末尾に置き config:recommended の fix(deps)/chore(deps) 割り当てを上書き
   ],
   timezone: "Asia/Tokyo",
+  // .npmrc でパッケージ取得元を Takumi Guard に固定しているため、sidecar にも認証を渡す。
+  // anonymous quota はローカルと GitHub Actions runner の IP にしか適用されず、
+  // Mend hosted の sidecar は 401 になって lockfile 再生成が失敗する。
+  // matchHost は scheme と末尾スラッシュを含めること (省略すると Mend hosted の matcher に hit しない)。
+  // hostType は npm 固定 (bun manager は内部で npm datasource を使う)。
+  // token は Mend Portal の Credentials に登録した Secret を展開する記法
+  hostRules: [
+    {
+      matchHost: "https://npm.flatt.tech/",
+      hostType: "npm",
+      token: "{{ secrets.TAKUMI_GUARD_TOKEN }}",
+    },
+  ],
   // schedule: ["* 0-8 * * 1"],  // 月曜 0-8 時台 (JST)。activated 後に有効化
   lockFileMaintenance: { enabled: false },
   // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）

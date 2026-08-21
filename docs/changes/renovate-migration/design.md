@@ -46,6 +46,7 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 | スケジュール | `schedule: ["* 0-8 * * 1"]`（cron 構文、月曜 0-8 時台）+ `timezone: "Asia/Tokyo"`（activated 後に追加） | 現行の weekly monday を再現（[Scheduling](https://docs.renovatebot.com/key-concepts/scheduling/)）。`before 9am on monday` のような Later 構文は非推奨で、新規設定は cron 構文が推奨（[schedule](https://docs.renovatebot.com/configuration-options/#schedule)）。onboarding PR マージ直後は daily 実行（onboarded 状態）のため、狭い schedule を最初から入れると初回 pin 系 PR が窓を外す。初回 PR マージで activated（4 時間ごと）になってから schedule を追加する（[Job scheduling](https://docs.renovatebot.com/mend-hosted/job-scheduling/)） |
 | schedule 外の既存 PR 更新 | `updateNotScheduled` は既定（`true`）のまま | 既存グループ PR への新バージョン取り込みや rebase は schedule 外でも行われる。これは Dependabot の「次回 weekly まで放置」と異なる挙動だが、BEHIND 滞留の解消こそが本移行の動機なので意図した差分として受け入れる（[updateNotScheduled](https://docs.renovatebot.com/configuration-options/#updatenotscheduled)） |
 | クールダウン | `minimumReleaseAge: "3 days"`（公式 preset と同じ更新タイプ）。パッケージマネージャ側には置かない | 移行時は Dependabot の `cooldown.default-days: 7` をそのまま引き継いだが、7 という値に根拠は無かった。ci-pipeline の design doc が記録しているのは「zizmor の `dependabot-cooldown` 監査が cooldown 不在を fail にするため必須」であって、長さの理由ではない（`dependabot.yml` 削除でこの監査自体が対象外になった）。3 日は Renovate 公式の `security:minimumReleaseAgeNpm` / `...Crate` / `...Pypi` が採る値で、プリセットの説明に「malware 研究者やスキャナが検知する短い猶予」と「npm / crates.io の 72 時間 unpublish・削除ウィンドウを跨がせない」という根拠が明記されている。7 日は週次スケジュールと噛み合って取り込み遅延をほぼ倍にする（火曜リリースが 3 日なら翌 Monday、7 日なら Monday を外してその次 = 最大 13 日）割に、追加の安全性は限定的。`internalChecksFilter` の既定 `strict` により、条件を満たさない更新はブランチ自体が作られず PR も出ない（[Minimum Release Age](https://docs.renovatebot.com/key-concepts/minimum-release-age/)）。pin / digest 更新は releaseTimestamp を持たず永久 pending になるため packageRules で対象を version 更新に限定する（公式プリセットも同じ理由で `lockFileMaintenance` / `replacement` / `pin` を除外している）。公式は「パッケージマネージャ側にも同じ値を置く」ことを推奨しており一度 `bunfig.toml` の `[install] minimumReleaseAge` を入れたが、**撤回した**。bun の install 時ゲートには Renovate のような脆弱性修正の例外が無く、公開 3 日未満の修正版を exact 指定でも拒否する（黙って古い版に落とさずエラーで停止することを実測）。その結果 `bun.lock` を再生成できず CI が赤のまま残り、「脆弱性修正は即時」という設計を満たせない。同じ理由で `pin` 更新も詰まり（`pin` は Renovate のクールダウン対象外なので公開間もない版が提案されうる）、実際に初回の pin PR が公開 1.0 日の `bun-types@1.4.0` で赤くなった。守れるのは手動 `bun install` の経路だけで、詰まる場所が最も時間の惜しい脆弱性経路である以上、割に合わない。Renovate 経由の更新には Renovate 自身のゲートが効いたまま残る |
+| パッケージ取得元 | `.npmrc` でレジストリを Takumi Guard (`https://npm.flatt.tech/`) に固定し、Renovate には `hostRules` でトークンを渡す | 固定前は取得元が「誰がどの環境で `bun install` したか」で決まっていた。開発者の手元は各自のグローバル `~/.npmrc`、CI と Renovate の sidecar は既定の registry.npmjs.org で、リポジトリからは何も分からない。さらに `bun.lock` には 2026-04 のローカル解決時に焼き込まれた絶対 URL が 119 件残っており、`bun install --frozen-lockfile` はこれをそのまま使う（URL を到達不能ホストに書き換えると `FailedToOpenSocket` で失敗することを実測）。つまり CI と Docker ビルドは設定が無いまま Takumi Guard へ依存していた。`.npmrc` で明示し、あわせて `bun.lock` の URL 欄を空にして取得元の単一の情報源にする。認証は経路ごとに異なり、ローカルと GitHub Actions runner は IP ベースの anonymous quota で通るが、Mend hosted の sidecar は対象外で 401 になるため `hostRules` で Mend Portal の Secret を注入する（`matchHost` は scheme と末尾スラッシュを含めること。省略すると matcher に hit しない） |
 | **自前 regex** customManager の導入時期 | Phase 2（標準マネージャの安定稼働後） | regex 設定はミスしてもエラーにならず 0 件マッチになるだけでデバッグしにくいため、段階導入でリスクを分離する。この判断が対象とするのは自分で書く regex であって、customManager 一般ではない。公式プリセット `customManagers:biomeVersions`（実体は JSONata の customManager）は上流がメンテしており、対象も単一の固定ファイルで検証が容易なため Phase 1 に入れる |
 | zizmor-action `version` の扱い | 標準の `github-actions` マネージャに任せ、action 本体と CLI を専用グループ（`minimumGroupSize: 2`）にして通常グループから分離する | zizmor-action の `version` 入力は community-maintained action の `with:` 対応リストに含まれ、依存 `ghcr.io/zizmorcore/zizmor` として標準更新される（[Updating `with:` values](https://docs.renovatebot.com/modules/manager/github-actions/#updating-with-values-in-commonly-used-community-maintained-github-actions)）。customManagers で `pypi` の zizmor を重ねると同じ行を二重抽出して更新が競合するため対象にしない。zizmor-action は新しい CLI コンテナに即応しないため、Renovate 本家の設定に倣い action と CLI が揃った時だけ更新する専用グループとする（[Renovate 自身の renovate.json](https://github.com/renovatebot/renovate/blob/main/renovate.json) の zizmor ルール、[minimumGroupSize](https://docs.renovatebot.com/configuration-options/#minimumgroupsize)）。zizmor だけ別 PR になるのは意図した差分。また GHCR は releaseTimestamp 非対応（[renovate#39064](https://github.com/renovatebot/renovate/issues/39064)）で、既定の `timestamp-required` では 7 日クールダウンが永久 pending になるため、クールダウンを外す。ただし外すのは `ghcr.io/zizmorcore/zizmor` だけで、グループ全体には掛けない。action 側の `zizmorcore/zizmor-action` は `github-tags` datasource（`releaseTimestampSupport = true`）なので待機が成立し、これをグループごと外すと Goals のクールダウン方針を迂回してしまう。CLI だけ外して action に待機を残せば、`minimumGroupSize: 2` により「2 件揃うまでブランチを作らない」が働き、結果としてグループ全体が action の 7 日待機にゲートされる。加えてこのグループには `separateMajorMinor: false` を置く。`group:all` をやめたことで既定の `true` に戻り、同じ `groupName` でも major と non-major が別ブランチに割れるため、CLI と action の片方だけが major に振れると各ブランチの更新が 1 件になり `minimumGroupSize: 2` を満たさず、どちらの PR も出ないまま止まる |
 | mise-action `version` の扱い | 標準の `github-actions` マネージャに任せる（customManagers は使わない） | `jdx/mise-action` は community-maintained action の `with:` 対応リストに登録済みで、`version`（と任意の `sha256`）を `jdx/mise` として抽出する（`lib/modules/manager/github-actions/community.ts` の `jdx/mise-action` エントリ、datasource は `github-release-attachments`）。本リポジトリの `ci.yml` とほぼ同一の入力（`uses: jdx/mise-action@<sha> # v4.2.0` + `with.version` + `install_args`）を使う抽出テストが上流にある。したがって `# renovate:` アノテーションの付与も customManagers も不要で、手動ピン 3 箇所のうち 2 箇所（zizmor / mise）が Phase 1 で解消する |
@@ -63,6 +64,8 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 - 新規: `renovate.json5` — Renovate 設定（リポジトリルート）
 - 削除: `.github/dependabot.yml` — onboarding PR に含める
 - 修正: `package.json` — `engines.bun` を削除し `private: true` を付与（Phase 1）
+- 新規: `.npmrc` — パッケージ取得元を Takumi Guard に固定（Phase 1）
+- 修正: `Dockerfile` — install ステージへ `.npmrc` をコピー（本番イメージのビルドも同じ取得元を通すため）
 - 修正: `mise.toml` / `Dockerfile` — bun を exact patch に固定（`bun = "1.3.14"` / `oven/bun:1.3.14-slim@sha256:...`）（Phase 1）
 - 修正: `.github/workflows/ci.yml` — biome schema drift check の追加と bun drift check の 2 値化（Phase 1）。actionlint イメージ行は Phase 2 の customManager が更新するが、`ci.yml` 側の記述変更は不要
 - 修正: `CLAUDE.md` — Notes の手動ピン運用メモを更新
@@ -85,6 +88,19 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
     ":semanticCommitTypeAll(build)", // 末尾に置き config:recommended の fix(deps)/chore(deps) 割り当てを上書き
   ],
   timezone: "Asia/Tokyo",
+  // .npmrc でパッケージ取得元を Takumi Guard に固定しているため、sidecar にも認証を渡す。
+  // anonymous quota はローカルと GitHub Actions runner の IP にしか適用されず、
+  // Mend hosted の sidecar は 401 になって lockfile 再生成が失敗する。
+  // matchHost は scheme と末尾スラッシュを含めること (省略すると Mend hosted の matcher に hit しない)。
+  // hostType は npm 固定 (bun manager は内部で npm datasource を使う)。
+  // token は Mend Portal の Credentials に登録した Secret を展開する記法
+  hostRules: [
+    {
+      matchHost: "https://npm.flatt.tech/",
+      hostType: "npm",
+      token: "{{ secrets.TAKUMI_GUARD_TOKEN }}",
+    },
+  ],
   // schedule: ["* 0-8 * * 1"],  // 月曜 0-8 時台 (JST)。activated 後に有効化
   lockFileMaintenance: { enabled: false },
   // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
@@ -324,6 +340,9 @@ Phase 2:
 - `pin` 更新は Renovate の `minimumReleaseAge` の対象外（公式プリセットも本リポジトリの catch-all も除外。`pin` には releaseTimestamp が渡らず永久 pending になるため）。したがって公開間もない版への固定が提案されうる。`bunfig.toml` を入れていた間はこれが install 時ゲートと衝突して artifact 更新を壊したが、撤回により解消した。
 - `bunfig.toml` の install 時ゲートは脆弱性修正にも掛かるため撤回した（Decisions「クールダウン」参照）。クールダウンは Renovate 側だけで掛ける。手動 `bun install` は保護対象外になるが、依存更新の主経路が Renovate である以上、脆弱性経路を詰まらせる代償に見合わないと判断した。
 - **`ghcr.io/zizmorcore/zizmor` に digest 固定を行ってはいけない**。zizmor-action の `version` 入力は `latest` か厳密な `X.Y.Z` しか受け付けず（`action.sh` の `version_regex='^v?[0-9]+\.[0-9]+\.[0-9]+$'`）、`1.29.0@sha256:...` を書き込まれると `'version' must be 'latest' or an exact X.Y.Z version` で即座に失敗する。`docker:pinDigests`（`config:best-practices` 由来）が有効なため放置すると digest 固定 PR が立つので、packageRule で `pinDigests: false` を明示している。そもそも action 自身が version → digest の対応表を internal に持ち `ghcr.io/zizmorcore/zizmor:<version>@<digest>` を組み立てて pull するので、外から固定する必要も無い。
+- `TAKUMI_GUARD_TOKEN` は GitHub Actions Secret と Mend Portal の Credentials の 2 箇所で管理される。Mend hosted の制約で自動同期できないため、rotate 時は両方を更新すること。
+- `bun.lock` の URL 欄を空にしたのは、版を変えずに取得元を `.npmrc` へ一本化するため。`rm bun.lock && bun install` による再生成は使わなかった。レンジ指定の依存がゼロから解決され直し、実際に `discord.js` が `^14.26.5` の範囲内で 14.26.5 → 14.27.0 へ上がってしまうため（レジストリ設定の変更に依存更新を混ぜない）。
+- 上記に関連して、**レンジ内の更新は現在どの経路でも適用されない**。Renovate の既定 `rangeStrategy` はレンジを満たす新版を更新対象にせず、それを拾う `lockFileMaintenance` は無効化してある。`discord.js` が 14.26.5 に留まり 14.27.0 が提案されないのはこのため。意図した状態か再評価の余地がある。
 - **SHA 固定した GitHub Actions には Dependabot alert が来ない**。GitHub は action の脆弱性を version メタデータで管理しており、alert を生成するのは semantic version 参照の場合だけで、SHA 参照には生成しない（[About Dependabot alerts](https://docs.github.com/code-security/dependabot/dependabot-alerts/about-dependabot-alerts)）。本リポジトリは `helpers:pinGitHubActionDigests` で全 action を SHA 固定するため、action の脆弱性は即時 PR ではなく通常の version 更新で拾うことになる（GitHub 自身も SHA 固定時の代替として version updates の有効化を案内している）。供給網の不変性と alert 網羅性のトレードオフとして受容する。
 - `vulnerabilityAlerts: { minimumGroupSize: 1 }` が実際に効くかは、本物の脆弱性 alert が出るまで実測できない（合成手段がない）。設定の根拠はソース（`vulnerability.ts` の `force: { ...config.vulnerabilityAlerts }`）と `vulnerabilityAlerts` の既定値一覧に `minimumGroupSize` が含まれないことまで。効く対象は alert が生成される npm 依存の経路に限られる。
 - `customManagers:biomeVersions` の JSONata 式も `$schema` の欠落や URL 形式の変更で 0 件抽出になりうる。抽出 0 件は debug ログになるだけでエラーにならないため、biome schema drift check をカナリアとして置く（Design「Phase 1: biome schema drift check」参照）。
