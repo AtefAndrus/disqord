@@ -7,6 +7,10 @@ summary: "CI 新設・workflow hardening・mise SSOT 化"
 
 # CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT
 
+> **注記**: 本 change が定めた bun バージョン運用（`mise.toml` の minor 線を SSOT とし、`Dockerfile` と `package.json` の `engines.bun` を drift-check で追従させる 3 ファイル構成）は、[renovate-migration](../renovate-migration/design.md) によって置き換えられた。
+> 現行仕様は `mise.toml` と `Dockerfile` の 2 ファイルを exact patch で完全一致させるもので、`engines.bun` は削除済み。
+> 以下の記述は本 change 実施時点の設計として残している。
+
 ## Why
 
 本リポジトリには品質ゲートとしての CI が無く、PR/push 時に `bun test` / `typecheck` / `lint` / `lint:md` が自動実行されない。
