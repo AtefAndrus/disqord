@@ -15,13 +15,16 @@
   semanticCommits: "enabled",
   labels: ["dependencies"],
   packageRules: [
-    // 供給網対策のクールダウン。version 更新に限る（pin / digest は releaseTimestamp を
-    // 持たず永久 pending になるため対象外。公式の security:minimumReleaseAge* も同じ理由で
-    // lockFileMaintenance / replacement / pin を除外している）。
-    // 値は bunfig.toml の [install] minimumReleaseAge と揃えること。bun 側を長くすると
-    // Renovate が提案した版を bun install が拒否して artifact 更新が壊れる
+    // 供給網対策のクールダウン。対象の更新タイプは公式の security:minimumReleaseAge* に合わせる。
+    // 公式が除外しているのは pin / replacement / lockFileMaintenance / bump / lockfileUpdate /
+    // rollback で、digest と pinDigest は除外されていない。digest 更新はタグを変えないまま
+    // 実イメージの中身を差し替えるので、むしろクールダウンを掛ける価値が高い。
+    // releaseTimestamp を返さない datasource では永久 pending になるため、
+    // 該当するものは個別に例外化する（現状 GHCR の zizmor CLI のみ）。
+    // パッケージマネージャ側 (bunfig.toml) には同じゲートを置かない。bun の install 時ゲートには
+    // 脆弱性修正の例外が無く、公開間もない修正版を拒否して lockfile 再生成を止めるため（Decisions 参照）
     {
-      matchUpdateTypes: ["major", "minor", "patch"],
+      matchUpdateTypes: ["major", "minor", "patch", "digest", "pinDigest"],
       minimumReleaseAge: "3 days",
     },
     // bun は mise 側 (depName: bun / packageName: oven-sh/bun) と Dockerfile 側 (depName: oven/bun) で

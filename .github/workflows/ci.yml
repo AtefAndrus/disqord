@@ -24,23 +24,38 @@ jobs:
       # base image が bun を決める。package.json の engines.bun はどちらにも関与せず
       # bun 自身も強制しないため、この検査のためだけに存在する値になっていたので削除した。
       #
-      # patch まで含めた完全一致を要求する。両側とも exact 指定にしてあり、
+      # 3 経路とも同じ patch を指すことを要求する。両側とも exact 指定にしてあり、
       # 片側だけを可変指定に戻すと、同じ minor 線の中で本番と開発の版が静かにずれる。
       # mise の `1.3` は 1.3 系の最新へ解決するため書き換えなしで浮動する。Docker 側は
       # digest を固定しているのでタグ再発行だけでは動かないが、可変タグ `1.3-slim` のまま
       # digest だけが更新されると、タグ表記が変わらないまま実イメージの patch が上がる。
       # どちらの経路も版表記の比較では捉えられないので、両側に 3 要素を要求する。
       # 3 要素にマッチしない値は可変指定へ戻った合図なので、その時点で落とす。
+      #
+      # bun-types も比較する。tsconfig.json の types が ["bun-types"] なので typecheck における
+      # Bun API 型の唯一の供給源で、ランタイムより先行すると「型は通るが実行時に無い API」を
+      # 受け入れる。Renovate 側は同じグループに入れてあるが、グループ化が保証するのは
+      # 「同時に更新可能なものを 1 本の PR に載せる」ことだけで、版の一致は保証しない
+      # (pin だけ別グループへ回る経路もある)。package.json の宣言ではなく bun.lock の
+      # 解決結果を見るのは、レンジ指定のままでも実際に入る版を検査するため。
+      #
+      # 限界: Dockerfile はタグ文字列しか見ていない。digest は独立に固定されており、
+      # 別バージョンの有効な digest を付けてもこの検査と docker build は通る。
+      # タグと digest の対応まで検証するにはレジストリ照会が要るため、ここでは扱わない。
       - name: bun version drift check (mise SSOT)
         run: |
           mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' mise.toml)
           docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+\.[0-9]+)-slim@.*#\1#p' Dockerfile | head -n1)
-          echo "mise=$mise_v dockerfile=$docker_v"
+          types_v=$(sed -nE 's/^[[:space:]]*"bun-types": \["bun-types@([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' bun.lock | head -n1)
+          echo "mise=$mise_v dockerfile=$docker_v bun-types=$types_v"
           if [ -z "$mise_v" ] || [ -z "$docker_v" ]; then
             echo "::error::bun version must be pinned to an exact patch in both mise.toml and Dockerfile (mise=$mise_v dockerfile=$docker_v)"; exit 1
           fi
-          if [ "$mise_v" != "$docker_v" ]; then
-            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v)"; exit 1
+          if [ -z "$types_v" ]; then
+            echo "::error::could not read the resolved bun-types version from bun.lock"; exit 1
+          fi
+          if [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$types_v" ]; then
+            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v bun-types=$types_v)"; exit 1
           fi
       # biome.json の $schema が package.json(SSOT) と一致するか検証（bun 不要・純テキスト）
       # biome 自身も不一致を検出するが severity が info で exit 0 のため CI は緑のまま通る。
