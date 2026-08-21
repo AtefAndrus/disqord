@@ -243,7 +243,16 @@ Phase 1:
 - [x] Mend Renovate App を selected repositories で本リポジトリのみにインストール（<https://github.com/apps/renovate>）
 - [x] 自動生成される onboarding PR（`renovate/configure` ブランチ）の作成を待つ。`renovate.json5` を先に main へ直接コミットしない（設定ファイルが main に存在すると onboarding PR は作られない。[Configuration overview](https://docs.renovatebot.com/config-overview/)）
 - [x] onboarding PR のブランチ上で、提案された `renovate.json` を本設計の `renovate.json5`（schedule なしの初期構成）に置き換え、`.github/dependabot.yml` の削除も積む
-- [ ] 上記を push したあと、Renovate が次回実行でブランチの設定を読み込んで **PR 本文のプレビューを更新する**のを待ち、その内容を確認する。確認するのは検出された依存と警告に加えて、bun toolchain / zizmor のグルーピングが効いているか、`biome.json` の `$schema` が依存として抽出されているか。push 前のプレビューは `config:recommended` のままなので判断材料にならない
+- [x] 上記を push したあと、Renovate が設定を読み込んで更新した PR 本文のプレビューを確認した。予告 PR は 8 本から 4 本に減り、以下が確認できた（警告・エラーの記載なし）
+  - `group:allNonMajor` が `renovate/all-minor-patch` として機能（biome / actions-checkout / jdx/mise / mise-action が 1 本）
+  - **bun toolchain グループが機能**。`renovate/bun-toolchain` に `bun`（→ 1.4.0）と `oven/bun`（digest）が同居し、depName が異なる 2 経路を束ねられている
+  - **zizmor グループが機能**。`renovate/zizmor` に CLI と action の 2 依存が入り `minimumGroupSize: 2` を満たしている
+  - `customManagers:biomeVersions` が Configuration Summary に出ており、プリセット名が実在することを確認（`renovate-config-validator` では検証できない項目）
+  - `:semanticCommitTypeAll(build)` が効き、全 PR タイトルが `build(deps):` 形式
+  - `pin` 更新は既定の "Pin Dependencies" グループで 1 本にまとまる（個別 PR 乱立の懸念は誤りだった）
+  - `minimumReleaseAge: "7 days"` が効いている。既定設定時のプレビューでは `jdx/mise` が `2026.8.10` だったが、本設定では `2026.8.5` が選ばれている
+  - なお `prHourlyLimit`（既定 2）により 4 本は 1 時間あたり 2 本ずつ作られる
+  - ここで確認できたのはグルーピングと抽出までで、**実ファイルの置換が正しいか（Dockerfile のタグが `1.4.0-slim` になるか、`biome.json` の `$schema` が実際に書き換わるか）は生成 PR の差分で別途確認する**（後続タスク）
 - [x] 未処理の Dependabot PR（グループ PR・security update PR とも）をマージまたはクローズ
 - [ ] リポジトリ設定で Dependabot security updates を無効化（Dependabot alerts は維持）
 - [ ] onboarding PR をマージ（ロールバック: `dependabot.yml` 復元 + security updates 再有効化 + App アンインストール）
