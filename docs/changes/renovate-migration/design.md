@@ -104,12 +104,26 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
     // bun-types も同じグループに入れる。tsconfig.json の types が ["bun-types"] なので
     // これが typecheck における Bun API 型の唯一の供給源で、ランタイムから独立して先行すると
     // 「型は通るが実行時に存在しない API」を受け入れてしまう。drift-check は mise/Dockerfile しか
-    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする
+    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする。
+    //
     {
       groupName: "bun toolchain",
       groupSlug: "bun-toolchain",
       matchDepNames: ["bun", "oven/bun", "bun-types"],
       separateMajorMinor: false,
+    },
+    // bun-types の pin だけは既定の "Pin Dependencies" へ戻す。
+    // :pinDevDependencies による range -> exact の一度きりの変換で、版を動かす更新ではない。
+    // 上のグループに残すと pin と minor が同じ groupName から同じ branchName に解決されて衝突し、
+    // pin 側が勝ってランタイム (mise / Dockerfile) の更新がブランチごと消える（実際に発生した）。
+    // なお matchUpdateTypes は separateMajorMinor と同一ルール内で併用できないため、
+    // 上のグループを絞るのではなく後続ルールで上書きする形にしている。
+    // 固定後の bun-types は minor / patch になり、上のグループに戻る
+    {
+      matchDepNames: ["bun-types"],
+      matchUpdateTypes: ["pin"],
+      groupName: "Pin Dependencies",
+      groupSlug: "pin-dependencies",
     },
     // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
     {
@@ -290,6 +304,7 @@ Phase 2:
 - Renovate の bun マネージャは monorepo / workspace 構成で bun.lock の更新漏れ報告があるが、本リポジトリは単一 package.json のため影響を受けにくい見込み。
 - `pin` / `pinDigest` は `group:allNonMajor` にも `group:allDigest` にも含まれないが、Renovate の既定でどちらも `groupName: "Pin Dependencies"` / `groupSlug: "pin-dependencies"` を持つため、通常は 1 本の pin PR にまとまる。個別 PR が乱立する想定はしなくてよい。
 - customManagers の regex は `ci.yml` の書式変更（クォート形式や空白の変更）で 0 件マッチに退化しうる。Phase 2 のジョブログ確認タスクで検知する。
+- `pin` 更新は同じ `groupName` を持つ他の更新タイプと同じ branchName に解決されて衝突する。bun toolchain グループに `bun-types` を入れた直後、`bun-types` の pin がブランチを取り、`mise.toml` / `Dockerfile` の minor 更新が Dashboard からも PR からも消えた（検出はされているのにブランチが無い状態になる）。後続 packageRule で pin を既定の "Pin Dependencies" へ戻して解消した。`matchUpdateTypes` と `separateMajorMinor` は同一ルール内で併用できない（`packageRules cannot combine both matchUpdateTypes and separateMajorMinor`）ため、グループ側を絞る形は取れない。
 - `bun-types` の版を drift-check の比較対象に加えることは見送った。グループ化で同一 PR に載れば版がずれる余地は実質的に無く、一方で bun のあらゆる patch に対応する `bun-types` が必ず公開される保証はないため、完全一致を強制すると公開されない patch で更新が止まる。グループ化が破れた場合に備えるなら major.minor 比較で足りるが、まずはグループ化の実効を 2 サイクル観測してから判断する。
 - **SHA 固定した GitHub Actions には Dependabot alert が来ない**。GitHub は action の脆弱性を version メタデータで管理しており、alert を生成するのは semantic version 参照の場合だけで、SHA 参照には生成しない（[About Dependabot alerts](https://docs.github.com/code-security/dependabot/dependabot-alerts/about-dependabot-alerts)）。本リポジトリは `helpers:pinGitHubActionDigests` で全 action を SHA 固定するため、action の脆弱性は即時 PR ではなく通常の version 更新で拾うことになる（GitHub 自身も SHA 固定時の代替として version updates の有効化を案内している）。供給網の不変性と alert 網羅性のトレードオフとして受容する。
 - `vulnerabilityAlerts: { minimumGroupSize: 1 }` が実際に効くかは、本物の脆弱性 alert が出るまで実測できない（合成手段がない）。設定の根拠はソース（`vulnerability.ts` の `force: { ...config.vulnerabilityAlerts }`）と `vulnerabilityAlerts` の既定値一覧に `minimumGroupSize` が含まれないことまで。効く対象は alert が生成される npm 依存の経路に限られる。
