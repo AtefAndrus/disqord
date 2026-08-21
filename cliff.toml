@@ -57,7 +57,7 @@ commit_parsers = [
   { message = '^\[refactor\]', group = "Refactoring" },
   { message = '^\[test\]', group = "Testing" },
   { message = '^\[perf\]', group = "Performance" },
-  # Dependabot
+  # Bot-generated dependency updates (Renovate; Dependabot in older history)
   { message = '^build\(deps', group = "Dependencies" },
   # Fallback (lowercase conventional-style from older commits)
   { message = '^feat', group = "Added" },
