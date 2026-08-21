@@ -3,6 +3,7 @@
   "version": "1.4.0",
   "description": "Discord bot that connects to OpenRouter for LLM conversations",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
@@ -19,9 +20,6 @@
     "generate:readme": "bun scripts/generate-readme.ts",
     "preview": "bun scripts/preview/index.ts",
     "prepare": "lefthook install"
-  },
-  "engines": {
-    "bun": ">=1.3"
   },
   "dependencies": {
     "discord.js": "^14.26.5",
