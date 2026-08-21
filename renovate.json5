@@ -27,12 +27,26 @@
     // bun-types も同じグループに入れる。tsconfig.json の types が ["bun-types"] なので
     // これが typecheck における Bun API 型の唯一の供給源で、ランタイムから独立して先行すると
     // 「型は通るが実行時に存在しない API」を受け入れてしまう。drift-check は mise/Dockerfile しか
-    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする
+    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする。
+    //
     {
       groupName: "bun toolchain",
       groupSlug: "bun-toolchain",
       matchDepNames: ["bun", "oven/bun", "bun-types"],
       separateMajorMinor: false,
+    },
+    // bun-types の pin だけは既定の "Pin Dependencies" へ戻す。
+    // :pinDevDependencies による range -> exact の一度きりの変換で、版を動かす更新ではない。
+    // 上のグループに残すと pin と minor が同じ groupName から同じ branchName に解決されて衝突し、
+    // pin 側が勝ってランタイム (mise / Dockerfile) の更新がブランチごと消える（実際に発生した）。
+    // なお matchUpdateTypes は separateMajorMinor と同一ルール内で併用できないため、
+    // 上のグループを絞るのではなく後続ルールで上書きする形にしている。
+    // 固定後の bun-types は minor / patch になり、上のグループに戻る
+    {
+      matchDepNames: ["bun-types"],
+      matchUpdateTypes: ["pin"],
+      groupName: "Pin Dependencies",
+      groupSlug: "pin-dependencies",
     },
     // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
     {
