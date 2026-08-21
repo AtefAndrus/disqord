@@ -257,7 +257,7 @@ Phase 1:
 - [ ] リポジトリ設定で Dependabot security updates を無効化（Dependabot alerts は維持）
 - [ ] onboarding PR をマージ（ロールバック: `dependabot.yml` 復元 + security updates 再有効化 + App アンインストール）
 - [ ] `config:recommended` の `group:monorepos` / `group:recommended` が本リポジトリの依存に `groupName` を与えているかをジョブログで確認する。与えている場合、その依存の major は個別 PR にならずまとまる。想定と違えば packageRules で上書きするか、記述を実態に合わせる
-- [ ] マージ後の最初の実行のジョブログで `renovateVersion` と、`jdx/mise` / `ghcr.io/zizmorcore/zizmor` / `biome.json` の `$schema` が期待どおり抽出されているかを確認する。hosted は OSS 版から遅れうるため（Decisions「実行基盤」参照）、上流の新機能に依存する 3 点の受け入れ確認
+- [x] マージ後の最初の実行のジョブログで確認した。`renovateVersion: 44.39.0`。`jdx/mise` / `ghcr.io/zizmorcore/zizmor` / `biome.json` の `$schema` はいずれも期待どおり抽出され、生成 PR に反映されている
 - [ ] 初回の pin 系 PR（devDependencies pin / digest pin）を確認・マージ（→ activated 状態になり 4 時間ごと実行へ）。コミット / PR タイトルが `build(deps)` 形式になっているかも確認
 - [ ] `renovate.json5` に `schedule: ["* 0-8 * * 1"]` を追加
 - [ ] zizmor-action と mise-action の `with.version` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。公式ドキュメントが保証しているのは対象入力のサポートであって、実環境での置換成功は別の受け入れ条件になる。抽出の確認だけで完了とすると、手動ピンから引き取った 2 箇所が一度も更新されないまま Phase 1 を終えられてしまう。解決するまで Phase 1 を完了としない
@@ -280,6 +280,10 @@ Phase 2:
 
 - bun を exact patch に固定したことで、patch リリースのたびに `mise.toml` の更新 PR が立つ。移行前に自動追従していたのは `mise.toml` の fuzzy 指定だけで、`Dockerfile` は digest 固定なので元から更新 PR が必要だった（実際には導入以来 digest が更新された履歴が無い）。したがって増えるのは mise 側の 1 経路分で、bun toolchain グループにより Dockerfile 側の変更と同じ PR に載る。週次グループ + 7 日クールダウンで週 1 本の中に収まる想定だが、実際の頻度は 2 サイクル確認で見る。
 - 両側の patch 更新が同一 PR にまとまるかは実機未確認（Phase 1 Tasks のゲート）。割れた場合も drift-check が落ちるので silent な乖離にはならない。
+- **Dashboard に `Could not re-extract the packageFile after updating it` が出るが、これは上流の構造的な制約で対処不要**。この警告は `checkForPendingVersions`（`lib/workers/repository/update/branch/get-updated.ts`）から出る。`minimumReleaseAge` で保留中の新しい版がある依存について、lockfile 更新の結果が Renovate の想定と食い違っていないかを検証する安全確認で、汎用の `extractPackageFile` を呼ぶ。しかし `bun` マネージャは `extractAllPackageFiles` だけを export していて `extractPackageFile` を持たない（`lib/modules/manager/bun/index.ts`。`npm` マネージャも同じ）ため、再抽出が必ず null を返し警告になる。設定側で回避する手段はない（上流 [renovate#41624](https://github.com/renovatebot/renovate/issues/41624) が対応対象）。
+  - 実害は「lockfile が想定と違う版を引いていないかの検証が効かない」ことに限られる。本リポジトリの devDependencies は `:pinDevDependencies` で exact に固定されるため `bun install` に選択の余地がなく、リスクは実質的に runtime 依存（`discord.js` / `zod`）のレンジ解決に限定される。
+  - 実際、初回の `renovate/all-minor-patch` では `@biomejs/biome` が 2.5.8（2.5.9 はクールダウンで保留）で lockfile と一致していた。
+- **`@skyra/discord-components-core` が abandoned として Dashboard に表示される**（最終リリース 2025-06-18、`abandonments:recommended` の閾値 1 年）。`scripts/preview/` の UI プレビュー描画にのみ使う devDependency で、Bot のランタイムには入らない。代替も存在しない（[ui-preview](../ui-preview/design.md) の Decisions 参照: 公式の描画ツールが無く、discord.js 公式ガイドも本パッケージを採用している）。表示は検知であって障害ではないので、当面は放置し、プレビュー機能自体を見直す際に再評価する。
 - `minimumReleaseAgeBehaviour` の既定は `timestamp-required` で、releaseTimestamp を返さない datasource の更新は stable 扱いされず `internalChecksFilter: "strict"`（既定）に落とされて PR が出なくなる（[minimumReleaseAgeBehaviour](https://docs.renovatebot.com/configuration-options/#minimumreleaseagebehaviour)）。GHCR の非対応は確定事項として `ghcr.io/zizmorcore/zizmor`（CLI）のみを例外化済み。action 側の `zizmorcore/zizmor-action` には catch-all の 7 日が残る（Decisions 参照）。Docker Hub と github-releases は対応見込みだが、実際に timestamp が取れているかは Phase 1 の依存（`oven/bun`、mise.toml の bun 等）は 2 サイクル確認のタスクで、Phase 1 で新たに拾われる `jdx/mise`（github-release-attachments）と `ghcr.io/zizmorcore/zizmor`（GHCR）は 2 サイクル確認のタスクで datasource ごとに個別に見る（`mise.toml` の bun とは datasource が別）。Phase 2 で追加される `rhysd/actionlint` は Phase 2 のジョブログ確認タスクで実測する。取れない依存が他にあれば該当 packageRule で `minimumReleaseAge` を外す。
 - Renovate の bun マネージャは monorepo / workspace 構成で bun.lock の更新漏れ報告があるが、本リポジトリは単一 package.json のため影響を受けにくい見込み。
 - `pin` / `pinDigest` は `group:allNonMajor` にも `group:allDigest` にも含まれないが、Renovate の既定でどちらも `groupName: "Pin Dependencies"` / `groupSlug: "pin-dependencies"` を持つため、通常は 1 本の pin PR にまとまる。個別 PR が乱立する想定はしなくてよい。
