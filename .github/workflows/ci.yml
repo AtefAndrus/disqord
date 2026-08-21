@@ -29,6 +29,25 @@ jobs:
           if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$eng_v" ]; then
             echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
           fi
+      # biome.json の $schema が package.json(SSOT) と一致するか検証（bun 不要・純テキスト）
+      # biome 自身も不一致を検出するが severity が info で exit 0 のため CI は緑のまま通る。
+      # このジョブの役割は検出の追加ではなく、その info を落ちる失敗へ昇格させること。
+      # $schema から版を抽出せず期待 URL 全体と文字列比較するのは、版の不一致だけでなく
+      # ホスト・パス形状の破損も同時に捕まえるため。
+      # レンジ接頭辞を剥がさず exact を要求するのは、剥がすと ^2.5.3 で実際に入る版が
+      # $schema とずれても通過してしまうから。exact ピンは :pinDevDependencies の前提でもある。
+      - name: biome schema drift check
+        run: |
+          pkg_v=$(jq -r '.devDependencies["@biomejs/biome"]' package.json)
+          if ! printf '%s' "$pkg_v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3 (got: $pkg_v)"; exit 1
+          fi
+          actual=$(jq -r '."$schema"' biome.json)
+          expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
+          echo "expected=$expected actual=$actual"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::biome schema drift (expected=$expected actual=$actual)"; exit 1
+          fi
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:

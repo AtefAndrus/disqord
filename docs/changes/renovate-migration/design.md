@@ -1,6 +1,6 @@
 ---
 title: "Renovate 移行"
-status: planned
+status: in-progress
 priority: medium
 summary: "Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化"
 ---
@@ -25,7 +25,8 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 - Dependabot（`.github/dependabot.yml`）を Renovate（Mend Renovate App）に置き換える
 - 現行運用（週次月曜・全エコシステム 1 本のグループ PR・version 更新の 7 日クールダウン）を Renovate 設定で再現する（pin / digest 更新はクールダウン対象外とする。意図した差分、Decisions「クールダウン」参照）
 - GitHub Actions の SHA ピン + バージョンコメント維持を Renovate に任せる（`helpers:pinGitHubActionDigests`）
-- 手動ピン 3 箇所を自動更新対象にする。zizmor-action の `version` は標準の `github-actions` マネージャが `with:` 入力ごと対応済みのため Phase 1 で解消し（[Updating `with:` values](https://docs.renovatebot.com/modules/manager/github-actions/#updating-with-values-in-commonly-used-community-maintained-github-actions)）、actionlint イメージ digest / mise-action `version` の 2 箇所を Phase 2 の customManagers で対応する
+- 手動ピン 3 箇所を自動更新対象にする。zizmor-action と mise-action の `version` はいずれも標準の `github-actions` マネージャが `with:` 入力ごと対応済みのため Phase 1 で解消し（[Updating `with:` values](https://docs.renovatebot.com/modules/manager/github-actions/#updating-with-values-in-commonly-used-community-maintained-github-actions)）、actionlint イメージ digest の 1 箇所を Phase 2 の customManagers で対応する
+- `biome.json` の `$schema` を `@biomejs/biome` の更新に追従させる（公式プリセット `customManagers:biomeVersions`）。手動ピン 3 箇所と同種の恒常作業でありながら現行では自動化対象になっていない
 
 **Non-Goals:**
 
@@ -38,18 +39,19 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 実行基盤 | Mend Renovate App（無料ホステッド） | 個人リポジトリでコスト・運用負荷ゼロ。activated 状態で約 4 時間ごと実行（[Mend-hosted apps overview](https://docs.renovatebot.com/mend-hosted/overview/)、[Job scheduling](https://docs.renovatebot.com/mend-hosted/job-scheduling/)） |
+| 実行基盤 | Mend Renovate App（無料ホステッド） | 個人リポジトリでコスト・運用負荷ゼロ。activated 状態で約 4 時間ごと実行（[Mend-hosted apps overview](https://docs.renovatebot.com/mend-hosted/overview/)、[Job scheduling](https://docs.renovatebot.com/mend-hosted/job-scheduling/)）。ただし hosted が使う Renovate 本体はメンテナが手動更新しており、OSS 版から数時間〜1 週間遅れうる（major リリースはさらに保留される）。「hosted なので常に最新」を前提にせず、上流の新機能に依存する設定は導入時にジョブログの `renovateVersion` と実際の抽出結果で受け入れ確認する（[Mend-hosted Apps Configuration](https://docs.renovatebot.com/mend-hosted/hosted-apps-config/)） |
 | 供給網リスクの受容 | ci-pipeline で不採用とした「Mend App への repo write 付与」を受容する | Dependabot のグループ PR バグが 1 年近く未解決で、手動ピン 3 箇所の負担も恒常化したため再評価。App は Code / Workflows を含む read-write を要求する（[Security and permissions](https://docs.renovatebot.com/security-and-permissions/)）。脅威別に整理すると: ① 悪意ある上流リリースの混入 → automerge を使わずマージ前に workflow 差分を含む PR 内容を人間が確認することで緩和。② App token 侵害 → selected repositories でのインストールにより影響範囲を本リポジトリに限定。ただし Contents write があれば PR の merge API を叩けるため、「マージは常に人間」は設定上強制されていない。`required_approving_review_count: 1` を課せば bot PR への所有者承認を必須化でき token 単独のマージは防げるが、solo 運用では自分の PR を自己承認できず全ての通常 PR が admin bypass 頼みになるため採用しない。Workflows write と併せた不正マージは**残余リスクとして明示的に受容**する。Mend は ISO 27001 / SOC 2 取得済みでコードは実行後保持されない。代替の self-hosted は fine-grained PAT や自前 GitHub App token でも運用できる（[GitHub platform authentication](https://docs.renovatebot.com/modules/platform/github/)）が、credential とワークフローの保守が増え、1 人運用では App 1 つに絞る方が管理面を小さくできると判断 |
 | ベースプリセット | `config:best-practices` | `config:recommended` + `docker:pinDigests` + `helpers:pinGitHubActionDigests` + `:configMigration` + `:pinDevDependencies` + `abandonments:recommended` + `security:minimumReleaseAgeNpm` + `:maintainLockFilesWeekly` の 8 プリセット（[Config presets](https://docs.renovatebot.com/presets-config/#configbest-practices)）。SHA ピン運用と方針が一致。`:maintainLockFilesWeekly` は Non-Goals の通り `lockFileMaintenance.enabled: false` で打ち消し、npm の 3 日制限はより厳しい 7 日設定で上書きする |
 | グルーピング | `group:all` プリセット | 現行 Dependabot の multi-ecosystem-group と同じ 1 本運用を維持。`separateMajorMinor` は既定 `true` で packageRules のグループ指定より優先されるため、`groupName` 指定だけでは major が別 PR になる。`group:all` は `separateMajorMinor: false` を含む（[Group presets](https://docs.renovatebot.com/presets-group/#groupall)、[separateMajorMinor](https://docs.renovatebot.com/configuration-options/#separatemajorminor)） |
 | スケジュール | `schedule: ["* 0-8 * * 1"]`（cron 構文、月曜 0-8 時台）+ `timezone: "Asia/Tokyo"`（activated 後に追加） | 現行の weekly monday を再現（[Scheduling](https://docs.renovatebot.com/key-concepts/scheduling/)）。`before 9am on monday` のような Later 構文は非推奨で、新規設定は cron 構文が推奨（[schedule](https://docs.renovatebot.com/configuration-options/#schedule)）。onboarding PR マージ直後は daily 実行（onboarded 状態）のため、狭い schedule を最初から入れると初回 pin 系 PR が窓を外す。初回 PR マージで activated（4 時間ごと）になってから schedule を追加する（[Job scheduling](https://docs.renovatebot.com/mend-hosted/job-scheduling/)） |
 | schedule 外の既存 PR 更新 | `updateNotScheduled` は既定（`true`）のまま | 既存グループ PR への新バージョン取り込みや rebase は schedule 外でも行われる。これは Dependabot の「次回 weekly まで放置」と異なる挙動だが、BEHIND 滞留の解消こそが本移行の動機なので意図した差分として受け入れる（[updateNotScheduled](https://docs.renovatebot.com/configuration-options/#updatenotscheduled)） |
 | クールダウン | `minimumReleaseAge: "7 days"`（major / minor / patch のみ） | 現行 `cooldown.default-days: 7` の再現。`internalChecksFilter` の既定 `strict` により、`minimumReleaseAge` を満たさない更新はブランチ自体が作られず PR も出ない。`prCreation` の追加設定は不要（かつては推奨されていたが Renovate 42.19.9 以降のドキュメントで撤回済み。[Minimum Release Age](https://docs.renovatebot.com/key-concepts/minimum-release-age/)）。pin / digest 更新はリリース年齢の概念が薄いため packageRules で対象を version 更新に限定する |
-| customManagers の導入時期 | Phase 2（標準マネージャの安定稼働後） | regex 設定はミスしてもエラーにならず 0 件マッチになるだけでデバッグしにくいため、段階導入でリスクを分離 |
-| zizmor-action `version` の扱い | 標準の `github-actions` マネージャに任せ、action 本体と CLI を専用グループ（`minimumGroupSize: 2`）にして `group:all` から分離する | zizmor-action の `version` 入力は community-maintained action の `with:` 対応リストに含まれ、依存 `ghcr.io/zizmorcore/zizmor` として標準更新される（[Updating `with:` values](https://docs.renovatebot.com/modules/manager/github-actions/#updating-with-values-in-commonly-used-community-maintained-github-actions)）。customManagers で `pypi` の zizmor を重ねると同じ行を二重抽出して更新が競合するため対象にしない。zizmor-action は新しい CLI コンテナに即応しないため、Renovate 本家の設定に倣い action と CLI が揃った時だけ更新する専用グループとする（[Renovate 自身の renovate.json](https://github.com/renovatebot/renovate/blob/main/renovate.json) の zizmor ルール、[minimumGroupSize](https://docs.renovatebot.com/configuration-options/#minimumgroupsize)）。zizmor だけ別 PR になるのは意図した差分。また GHCR は releaseTimestamp 非対応（[renovate#39064](https://github.com/renovatebot/renovate/issues/39064)）で、既定の `timestamp-required` では 7 日クールダウンが永久 pending になるため、このグループは `minimumReleaseAge: null` でクールダウン対象外にする |
-| mise 版の regex 方式 | 対象行に `# renovate: datasource=... depName=...` コメントを付け、汎用 regex マネージャで拾う | 公式ドキュメント記載のパターン。`uses:` 行をアンカーにする方式より CI 構造変更に強い（[Custom Manager Support using Regex](https://docs.renovatebot.com/modules/manager/regex/)）。mise-action の `version` 入力は標準対応リストに含まれないため customManagers が必要 |
-| `engines.bun` の扱い | packageRules で明示的に無効化する | bun マネージャは npm の `package.json` extractor を再利用しており（[bun/extract.ts](https://github.com/renovatebot/renovate/blob/main/lib/modules/manager/bun/extract.ts) が npm の extract を呼ぶ）、npm 側は `engines` を depType として扱うため（[npm manager dependency types](https://docs.renovatebot.com/modules/manager/npm/#dependency-types)）、`engines.bun` も検出されうる。値の形状（`>=1.3`）が range で自動更新の挙動が不確実なため対象外にし、bun minor 更新 PR のマージ時に手動同期する（drift-check が不整合を fail させるので事故にはならない）。実際の抽出結果と無効化ルールの一致は onboarding 後にジョブログで確認する（Tasks 参照） |
-| 脆弱性対応 | GitHub の Dependabot **alerts** は維持し、Dependabot **security updates**（自動 PR）はリポジトリ設定で無効化。Renovate の `vulnerabilityAlerts` は既定（有効）のまま | alerts（検知）と security updates（自動 PR）は別機能で、`dependabot.yml` を削除しても後者のリポジトリ設定は残る。両方有効だと脆弱性修正 PR が重複する。Renovate の脆弱性 PR は schedule / group / minimumReleaseAge を適用せず即時の個別 PR になる点も現行と異なるが、修正は早いほど良いので受け入れる（[vulnerabilityAlerts](https://docs.renovatebot.com/configuration-options/#vulnerabilityalerts)） |
+| **自前 regex** customManager の導入時期 | Phase 2（標準マネージャの安定稼働後） | regex 設定はミスしてもエラーにならず 0 件マッチになるだけでデバッグしにくいため、段階導入でリスクを分離する。この判断が対象とするのは自分で書く regex であって、customManager 一般ではない。公式プリセット `customManagers:biomeVersions`（実体は JSONata の customManager）は上流がメンテしており、対象も単一の固定ファイルで検証が容易なため Phase 1 に入れる |
+| zizmor-action `version` の扱い | 標準の `github-actions` マネージャに任せ、action 本体と CLI を専用グループ（`minimumGroupSize: 2`）にして `group:all` から分離する | zizmor-action の `version` 入力は community-maintained action の `with:` 対応リストに含まれ、依存 `ghcr.io/zizmorcore/zizmor` として標準更新される（[Updating `with:` values](https://docs.renovatebot.com/modules/manager/github-actions/#updating-with-values-in-commonly-used-community-maintained-github-actions)）。customManagers で `pypi` の zizmor を重ねると同じ行を二重抽出して更新が競合するため対象にしない。zizmor-action は新しい CLI コンテナに即応しないため、Renovate 本家の設定に倣い action と CLI が揃った時だけ更新する専用グループとする（[Renovate 自身の renovate.json](https://github.com/renovatebot/renovate/blob/main/renovate.json) の zizmor ルール、[minimumGroupSize](https://docs.renovatebot.com/configuration-options/#minimumgroupsize)）。zizmor だけ別 PR になるのは意図した差分。また GHCR は releaseTimestamp 非対応（[renovate#39064](https://github.com/renovatebot/renovate/issues/39064)）で、既定の `timestamp-required` では 7 日クールダウンが永久 pending になるため、クールダウンを外す。ただし外すのは `ghcr.io/zizmorcore/zizmor` だけで、グループ全体には掛けない。action 側の `zizmorcore/zizmor-action` は `github-tags` datasource（`releaseTimestampSupport = true`）なので 7 日待機が成立し、これをグループごと外すと Goals のクールダウン方針を迂回してしまう。CLI だけ外して action に待機を残せば、`minimumGroupSize: 2` により「2 件揃うまでブランチを作らない」が働き、結果としてグループ全体が action の 7 日待機にゲートされる |
+| mise-action `version` の扱い | 標準の `github-actions` マネージャに任せる（customManagers は使わない） | `jdx/mise-action` は community-maintained action の `with:` 対応リストに登録済みで、`version`（と任意の `sha256`）を `jdx/mise` として抽出する（`lib/modules/manager/github-actions/community.ts` の `jdx/mise-action` エントリ、datasource は `github-release-attachments`）。本リポジトリの `ci.yml` とほぼ同一の入力（`uses: jdx/mise-action@<sha> # v4.2.0` + `with.version` + `install_args`）を使う抽出テストが上流にある。したがって `# renovate:` アノテーションの付与も customManagers も不要で、手動ピン 3 箇所のうち 2 箇所（zizmor / mise）が Phase 1 で解消する |
+| `biome.json` の `$schema` | 公式プリセット `customManagers:biomeVersions` を `extends` に足す（自前 regex は書かない） | `@biomejs/biome` の bump に `$schema` URL が追従しないため手で同期しており、グループ PR 運用に切り替えた 2026-06 以降の 6 本中 3 本（#63 / #65 / #70）で発生している。手動ピン 3 箇所より頻度が高い。プリセットは `customType: "jsonata"` + `fileFormat: "json"` で JSON をパースして `$schema` をスラッシュ分割するため、regex と違って空白・インデント・キー順の変化で壊れない。上流がメンテするので URL 形式の変更にも追従が期待できる（自動的な互換性が保証されるわけではなく、`/` 区切りの後ろから 2 番目を version とみなす URL 構造への依存は残る）。プリセットは `versioningTemplate` を設定しないため versioning は `semver-coerced` になるが、Biome の公開バージョンと `$schema` URL はいずれも完全な SemVer なので `package.json` 側（npm versioning）と解決結果は一致する。挙動差がない以上 `versioning` の上書きは足さない。なお自動化されるのは `$schema` URL の置換だけで `biome migrate` は走らないため、Biome の設定構文が変わる更新では CI が落ちて手動 migration が要る |
+| `engines.bun` の扱い | packageRules で明示的に無効化する（現状は no-op の予防的ガード） | bun マネージャは npm の `package.json` extractor を再利用しており（[bun/extract.ts](https://github.com/renovatebot/renovate/blob/main/lib/modules/manager/bun/extract.ts) が npm の extract を呼ぶ）、`engines` は depType として抽出される。ただし npm 側の extractor は `depType === 'engines'` のとき depName が `node` / `yarn` / `npm` / `pnpm` / `vscode` のいずれでもなければ `skipReason: 'unknown-engines'` を設定して返す（`lib/modules/manager/npm/extract/common/dependency.ts`）。`bun` は列挙にないため確実にスキップされ、現行バージョンでは更新候補にならない。それでもルールを置くのは、「`engines.bun` は Renovate に更新させず mise SSOT に合わせて手動同期する」というリポジトリ方針を設定として表明し、将来 Renovate が bun の engines 対応を入れたときに意図せず更新対象へ入るのを防ぐため。bun minor 更新 PR のマージ時は `engines.bun` を手動同期する（drift-check が不整合を fail させるので事故にはならない） |
+| 脆弱性対応 | GitHub の Dependabot **alerts** は維持し、Dependabot **security updates**（自動 PR）はリポジトリ設定で無効化。Renovate の `vulnerabilityAlerts` は有効のまま使い、`minimumGroupSize: 1` だけ明示する | alerts（検知）と security updates（自動 PR）は別機能で、`dependabot.yml` を削除しても後者のリポジトリ設定は残る。両方有効だと脆弱性修正 PR が重複する。Renovate の脆弱性 PR は schedule / group / minimumReleaseAge を適用せず即時の個別 PR になる点も現行と異なるが、修正は早いほど良いので受け入れる（[vulnerabilityAlerts](https://docs.renovatebot.com/configuration-options/#vulnerabilityalerts)）。ただし `vulnerabilityAlerts` の既定が上書きするのは `groupName` / `schedule` / `minimumReleaseAge` などに限られ、**`minimumGroupSize` は上書きしない**。zizmor グループの `minimumGroupSize: 2` はそのまま残るため、`zizmorcore/zizmor-action` 単独の脆弱性修正は更新 1 件でブランチ作成が延期され、PR が出ないまま黙って落ちる。`with.version` の CLI は GitHub の依存グラフ上 action 依存として扱われないので 2 件目を供給しない。これを避けるため `vulnerabilityAlerts: { minimumGroupSize: 1 }` を明示する。生成される脆弱性 packageRule は `force: { ...config.vulnerabilityAlerts }` を持つ（`lib/workers/repository/init/vulnerability.ts`）ため、この指定は packageRules 側の値を確実に上書きする |
 | Dependabot 廃止タイミング | `dependabot.yml` の削除を onboarding PR に含め、Dependabot security updates の無効化はマージ直前に行う | onboarding PR マージまで Renovate は更新 PR を作らないため、マージと同時に Dependabot version updates を止めれば重複期間が生じない（[Installing and onboarding](https://docs.renovatebot.com/getting-started/installing-onboarding/)）。security updates もマージ直前に無効化しておかないと、Renovate `vulnerabilityAlerts` との脆弱性 PR 重複期間が残る。ロールバックは `dependabot.yml` の復元 + security updates の再有効化 + App のアンインストール |
 | コミットメッセージ形式 | `semanticCommits: "enabled"` + extends `":semanticCommitTypeAll(build)"` | 本リポジトリのコミット規約は `[type]` 形式で conventional commits ではないため、`semanticCommits` の既定 `auto` では接頭辞なしになりうる。また `config:recommended` は `:semanticPrefixFixDepsChoreOthers` を含み、packageRules で依存ごとに `fix(deps)` / `chore(deps)` を割り当てるため、トップレベルの `semanticCommitType` 指定では上書きされて効かない。全 PR の type を変えるには公式案内どおり `:semanticCommitTypeAll(build)` を extends の末尾に置く（[Changing the semantic commit type](https://docs.renovatebot.com/semantic-commits/#changing-the-semantic-commit-type)）。scope は既定が `deps` のため、`cliff.toml` の `^build\(deps` → Dependencies 分類と一致する |
 
@@ -59,7 +61,7 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 
 - 新規: `renovate.json5` — Renovate 設定（リポジトリルート）
 - 削除: `.github/dependabot.yml` — onboarding PR に含める
-- 修正: `.github/workflows/ci.yml` — Phase 2 で mise-action の `version:` 行に renovate コメントアノテーション追加
+- 修正: `.github/workflows/ci.yml` — biome schema drift check の追加（Phase 1）。actionlint イメージ行は Phase 2 の customManager が更新するが、`ci.yml` 側の記述変更は不要
 - 修正: `CLAUDE.md` — Notes の手動ピン運用メモを更新
 - 修正: `.claude/skills/dependabot-pr/` — Renovate 運用向けに書き換え（または `renovate-pr` にリネーム）
 - 修正: `cliff.toml` — `^build\(deps` 分類ルール直前の `# Dependabot` コメントを `# Dependency updates (Dependabot / Renovate)` 等に更新（分類ルール自体は変更不要）
@@ -75,11 +77,14 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
   extends: [
     "config:best-practices",
     "group:all",
+    "customManagers:biomeVersions", // biome.json の $schema を @biomejs/biome に追従させる公式プリセット
     ":semanticCommitTypeAll(build)", // 末尾に置き config:recommended の fix(deps)/chore(deps) 割り当てを上書き
   ],
   timezone: "Asia/Tokyo",
   // schedule: ["* 0-8 * * 1"],  // 月曜 0-8 時台 (JST)。activated 後に有効化
   lockFileMaintenance: { enabled: false },
+  // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
+  vulnerabilityAlerts: { minimumGroupSize: 1 },
   semanticCommits: "enabled",
   labels: ["dependencies"],
   packageRules: [
@@ -96,12 +101,16 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
       enabled: false,
     },
     // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
-    // GHCR は releaseTimestamp 非対応のためクールダウンも外す
     {
       groupName: "zizmor",
       groupSlug: "zizmor", // group:all の groupSlug: "all" を上書きしないとブランチ名が通常グループと衝突する
       matchPackageNames: ["ghcr.io/zizmorcore/zizmor", "zizmorcore/zizmor-action"],
       minimumGroupSize: 2,
+    },
+    // クールダウンを外すのは GHCR の CLI だけ。action 側 (github-tags) は releaseTimestamp を
+    // 返すので 7 日待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる
+    {
+      matchPackageNames: ["ghcr.io/zizmorcore/zizmor"],
       minimumReleaseAge: null,
     },
   ],
@@ -113,27 +122,73 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 | マネージャ | 対象ファイル | 現行 Dependabot との対応 |
 | ---------- | ------------ | ------------------------ |
 | `bun` | `package.json` + `bun.lock` | `package-ecosystem: bun` を代替。bun.lock テキスト形式対応済み（[Bun manager](https://docs.renovatebot.com/modules/manager/bun/)） |
-| `github-actions` | `.github/workflows/*.yml` | `package-ecosystem: github-actions` を代替。`uses: <owner>/<repo>@<sha> # vX.Y.Z` のコメント付き SHA ピンを維持したまま更新。zizmor-action の `with.version` も依存 `ghcr.io/zizmorcore/zizmor` として標準更新され、手動ピン 3 箇所のうち 1 つがこの時点で解消する（[GitHub Actions manager](https://docs.renovatebot.com/modules/manager/github-actions/)） |
+| `github-actions` | `.github/workflows/*.yml` | `package-ecosystem: github-actions` を代替。`uses: <owner>/<repo>@<sha> # vX.Y.Z` のコメント付き SHA ピンを維持したまま更新。zizmor-action の `with.version`（→ `ghcr.io/zizmorcore/zizmor`）と mise-action の `with.version`（→ `jdx/mise`）も依存として標準更新され、手動ピン 3 箇所のうち 2 つがこの時点で解消する（[GitHub Actions manager](https://docs.renovatebot.com/modules/manager/github-actions/)） |
 | `dockerfile` | `Dockerfile`（`oven/bun:1.3-slim@sha256:...`） | `package-ecosystem: docker` を代替。タグ + digest を追従（[Docker](https://docs.renovatebot.com/docker/)） |
 | `mise` | `mise.toml`（`bun = "1.3"`） | 現行 Dependabot では対象外。新規に自動化（[mise manager](https://docs.renovatebot.com/modules/manager/mise/)） |
+| `custom.jsonata`（`customManagers:biomeVersions`） | `biome.json` の `$schema` | 現行 Dependabot では対象外。`@biomejs/biome` と同一 depName / 同一 datasource で抽出されるため `group:all` 配下で同じ PR に入る |
+
+`github-actions` マネージャは action 本体の SHA に加えて、community-maintained action の `with:` 入力も依存として抽出する。
+本リポジトリでは zizmor-action の `version`（→ `ghcr.io/zizmorcore/zizmor`）と mise-action の `version`（→ `jdx/mise`）が該当し、手動ピン 3 箇所のうち 2 箇所がこの時点で解消する。
 
 `config:best-practices` の `:pinDevDependencies` により、初回に devDependencies を exact version にピンする PR が作られる（受け入れる）。
+`@biomejs/biome` は既に exact なので追加の pin 差分は生じない。
+
+### Phase 1: biome schema drift check
+
+`biome.json` の `$schema` と `package.json` の `@biomejs/biome` が一致するかを `ci.yml` の `quality` ジョブで検証する。
+既存の bun version drift check と同じく、bun を必要としない純テキスト（`jq` + `sed`）で書く。
+
+```yaml
+- name: biome schema drift check
+  run: |
+    pkg_v=$(jq -r '.devDependencies["@biomejs/biome"]' package.json)
+    if ! printf '%s' "$pkg_v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+      echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3 (got: $pkg_v)"; exit 1
+    fi
+    actual=$(jq -r '."$schema"' biome.json)
+    expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
+    echo "expected=$expected actual=$actual"
+    if [ "$actual" != "$expected" ]; then
+      echo "::error::biome schema drift (expected=$expected actual=$actual)"; exit 1
+    fi
+```
+
+`$schema` から版を抽出して比べるのではなく、期待 URL を組み立てて値全体と文字列比較する。
+版だけを正規表現で抜くと、`https://garbage.example/other/schemas/2.5.3/schema.json` のようにホストやパス形状が壊れた値からも版が抽出でき、版が一致していれば通過してしまう。
+`jq -r` の出力が改行を含む場合に行単位のアンカーがすり抜ける経路も、文字列比較なら生じない。
+
+**この check が追加するのは検出ではなく強制である。**
+Biome 自身が `$schema` の版ずれを検出し `The configuration schema version does not match the CLI version` を出す。
+ただし severity は `info` で終了コードは 0 なので、`bun lint` も CI も緑のまま通る（2.5.3 でローカル実測）。
+実際に PR #70 の CI ログ（run 29763071057）にはこの info が記録されており、それでも `quality` ジョブは success になっていた。
+`$schema` の手動 bump が 6 本中 3 本で必要になったのは、情報が出ていなかったからではなく、出ていた情報が何もゲートしていなかったためである。
+
+bun drift-check とは守る対象が違う。
+bun の不整合は宣言と異なるランタイムで build / 実行される実害があるが、`$schema` の版ずれで壊れるのは Biome の挙動ではなくエディタ / LSP が古いスキーマで補完・検証することだけである。
+`biome migrate` への案内は版ずれ時の診断そのものが出しているので失われていない。
+この check がしているのは、その既存の案内を CI の失敗へ昇格させることである。
+したがってこの check は lint / build の正しさを守るものではなく、次の 2 点を担う:
+
+1. 「Biome パッケージと `$schema` を同期させる」というリポジトリの継続的な invariant を機械化する
+2. **Renovate 側の自動化が黙って止まったことを検知するカナリアにする**。JSONata マネージャは抽出 0 件でもエラーにならず debug ログを出すだけで、更新自体は続く。`$schema` の欠落・URL 形式の変更・上流の regression で 0 件抽出に退化しても、Renovate は何も言わない。この沈黙は Phase 2 の actionlint customManager にも共通する性質で、drift-check があれば次の Biome bump PR で必ず気付ける。Biome 自身の info では 6 本中 3 本を実際に見逃しており、ゲートしない通知はカナリアとして機能しないことが実績で示されている
+
+`group:all` は同一実行で更新対象になった依存を 1 本のブランチにまとめるノイズ削減策であって、異なるマネージャ由来の依存を原子的に束ねる同期保証ではない。
+ただし脆弱性 PR が `group:all` を迂回すること自体は片側更新の理由にならない。
+生成される脆弱性 packageRule は `matchDatasources` と `matchPackageNames` だけで対象を決めて manager やファイルを限定しないため（`lib/workers/repository/init/vulnerability.ts`）、`$schema` 側も同じ npm / `@biomejs/biome` として抽出されていれば同じルールが当たり、両方が一緒に更新される。
+片側更新が起きるのは JSONata 抽出が欠落・退行して `$schema` 側が依存として見えていない場合であり、それはまさにこの check が検知したい状態そのものである。
 
 ### Phase 2: customManagers による手動ピン自動化
 
-対象は actionlint イメージ digest と mise-action `version` の 2 箇所（zizmor-action `version` は Phase 1 の標準マネージャで解消済み。Decisions 参照）。
+対象は actionlint イメージ digest の 1 箇所のみ（zizmor-action / mise-action の `version` はいずれも Phase 1 の標準マネージャで解消済み。Decisions 参照）。
 
-`ci.yml` の mise-action の `version:` 行にアノテーションを追加:
-
-```yaml
-version: "2026.6.1" # renovate: datasource=github-releases depName=jdx/mise
-```
+`customManagers` は `mergeable: true` の配列オプションで、プリセット由来の定義とローカル定義は連結される（`lib/config/options/index.ts` の `customManagers` 定義と `lib/config/utils.ts` の `mergeChildConfig`）。
+したがって以下を足しても `customManagers:biomeVersions` の定義は消えない。
 
 `renovate.json5` に追記する customManagers 案:
 
 ```json5
 customManagers: [
-  // (a) actionlint: run 内の docker イメージ（タグ + digest）
+  // actionlint: run 内の docker イメージ（タグ + digest）
   {
     customType: "regex",
     managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
@@ -143,21 +198,12 @@ customManagers: [
     depNameTemplate: "rhysd/actionlint",
     datasourceTemplate: "docker",
   },
-  // (b) renovate コメントアノテーション付きの version: 行（mise）
-  {
-    customType: "regex",
-    managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
-    matchStrings: [
-      "version: \"(?<currentValue>[^\"]+)\" # renovate: datasource=(?<datasource>[a-z-.]+?) depName=(?<depName>\\S+)",
-    ],
-    extractVersionTemplate: "^v?(?<version>.*)$",
-  },
 ],
 ```
 
-- `extractVersionTemplate` は jdx/mise の GitHub Release タグの `v` プレフィックスを除去するために付ける（versioning は regex マネージャ既定の `semver-coerced` で足りる）。
-- 検証は 3 段階で行う: ① 構文は `renovate-config-validator`、② 抽出結果（regex が 0 件マッチに退化していないか）は Mend Developer Portal のジョブログ、③ 実際の置換結果は生成 PR の差分と CI 成功。Dependency Dashboard は抽出された全依存のインベントリではなく、依存が最新の場合は抽出成功でも表示されないため検証には使えない（[Dependency Dashboard](https://docs.renovatebot.com/key-concepts/dashboard/)）。
-- ③ で自然な更新が来ない場合の手順: Renovate は既定でデフォルトブランチしか走査しないため（[baseBranchPatterns](https://docs.renovatebot.com/configuration-options/#basebranchpatterns)）、検証ブランチで値を下げるだけでは PR は生成されない。一時的に `baseBranchPatterns: ["$default", "renovate-validation"]` を設定し、weekly の `schedule` キーを一時削除して（schedule を外さないと Phase 2 時点の週次 schedule 外では新規ブランチが作られない。[updateNotScheduled](https://docs.renovatebot.com/configuration-options/#updatenotscheduled)）、`renovate-validation` ブランチで対象値を旧版に下げて Developer Portal からジョブを実行、そのブランチ向け PR の差分と CI を確認したら一時設定・PR・ブランチを削除する。mise は毎週リリースされるため、実際には自然な更新を待つ方が早いことが多い。
+- 検証は 3 段階で行う: ① 構文は `renovate-config-validator`、② 抽出結果（regex が 0 件マッチに退化していないか）は Mend Developer Portal のジョブログ、③ 実際の置換結果は生成 PR の差分と CI 成功。
+- `renovate-config-validator` が見るのは構文とオプション名 / 型までで、**`extends` に書いたプリセット名の実在は検証しない**（存在しないプリセット名を混ぜても `Config validated successfully` になることを実測）。プリセット名の綴りは②のジョブログで確認する。ローカル実行時は prebuilt の `re2` が Node の ABI と合わずに落ちることがあるので、その場合は `RENOVATE_X_IGNORE_RE2=true` を付ける。Dependency Dashboard は抽出された全依存のインベントリではなく、依存が最新の場合は抽出成功でも表示されないため検証には使えない（[Dependency Dashboard](https://docs.renovatebot.com/key-concepts/dashboard/)）。
+- ③ で自然な更新が来ない場合の手順: Renovate は既定でデフォルトブランチしか走査しないため（[baseBranchPatterns](https://docs.renovatebot.com/configuration-options/#basebranchpatterns)）、検証ブランチで値を下げるだけでは PR は生成されない。一時的に `baseBranchPatterns: ["$default", "renovate-validation"]` を設定し、weekly の `schedule` キーを一時削除して（schedule を外さないと Phase 2 時点の週次 schedule 外では新規ブランチが作られない。[updateNotScheduled](https://docs.renovatebot.com/configuration-options/#updatenotscheduled)）、`renovate-validation` ブランチで対象値を旧版に下げて Developer Portal からジョブを実行、そのブランチ向け PR の差分と CI を確認したら一時設定・PR・ブランチを削除する。actionlint のリリース間隔は不定なので、自然な更新を待つか一時検証手順を使うかは状況で選ぶ。
 
 ### 設計メモ
 
@@ -170,35 +216,41 @@ customManagers: [
 
 Phase 1:
 
+- [x] `ci.yml` に biome schema drift check を追加（App インストール前に単独でマージ可能。移行前でも成立する invariant であり、Renovate 導入後は自動化のカナリアになる）
 - [ ] Mend Renovate App を selected repositories で本リポジトリのみにインストール（<https://github.com/apps/renovate>）
 - [ ] 自動生成される onboarding PR（`renovate/configure` ブランチ）の作成を待つ。`renovate.json5` を先に main へ直接コミットしない（設定ファイルが main に存在すると onboarding PR は作られない。[Configuration overview](https://docs.renovatebot.com/config-overview/)）
 - [ ] onboarding PR のブランチ上で、提案された `renovate.json` を本設計の `renovate.json5`（schedule なしの初期構成）に置き換え、`.github/dependabot.yml` の削除も積む。PR 本文のプレビュー（検出された依存・警告）を確認
 - [ ] 未処理の Dependabot PR（グループ PR・security update PR とも）をマージまたはクローズ
 - [ ] リポジトリ設定で Dependabot security updates を無効化（Dependabot alerts は維持）
 - [ ] onboarding PR をマージ（ロールバック: `dependabot.yml` 復元 + security updates 再有効化 + App アンインストール）
-- [ ] マージ後の最初の実行直後に、Mend Developer Portal のジョブログで `engines.bun` の抽出有無（manager=bun / depType=engines / depName=bun）と無効化ルールの一致を確認（生成 PR のマージより先に行う）
+- [ ] マージ後の最初の実行のジョブログで `renovateVersion` と、`jdx/mise` / `ghcr.io/zizmorcore/zizmor` / `biome.json` の `$schema` が期待どおり抽出されているかを確認する。hosted は OSS 版から遅れうるため（Decisions「実行基盤」参照）、上流の新機能に依存する 3 点の受け入れ確認。`engines.bun` はソース上 `unknown-engines` でスキップされることが確定しているので確認対象に含めない（Decisions 参照）
 - [ ] 初回の pin 系 PR（devDependencies pin / digest pin）を確認・マージ（→ activated 状態になり 4 時間ごと実行へ）。コミット / PR タイトルが `build(deps)` 形式になっているかも確認
 - [ ] `renovate.json5` に `schedule: ["* 0-8 * * 1"]` を追加
-- [ ] 週次グループ PR を 2 サイクル確認（グルーピング・schedule・minimumReleaseAge の動作、および mise / docker の releaseTimestamp 取得可否）
+- [ ] zizmor-action と mise-action の `with.version` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。公式ドキュメントが保証しているのは対象入力のサポートであって、実環境での置換成功は別の受け入れ条件になる。抽出の確認だけで完了とすると、手動ピンから引き取った 2 箇所が一度も更新されないまま Phase 1 を終えられてしまう。解決するまで Phase 1 を完了としない
+  - mise: `group:all` 配下で `minimumGroupSize` の制約がないため、2 サイクル中に更新が来なければ Design「Phase 2」記載の `baseBranchPatterns` 手順で検証ブランチの `version:` だけを旧版に下げれば PR が出る
+  - zizmor: 専用グループに `minimumGroupSize: 2` を設定しているため、**`with.version` だけを下げても更新が 1 件にしかならずブランチ作成が延期され、PR が出ない**（`minimumGroupSize` は「x 件以上の更新が揃うまでブランチ作成を延期する」オプション）。合成する場合は `uses: zizmorcore/zizmor-action@<sha> # vX.Y.Z` の SHA とバージョンコメント、および `with.version` の両方を、既知の互換な旧ペアまで下げて更新を 2 件にする。そもそも action と CLI が揃った時だけ更新するのがこのグループの狙いなので、自然な更新を待てば両方が同じ PR に載る
+- [ ] `biome.json` の `$schema` が実際に置換されることを、生成 PR の差分と CI 成功で確認する。抽出の成功だけでは置換経路が通ったことにならない（現状は `package.json` と `$schema` が同版なので更新自体が発生しない）。Biome のリリース間隔なら 2 サイクル中に自然な更新が来る見込みだが、来なければ Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で `$schema` だけ旧版に下げて合成する。解決するまで Phase 1 を完了としない
+- [ ] 週次グループ PR を 2 サイクル確認（グルーピング・schedule・minimumReleaseAge の動作、および releaseTimestamp の取得可否）。releaseTimestamp は datasource ごとに確認する: `mise.toml` の bun（mise マネージャ）、`oven/bun`（docker）、mise-action の `jdx/mise`（github-release-attachments）、zizmor-action の `ghcr.io/zizmorcore/zizmor`（docker / GHCR）。`mise.toml` の bun と mise-action の `jdx/mise` は datasource が異なるので、まとめて「mise」と扱わず個別に見る
 - [ ] 2 サイクル中に `mise.toml` の bun が minor 線表記（`1.3`）のまま維持されることを確認する（bun は patch リリースが頻繁なため観測機会は十分ある）。3 要素版（例: `1.3.14`）への書き換え PR が出た場合は、適切な packageRule を追加するか mise の bun 更新を無効化して手動同期（現行運用）へ戻す。解決するまで Phase 1 を完了としない。なお「`1.4` リリース時に bump PR が出るか」「Dockerfile と同じ PR にまとまるか」は次の bun minor リリースまで検証できないため完了条件にしない（提案されなくても現行の手動 bump + drift-check と同等で退行はない）。先行検証したい場合は Phase 2 の `baseBranchPatterns` 手順を流用し、検証ブランチで 3 ファイルを旧 minor 線（Dockerfile は旧タグと対応する digest）に揃えて `1.2 → 1.3` の更新を合成できる
-- [ ] CLAUDE.md の Notes（手動ピン運用メモ。zizmor-action `version` はこの時点で自動化済みになるため削除）とコミット規約表の `build(deps) | Dependabot auto-generated` 行、および `.claude/skills/dependabot-pr/` を Renovate 運用に更新（bun minor 更新 PR マージ時の `engines.bun` 手動同期手順を含める）。`cliff.toml` の `# Dependabot` コメントも更新
+- [ ] CLAUDE.md の Notes（手動ピン運用メモ。zizmor-action と mise-action の `version` はこの時点で自動化済みになるため削除し、残るのは actionlint イメージ digest のみ）とコミット規約表の `build(deps) | Dependabot auto-generated` 行、および `.claude/skills/dependabot-pr/` を Renovate 運用に更新（bun minor 更新 PR マージ時の `engines.bun` 手動同期手順を含める）。`cliff.toml` の `# Dependabot` コメントと、`ci.yml` の mise-action `version:` 行に付いた「Dependabot は更新しないため手動 bump」コメントも更新（この 2 つは Renovate が実際に更新するようになってから直す。先に書き換えると移行完了までの間だけ記述が誤りになる）
 
 Phase 2:
 
-- [ ] `ci.yml` の mise-action の `version:` 行に renovate コメントアノテーションを追加
-- [ ] `renovate.json5` に customManagers（actionlint digest / mise version コメント）を追加し、`renovate-config-validator` で構文検証
-- [ ] Mend Developer Portal のジョブログで customManagers の抽出件数・依存名を確認（0 件マッチになっていないか）。あわせて `rhysd/actionlint` / `jdx/mise` の version update に `releaseTimestamp` が設定されていることも確認
-- [ ] customManagers による生成 PR の差分（digest / version の置換結果）と CI 成功を確認してから完了とする。自然な更新が来ない場合は Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で確認する
+- [ ] `renovate.json5` に customManagers（actionlint digest）を追加し、`renovate-config-validator` で構文検証
+- [ ] Mend Developer Portal のジョブログで customManagers の抽出件数・依存名を確認（0 件マッチになっていないか）。あわせて `rhysd/actionlint` の version update に `releaseTimestamp` が設定されていることも確認
+- [ ] customManagers による生成 PR の差分（タグ / digest の置換結果）と CI 成功を確認してから完了とする。自然な更新が来ない場合は Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で確認する
 - [ ] CLAUDE.md の手動ピン運用メモから自動化済み項目を削除
 - [ ] `docs/changes/renovate-migration/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
 - `mise` マネージャが `bun = "1.3"` のようなマイナー行表記をどう扱うか（1.4 リリース時に bump PR を出すか、range として維持するか）は公式ドキュメントに明記がなく、onboarding 後に実機確認する。維持されない場合のフォールバック（packageRule 追加または mise の bun 更新を無効化して手動同期へ戻す）を Phase 1 Tasks のゲートとして定義済み。
-- `minimumReleaseAgeBehaviour` の既定は `timestamp-required` で、releaseTimestamp を返さない datasource の更新は stable 扱いされず `internalChecksFilter: "strict"`（既定）に落とされて PR が出なくなる（[minimumReleaseAgeBehaviour](https://docs.renovatebot.com/configuration-options/#minimumreleaseagebehaviour)）。GHCR の非対応は確定事項として zizmor グループを例外化済み（Decisions 参照）。Docker Hub と github-releases は対応見込みだが、実際に timestamp が取れているかは Phase 1 の依存（`oven/bun`、mise.toml の bun 等）は 2 サイクル確認のタスクで、Phase 2 で追加される依存（`rhysd/actionlint`、`jdx/mise`）は Phase 2 のジョブログ確認タスクで実測する。取れない依存が他にあれば該当 packageRule で `minimumReleaseAge` を外す。
+- `minimumReleaseAgeBehaviour` の既定は `timestamp-required` で、releaseTimestamp を返さない datasource の更新は stable 扱いされず `internalChecksFilter: "strict"`（既定）に落とされて PR が出なくなる（[minimumReleaseAgeBehaviour](https://docs.renovatebot.com/configuration-options/#minimumreleaseagebehaviour)）。GHCR の非対応は確定事項として zizmor グループを例外化済み（Decisions 参照）。Docker Hub と github-releases は対応見込みだが、実際に timestamp が取れているかは Phase 1 の依存（`oven/bun`、mise.toml の bun 等）は 2 サイクル確認のタスクで、Phase 1 で新たに拾われる `jdx/mise`（github-release-attachments）と `ghcr.io/zizmorcore/zizmor`（GHCR）は 2 サイクル確認のタスクで datasource ごとに個別に見る（`mise.toml` の bun とは datasource が別）。Phase 2 で追加される `rhysd/actionlint` は Phase 2 のジョブログ確認タスクで実測する。取れない依存が他にあれば該当 packageRule で `minimumReleaseAge` を外す。
 - Renovate の bun マネージャは monorepo / workspace 構成で bun.lock の更新漏れ報告があるが、本リポジトリは単一 package.json のため影響を受けにくい見込み。
 - `group:all` は major 更新も同一 PR に含める（現行 Dependabot と同じ）。major で壊れた際にグループ全体が滞留するようなら、major のみグループを分ける packageRules を後から足す。
 - customManagers の regex は `ci.yml` の書式変更（クォート形式や空白の変更）で 0 件マッチに退化しうる。Phase 2 のジョブログ確認タスクで検知する。
+- `vulnerabilityAlerts: { minimumGroupSize: 1 }` が実際に効くかは、本物の脆弱性 alert が出るまで実測できない（合成手段がない）。設定の根拠はソース（`vulnerability.ts` の `force: { ...config.vulnerabilityAlerts }`）と `vulnerabilityAlerts` の既定値一覧に `minimumGroupSize` が含まれないことまでで、実行時の確認は将来の alert 発生時に持ち越す。
+- `customManagers:biomeVersions` の JSONata 式も `$schema` の欠落や URL 形式の変更で 0 件抽出になりうる。抽出 0 件は debug ログになるだけでエラーにならないため、biome schema drift check をカナリアとして置く（Design「Phase 1: biome schema drift check」参照）。
 
 ## 参照
 
@@ -210,6 +262,7 @@ Phase 2:
 - [Minimum Release Age](https://docs.renovatebot.com/key-concepts/minimum-release-age/)
 - [Mend-hosted apps overview](https://docs.renovatebot.com/mend-hosted/overview/)
 - [Mend-hosted apps: Job scheduling](https://docs.renovatebot.com/mend-hosted/job-scheduling/)
+- [Mend-hosted Apps Configuration（hosted の Renovate 本体バージョンと lag）](https://docs.renovatebot.com/mend-hosted/hosted-apps-config/)
 - [Security and permissions](https://docs.renovatebot.com/security-and-permissions/)
 - [Config presets（config:best-practices の内訳）](https://docs.renovatebot.com/presets-config/)
 - [Group presets（group:all）](https://docs.renovatebot.com/presets-group/)
@@ -217,6 +270,8 @@ Phase 2:
 - [Updating and rebasing branches](https://docs.renovatebot.com/updating-rebasing/)
 - [Semantic commit messages](https://docs.renovatebot.com/semantic-commits/)
 - [Custom Manager Support using Regex](https://docs.renovatebot.com/modules/manager/regex/)
+- [customManagers プリセット一覧（`customManagers:biomeVersions`）](https://docs.renovatebot.com/presets-customManagers/)
+- [JSONata custom manager](https://docs.renovatebot.com/modules/manager/jsonata/)
 - [GitHub Actions manager](https://docs.renovatebot.com/modules/manager/github-actions/)
 - [mise manager](https://docs.renovatebot.com/modules/manager/mise/)
 - [Bun manager](https://docs.renovatebot.com/modules/manager/bun/)

@@ -26,7 +26,7 @@
 | [複数モデル並列](changes/model-compare/design.md) | 中 | planned | /compare で複数モデルへ並列リクエストし回答を比較 |
 | [OpenRouter API 整合監査](changes/openrouter-api-audit/design.md) | 中 | planned | 実装済み OpenRouter 連携を現行 API へ整合（deprecated な usage:{include} 撤去ほか） |
 | [リリース更新通知のポーリング化](changes/release-polling/design.md) | 中 | planned | リリース通知を GitHub Webhook からポーリング方式へ移行 |
-| [Renovate 移行](changes/renovate-migration/design.md) | 中 | planned | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
+| [Renovate 移行](changes/renovate-migration/design.md) | 中 | in-progress | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
