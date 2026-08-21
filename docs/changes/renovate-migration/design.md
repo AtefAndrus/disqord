@@ -350,6 +350,7 @@ Phase 2:
 
 ## 参照
 
+- [biosig-match/eeg-server](https://github.com/biosig-match/eeg-server) — 同一構成の先行実装。とくに `CONTRIBUTING.md` の「Renovate 運用」節に、Mend hosted sidecar が Takumi Guard の anonymous quota 対象外で 401 になる件と `hostRules` による対処が記録されている。本 change の削除時は、この参照を skill 側（Renovate 運用へ書き換える `dependabot-pr`）へ移すこと
 - [Renovate vs Dependabot 機能比較（公式）](https://docs.renovatebot.com/bot-comparison/)
 - [Installing and onboarding](https://docs.renovatebot.com/getting-started/installing-onboarding/)
 - [Configuration overview](https://docs.renovatebot.com/config-overview/)
