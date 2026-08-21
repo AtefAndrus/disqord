@@ -4,7 +4,9 @@ WORKDIR /app
 # Install dependencies (cache optimization)
 FROM base AS install
 RUN mkdir -p /temp/prod
-COPY package.json bun.lock /temp/prod/
+# .npmrc も渡す。bun.lock は取得元を持たないので、これが無いと本番イメージのビルドだけが
+# Takumi Guard を経由せず既定レジストリから取得することになる
+COPY package.json bun.lock .npmrc /temp/prod/
 # --ignore-scripts: prepare (lefthook install) は dev 用 hook 設定で、本番イメージでは不要かつ devDependency 不在で失敗する
 RUN cd /temp/prod && bun install --frozen-lockfile --production --ignore-scripts
 
