@@ -228,23 +228,26 @@ describe("ToolDispatcher.dispatch", () => {
   test.each([
     ["undefined", undefined],
     ["a number", 42],
-  ])("a handler resolving with a non-string llmResult (%s) produces a bounded error result, not a false ok", async (_label, badLlmResult) => {
-    const { dispatcher } = setup([
-      makeTool({
-        handler: async () => ({ llmResult: badLlmResult }) as unknown as IToolHandlerResult,
-      }),
-    ]);
-    const outcome = await dispatcher.dispatch(makeCall(), {
-      ctx,
-      frozenToolNames: new Set(["echo"]),
-      requestId: "req-1",
-    });
-    expect(outcome.status).toBe("error");
-    expect(typeof outcome.toolMessage.content).toBe("string");
-    expect(outcome.toolMessage.content).toContain("non-string result");
-    expect(outcome.toolMessage.tool_call_id).toBe("call-1");
-    expect(outcome.render).toBeUndefined();
-  });
+  ])(
+    "a handler resolving with a non-string llmResult (%s) produces a bounded error result, not a false ok",
+    async (_label, badLlmResult) => {
+      const { dispatcher } = setup([
+        makeTool({
+          handler: async () => ({ llmResult: badLlmResult }) as unknown as IToolHandlerResult,
+        }),
+      ]);
+      const outcome = await dispatcher.dispatch(makeCall(), {
+        ctx,
+        frozenToolNames: new Set(["echo"]),
+        requestId: "req-1",
+      });
+      expect(outcome.status).toBe("error");
+      expect(typeof outcome.toolMessage.content).toBe("string");
+      expect(outcome.toolMessage.content).toContain("non-string result");
+      expect(outcome.toolMessage.tool_call_id).toBe("call-1");
+      expect(outcome.render).toBeUndefined();
+    },
+  );
 
   test("a handler that throws produces a bounded error result", async () => {
     const { dispatcher } = setup([
