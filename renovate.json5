@@ -65,10 +65,18 @@
       separateMajorMinor: false,
     },
     // クールダウンを外すのは GHCR の CLI だけ。action 側 (github-tags) は releaseTimestamp を
-    // 返すので 7 日待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる
+    // 返すので待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる。
+    //
+    // digest 固定もこの依存には行わない。zizmor-action の version 入力は
+    // `latest` か厳密な X.Y.Z しか受け付けず (action.sh の version_regex)、
+    // `1.29.0@sha256:...` を書き込まれると "'version' must be 'latest' or an exact X.Y.Z version"
+    // で即死する。そもそも action 自身が version -> digest の対応表を internal に持ち
+    // `ghcr.io/zizmorcore/zizmor:<version>@<digest>` を組み立てて pull するので、
+    // 外から digest を固定する意味も無い
     {
       matchPackageNames: ["ghcr.io/zizmorcore/zizmor"],
       minimumReleaseAge: null,
+      pinDigests: false,
     },
   ],
 }

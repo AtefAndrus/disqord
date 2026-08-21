@@ -143,10 +143,18 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
       separateMajorMinor: false,
     },
     // クールダウンを外すのは GHCR の CLI だけ。action 側 (github-tags) は releaseTimestamp を
-    // 返すので 7 日待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる
+    // 返すので待機が成立し、minimumGroupSize: 2 と合わさってグループ全体がその待機にゲートされる。
+    //
+    // digest 固定もこの依存には行わない。zizmor-action の version 入力は
+    // `latest` か厳密な X.Y.Z しか受け付けず (action.sh の version_regex)、
+    // `1.29.0@sha256:...` を書き込まれると "'version' must be 'latest' or an exact X.Y.Z version"
+    // で即死する。そもそも action 自身が version -> digest の対応表を internal に持ち
+    // `ghcr.io/zizmorcore/zizmor:<version>@<digest>` を組み立てて pull するので、
+    // 外から digest を固定する意味も無い
     {
       matchPackageNames: ["ghcr.io/zizmorcore/zizmor"],
       minimumReleaseAge: null,
+      pinDigests: false,
     },
   ],
 }
@@ -311,6 +319,11 @@ Phase 2:
 - customManagers の regex は `ci.yml` の書式変更（クォート形式や空白の変更）で 0 件マッチに退化しうる。Phase 2 のジョブログ確認タスクで検知する。
 - `pin` 更新は同じ `groupName` を持つ他の更新タイプと同じ branchName に解決されて衝突する。bun toolchain グループに `bun-types` を入れた直後、`bun-types` の pin がブランチを取り、`mise.toml` / `Dockerfile` の minor 更新が Dashboard からも PR からも消えた（検出はされているのにブランチが無い状態になる）。後続 packageRule で pin を既定の "Pin Dependencies" へ戻して解消した。`matchUpdateTypes` と `separateMajorMinor` は同一ルール内で併用できない（`packageRules cannot combine both matchUpdateTypes and separateMajorMinor`）ため、グループ側を絞る形は取れない。
 - `bun-types` の版を drift-check の比較対象に加えることは見送った。グループ化で同一 PR に載れば版がずれる余地は実質的に無く、一方で bun のあらゆる patch に対応する `bun-types` が必ず公開される保証はないため、完全一致を強制すると公開されない patch で更新が止まる。グループ化が破れた場合に備えるなら major.minor 比較で足りるが、まずはグループ化の実効を 2 サイクル観測してから判断する。
+- **`pin` 更新は Renovate のクールダウンを迂回するが bunfig のゲートは迂回しない**。公式プリセットも本リポジトリの catch-all も `pin` を `minimumReleaseAge` の対象外にしている（`pin` には releaseTimestamp が渡らず永久 pending になるため）。一方 `bunfig.toml` の `[install] minimumReleaseAge` は install 解決時に効くので、公開間もない版への pin を Renovate が提案すると、Renovate 自身の artifact 実行（`bun install`）が拒否されて `bun.lock` が再生成されない。結果 `package.json` と `bun.lock` が乖離し、`--frozen-lockfile` を使う CI と Docker ビルドが `lockfile had changes, but lockfile is frozen` で落ちる。
+  - 実例: pin PR が公開 1.0 日の `bun-types@1.4.0` を固定しようとして発生（同 PR の他 6 件は 13〜44 日で問題なし）。
+  - 対処は待つこと。対象版が 3 日を超えれば Renovate が再生成して解消する。失敗は CI で明示的に落ちるので silent な乖離にはならない。
+  - なおこの挙動は結果的に望ましい。`bun-types` がクールダウンを飛び越えられないということは、ランタイムの bun より先行できないということでもある（bun 本体も同じ 3 日ゲートを通る）。
+- **`ghcr.io/zizmorcore/zizmor` に digest 固定を行ってはいけない**。zizmor-action の `version` 入力は `latest` か厳密な `X.Y.Z` しか受け付けず（`action.sh` の `version_regex='^v?[0-9]+\.[0-9]+\.[0-9]+$'`）、`1.29.0@sha256:...` を書き込まれると `'version' must be 'latest' or an exact X.Y.Z version` で即座に失敗する。`docker:pinDigests`（`config:best-practices` 由来）が有効なため放置すると digest 固定 PR が立つので、packageRule で `pinDigests: false` を明示している。そもそも action 自身が version → digest の対応表を internal に持ち `ghcr.io/zizmorcore/zizmor:<version>@<digest>` を組み立てて pull するので、外から固定する必要も無い。
 - **SHA 固定した GitHub Actions には Dependabot alert が来ない**。GitHub は action の脆弱性を version メタデータで管理しており、alert を生成するのは semantic version 参照の場合だけで、SHA 参照には生成しない（[About Dependabot alerts](https://docs.github.com/code-security/dependabot/dependabot-alerts/about-dependabot-alerts)）。本リポジトリは `helpers:pinGitHubActionDigests` で全 action を SHA 固定するため、action の脆弱性は即時 PR ではなく通常の version 更新で拾うことになる（GitHub 自身も SHA 固定時の代替として version updates の有効化を案内している）。供給網の不変性と alert 網羅性のトレードオフとして受容する。
 - `vulnerabilityAlerts: { minimumGroupSize: 1 }` が実際に効くかは、本物の脆弱性 alert が出るまで実測できない（合成手段がない）。設定の根拠はソース（`vulnerability.ts` の `force: { ...config.vulnerabilityAlerts }`）と `vulnerabilityAlerts` の既定値一覧に `minimumGroupSize` が含まれないことまで。効く対象は alert が生成される npm 依存の経路に限られる。
 - `customManagers:biomeVersions` の JSONata 式も `$schema` の欠落や URL 形式の変更で 0 件抽出になりうる。抽出 0 件は debug ログになるだけでエラーにならないため、biome schema drift check をカナリアとして置く（Design「Phase 1: biome schema drift check」参照）。
