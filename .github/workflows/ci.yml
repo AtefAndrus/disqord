@@ -36,12 +36,14 @@ jobs:
       # ホスト・パス形状の破損も同時に捕まえるため。
       # レンジ接頭辞を剥がさず exact を要求するのは、剥がすと ^2.5.3 で実際に入る版が
       # $schema とずれても通過してしまうから。exact ピンは :pinDevDependencies の前提でもある。
+      # 検証を jq の \A...\z で行うのは、grep が行単位で照合するため多行値の 1 行目だけが
+      # 一致しても通過してしまうから。\A / \z は文字列全体をアンカーする。
       - name: biome schema drift check
         run: |
-          pkg_v=$(jq -r '.devDependencies["@biomejs/biome"]' package.json)
-          if ! printf '%s' "$pkg_v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3 (got: $pkg_v)"; exit 1
-          fi
+          pkg_v=$(jq -er '.devDependencies["@biomejs/biome"]
+                          | select(type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))' package.json) || {
+            echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3"; exit 1
+          }
           actual=$(jq -r '."$schema"' biome.json)
           expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
           echo "expected=$expected actual=$actual"

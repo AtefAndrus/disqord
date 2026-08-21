@@ -136,15 +136,15 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 ### Phase 1: biome schema drift check
 
 `biome.json` の `$schema` と `package.json` の `@biomejs/biome` が一致するかを `ci.yml` の `quality` ジョブで検証する。
-既存の bun version drift check と同じく、bun を必要としない純テキスト（`jq` + `sed`）で書く。
+既存の bun version drift check と同じく、bun を必要としない純テキスト（`jq`）で書く。
 
 ```yaml
 - name: biome schema drift check
   run: |
-    pkg_v=$(jq -r '.devDependencies["@biomejs/biome"]' package.json)
-    if ! printf '%s' "$pkg_v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-      echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3 (got: $pkg_v)"; exit 1
-    fi
+    pkg_v=$(jq -er '.devDependencies["@biomejs/biome"]
+                    | select(type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))' package.json) || {
+      echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3"; exit 1
+    }
     actual=$(jq -r '."$schema"' biome.json)
     expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
     echo "expected=$expected actual=$actual"
@@ -155,7 +155,11 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 
 `$schema` から版を抽出して比べるのではなく、期待 URL を組み立てて値全体と文字列比較する。
 版だけを正規表現で抜くと、`https://garbage.example/other/schemas/2.5.3/schema.json` のようにホストやパス形状が壊れた値からも版が抽出でき、版が一致していれば通過してしまう。
-`jq -r` の出力が改行を含む場合に行単位のアンカーがすり抜ける経路も、文字列比較なら生じない。
+
+`package.json` 側の版検証を shell の `grep` ではなく `jq` の `test("\A...\z")` で行うのにも理由がある。
+`grep` は入力を行単位で照合するため、`2.5.3\njunk` のような多行の値でも 1 行目が一致すれば通過する（実測で確認）。
+`\A` / `\z` は行頭・行末ではなく文字列全体の先頭・末尾にアンカーするので、多行の値をまとめて弾ける。
+レンジ（`^2.5.3` / `~2.5.3`）、prerelease、キー欠落、末尾改行付きの値も同じ検証で落ちる。
 
 **この check が追加するのは検出ではなく強制である。**
 Biome 自身が `$schema` の版ずれを検出し `The configuration schema version does not match the CLI version` を出す。
