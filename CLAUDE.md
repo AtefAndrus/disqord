@@ -198,7 +198,7 @@ The skill handles: version bump, CHANGELOG.md generation, deleting the changes f
 - Default model: `google/gemma-4-26b-a4b-it:free`
 <!-- AUTO:DEFAULT_MODEL:END -->
 - SQLite WAL mode enabled
-- The bun minor line in `mise.toml` (`bun = "1.x"`) is the SSOT. When bumping it, align the `Dockerfile` tag/digest and `package.json` `engines.bun` in the same PR (CI's drift-check fails on a mismatch).
+- The bun version in `mise.toml` is the SSOT, pinned to an exact patch (`bun = "1.3.14"`). The `Dockerfile` tag is pinned to the same patch (`oven/bun:1.3.14-slim@sha256:...`) and CI's drift-check requires the two to match exactly, rejecting any value that is not a three-part version. Do not go back to a floating spec on either side. mise resolves `1.3` to the newest 1.3.x, so it moves with no edit at all. The Dockerfile pins a digest, so republishing a tag does not move it — but on a mutable tag like `1.3-slim` a digest update raises the real patch while the tag text stays put. Neither drift is visible in the version strings, which is why both sides must carry a three-part version. These are the only two places that decide which bun runs: `mise.toml` for local and CI, the base image for production. `package.json` has no `engines.bun` — bun does not enforce `engines`, and the package is `private` so it never reaches a registry that would.
 - Manual pins outside Dependabot's scope (bump periodically): the actionlint docker image digest in `ci.yml`, the zizmor-action `version` input, and the mise-action `version` input.
 
 ## References

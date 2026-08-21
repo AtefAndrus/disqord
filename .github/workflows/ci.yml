@@ -19,16 +19,51 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      # bun の minor 線が mise.toml(SSOT) / Dockerfile / package.json で一致するか検証（bun 不要・純テキスト）
+      # bun の版が mise.toml(SSOT) と Dockerfile で完全一致するか検証（bun 不要・純テキスト）
+      # 比較するのは実際に bun を供給する 2 経路だけ。開発 / CI は mise.toml、本番は Dockerfile の
+      # base image が bun を決める。package.json の engines.bun はどちらにも関与せず
+      # bun 自身も強制しないため、この検査のためだけに存在する値になっていたので削除した。
+      #
+      # patch まで含めた完全一致を要求する。両側とも exact 指定にしてあり、
+      # 片側だけを可変指定に戻すと、同じ minor 線の中で本番と開発の版が静かにずれる。
+      # mise の `1.3` は 1.3 系の最新へ解決するため書き換えなしで浮動する。Docker 側は
+      # digest を固定しているのでタグ再発行だけでは動かないが、可変タグ `1.3-slim` のまま
+      # digest だけが更新されると、タグ表記が変わらないまま実イメージの patch が上がる。
+      # どちらの経路も版表記の比較では捉えられないので、両側に 3 要素を要求する。
+      # 3 要素にマッチしない値は可変指定へ戻った合図なので、その時点で落とす。
       - name: bun version drift check (mise SSOT)
         run: |
-          mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+).*/\1/p' mise.toml)
-          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+).*#\1#p' Dockerfile | head -n1)
-          eng_v=$(jq -r '.engines.bun' package.json | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/')
-          echo "mise=$mise_v dockerfile=$docker_v engines=$eng_v"
-          if [ -z "$mise_v" ] || [ "$mise_v" != "$docker_v" ] || [ "$mise_v" != "$eng_v" ]; then
-            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v engines=$eng_v)"; exit 1
+          mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' mise.toml)
+          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+\.[0-9]+)-slim@.*#\1#p' Dockerfile | head -n1)
+          echo "mise=$mise_v dockerfile=$docker_v"
+          if [ -z "$mise_v" ] || [ -z "$docker_v" ]; then
+            echo "::error::bun version must be pinned to an exact patch in both mise.toml and Dockerfile (mise=$mise_v dockerfile=$docker_v)"; exit 1
           fi
+          if [ "$mise_v" != "$docker_v" ]; then
+            echo "::error::bun version drift (mise=$mise_v dockerfile=$docker_v)"; exit 1
+          fi
+      # biome.json の $schema が package.json(SSOT) と一致するか検証（bun 不要・純テキスト）
+      # biome 自身も不一致を検出するが severity が info で exit 0 のため CI は緑のまま通る。
+      # このジョブの役割は検出の追加ではなく、その info を落ちる失敗へ昇格させること。
+      # $schema から版を抽出せず期待 URL 全体と文字列比較するのは、版の不一致だけでなく
+      # ホスト・パス形状の破損も同時に捕まえるため。
+      # レンジ接頭辞を剥がさず exact を要求するのは、剥がすと ^2.5.3 で実際に入る版が
+      # $schema とずれても通過してしまうから。exact ピンは :pinDevDependencies の前提でもある。
+      # 検証を jq の \A...\z で行うのは、grep が行単位で照合するため多行値の 1 行目だけが
+      # 一致しても通過してしまうから。\A / \z は文字列全体をアンカーする。
+      - name: biome schema drift check
+        run: |
+          pkg_v=$(jq -er '.devDependencies["@biomejs/biome"]
+                          | select(type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z"))' package.json) || {
+            echo "::error::@biomejs/biome must be pinned to an exact stable version like 2.5.3"; exit 1
+          }
+          expected="https://biomejs.dev/schemas/${pkg_v}/schema.json"
+          echo "expected=$expected actual=$(jq -r '."$schema"' biome.json)"
+          # 比較も jq 内で行う。シェルのコマンド置換は末尾改行を落とすため、
+          # 値を取り出してから比べると末尾に改行が付いた $schema を取りこぼす。
+          jq -e --arg expected "$expected" '."$schema" == $expected' biome.json > /dev/null || {
+            echo "::error::biome schema drift (expected=$expected)"; exit 1
+          }
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
