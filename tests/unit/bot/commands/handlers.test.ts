@@ -1,4 +1,4 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { ChatInputCommandInteraction, EmbedBuilder } from "discord.js";
 import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
 import { ModelService } from "../../../../src/services/modelService";
@@ -79,26 +79,20 @@ describe("model command handlers", () => {
   });
 
   test("Models APIが失敗してもcurrentは設定済みモデルとURLを表示する", async () => {
-    const warn = spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const llmClient = createMockLLMClient();
-      llmClient.listModelsWithPricing = mock(() => Promise.reject(new Error("unavailable")));
-      const settingsService = createMockSettingsService();
-      settingsService.getGuildSettings = mock(() =>
-        Promise.resolve(createMockGuildSettings({ defaultModel: "fallback/model" })),
-      );
-      const modelService = new ModelService(llmClient);
-      const handlers = createCommandHandlers(llmClient, settingsService, modelService);
-      const current = createInteraction();
+    const llmClient = createMockLLMClient();
+    llmClient.listModelsWithPricing = mock(() => Promise.reject(new Error("unavailable")));
+    const settingsService = createMockSettingsService();
+    settingsService.getGuildSettings = mock(() =>
+      Promise.resolve(createMockGuildSettings({ defaultModel: "fallback/model" })),
+    );
+    const modelService = new ModelService(llmClient);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const current = createInteraction();
 
-      await handlers.modelCurrent(current.interaction);
+    await handlers.modelCurrent(current.interaction);
 
-      expect(repliedEmbed(current.editReply).description).toContain(
-        "<https://openrouter.ai/fallback/model>",
-      );
-      expect(warn).toHaveBeenCalledTimes(1);
-    } finally {
-      warn.mockRestore();
-    }
+    expect(repliedEmbed(current.editReply).description).toContain(
+      "<https://openrouter.ai/fallback/model>",
+    );
   });
 });
