@@ -21,12 +21,24 @@
       token: "{{ secrets.TAKUMI_GUARD_TOKEN }}",
     },
   ],
-  // schedule: ["* 0-8 * * 1"],  // 月曜 0-8 時台 (JST)。activated 後に有効化
+  schedule: ["* 0-8 * * 1"], // 月曜 0-8 時台 (JST)
   lockFileMaintenance: { enabled: false },
   // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
   vulnerabilityAlerts: { minimumGroupSize: 1 },
   semanticCommits: "enabled",
   labels: ["dependencies"],
+  customManagers: [
+    // GitHub Actions の run 内で使う actionlint コンテナのタグと digest を同時に更新する。
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
+      matchStrings: [
+        "docker\\.io/rhysd/actionlint:(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+      ],
+      depNameTemplate: "rhysd/actionlint",
+      datasourceTemplate: "docker",
+    },
+  ],
   packageRules: [
     // 供給網対策のクールダウン。対象の更新タイプは公式の security:minimumReleaseAge* に合わせる。
     // 公式が除外しているのは pin / replacement / lockFileMaintenance / bump / lockfileUpdate /
