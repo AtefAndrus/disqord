@@ -163,6 +163,166 @@ export function splitTextByCharsAndBytes(
   return chunks;
 }
 
+interface CodeFenceState {
+  language: string;
+}
+
+interface MarkdownSplitCandidate {
+  end: number;
+  state: CodeFenceState | null;
+  rawChars: number;
+  endsWithNewline: boolean;
+}
+
+interface MarkdownUnit {
+  text: string;
+  nextState: CodeFenceState | null;
+  opensFence: boolean;
+}
+
+/** Discord の syntax highlight 名として再利用する先頭 token だけを安全な長さで保持する。 */
+function readFenceLanguage(text: string, fenceStart: number): string {
+  const lineEnd = text.indexOf("\n", fenceStart + 3);
+  const info = text.slice(fenceStart + 3, lineEnd === -1 ? text.length : lineEnd).trim();
+  const language = info.split(/\s+/, 1)[0] ?? "";
+  return language.length <= 64 && /^[\w#+.-]*$/.test(language) ? language : "";
+}
+
+function reopenedFence(state: CodeFenceState | null): string {
+  return state ? `\`\`\`${state.language}\n` : "";
+}
+
+function temporaryFenceClose(state: CodeFenceState | null, endsWithNewline: boolean): string {
+  if (!state) return "";
+  return `${endsWithNewline ? "" : "\n"}\`\`\``;
+}
+
+/** opening fence は info string と改行までを1単位にし、言語指定の途中で分割しない。 */
+function readMarkdownUnit(
+  text: string,
+  cursor: number,
+  state: CodeFenceState | null,
+): MarkdownUnit {
+  if (!text.startsWith("```", cursor)) {
+    const codePoint = text.codePointAt(cursor);
+    return {
+      text: codePoint === undefined ? text[cursor] : String.fromCodePoint(codePoint),
+      nextState: state,
+      opensFence: false,
+    };
+  }
+
+  if (state) {
+    return { text: "```", nextState: null, opensFence: false };
+  }
+
+  const lineEnd = text.indexOf("\n", cursor + 3);
+  const sameLineClosingFence = text.indexOf("```", cursor + 3);
+  if (sameLineClosingFence !== -1 && (lineEnd === -1 || sameLineClosingFence < lineEnd)) {
+    return { text: "```", nextState: { language: "" }, opensFence: true };
+  }
+
+  return {
+    text: text.slice(cursor, lineEnd === -1 ? text.length : lineEnd + 1),
+    nextState: { language: readFenceLanguage(text, cursor) },
+    opensFence: true,
+  };
+}
+
+/**
+ * Markdown の fenced code block を各 Discord message 内で閉じた形に保ちながら分割する。
+ *
+ * 生テキスト上の fence 状態だけを次 chunk へ引き継ぎ、表示用に追加した一時 close/reopen は状態へ
+ * 反映しない。そのため streaming のたびに累積生テキストから再計算しても scaffold が重複しない。
+ * triple backtick は1単位で走査し、その3文字の途中を chunk 境界にしない。
+ */
+export function splitMarkdownByCharsAndBytes(
+  text: string,
+  maxChars: number,
+  maxBytes: number,
+): string[] {
+  const chunks: string[] = [];
+  let position = 0;
+  let state: CodeFenceState | null = null;
+
+  while (position < text.length) {
+    // 直前 chunk の表示用 close が、生テキスト上の closing fence の役割をすでに果たしている。
+    // 再開直後に closing fence だけの空 code block を作らず、その fence は状態遷移として消費する。
+    if (state && text.startsWith("```", position)) {
+      position += 3;
+      state = null;
+      continue;
+    }
+
+    const prefix = reopenedFence(state);
+    const prefixChars = prefix.length;
+    const prefixBytes = byteLength(prefix);
+    let cursor = position;
+    let workingState = state;
+    let rawBytes = 0;
+    let lastFit: MarkdownSplitCandidate | null = null;
+    let lastNewlineFit: MarkdownSplitCandidate | null = null;
+
+    while (cursor < text.length) {
+      const markdownUnit = readMarkdownUnit(text, cursor, workingState);
+      const unit = markdownUnit.text;
+      const nextState = markdownUnit.nextState;
+
+      const nextCursor = cursor + unit.length;
+      const nextRawBytes = rawBytes + byteLength(unit);
+      const endsWithNewline = unit.endsWith("\n");
+      const suffix = temporaryFenceClose(nextState, endsWithNewline);
+      const projectedChars = prefixChars + (nextCursor - position) + suffix.length;
+      const projectedBytes = prefixBytes + nextRawBytes + byteLength(suffix);
+
+      if (projectedChars > maxChars || projectedBytes > maxBytes) {
+        break;
+      }
+
+      cursor = nextCursor;
+      rawBytes = nextRawBytes;
+      workingState = nextState;
+      if (markdownUnit.opensFence) {
+        // opening fence だけで chunk を確定すると空の code block が残るため、少なくとも本文1単位まで読む。
+        continue;
+      }
+      const candidate: MarkdownSplitCandidate = {
+        end: cursor,
+        state: workingState,
+        rawChars: cursor - position,
+        endsWithNewline,
+      };
+      lastFit = candidate;
+      if (endsWithNewline) lastNewlineFit = candidate;
+    }
+
+    let chosen = lastFit;
+    if (lastFit && lastNewlineFit && lastNewlineFit.rawChars > lastFit.rawChars * 0.8) {
+      chosen = lastNewlineFit;
+    }
+
+    // 実運用の本文予算では到達しないが、極端に小さい予算でもコードポイントまたは fence 単位で前進する。
+    if (!chosen) {
+      const markdownUnit = readMarkdownUnit(text, position, state);
+      const unit = markdownUnit.text;
+      chosen = {
+        end: position + unit.length,
+        state: markdownUnit.nextState,
+        rawChars: unit.length,
+        endsWithNewline: unit.endsWith("\n"),
+      };
+    }
+
+    const raw = text.slice(position, chosen.end);
+    const suffix = temporaryFenceClose(chosen.state, chosen.endsWithNewline);
+    chunks.push(`${prefix}${raw}${suffix}`);
+    position = chosen.end;
+    state = chosen.state;
+  }
+
+  return chunks;
+}
+
 /**
  * 本文を「1 message に載る本文量」ごとに分割する。1 message の全 TextDisplay 合計が
  * 文字数上限 (MAX_TOTAL_CHARS_PER_MESSAGE) と UTF-8 バイト数上限 (MAX_TOTAL_BYTES_PER_MESSAGE) の
@@ -177,7 +337,7 @@ export function splitTextIntoMessages(
 ): string[] {
   const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
   const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
-  const chunks = splitTextByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
+  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
   return chunks.length > 0 ? chunks : [""];
 }
 

@@ -16,6 +16,7 @@ import {
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
   STREAMING_LABEL,
+  splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
   splitTextIntoMessages,
   type TextBudget,
@@ -168,6 +169,93 @@ describe("chatContainerBuilder", () => {
         expect(chunk.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
         expect(byteLength(chunk)).toBeLessThanOrEqual(MAX_TOTAL_BYTES_PER_MESSAGE);
       }
+    });
+
+    test("長いfenced code blockを各message内で閉じ、言語指定付きで再開する", () => {
+      const code = "const value = 1;\n".repeat(20);
+      const text = `説明\n\`\`\`ts\n${code}\`\`\`\n続き`;
+      const bodyBudget = 100;
+      const footerBudget = budget(
+        MAX_TOTAL_CHARS_PER_MESSAGE - bodyBudget,
+        MAX_TOTAL_BYTES_PER_MESSAGE - bodyBudget,
+      );
+      const chunks = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, footerBudget);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.some((chunk, index) => index > 0 && chunk.startsWith("```ts\n"))).toBe(true);
+      expect(chunks.join("").match(/const value = 1;/g)?.length).toBe(20);
+      for (const chunk of chunks) {
+        expect(chunk.match(/```/g)?.length ?? 0).toBeEven();
+        expect(chunk.length).toBeLessThanOrEqual(bodyBudget);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(bodyBudget);
+      }
+    });
+
+    test("streaming途中の未閉鎖code blockを表示用chunkだけ一時的に閉じる", () => {
+      const text = "```python\nprint('streaming')";
+      const chunks = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+
+      expect(chunks).toEqual([`${text}\n\`\`\``]);
+      expect(chunks[0].match(/```/g)?.length).toBe(2);
+    });
+
+    test("複数のcode blockと通常文を分割しても各chunkのfenceが閉じている", () => {
+      const text = [
+        "前置き",
+        "```js",
+        "a".repeat(80),
+        "```",
+        "中間",
+        "```sql",
+        "SELECT 1;".repeat(12),
+        "```",
+        "末尾",
+      ].join("\n");
+      const chunks = splitMarkdownByCharsAndBytes(text, 70, 70);
+
+      expect(chunks.length).toBeGreaterThan(2);
+      expect(chunks.join("")).toContain("前置き");
+      expect(chunks.join("")).toContain("末尾");
+      for (const chunk of chunks) {
+        expect(chunk.match(/```/g)?.length ?? 0).toBeEven();
+        expect(chunk.length).toBeLessThanOrEqual(70);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(70);
+      }
+    });
+
+    test("chunk境界をtriple backtickの途中に置かない", () => {
+      const text = `${"a".repeat(12)}\`\`\`ts\n${"b".repeat(20)}`;
+      const chunks = splitMarkdownByCharsAndBytes(text, 15, 15);
+
+      expect(
+        chunks.every((chunk) => {
+          const trailingBackticks = chunk.match(/`+$/)?.[0].length ?? 0;
+          return trailingBackticks === 0 || trailingBackticks >= 3;
+        }),
+      ).toBe(true);
+      expect(
+        chunks.every((chunk) => {
+          const leadingBackticks = chunk.match(/^`+/)?.[0].length ?? 0;
+          return leadingBackticks === 0 || leadingBackticks >= 3;
+        }),
+      ).toBe(true);
+    });
+
+    test("opening fenceの言語指定行が境界にかかる場合はfence手前で分割する", () => {
+      const text = `${"a".repeat(3784)}\`\`\`typescript\nconst x = 1;\n\`\`\``;
+      const chunks = splitMarkdownByCharsAndBytes(text, 3800, 9000);
+
+      expect(chunks[0]).toBe("a".repeat(3784));
+      expect(chunks[1]).toBe("```typescript\nconst x = 1;\n```");
+      expect(chunks).toHaveLength(2);
+      expect(chunks.every((chunk) => chunk.length <= 3800 && byteLength(chunk) <= 9000)).toBe(true);
+    });
+
+    test("改行なしで閉じるtriple backtickを予算内で変形しない", () => {
+      expect(splitMarkdownByCharsAndBytes("```hello```", 3800, 9000)).toEqual(["```hello```"]);
+      expect(splitMarkdownByCharsAndBytes("before ```hello``` after", 3800, 9000)).toEqual([
+        "before ```hello``` after",
+      ]);
     });
 
     test("空文字列は1要素（空文字列）の配列になる", () => {
