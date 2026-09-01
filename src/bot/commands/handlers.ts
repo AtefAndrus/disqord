@@ -3,9 +3,9 @@ import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { EmbedColors } from "../../types/embed";
-import { createEmbed, createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
+import { createModelDetailsEmbed, getOpenRouterModelUrl } from "../../utils/modelDetailsEmbed";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import type { CommandHandlers } from "../events/interactionCreate";
 
@@ -45,12 +45,27 @@ export function createCommandHandlers(
         return;
       }
 
+      await interaction.deferReply();
       const settings = await settingsService.getGuildSettings(interaction.guildId);
-      const embed = createSuccessEmbed(
-        `現在のモデル: \`${settings.defaultModel}\``,
-        "現在のモデル",
-      );
-      await interaction.reply({ embeds: [embed] });
+      let details: Awaited<ReturnType<IModelService["getModelDetails"]>> = null;
+      try {
+        details = await modelService.getModelDetails(settings.defaultModel);
+      } catch (error) {
+        logger.warn("Failed to fetch current model details", {
+          error,
+          model: settings.defaultModel,
+        });
+      }
+      const embed = details
+        ? createModelDetailsEmbed(details, {
+            title: "現在のモデル",
+            description: `現在のモデルは \`${settings.defaultModel}\` です。`,
+          })
+        : createSuccessEmbed(
+            `現在のモデル: \`${settings.defaultModel}\`\n\n<${getOpenRouterModelUrl(settings.defaultModel)}>`,
+            "現在のモデル",
+          );
+      await interaction.editReply({ embeds: [embed] });
     },
 
     async modelSet(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -87,36 +102,15 @@ export function createCommandHandlers(
       const details = await modelService.getModelDetails(model);
 
       if (details) {
-        const { formatContextLength, formatModalities, formatPrice } = await import(
-          "../../utils/modelDetailsFormatter"
-        );
-
-        const successEmbed = createEmbed({
-          color: EmbedColors.BLURPLE,
+        const successEmbed = createModelDetailsEmbed(details, {
           title: "モデル変更",
           description: `モデルを \`${model}\` に変更しました。`,
-          fields: [
-            { name: "モデル名", value: details.name, inline: true },
-            {
-              name: "コンテキスト長",
-              value: formatContextLength(details.contextLength),
-              inline: true,
-            },
-            { name: "入力価格", value: formatPrice(details.pricing.prompt), inline: true },
-            { name: "出力価格", value: formatPrice(details.pricing.completion), inline: true },
-            {
-              name: "対応モダリティ",
-              value: formatModalities(details.inputModalities, details.outputModalities),
-              inline: false,
-            },
-          ],
-          timestamp: null,
         });
         await interaction.reply({ embeds: [successEmbed] });
       } else {
         // フォールバック（詳細取得失敗時）
         const successEmbed = createSuccessEmbed(
-          `モデルを \`${model}\` に変更しました。`,
+          `モデルを \`${model}\` に変更しました。\n\n<${getOpenRouterModelUrl(model)}>`,
           "モデル変更",
         );
         await interaction.reply({ embeds: [successEmbed] });

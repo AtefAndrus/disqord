@@ -60,6 +60,11 @@ export class ModelService implements IModelService {
     }
 
     const models = await this.llmClient.listModelsWithPricing();
+    if (models.length === 0) {
+      // OpenRouter client は一時的な Models API 失敗を空配列として返す。
+      // 正常取得済み cache を空一覧で上書きせず、期限切れでも stale data を fallback に使う。
+      return this.modelsCache?.data ?? [];
+    }
     this.modelsCache = {
       data: models,
       expiresAt: now + CACHE_TTL_MS,

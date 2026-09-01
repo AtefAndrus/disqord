@@ -91,6 +91,26 @@ describe("ModelService", () => {
 
       expect(mockLLMClient.listModelsWithPricing).toHaveBeenCalledTimes(2);
     });
+
+    test("空の更新結果で正常取得済みcacheを上書きせずstale dataを返す", async () => {
+      await modelService.getAllModels();
+      mockLLMClient.listModelsWithPricing = mock(() => Promise.resolve([]));
+
+      const models = await modelService.getAllModels({ noCache: true });
+
+      expect(models).toEqual(mockModels);
+      expect(modelService.getCacheStatus().modelCount).toBe(mockModels.length);
+    });
+
+    test("初回取得が空の場合はcacheせず次回に再取得する", async () => {
+      mockLLMClient.listModelsWithPricing = mock(() => Promise.resolve([]));
+
+      expect(await modelService.getAllModels()).toEqual([]);
+      expect(await modelService.getAllModels()).toEqual([]);
+
+      expect(mockLLMClient.listModelsWithPricing).toHaveBeenCalledTimes(2);
+      expect(modelService.getCacheStatus().modelCount).toBe(0);
+    });
   });
 
   describe("getFreeModels", () => {
