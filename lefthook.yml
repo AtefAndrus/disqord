@@ -17,7 +17,7 @@ pre-commit:
             exit 1 ;;
         esac
     01_generate-readme:
-      run: bun scripts/generate-readme.ts && git add README.md CLAUDE.md .env.example docs/progress.md
+      run: bun scripts/generate-readme.ts && git add README.md AGENTS.md .env.example docs/progress.md
     02_lint:
       run: bun run lint
     03_lint-md:

@@ -10,7 +10,7 @@ summary: "Dependabot を Renovate (Mend App) に置き換え、手動ピン更�
 ## Why
 
 Dependabot のマルチエコシステムグループ PR には `@dependabot rebase` / `@dependabot recreate` が効かない既知バグがあり（[dependabot-core#12903](https://github.com/dependabot/dependabot-core/issues/12903)、2026-07 時点で Open）、PR が BEHIND になると、次回 weekly 実行を待つか PR ブランチへ手動で main をマージするしかない運用を強いられている。
-また、Dependabot は action の `with:` 入力値（zizmor CLI 版、mise 本体版）や `run:` 内の Docker イメージ digest を走査しないため、CLAUDE.md に「手動ピン」として 3 箇所の定期 bump 運用が残っている。
+また、Dependabot は action の `with:` 入力値（zizmor CLI 版、mise 本体版）や `run:` 内の Docker イメージ digest を走査しないため、AGENTS.md に「手動ピン」として 3 箇所の定期 bump 運用が残っている。
 Renovate は PR 本文の rebase チェックボックスや rebase label で任意タイミングの rebase を指示でき（[Updating and rebasing branches](https://docs.renovatebot.com/updating-rebasing/)）、customManagers（regex）でビルトイン非対応の箇所も更新対象にできる（[Custom Manager Support using Regex](https://docs.renovatebot.com/modules/manager/regex/)）ため、バグ回避と手動ピン削減の両方が見込める。
 
 ## 依存 / 関連 change
@@ -69,8 +69,8 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 - 修正: `Dockerfile` — install ステージへ `.npmrc` をコピー（本番イメージのビルドも同じ取得元を通すため）
 - 修正: `mise.toml` / `Dockerfile` — bun を exact patch に固定（`bun = "1.3.14"` / `oven/bun:1.3.14-slim@sha256:...`）（Phase 1）
 - 修正: `.github/workflows/ci.yml` — biome schema drift check の追加と bun drift check の 2 値化（Phase 1）。actionlint イメージ行は Phase 2 の customManager が更新するが、`ci.yml` 側の記述変更は不要
-- 修正: `CLAUDE.md` — Notes の手動ピン運用メモを更新
-- 修正: `.claude/skills/dependabot-pr/` — Renovate 運用向けに書き換え（または `renovate-pr` にリネーム）
+- 修正: `AGENTS.md` — Notes の手動ピン運用メモを更新
+- 修正: `.agents/skills/dependabot-pr/` — Renovate 運用向けに書き換え（または `renovate-pr` にリネーム）
 - 修正: `cliff.toml` — `^build\(deps` 分類ルール直前の `# Dependabot` コメントを `# Dependency updates (Dependabot / Renovate)` 等に更新（分類ルール自体は変更不要）
 - リポジトリ設定: Dependabot security updates を無効化（alerts は維持）
 
@@ -314,14 +314,14 @@ Phase 1:
 - [x] `biome.json` の `$schema` が `@biomejs/biome` と**同じ PR** で置換されることを確認した。#74 で `2.5.3` → `2.5.8`、#81 で `2.5.8` → `2.5.9`。いずれも `package.json` / `bun.lock` と同一 PR で整合しており、懸念していた別ブランチ分裂は起きなかった
 - [ ] 週次グループ PR を 2 サイクル確認（グルーピング・schedule・minimumReleaseAge の動作、および releaseTimestamp の取得可否）。releaseTimestamp は datasource ごとに確認する: `mise.toml` の bun（mise マネージャ）、`oven/bun`（docker）、mise-action の `jdx/mise`（github-release-attachments）、zizmor-action の `ghcr.io/zizmorcore/zizmor`（docker / GHCR）。`mise.toml` の bun と mise-action の `jdx/mise` は datasource が異なるので、まとめて「mise」と扱わず個別に見る
 - [x] bun の更新 PR で `mise.toml` と `Dockerfile` が同じ PR で同じ patch へ揃うことを #77 で確認した（`bun = "1.3.14"` → `"1.4.0"` と `oven/bun:1.3.14-slim@sha256:d56a...` → `oven/bun:1.4.0-slim@sha256:e0ee...`）。Renovate が可変タグではなく exact patch タグを書くことも確認。drift-check も完全一致で PASS。マージ自体は bun 1.4.0 のクールダウン明けを待つ
-- [ ] CLAUDE.md の Notes（手動ピン運用メモ。zizmor-action と mise-action の `version` はこの時点で自動化済みになるため削除し、残るのは actionlint イメージ digest のみ）とコミット規約表の `build(deps) | Dependabot auto-generated` 行、および `.claude/skills/dependabot-pr/` を Renovate 運用に書き換え（bun の同期は Renovate が完結するので手動同期手順は不要。biome `$schema` も自動化済みなので Known Issues 4 と Special Cases も削除する）。onboarding PR のマージ時点では暫定の注記だけ入れてあり、本文の書き換えは実際の Renovate PR を観測してから行う。注記では biome `$schema` の自動化を「見込み」として書く。`customManagers:biomeVersions` が保証するのは抽出と置換であって npm 依存との同一 PR 化ではなく、それ自体が Phase 1 の確認ゲートだから。`cliff.toml` の `# Dependabot` コメントと、`ci.yml` の mise-action `version:` 行に付いた「Dependabot は更新しないため手動 bump」コメントも更新（この 2 つは Renovate が実際に更新するようになってから直す。先に書き換えると移行完了までの間だけ記述が誤りになる）
+- [ ] AGENTS.md の Notes（手動ピン運用メモ。zizmor-action と mise-action の `version` はこの時点で自動化済みになるため削除し、残るのは actionlint イメージ digest のみ）とコミット規約表の `build(deps) | Dependabot auto-generated` 行、および `.agents/skills/dependabot-pr/` を Renovate 運用に書き換え（bun の同期は Renovate が完結するので手動同期手順は不要。biome `$schema` も自動化済みなので Known Issues 4 と Special Cases も削除する）。onboarding PR のマージ時点では暫定の注記だけ入れてあり、本文の書き換えは実際の Renovate PR を観測してから行う。注記では biome `$schema` の自動化を「見込み」として書く。`customManagers:biomeVersions` が保証するのは抽出と置換であって npm 依存との同一 PR 化ではなく、それ自体が Phase 1 の確認ゲートだから。`cliff.toml` の `# Dependabot` コメントと、`ci.yml` の mise-action `version:` 行に付いた「Dependabot は更新しないため手動 bump」コメントも更新（この 2 つは Renovate が実際に更新するようになってから直す。先に書き換えると移行完了までの間だけ記述が誤りになる）
 
 Phase 2:
 
 - [ ] `renovate.json5` に customManagers（actionlint digest）を追加し、`renovate-config-validator` で構文検証
 - [ ] Mend Developer Portal のジョブログで customManagers の抽出件数・依存名を確認（0 件マッチになっていないか）。あわせて `rhysd/actionlint` の version update に `releaseTimestamp` が設定されていることも確認
 - [ ] customManagers による生成 PR の差分（タグ / digest の置換結果）と CI 成功を確認してから完了とする。自然な更新が来ない場合は Design「Phase 2」記載の `baseBranchPatterns` を使った一時検証手順で確認する
-- [ ] CLAUDE.md の手動ピン運用メモから自動化済み項目を削除
+- [ ] AGENTS.md の手動ピン運用メモから自動化済み項目を削除
 - [ ] `docs/changes/renovate-migration/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
