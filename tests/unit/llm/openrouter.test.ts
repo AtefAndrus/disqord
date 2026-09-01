@@ -1112,14 +1112,26 @@ describe("OpenRouterClient", () => {
         ).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
-      test("terminal finish_reason 受領後でも usage チャンク・comment・[DONE] は許容される", async () => {
+      test("terminal後に同じfinish_reasonを繰り返すOpenRouter最終usage frameを許容する", async () => {
+        const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 };
         mockFetch.mockResolvedValueOnce(
           sseResponse([
             sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
             ": OPENROUTER PROCESSING\n\n",
             sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    content: "",
+                    role: "assistant",
+                    reasoning: null,
+                    reasoning_details: [],
+                  },
+                  finish_reason: "stop",
+                },
+              ],
+              usage,
             }),
             "data: [DONE]\n\n",
           ]),
@@ -1130,7 +1142,66 @@ describe("OpenRouterClient", () => {
         );
         const final = results.find(isFinalResult) as StreamFinalResult;
         expect(final.finishReason).toBe("stop");
-        expect(final.usage).toEqual({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 });
+        expect(final.fullText).toBe("hi");
+        expect(final.usage).toEqual(usage);
+        expect(results.filter(isHeartbeatChunk)).toEqual([
+          { heartbeat: true, done: false },
+          { heartbeat: true, done: false, usage },
+        ]);
+      });
+
+      test("terminal後のusage frameでもcontentを含む場合はprotocol error", async () => {
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([
+            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData({
+              choices: [{ delta: { content: "late" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+            }),
+          ]),
+        );
+
+        await expect(
+          drain(
+            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+          ),
+        ).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test("terminal後に同じfinish_reasonを繰り返してもusage無しならprotocol error", async () => {
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([
+            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData({ choices: [{ delta: { content: "" }, finish_reason: "stop" }] }),
+          ]),
+        );
+
+        await expect(
+          drain(
+            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+          ),
+        ).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test.each([
+        ["reasoning", { reasoning: "late reasoning" }],
+        ["reasoning_details", { reasoning_details: [{ type: "reasoning.text", text: "late" }] }],
+      ])("terminal後のusage frameに%s payloadがあればprotocol error", async (_name, delta) => {
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([
+            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData({
+              choices: [{ delta: { content: "", ...delta }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+            }),
+          ]),
+        );
+
+        await expect(
+          drain(
+            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+          ),
+        ).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
       test("finish_reason 受領後に [DONE] なしで EOF になっても正常終了する", async () => {

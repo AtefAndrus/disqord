@@ -181,7 +181,12 @@ protocol 整合の中核。[code-execution](../code-execution/design.md) にイ�
 
 **履歴 commit（最終応答）**: `stop`/`length`/`content_filter`（断片なし）で確定した content は updater だけでなく **`history` にも assistant message として append**（`ToolLoopResult.history` が返すため）。`length` の打ち切り注記は **UI のみ**で、raw な model content を履歴に入れる。cancel/error の部分 content は履歴に含めない。
 
-**正常終了の判定**: 最初の terminal `finish_reason` で **semantic accumulation を凍結**。以降 EOF まで許可するのは `[DONE]`・comment・空 choices の usage チャンクのみで、**後続の content / tool_call delta / 矛盾する terminal reason は reject**。`finish_reason` 受領後の**クリーン EOF で正常終了**（`[DONE]` は必須でない）。raw-stream テストで `[DONE]` あり/なし両ケースを検証。
+**正常終了の判定**: 最初の terminal `finish_reason` で **semantic accumulation を凍結**する。
+以降 EOF まで許可するのは `[DONE]`、comment、空 choices の usage チャンク、および同じ `finish_reason` を繰り返す content-free な最終 usage accounting frame だけである。
+OpenRouter の Chat Completions streaming は、非空 choices に空の `delta.content` と同じ `finish_reason` を載せた最終 usage accounting frame を `[DONE]` の直前に送るため、このframeでは `usage` を取り込みheartbeatとして扱う。
+usageがない反復frame、後続の content、tool_call、reasoning、reasoning_details、矛盾する terminal reason は protocol error とする。
+`finish_reason` 受領後の**クリーン EOF で正常終了**し、`[DONE]` は必須としない。
+raw-stream testは `[DONE]` あり、`[DONE]` なし、最終 usage accounting frame、終端後のsemantic delta拒否を検証する。
 
 | finish_reason / 状態 | 扱い |
 | --- | --- |
@@ -234,6 +239,7 @@ tool calling 対応は `GET /api/v1/models?supported_parameters=tools`（対応�
 - [x] `src/llm/toolLoop.ts`: streaming マルチターンループ（`n=1`/`choices[0]`、delta 蓄積〔drain 継続 + 保持量上限〕、ストリーム終了判定マトリクス、正規化〔name 欠落/全 drop/重複 id→synthetic/JSON 不正/schema 検証/overflow〕、turn 5 は `tool_choice:"none"`〔tools 再送〕、server/client 結合）
 - [x] `chatService`/`messageCreate` を `runToolLoop()`（`Promise<ToolLoopResult>`）経由に統一（tool 未登録時は現行と等価）、結果で分岐
 - [x] `openrouter.ts` SSE parser: frame/carry 最大長強制 + malformed-frame の protocol 失敗化。`tests/unit/llm/openrouter.test.ts` に **raw-stream テスト**（未終端 carry/frame 過大、chunk 境界跨ぎ UTF-8 byte 計算、ちょうど上限、malformed JSON、abort/drain、parser 失敗と同時の cancel 優先）
+- [x] terminal `finish_reason` 後の最終 usage accounting frameを受理し、終端後の content、tool_call、reasoning、reasoning_details は拒否
 - [x] unit test（上記の各分岐を mock stream で網羅）
 - [ ] `docs/changes/tool-calling-foundation/` 削除（リリース完了時、git 履歴がアーカイブ）
 
@@ -251,5 +257,6 @@ tool calling 対応は `GET /api/v1/models?supported_parameters=tools`（対応�
 
 - [OpenRouter Tool Calling](https://openrouter.ai/docs/guides/features/tool-calling) — `tools`/`tool_choice`、`tool_calls`（`choices[].message.tool_calls`、`function.arguments` は JSON 文字列）、`role:"tool"` + `tool_call_id`、assistant を先に push、`parallel_tool_calls`（既定 true）
 - [OpenRouter Chat API reference](https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request) — `finish_reason`（choice フィールド）、`tool_choice` 値
+- [OpenRouter Streaming](https://openrouter.ai/docs/api/reference/streaming) — Chat Completions の最終 usage accounting frame は content-free delta と `finish_reason` を持つ非空 choices として `[DONE]` の直前に返る
 - [OpenRouter Server Tools Overview](https://openrouter.ai/docs/guides/features/server-tools/overview) — client/server tool の同一 `tools` 配列併用、server tool はサーバ側実行
 - [OpenRouter Models filter](https://openrouter.ai/docs/guides/overview/models) — `GET /api/v1/models?supported_parameters=tools`（対応一覧の取得 API）

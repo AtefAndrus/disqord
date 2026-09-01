@@ -88,8 +88,8 @@ interface SseStreamState {
   lastProvider: string | undefined;
   lastUsage: ChatCompletionResponse["usage"] | undefined;
   // undefined = no terminal finish_reason observed yet. Once set, the
-  // stream is frozen: only [DONE]/comments/empty-choices usage chunks
-  // are legal until EOF (see design "ストリーム終了の判定").
+  // stream is frozen: only [DONE]/comments and content-free usage accounting
+  // frames that repeat the same finish_reason are legal until EOF.
   finishReasonSeen: string | undefined;
 }
 
@@ -188,6 +188,8 @@ interface StreamDelta {
     delta: {
       content?: string;
       role?: string;
+      reasoning?: unknown;
+      reasoning_details?: unknown;
       tool_calls?: StreamDeltaToolCall[];
       // Some providers surface finish_reason on the delta instead of the
       // choice; treated as a fallback (see resolveFinishReason).
@@ -808,10 +810,6 @@ export class OpenRouterClient implements ILLMClient {
       );
     }
 
-    if (state.finishReasonSeen !== undefined) {
-      throw new StreamProtocolError("received additional stream data after terminal finish_reason");
-    }
-
     const choice = chunk.choices[0];
     if (choice === undefined) {
       // Fully validated at this point, same as the empty-choices branch above
@@ -937,6 +935,36 @@ export class OpenRouterClient implements ILLMClient {
     // Resolving finish_reason can itself throw (choice/delta mismatch); doing
     // so here keeps it inside the validation phase, before any mutation.
     const finishReason = resolveFinishReason(choice.finish_reason, delta?.finish_reason);
+
+    if (state.finishReasonSeen !== undefined) {
+      // OpenRouter's final Chat Completions usage frame deliberately keeps a
+      // non-empty choices array for client compatibility. It repeats the
+      // terminal finish_reason with a content-free delta and adds usage just
+      // before [DONE]. Treat only that exact accounting shape as legal after
+      // the stream is frozen; late content/tool calls remain protocol errors.
+      const hasReasoningPayload =
+        (delta.reasoning !== undefined && delta.reasoning !== null && delta.reasoning !== "") ||
+        (delta.reasoning_details !== undefined &&
+          delta.reasoning_details !== null &&
+          (!Array.isArray(delta.reasoning_details) || delta.reasoning_details.length > 0));
+      const isUsageAccountingFrame =
+        validatedUsage !== undefined &&
+        (content === undefined || content === null || content === "") &&
+        normalizedToolCalls.length === 0 &&
+        !hasReasoningPayload &&
+        finishReason === state.finishReasonSeen;
+      if (!isUsageAccountingFrame) {
+        throw new StreamProtocolError(
+          "received additional stream data after terminal finish_reason",
+        );
+      }
+
+      if (chunk.model) state.lastModel = chunk.model;
+      if (chunk.provider) state.lastProvider = chunk.provider;
+      state.lastUsage = validatedUsage;
+      yield { heartbeat: true, done: false, usage: validatedUsage };
+      return false;
+    }
 
     // ---- Apply phase: every element of this frame validated successfully,
     // so `state` is now mutated and the frame's chunks are yielded. ----
