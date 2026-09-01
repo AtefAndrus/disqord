@@ -2,7 +2,7 @@
 title: "対話UX改善（会話履歴ストア）"
 status: planned
 priority: high
-summary: "DB 永続の論理ターン/セッション履歴・境界検出・構造化メディア・保持。再生成系は別 change"
+summary: "DB 永続の会話履歴、OpenRouter session routing、prompt cache 計測、境界・構造化メディア・保持"
 ---
 
 # 対話UX改善（会話履歴ストア）
@@ -11,20 +11,24 @@ summary: "DB 永続の論理ターン/セッション履歴・境界検出・構
 
 現状、Bot への各メッセージは独立処理され会話の文脈が保持されない。ユーザは毎回文脈を説明し直す必要がある。
 
-本 change で**多ターンの会話文脈の DB 永続基盤**を入れる。当初の「Discord API から毎回 fetch・DB 非永続」案は、(1) `/fork` 等の将来機能や圧縮要約の置き場、(2) 履歴 fetch のレート制限回避（bot は既に `messageCreate` で対象メッセージを受信）、(3) 後続の再生成/編集/undo の土台、を踏まえ **DB 逐次永続化へ方針転換**する（身内利用前提でプライバシー許容）。
+本 change で**多ターンの会話文脈の DB 永続基盤**を入れる。DB 逐次永続化は、(1) `/fork` 等の将来機能や圧縮要約の置き場、(2) 履歴 fetch のレート制限回避（bot は既に `messageCreate` で対象メッセージを受信）、(3) 後続の再生成/編集/undo の土台、を提供する（身内利用前提でプライバシー許容）。
 
 固定 N 件で切る方式は会話途中でも一律に切れて筋が悪いため、**無活動ギャップ + トークン予算**でセッション境界を決め、古い画像は剥がして文脈コストを抑える。
 
-> **スコープ分離**: 当初この change に含めていた**回答再生成・編集/undo・compaction**は、本基盤（turn/session モデル）の上の独立機能として [conversation-regeneration](../conversation-regeneration/design.md)（本バッチで起票）へ切り出した。本 change は**履歴ストア + 境界 + 構造化メディア + 保持**に集中する。
+OpenRouter の Responses API は会話状態をサーバ側へ保存せず、`previous_response_id` による継続も提供しないため、会話履歴の source of truth は本 change の DB とする。
+一方、Chat Completions の `session_id` は同じ会話を同一プロバイダへ寄せる sticky routing と観測に使え、プロバイダ側 prompt caching の再利用率を高められるため、ローカル session ごとの不透明な識別子として併用する。
+
+> **スコープ分離**: **回答再生成・編集/undo・compaction**は、本基盤（turn/session モデル）の上の独立機能として [conversation-regeneration](../conversation-regeneration/design.md) が扱う。本 change は**履歴ストア + 境界 + 構造化メディア + 保持**に集中する。
 
 ## 依存 / 関連 change
 
-- 後続（本基盤を前提、本バッチで起票）: [conversation-regeneration](../conversation-regeneration/design.md) — 回答再生成・編集/undo・compaction
+- 後続: [conversation-regeneration](../conversation-regeneration/design.md) — 本基盤を前提とする回答再生成・編集/undo・compaction
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — **優先順位で解決した単一 system prompt**（override precedence、合成ではない）を前置
-- 連携（本バッチで起票、リンクはバッチ完了時解決）: [tool-calling-foundation](../tool-calling-foundation/design.md) / [discord-tool](../discord-tool/design.md) — モデル駆動の文脈取得（`fetch_more_context`）は両者成立後の発展
-- 連携（本バッチで起票）: [view-image-rehydration](../view-image-rehydration/design.md) — 本 change の構造化メディア参照を使い剥がした画像をベストエフォート再取得
+- 連携: [tool-calling-foundation](../tool-calling-foundation/design.md) / [discord-tool](../discord-tool/design.md) — モデル駆動の文脈取得（`fetch_more_context`）は両者成立後の発展
+- 連携: [view-image-rehydration](../view-image-rehydration/design.md) — 本 change の構造化メディア参照を使い剥がした画像をベストエフォート再取得
 - 連携: [permissions-stats](../permissions-stats/design.md) — usage/トークンの**コスト計上**（message 本文は保存しない。履歴本体は本 change）
-- 将来: [code-execution](../code-execution/design.md) の persistent sandbox は本 change の **session_id** をキーにできる（**sandbox の所有・ライフサイクルは code-execution 側**。同 change の旧記述「所有は conversation-context」を改訂で訂正）
+- 連携: [openrouter-api-audit](../openrouter-api-audit/design.md) — `cached_tokens` / `cache_write_tokens` を含む usage 型と parser を共有
+- 将来: [code-execution](../code-execution/design.md) の persistent sandbox は本 change の **session_id** をキーにできる（**sandbox の所有・ライフサイクルは code-execution 側**）
 
 ## Goals / Non-Goals
 
@@ -36,8 +40,10 @@ summary: "DB 永続の論理ターン/セッション履歴・境界検出・構
 - メディア剥がし（保存不変・リクエスト配列のみ）
 - 共有チャンネルの発話者識別（ラベルのスナップショット）
 - 保持/プライバシー（オプトイン・TTL・Discord 削除/bulk削除/チャンネル削除同期・guild 退出 purge）
+- ローカル session ごとに外部へ漏らしても Discord の guild/channel/user を推測できない `openrouter_session_id` を発行し、同じ session の全 Chat Completions request へ付与
+- provider prompt caching の読み取り・書き込み token を usage として記録し、cache が利用できないモデルや request でも応答を継続
 
-**Non-Goals（v1）:** 固定 N 件切り出し（廃止） / **回答再生成・編集/undo・compaction**（→ [conversation-regeneration](../conversation-regeneration/design.md)） / 受動参加（全メッセージ保存）→ Phase 2 / 意図的沈黙 `[SILENT]` → Phase 2 / DM → 将来（`DirectMessages` intent 未設定・設定が guild 前提） / 意味的境界検出 → 将来 / `/search` → 見送り / `/fork` → 別 change
+**Non-Goals（v1）:** 固定 N 件切り出し（廃止） / **回答再生成・編集/undo・compaction**（→ [conversation-regeneration](../conversation-regeneration/design.md)） / OpenRouter 上の会話履歴保存・`previous_response_id` 継続 / `X-OpenRouter-Cache` による完成回答の response caching / provider ごとの明示的 `cache_control` 最適化 / 受動参加（全メッセージ保存）→ Phase 2 / 意図的沈黙 `[SILENT]` → Phase 2 / DM → 将来（`DirectMessages` intent 未設定・設定が guild 前提） / 意味的境界検出 → 将来 / `/search` → 見送り / `/fork` → 別 change
 
 ## Decisions
 
@@ -47,6 +53,10 @@ summary: "DB 永続の論理ターン/セッション履歴・境界検出・構
 | exchange リンク | assistant turn に `parent_user_turn_id`（その user turn に答える）。v1 は 1 user → 1 assistant | exchange 単位の境界選択（user 親なしで assistant だけ残さない）に必須 |
 | reply チェーン | user turn に `reply_to_turn_id`（`ON DELETE SET NULL`）+ `reply_to_discord_msg_id`（purge 後識別用スナップショット） | assistant→parent だけでは過去 user の reply 先を辿れない |
 | セッション同一性 | `sessions`（gap 区切り）。turn は `session_id` 保持、guild/channel は session 由来（重複保持しない） | 安定 ID（fork/sandbox）+ 重複カラム不整合の排除 |
+| OpenRouter session routing | session 作成時に `crypto.randomUUID()` で `openrouter_session_id` を発行し、同じ local session の request と tool loop 内の再 request へ一貫して付与する | OpenRouter の `session_id` は会話保存 ID ではなく sticky routing / 観測用である。Discord ID や連番 DB ID の外部送信を避ける |
+| prompt caching | v1 は provider の implicit caching を利用し、共通 prompt prefix を安定させる。provider 固有の `cache_control` は一律付与しない | 最小 prefix 長・cache write 料金・対応形式が provider ごとに異なるため、全モデル共通の明示 cache 方針は誤課金や miss を招く |
+| cache usage | `prompt_tokens_details.cached_tokens` と `prompt_tokens_details.cache_write_tokens` を optional な usage として記録し、未返却は 0 と同一視せず「不明」とする | 未対応 provider と cache miss を区別し、後から実測で方針を調整できる |
+| OpenRouter Responses API | 会話状態の保存先として採用しない | 現行 Responses API は stateless であり、`store` / `previous_response_id` を会話継続に利用できない |
 | FK 強制 | 接続時 `PRAGMA foreign_keys = ON`（現状 WAL のみ）+ 子に `ON DELETE CASCADE` | SQLite は FK 既定 off |
 | 処理順序 | **(1) `discord_msg_id` 照合 → (2) 既存なら完全 no-op → (3) 無ければ session 解決 + turn + 写像を同一 `BEGIN IMMEDIATE` txn で作成** | duplicate event で先に session を作ると空 session/`last_activity_at` 延長が起きる |
 | parent 整合 | CHECK はサブクエリ不可のため **repository txn で検証**（`parent.role='user'` かつ `parent.session_id=child.session_id`） | FK だけでは assistant 親や別 session 親を防げない |
@@ -68,6 +78,7 @@ PRAGMA foreign_keys = ON;  -- src/db/index.ts に追加（現状 WAL のみ）
 
 CREATE TABLE sessions (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  openrouter_session_id TEXT NOT NULL UNIQUE, -- UUID。OpenRouter sticky routing 用であり local FK には使わない
   guild_id     TEXT NOT NULL,
   channel_id   TEXT NOT NULL,              -- スレッドなら thread id
   parent_channel_id TEXT,                  -- スレッドの親チャンネル（親削除時の purge 用。非スレッドは NULL）
@@ -131,7 +142,7 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 ### 2. セッション解決・保存経路
 
 1. **`turn_messages.discord_msg_id` を照合 → 既存なら完全 no-op**（冪等）。pre-lock チェックは 2 ハンドラが通過しうるため、**`BEGIN IMMEDIATE` lock 取得後に再読**し、UNIQUE 競合は整合エラーでなく**冪等 no-op**として扱う。
-2. 無ければ**チャンネル単位の直列 txn**で session 解決。**Discord メッセージ生成時刻 t で配置**: t が既存 session の `[started_at, last_activity_at + GAP]` に入ればそれ、入らなければ新規（最新 session との単純比較ではなく時刻配置。遅延/順序入れ替えに頑健）。**配置規則（inactivity-gap・重複なし）**: t を、`(S.started_at - GAP) <= t <= (S.last_activity_at + GAP)` を満たし**隣接 session の領域を侵さない** session S に割当て、`started_at = MIN(started_at, t)` / `last_activity_at = MAX(last_activity_at, t)` へ拡張（started_at より前に来た late message も後付け結合できる＝gap セマンティクスを保つ）。t が**前後 2 session の GAP 内に同時に入り両者を橋渡しする**場合でも、**物理マージはしない**（`session_id` は fork/sandbox 用の安定 ID なので不変に保つ）。t を**近い方（既定は earlier）の session に割当て**、bounds を隣接 session の started_at を超えない範囲で拡張する。結果として隣接 2 session が GAP 内に並ぶ近似は許容（稀。厳密 gap セマンティクスより `session_id` 安定性を優先。文脈構築は必要なら隣接 session を跨いで拾ってよい）。該当無しなら新規。`BEGIN IMMEDIATE`（SQLite は **DB 全体で writer を直列化**。単一プロセス低負荷では十分、チャンネル単位の細粒度が要れば app レベル mutex 追加）下で実行し concurrent builder は部分状態を見ない。スレッドは `is_thread=1` + `parent_channel_id` も記録。
+2. 無ければ**チャンネル単位の直列 txn**で session 解決。**Discord メッセージ生成時刻 t で配置**: t が既存 session の `[started_at, last_activity_at + GAP]` に入ればそれ、入らなければ新規（最新 session との単純比較ではなく時刻配置。遅延/順序入れ替えに頑健）。**配置規則（inactivity-gap・重複なし）**: t を、`(S.started_at - GAP) <= t <= (S.last_activity_at + GAP)` を満たし**隣接 session の領域を侵さない** session S に割当て、`started_at = MIN(started_at, t)` / `last_activity_at = MAX(last_activity_at, t)` へ拡張（started_at より前に来た late message も後付け結合できる＝gap セマンティクスを保つ）。t が**前後 2 session の GAP 内に同時に入り両者を橋渡しする**場合でも、**物理マージはしない**（`session_id` は fork/sandbox 用の安定 ID なので不変に保つ）。t を**近い方（既定は earlier）の session に割当て**、bounds を隣接 session の started_at を超えない範囲で拡張する。結果として隣接 2 session が GAP 内に並ぶ近似は許容（稀。厳密 gap セマンティクスより `session_id` 安定性を優先。文脈構築は必要なら隣接 session を跨いで拾ってよい）。該当無しなら `openrouter_session_id = crypto.randomUUID()` とともに新規作成する。`BEGIN IMMEDIATE`（SQLite は **DB 全体で writer を直列化**。単一プロセス低負荷では十分、チャンネル単位の細粒度が要れば app レベル mutex 追加）下で実行し concurrent builder は部分状態を見ない。スレッドは `is_thread=1` + `parent_channel_id` も記録。
 3. user turn: turn(role=user, status=completed) + 写像を同一 txn で作成。`reply_to_turn_id`/`reply_to_discord_msg_id` を解決して記録。
 4. bot turn: **LLM 生成/送信の前に** turn(role=assistant, status=pending, parent_user_turn_id) を挿入してスロットを原子的 claim（`idx_turns_one_assistant`。重複/並行ハンドラはここで弾かれ生成・送信しない）。生成 → **分割を送信成功ごとに逐次 create-or-attach**（`discord_msg_id` キーで再試行安全。既存が別 turn/非互換 seq なら整合エラー）。確定は **CAS**: `UPDATE turns SET status=?,content_json=?,active=? WHERE id=? AND status='pending'`。`completed`=全文/履歴可、`stopped`=部分文/履歴可、`failed`=`active=0`/履歴除外、`pending`=reconcile まで除外。
 
@@ -178,7 +189,16 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 
 user turn の OpenRouter 表現では `author_label` を**メッセージ本文に描画**（例: 先頭に `表示名:`）して発話者を区別する。描画時は **bounded な単一行ラベルに正規化**する（改行除去・長さ制限・role 風/制御文字のエスケープ。表示名が使えなければ `author_id` に fallback）。OpenAI 形式の `name` フィールドはプロバイダ差があり脆いので使わない。非 bot メンション/リプライ先の文脈は保持。適用設定は addressing ユーザ（無ければ channel 既定）を precedence 解決。
 
-### 8. プライバシー / 保持
+### 8. OpenRouter session routing と prompt caching
+
+- 同じ local `sessions.id` に属する通常生成・tool call 後の再生成・retry は、すべて同じ `openrouter_session_id` を top-level `session_id` として Chat Completions request へ渡す。
+- fork と gap 越えで新しい local session を作る場合は、新しい `openrouter_session_id` を発行して provider routing を親 session と分離する。
+- cache hit は request の prefix 一致に依存するため、system prompt、tool schema、履歴 message の順序と serialization を決定的に保ち、新しい user turn だけを末尾へ追加する。
+- v1 は OpenRouter / provider が自動適用する prompt caching だけを利用し、特定 provider 向けの cache breakpoint や `cache_control` は設定しない。
+- final usage から `prompt_tokens_details.cached_tokens` と `prompt_tokens_details.cache_write_tokens` を取得し、provider が返した場合だけ統計へ保存する。
+- cache metadata が無い、cache miss になる、または routing 先が変わる場合も通常応答は失敗させない。
+
+### 9. プライバシー / 保持
 
 - guild/channel オプトイン（既定 off も可）。容量 TTL は**生 turn を exchange 単位**で（user expiry の CASCADE で TTL 内 assistant まで消えるのを避ける）。**sweep 契約**: 失効判定は exchange の最新 turn timestamp を基準、txn 境界内で exchange ごと削除、空 session も削除。
 - user 起因削除 / guild 退出 / **チャンネル削除 / `threadDelete`** → CASCADE 物理 purge（session 削除で turns/turn_messages まで）。スレッドは独自 channel_id を session キーに持つため `threadDelete`（partial-safe）も要る。**親チャンネル削除時は `parent_channel_id` で子スレッド session を列挙して purge**（archived 子スレッドの `threadDelete` が来ないケースを DB 側で補える）。
@@ -201,6 +221,9 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 - [ ] `stripHistoricalMedia()`（配列のみ・保存不変）
 - [ ] トークン予算推定（保守係数 + 予約 + 超過フォールバック）
 - [ ] 共有チャンネル `author_label` + 適用設定解決
+- [ ] `openrouter_session_id` の発行・永続化と Chat Completions / tool loop / retry への引き回し
+- [ ] 共通 prompt prefix の決定的 serialization と `cached_tokens` / `cache_write_tokens` の計測・統計連携
+- [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録
 - [ ] 保持/プライバシー（オプトイン・exchange 単位 TTL・削除/bulk/channel 同期・user/guild purge）+ `/config`
 - [ ] 旧 Discord-fetch コードの置換
 - [ ] テスト（冪等順序・session 直列解決・parent 検証・exchange 境界・PersistedContentPart 往復・剥がし・予算・発話者・削除/bulk/channel 同期と purge・partial イベント・pending reconcile）
@@ -211,6 +234,7 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 - **受動参加スコープ**（Phase 2、MessageContent 範囲・保存量・privacy）
 - **メディア再取得失敗 UX**（取得不可表示、バイト永続化は view-image で判断）
 - **トークン推定精度**（日本語/メディア。over-size 時の縮約リトライ）
+- **prompt cache の provider 差**（最小 cache 対象長、write 料金、TTL、暗黙 caching の有無は provider と model で異なるため、cache hit と費用削減は保証しない）
 - **pending turn の reconcile / 孤児メッセージ**（crash 残置 pending の起動時掃除。送信後・写像作成前 crash の孤児 Discord メッセージは best-effort 照合 + log。厳密化が要れば **durable outbox**〔送信前に outbox 行 → 送信 → 写像確定〕を将来導入）
 - **1 user に複数 assistant の制約**（v1 は 1:1 だが、誤って二重生成しない保証を repository で持つか）
 - **DM**（将来、`DirectMessages` intent・設定 fallback・privacy）
@@ -218,6 +242,8 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 ## 参照
 
 - [OpenRouter Chat Completions](https://openrouter.ai/docs/api/reference/chat) — `messages` 配列。`usage.prompt_tokens`（native）は事後計測
+- [OpenRouter Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) — `session_id` による sticky routing、provider 別の implicit / explicit caching、cache usage
+- [OpenRouter Responses API](https://openrouter.ai/docs/api/reference/responses/overview) — stateless API であり `store` / `previous_response_id` は未対応
 - [SQLite CHECK / foreign keys](https://www.sqlite.org/foreignkeys.html) — CHECK は式が NULL なら成功扱い、FK は既定 off
 - [discord.js Partials](https://discordjs.guide/popular-topics/partials.html) — partial delete/update に `Partials.Message`
 - [discord.js Client events](https://discord.js.org/docs/packages/discord.js/14.26.2/Client:Class) — `messageDelete`/`messageDeleteBulk`/`channelDelete`/`guildDelete`、`MessageContent` 特権 intent（有効済み）

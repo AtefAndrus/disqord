@@ -1,8 +1,8 @@
 ---
 title: "LLM チャット返信の Components V2 化"
-status: implemented
+status: in-progress
 priority: high
-summary: "LLM チャット返信を Components V2（Container/Section）化"
+summary: "LLM チャット返信を Components V2 化し、Markdown の fenced code block を保ったまま分割"
 ---
 
 # LLM チャット返信の Components V2 化
@@ -47,7 +47,7 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 **将来別 change 候補:**
 
 - Regenerate Button / Details toggle / Model-switch Button（新規インタラクション。本 spec は「現状 UX を V2 で再現」が目的）→ 別 change `chat-response-interactions` として独立
-- stream chunking の markdown 賢化（` ``` ` block / table の境界を尊重した chunking）→ Phase C の手動回帰で実害を確認してから判断
+- stream chunking の Markdown table 境界対応 → 実害を確認してから別 change として判断
 
 ## Decisions
 
@@ -56,6 +56,7 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | 実装タイミング | multimodal change の後に着手 | multimodal で扱う画像入出力の表現要件 (MediaGallery / File) が固まってから V2 builder を設計、二度手間回避 |
 | メッセージ構造 | 各 message = 1 Container、Model badge / 本文 / metadata の TextDisplay + 必要に応じ Separator + 末尾 message のみ Section + Button。**1 message 内の全 TextDisplay 合計 ≤ 3800 字 かつ ≤ 9000 UTF-8 バイト** | community 事例 (discord.js toolkit / TripBot) と一致。上限は per-component ではなく **1 message の全 TextDisplay 合計 4000 字**（discord.js guide）に加え、実測で判明した **UTF-8 バイト内部制限（≈10.17KB、超過は HTTP 500）** があるため、本文・badge・footer を文字数・バイト数の両方で合算管理する |
 | 長文分割の単位 | **1 message の全 TextDisplay 合計で 3800 字かつ 9000 UTF-8 バイト**（文字上限 4000・バイト上限実測 ≈10.17KB からのマージン）。Model badge・本文・metadata footer を**合算**して両予算に収め、超過分は次の message へ。日本語主体（≈3 bytes/字）では バイト予算が先に効き 1 message ≈ 3000 字弱 | discord.js guide の「全 text display components の合計 4000 字」に加え、実測で日本語 3393 字（10179B）が HTTP 500 になることを確認（Open Questions 参照）。分割は `TextBudget { chars, bytes }` の両予算で判定する。components 数は message 全体 40 枠に十分収まる |
+| fenced code block の分割 | 分割点が code fence 内なら当該 message の末尾へ表示用の閉じ fence を追加し、次 message の先頭で言語指定付き fence を再開する | Discord は message ごとに Markdown を解釈するため、未閉鎖 fence のまま分割すると以後の表示が崩れる。表示用 fence は文字数・バイト数の予算に含める |
 | ストリーミング edit | 既存ロジック (2 秒間隔) を踏襲、V2 で組んだ Container を毎回 edit | sticky flag 制約と整合。初期送信から V2、edit も V2、最終も V2 |
 | 初期 placeholder | `Container { TextDisplay("生成中...") + Section[Stop button] }` | 現状の `createStreamingEmbed("生成中...")` 相当を V2 化 |
 | 停止ボタン位置 (生成中) | 最終 message に `Section + accessory: Button(Danger)` を末尾配置。**この Section が唯一の Section 使用箇所**。Section 子は `TextDisplay("生成中...")` 1 つ | Discord Section は accessory 必須なので、ボタンが要る間しか Section を使えない |
@@ -239,6 +240,11 @@ export function splitTextIntoMessages(
 
 注: **Model badge `**Model:** xxx` と metadata footer も合計予算（文字数・バイト数の両方）に含まれる**。badge は ~30 字・footer は ~80 字程度なので、本文の実効上限は ASCII 主体なら 1 message あたり ~3700 字前後、日本語主体ならバイト予算（9000 バイトから badge/footer 分を引いた残り、≈3 bytes/字換算で ~3000 字前後）が先に効く。components 数（badge + 本文 + Separator + footer/Section ≈ 4〜5）は message 全体 40 枠に十分収まる。本文を複数 TextDisplay に割っても合計予算は変わらないため、1 message は基本 1 本文 TextDisplay で良い。
 
+fenced code block の状態は元の LLM 出力だけを走査して保持する。
+chunk 末尾へ補う閉じ fence と次 chunk 先頭へ補う再開 fence は表示用 scaffolding であり、元テキストの状態遷移には含めない。
+これにより、ストリーミング途中の未閉鎖 code block も各 Discord message 内では閉じられ、後続 chunk では元の言語指定を維持して再開できる。
+分割判定ではこの scaffolding も文字数・UTF-8 バイト数の両予算へ含め、三連バッククォート自体は途中で分断しない。
+
 ### Streaming flow の擬似コード
 
 ```ts
@@ -315,6 +321,7 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 - [x] `messageCreate.test.ts` の mock 検証を V2 化
 - [x] `embedBuilder.test.ts` から削除関数の test を除去
+- [x] fenced code block の一時 close / 次 message での再開 / 未閉鎖ストリーム / 複数 code block / fence 境界を unit test で検証
 - [ ] `interactionCreate.test.ts` の停止ボタン test を V2 化 (該当テストファイルが存在せず、`interactionCreate.ts` 自体も停止ボタンの message 更新には関与しないため対象外。詳細は Design 節参照)
 - [x] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + PDF 入力) のシナリオを実機確認済み (長文は日本語で UTF-8 バイト制限の分割も確認。multimodal の「出力」は Phase D 対象で未実装)
 
@@ -335,7 +342,7 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - **Container 内の component 数上限 = 10**: discord-api-types の `APIContainerComponent` JSDoc に「A Container is a top-level layout component that holds **up to 10 components**」と明記（Discord 公式 docs 準拠）。Section は別途 1–3 子の制約。**メッセージ全体は 40 components**（ネスト子も含む）。現設計（1 Container = 5〜7 components）は Container 10・メッセージ 40 のいずれにも余裕がある。
 - **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。`STREAM_UPDATE_INTERVAL = 2000ms` の debounce 内で同サイクル処理するため、Discord channel-level PATCH rate limit (5/5s) には収まるはず。429 受信時は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect)。
 - **multimodal 統合のタイミングずれ**: V2 spec を先に書き、multimodal 着手後に Phase B 以降。multimodal の API が固まる前に Phase A を着手する場合、`MediaGallery` / `File` のスロットは builder 側に「将来追加」枠だけ用意して中身は noop。
-- **stream 中の partial markdown**: Markdown table や code block が途中で切れている場合、TextDisplay 末尾でレンダリングが崩れる。現状 embed でも同じ問題があり許容しているが、V2 で chunk 境界が増えると目立つ可能性。気になるなら chunking ロジックで「\`\`\`block を尊重して切る」ヒューリスティック追加検討、本 spec scope 外。
+- **stream 中の partial markdown**: fenced code block は分割時に表示用 fence を補って message ごとの Markdown を成立させる。Markdown table は行の途中や header と body の間で分割される可能性が残るため、実害が確認された場合に別 change で扱う。
 - **ephemeral 経路の漏れ**: 本 spec では chat 返信が ephemeral ではないため影響なしの見込みだが、`ephemeral: true` を grep して deprecated 警告が残っていないか念のため確認 (Phase B 着手時)。
 - **`code-execution` change との連携**: 本 spec が提供する `chatContainerBuilder` の streaming updater は code-execution の tool call 中の進捗表示 (「コード実行中...」) で利用される。code-execution が `chat-response-v2` 完成前に Phase C に着手する場合は updater stub + legacy 描画フォールバックが必要。共通 primitive は本 spec の builder にのみ集約し、code-execution は **独自の `codeContainerBuilder` (tool 結果出力専用)** を別途持つ (chat の text stream と code 実行結果は構造的に異なるため、無理に共通化しない)。
 - **`conversation-context` / `model-compare` との V2 一貫性**: ユーザ方針により、回答再生成 UI（[conversation-context](../conversation-context/design.md)）とモデル比較表示（[model-compare](../model-compare/design.md)）も Components V2 で組む。両者は本 spec の `chatContainerBuilder`（特に `buildFinalContainer` / 前回応答の折りたたみ相当・モデル別 Container）を再利用する想定で、本 spec が先行して builder を確定させる。再生成ボタンや「比較」用の Section accessory は本 spec の停止ボタンと同じ「Section は accessory 必須」「allowedMentions 強制」ルールに従う。なお Regenerate ボタン等の **新規インタラクションのハンドラ実装**は引き続き各 change 側の責務（本 spec は描画 primitive のみ提供）。

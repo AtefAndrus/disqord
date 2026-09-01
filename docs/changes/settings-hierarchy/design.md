@@ -11,6 +11,10 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 
 現在の設定はGuild単位のみで、チャンネルやユーザごとの使い分けができない。例えば、技術チャンネルではコード特化モデル、雑談チャンネルでは汎用モデルを使いたいケースに対応できない。また、temperatureなどのLLMパラメータやシステムプロンプトのカスタマイズ手段がない。
 
+## 依存 / 関連 change
+
+- 連携: [reasoning-output](../reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -24,6 +28,7 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 - ロール単位の設定（複雑性が高すぎる）
 - パラメータのプリセット機能
 - プロンプトのバージョン管理
+- reasoning 本文の取得・表示 UI（[reasoning-output](../reasoning-output/design.md) が担当）
 
 ## Decisions
 

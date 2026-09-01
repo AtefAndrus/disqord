@@ -10,9 +10,9 @@
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
 | [Bot 管理 API（admin endpoints）](changes/admin-endpoints/design.md) | 高 | implemented | HMAC 認証付き管理エンドポイント（ログ取得・メトリクス） |
-| [LLM チャット返信の Components V2 化](changes/chat-response-v2/design.md) | 高 | implemented | LLM チャット返信を Components V2（Container/Section）化 |
+| [LLM チャット返信の Components V2 化](changes/chat-response-v2/design.md) | 高 | in-progress | LLM チャット返信を Components V2 化し、Markdown の fenced code block を保ったまま分割 |
 | [CI パイプライン整備 + Actions サプライチェーン対策 + mise SSOT](changes/ci-pipeline/design.md) | 高 | implemented | CI 新設・workflow hardening・mise SSOT 化 |
-| [対話UX改善（会話履歴ストア）](changes/conversation-context/design.md) | 高 | planned | DB 永続の論理ターン/セッション履歴・境界検出・構造化メディア・保持。再生成系は別 change |
+| [対話UX改善（会話履歴ストア）](changes/conversation-context/design.md) | 高 | planned | DB 永続の会話履歴、OpenRouter session routing、prompt cache 計測、境界・構造化メディア・保持 |
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [マルチモーダル対応](changes/multimodal/design.md) | 高 | implemented | 画像・PDF 添付の LLM 入力対応 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
@@ -23,8 +23,10 @@
 | [デフォルトモデル定数の SSOT 化](changes/default-model-ssot/design.md) | 中 | implemented | envVars.ts を DEFAULT_MODEL の単一ソース化 |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | planned | LLM に境界付きの Discord 操作（履歴取得/メンバー検索/スレッド作成/ピン/追加文脈取得）を与える client tool 群 |
 | [ログ集約サービスのセルフホスト](changes/log-aggregation/design.md) | 中 | planned | VictoriaLogs / Loki / OpenObserve 等によるログ集約基盤 |
+| [モデルコマンドの詳細表示](changes/model-command-ux/design.md) | 中 | in-progress | /model current と set の詳細表示を共通化し、OpenRouter のモデルページへリンク |
 | [複数モデル並列](changes/model-compare/design.md) | 中 | planned | /compare で複数モデルへ並列リクエストし回答を比較 |
 | [OpenRouter API 整合監査](changes/openrouter-api-audit/design.md) | 中 | planned | 実装済み OpenRouter 連携を現行 API へ整合（deprecated な usage:{include} 撤去ほか） |
+| [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | OpenRouter の reasoning / reasoning_details を安全に受け取り、設定に応じて Discord へ表示 |
 | [リリース更新通知のポーリング化](changes/release-polling/design.md) | 中 | planned | リリース通知を GitHub Webhook からポーリング方式へ移行 |
 | [Renovate 移行](changes/renovate-migration/design.md) | 中 | in-progress | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
