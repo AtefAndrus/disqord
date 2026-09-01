@@ -21,7 +21,7 @@ DisQord はチャット bot として既に Discord 上で動いており、ユ�
 
 - 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler`）・`ToolRegistry`・`runToolLoop()` が前提。本 change はここに tool を登録するだけで、protocol ループは持たない
 - 連携: [conversation-context](../conversation-context/design.md) — `fetch_more_context` は履歴ストアの session/exchange モデルと予算境界を使う。本 change の他 action（履歴取得等）は live な Discord API を叩く
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — tool 結果の Discord 描画（`ToolRenderPayload`）は V2 の updater が解釈する。V2 未実装期は**基盤が受け取る updater インタフェースのスタブ（legacy embed）が描画フォールバック**する（これは描画/updater レイヤの話。tool 自体の可否は `isEnabled` で別管理。後述の `fetch_more_context` の「未実装 tool 用スタブは無い」と混同しない）
+- 連携: [chat-response-v2](../chat-response-v2/design.md) — foundation は `ToolRenderPayload` を V2 updater へ透過するが、現在の tool block hook は描画しない。本 change が Discord tool の結果描画を実装し、tool 自体の可否は `isEnabled` で別管理する
 - 連携: [permissions-stats](../permissions-stats/design.md) — 管理系 action（pin/スレッド作成）の使用ログ/権限境界は将来 stats 側と整合させうる（本 change では tool 単位の log に留める）
 
 ## Goals / Non-Goals
@@ -321,7 +321,7 @@ export function threadCreateNeeds(isPrivate: boolean): bigint[] {
 - 権限ガード: reader を呼ぶ**前に** **bot と invoking member の両方**の `ViewChannel`+`ReadMessageHistory`（on `ctx.channel`、`fetch_recent_messages` の read 権限集合を再利用）を確認する（read 系のユーザ権限昇格防止。剥奪された過去の閲覧を persisted 経路で曝さない）。**これは runtime 境界**で、bot/member いずれかが権限を失っていれば reader を呼ばない（conversation-context の hydrate 再検証/purge は eventually-consistent な補完であって、この runtime チェックの代替にはしない）。
 - session/channel 境界（authz）: **bare `ctx.sessionId` を単独の authz 境界にしない**。ctx には**当該応答で解決済みの current session+channel にスコープ済みの reader**を載せ、tool はそれ越しにしか読めない構造にする（別 session/別 channel を読む API 面を tool に与えない）。raw `sessionId` を渡す経路を取る場合でも、reader 側で **`sessionId` が `ctx.guildId`+`ctx.channelId` に解決すること**を検証し、不一致は reject する（ctx 構築や将来の caller が誤った session を載せても別チャンネル履歴を hydrate しない防御。conversation-context の session 解決契約に依存しつつ二重化）。
 - 累積 state の寿命: 既出 exchange 集合・残り予算は `ctx.fetchMoreContextState`（discord-tool 所有、`runToolLoop` 1 実行＝1 応答生成あたり 1 個生成）に保持する。ctx は応答生成ごとに DI 経路（chatService）で構築されるため自然に loop スコープになり、基盤の `IToolContext`（可変スロットを基盤に足さない）契約を壊さない。global/static には持たせない。
-- conversation-context **未導入の guild / 未実装期**は `isEnabled=false` で `fetch_more_context` を**そもそも tools 配列に出さない**。基盤（tool-calling-foundation）には「未実装 tool 用のスタブ」は無い（基盤のスタブ／legacy embed フォールバックは描画 updater 側の話）。history reader が ctx 経由で渡らなければ `isEnabled` が false を返すだけで、UX 上のフォールバックが要るなら本 change 側が担う。
+- conversation-context **未導入の guild / 未実装期**は `isEnabled=false` で `fetch_more_context` を**そもそも tools 配列に出さない**。基盤（tool-calling-foundation）には「未実装 tool 用のスタブ」はない。history reader が ctx 経由で渡らなければ `isEnabled` が false を返すだけで、UX 上のフォールバックが要るなら本 change 側が担う。
 
 ## Tasks
 

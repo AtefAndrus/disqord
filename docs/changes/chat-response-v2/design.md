@@ -1,6 +1,6 @@
 ---
 title: "LLM チャット返信の Components V2 化"
-status: in-progress
+status: implemented
 priority: high
 summary: "LLM チャット返信を Components V2 化し、Markdown の fenced code block を保ったまま分割"
 ---
@@ -9,16 +9,22 @@ summary: "LLM チャット返信を Components V2 化し、Markdown の fenced c
 
 ## Why
 
-現在の LLM チャット返信は `embedBuilder.ts` (271 行) ベースの 1 embed/メッセージで構成され、Discord embed の制約に縛られている: description は 4096 字までで切り詰め、footer text に metadata を詰め込み、長文は 9000 byte 単位で複数メッセージに分割、ページ番号は footer 文字列で擬似実装。停止ボタンだけが ActionRow で外部に置かれている。
+移行前の LLM チャット返信は `embedBuilder.ts` ベースの 1 embed/メッセージで構成され、Discord embed の制約に縛られていた。
+description は 4096 字までで切り詰め、footer text に metadata を詰め込み、長文は 9000 byte 単位で複数メッセージに分割し、ページ番号は footer 文字列で表現していた。
+停止ボタンだけが ActionRow で外部に置かれていた。
 
-Discord が 2025-04 にリリースした **Components V2** (`IS_COMPONENTS_V2` flag) によって、`Container` / `TextDisplay` / `Section` / `Separator` / `MediaGallery` / `File` で柔軟にメッセージレイアウトが組めるようになった。これに移行することで:
+Discord が 2025-04 にリリースした **Components V2** (`IS_COMPONENTS_V2` flag) によって、`Container` / `TextDisplay` / `Section` / `Separator` で柔軟にメッセージレイアウトが組めるようになった。これに移行することで:
 
-- text 表示と添付ファイル表示を統一構造で扱える (multimodal change で扱う入力画像・出力画像・添付ファイルが自然に MediaGallery / File に乗る)
 - Section accessory を使えば inline Button が text の隣に置ける (停止ボタンの取扱いが綺麗になる)
 - ページ番号 footer の擬似実装をやめて Container の構造で表現できる
-- embed の構造的制約（description 4096 字・全体 6000 字・footer/author の固定枠）から解放され、text/画像/ファイルを 1 つの Container 構造で柔軟に組める（TextDisplay は 1 message 合計 4000 字制約だが、複数 message へシームレスに分割できる）
+- embed の構造的制約（description 4096 字、全体 6000 字、footer/author の固定枠）から離れ、本文、停止操作、metadata を独立した component として構成できる（TextDisplay は 1 message 合計 4000 字制約だが、複数 message へ分割できる）
 
-multimodal change を先行させ、それと統合する形で V2 化を進める。
+本 change はテキスト応答の描画基盤を対象とし、生成画像と生成ファイルの受信および表示は別の release 単位で扱う。
+
+## 依存 / 関連 change
+
+- 先行: [マルチモーダル対応](../multimodal/design.md) — 画像と PDF を入力として扱う既存フローと共存する
+- 関連: [出力マルチモーダル対応](../multimodal-output/design.md) — 本 change の Components V2 描画基盤を拡張し、生成画像と生成ファイルを表示する
 
 ## Goals / Non-Goals
 
@@ -33,7 +39,6 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
   - 停止時の "Stopped" 表示は維持
 - 長文は **複数メッセージ分割を継続**。各 message は `Container + TextDisplay(+ Separator)` で V2 化
 - 末尾メッセージに metadata TextDisplay (完了 / "Stopped") を配置。**Stop button は生成中のときだけ Section accessory として置く** (Section は accessory 必須なので、ボタン不要な状態では Section を使わない)
-- multimodal change との統合: 出力画像は `MediaGallery`、添付ファイル (例: 生成 PDF / コードファイル) は `File` で表示
 - `embedBuilder.ts` の embed-向けユーティリティを退役、置き換えで `containerBuilder.ts` (仮) を新設
 
 **Non-Goals:**
@@ -43,6 +48,7 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 - 編集後の rendering を legacy 互換に戻す機能（V2 sticky 仕様により不可、戻したい場合は新規送信）
 - showLlmDetails の per-response toggle 化（current は per-guild config、本 spec で変えない）
 - 古い Discord client での見た目最適化（V2 GA、Discord 側でフォールバックされる）
+- 生成画像と生成ファイルの受信および表示（[出力マルチモーダル対応](../multimodal-output/design.md)）
 
 **将来別 change 候補:**
 
@@ -53,7 +59,6 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 実装タイミング | multimodal change の後に着手 | multimodal で扱う画像入出力の表現要件 (MediaGallery / File) が固まってから V2 builder を設計、二度手間回避 |
 | メッセージ構造 | 各 message = 1 Container、Model badge / 本文 / metadata の TextDisplay + 必要に応じ Separator + 末尾 message のみ Section + Button。**1 message 内の全 TextDisplay 合計 ≤ 3800 字 かつ ≤ 9000 UTF-8 バイト** | community 事例 (discord.js toolkit / TripBot) と一致。上限は per-component ではなく **1 message の全 TextDisplay 合計 4000 字**（discord.js guide）に加え、実測で判明した **UTF-8 バイト内部制限（≈10.17KB、超過は HTTP 500）** があるため、本文・badge・footer を文字数・バイト数の両方で合算管理する |
 | 長文分割の単位 | **1 message の全 TextDisplay 合計で 3800 字かつ 9000 UTF-8 バイト**（文字上限 4000・バイト上限実測 ≈10.17KB からのマージン）。Model badge・本文・metadata footer を**合算**して両予算に収め、超過分は次の message へ。日本語主体（≈3 bytes/字）では バイト予算が先に効き 1 message ≈ 3000 字弱 | discord.js guide の「全 text display components の合計 4000 字」に加え、実測で日本語 3393 字（10179B）が HTTP 500 になることを確認（Open Questions 参照）。分割は `TextBudget { chars, bytes }` の両予算で判定する。components 数は message 全体 40 枠に十分収まる |
 | fenced code block の分割 | 分割点が code fence 内なら当該 message の末尾へ表示用の閉じ fence を追加し、次 message の先頭で言語指定付き fence を再開する | Discord は message ごとに Markdown を解釈するため、未閉鎖 fence のまま分割すると以後の表示が崩れる。表示用 fence は文字数・バイト数の予算に含める |
@@ -67,11 +72,9 @@ multimodal change を先行させ、それと統合する形で V2 化を進め�
 | エラー表示 | `Container { accent_color: red, TextDisplay(エラー本文) }` | `createErrorEmbed` の役割を V2 で再現 |
 | 停止時表示 | 最終 message から Section を削除、代わりに `Separator + TextDisplay("🛑 Stopped \| xx.xs \| Tokens: ...")` を末尾配置 | 上記 Metadata footer と同じ理由で Section は外す |
 | Mention safety | **全 `channel.send` / `message.edit` / `message.reply` 経路で `allowedMentions: { parse: [] }` を強制**。`message.reply()` 経路では追加で `repliedUser: false` を併用 (元投稿者の意図しない ping を防ぐ、現状の messageCreate.ts:92 と同じ) | TextDisplay は legacy embed.description と違い content と同じ ping 挙動。送信ヘルパに必ず allowedMentions を含めて、edit 経路で漏れないよう builder の型シグネチャ側で強制する |
-| `embedBuilder.ts` の扱い | 退役。chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages`) を削除、slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す。`splitTextIntoChunks` は当初 chat chunking 用に残す想定だったが、UTF-8 バイト制限対応（Open Questions 参照）のため `chatContainerBuilder.ts` 内の `splitTextByCharsAndBytes`（文字数・バイト数両対応）に置換され、`embedBuilder.ts` からは削除済み | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
+| `embedBuilder.ts` の扱い | chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages` / `splitTextIntoChunks`) を削除し、文字数と UTF-8 バイト数に対応する `splitTextByCharsAndBytes` を `chatContainerBuilder.ts` に置く。slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
 | 新規 builder ファイル | `src/utils/chatContainerBuilder.ts` を新設 | embed-V2 を完全に分離。V2 関連の型 (`ContainerBuilder`, `TextDisplayBuilder`, etc.) を集中させる |
 | 多言語化 / i18n | しない (現状の hardcoded ja を踏襲) | 別 spec が立つまで現状維持 |
-| MediaGallery (画像出力) | multimodal change の出力部と接続。V2 Container 内に `MediaGallery` を組み込む API を builder に持たせる | multimodal の入力画像表示と統合 |
-| File 添付 (生成ファイル) | multimodal change が File を扱う場合、Container 内 `File` で配置 | 同上 |
 | 旧 client 互換性 | 配慮しない | V2 は GA、Discord client 側でフォールバック処理 |
 | `ephemeral: true` 経路の修正 | 該当箇所があれば `flags: MessageFlags.Ephemeral` に置換 (本 spec では chat 返信が ephemeral ではないので不要、エラー系で残存していないか確認) | v14.19 で deprecated。本 spec の scope 内では発生しないはずだが grep で漏れ確認 |
 
@@ -174,21 +177,6 @@ Container (accent: RED)
 └ TextDisplay  "## ⚠️ エラー\n\n<error message>"
 ```
 
-#### ケース F: multimodal 統合後 (画像出力含む)
-
-```text
-Container (accent: model color)
-├ TextDisplay  "**Model:** xxx\n\n<text response>"
-├ MediaGallery
-│   ├ item: image_1.png (alt: "Generated chart")
-│   └ item: image_2.png (alt: "Generated diagram")
-├ File  analysis.csv
-├ Separator
-└ TextDisplay  "Tokens: ... | Cost: $... | Latency: ..."
-```
-
-注: `MediaGallery` / `File` を使う場合、メッセージ payload の `files: [...]` 配列に AttachmentBuilder を **必ず添付**し、`MediaGallery.items[].media.url` や `File.file.url` を `attachment://<filename>` 形式で参照する。V2 が無効化するのは「attachments 配列の自動 unfurl」だけで、`files` payload upload + `attachment://` 参照のパスは V2 でも維持される ([Discord File component spec](https://docs.discord.com/developers/components/reference))。
-
 ### 変更対象ファイル
 
 **新規:**
@@ -201,11 +189,11 @@ Container (accent: model color)
 - `src/bot/events/messageCreate.ts` — `embedBuilder.ts` 依存を `chatContainerBuilder` に置換、`updateStreamingMessages` を V2 ベースに書き換え、`channel.send`/`edit` 呼び出しの `embeds:` を `components:` + `flags: MessageFlags.IsComponentsV2` + **`allowedMentions: { parse: [] }`** に変更。`custom_id` には現状実装と同じく `triggerMessageId` (入力ユーザの `message.id`、Bot 返信送信前に既知) を埋める
 - `src/utils/embedBuilder.ts` — chat 専用関数 (`createStreamingEmbed`, `splitTextToMultipleMessages`) を削除。slash command で使う `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す。`splitTextIntoChunks` は当初残す想定だったが、UTF-8 バイト制限対応のため `chatContainerBuilder.ts` の `splitTextByCharsAndBytes` に置換され削除済み（Open Questions 参照）
 - `src/utils/buttonBuilder.ts` — `createStopButton` を ActionRow → 単独 ButtonBuilder に変更 (Section accessory として使うため)、または新たに `createStopButtonAccessory()` を追加して旧関数併存
-- `src/bot/events/interactionCreate.ts` — `handleButtonInteraction` の停止処理ロジックはそのまま (`custom_id: stop_response_*` パース不変、抽出された ID は `triggerMessageId` = ユーザ入力 msg.id として `chatService.cancelRequest()` に渡す既存実装と一致)、ただし停止後の message 更新で V2 container を edit するように調整
 - 関連 unit test 群:
   - `tests/unit/bot/events/messageCreate.test.ts` — mock の `embeds: [...]` 検証を `components: [...]` + `flags` 検証に書き換え
   - `tests/unit/utils/embedBuilder.test.ts` — 削除関数のテスト削除
-  - `tests/unit/bot/events/interactionCreate.test.ts` — 停止フローの V2 整合
+
+`interactionCreate.ts` は停止要求を `chatService.cancelRequest()` へ渡すだけで、停止後のメッセージ更新には関与しないため変更対象外とする。
 
 ### TextDisplay chunking ロジック
 
@@ -297,7 +285,6 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 
 - `tests/unit/bot/events/messageCreate.test.ts` (現状 14 個前後の test): mock の検証部分が `embeds` → `components` + `flags` に変わる
 - `tests/unit/utils/embedBuilder.test.ts`: `createStreamingEmbed` / `splitTextToMultipleMessages` の test を削除、chunking 関連は `chatContainerBuilder.test.ts` 側に移植
-- `tests/unit/bot/events/interactionCreate.test.ts`: 停止ボタン押下後の reply 検証を V2 化
 
 ## Tasks
 
@@ -322,29 +309,21 @@ await updateFinalMessages(messages, finalResult.fullText, modelName, color, meta
 - [x] `messageCreate.test.ts` の mock 検証を V2 化
 - [x] `embedBuilder.test.ts` から削除関数の test を除去
 - [x] fenced code block の一時 close / 次 message での再開 / 未閉鎖ストリーム / 複数 code block / fence 境界を unit test で検証
-- [ ] `interactionCreate.test.ts` の停止ボタン test を V2 化 (該当テストファイルが存在せず、`interactionCreate.ts` 自体も停止ボタンの message 更新には関与しないため対象外。詳細は Design 節参照)
-- [x] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + PDF 入力) のシナリオを実機確認済み (長文は日本語で UTF-8 バイト制限の分割も確認。multimodal の「出力」は Phase D 対象で未実装)
+- [x] 手動回帰: 短文 / 長文 / ストリーミング / 停止 / エラー / multimodal (画像 + PDF 入力) のシナリオを実機確認済み (長文は日本語で UTF-8 バイト制限の分割も確認)
 
-### Phase D: multimodal 統合 (LLM 出力側の multimodal が未実装のため保留)
-
-- [ ] multimodal change 側の出力画像処理が `MediaGallery` を返す前提で、`chatContainerBuilder` に `media` 引数を追加
-- [ ] 添付ファイル (`File`) の取り扱いも同様
-
-### Phase E: 後片付け
+### Phase D: 後片付け
 
 - [ ] `docs/changes/chat-response-v2/` 削除 (リリース完了時、git 履歴がアーカイブ)
 
 ## Open Questions / Risks
 
-- **TextDisplay の char limit（確定: 1 message 合計 4000 字）**: discord.js guide が「The amount of text across all text display components cannot exceed 4000 characters」と明記＝**per-component ではなく 1 message 内の全 TextDisplay 合計 4000 字**。本設計はこれを前提に `MAX_TOTAL_CHARS_PER_MESSAGE=3800`（200 字マージン）で **1 message ≈ 本文 3700 字**に分割する（badge/footer も合計予算に含む）。公式 Component Reference 自体には数値の明記がないため、Phase C の手動回帰で長文 (1万字以上) を実機に流し、合計 4000 で正しく次 message に送られることを最終確認する。
+- **TextDisplay の char limit（確定: 1 message 合計 4000 字）**: discord.js guide が「The amount of text across all text display components cannot exceed 4000 characters」と明記＝**per-component ではなく 1 message 内の全 TextDisplay 合計 4000 字**。本設計はこれを前提に `MAX_TOTAL_CHARS_PER_MESSAGE=3800`（200 字マージン）で **1 message ≈ 本文 3700 字**に分割する（badge/footer も合計予算に含む）。公式 Component Reference 自体には数値の明記がないため、Phase C の手動回帰で長文 (1万字以上) を実機に流し、合計 4000 で正しく次 message に送られることを確認済みである。
 - **TextDisplay の byte limit（実測で確定: 文書化されていない UTF-8 約 10.17KB の内部制限が別途存在）**: ユーザテストで日本語長文 (5 ページ分割) の streaming edit・最終 render・クリーンアップの全経路で HTTP 500 (JSON エラーコードなし) が発生。実 API のバイセクトで、単一 TextDisplay の Container を POST した際の境界を確認: ASCII 3999 字 (3999 bytes) → 200 / 日本語 3000 字 (9000 bytes) → 200 / 日本語 3387 字 (10161 bytes) → 200 / **日本語 3393 字 (10179 bytes) → 500**（以降も 500）。つまり Discord は文書化された「全 TextDisplay 合計 4000 字」制限とは別に、**UTF-8 バイト数ベースの内部制限（実測境界 ≈ 10.17KB）を持ち、超過時は 400 ではなく 500 を返す**。`MAX_TOTAL_CHARS_PER_MESSAGE=3800` は文字数のみの予算のため、日本語主体 (≈3 bytes/字) の応答では 1 message ≈ 11KB になり必ず超過していた。旧 embed 実装が `MAX_BYTE_LENGTH=9000` で分割していたのはこの制限への対処だったと推定される。対策として `chatContainerBuilder.ts` に `MAX_TOTAL_BYTES_PER_MESSAGE=9000`（旧 embed 実装と同値の安全マージン）を新設し、`splitTextIntoMessages` を「文字数 3800 以下 **かつ** UTF-8 バイト数 9000 以下」の両方を満たすようコードポイント単位（サロゲートペア非分断）で分割するよう修正済み。
 - **components 数の枠（ネスト子も数える）**: 完了時 = Container + badge + 本文 + Separator + footer TextDisplay = **5**、生成中 = Container + badge + 本文 + Separator + Section + Section内TextDisplay + Button = **7**。いずれも下記の上限内。本文を複数 TextDisplay に割っても合計文字 4000 制約が先に効くため、通常 1 本文 TextDisplay。
 - **Container 内の component 数上限 = 10**: discord-api-types の `APIContainerComponent` JSDoc に「A Container is a top-level layout component that holds **up to 10 components**」と明記（Discord 公式 docs 準拠）。Section は別途 1–3 子の制約。**メッセージ全体は 40 components**（ネスト子も含む）。現設計（1 Container = 5〜7 components）は Container 10・メッセージ 40 のいずれにも余裕がある。
 - **停止ボタンの移動コスト**: 長文ストリーミング中、message を追加するたびに前 message の Section を edit でボタン除去、新 message に Section 追加で edit。`STREAM_UPDATE_INTERVAL = 2000ms` の debounce 内で同サイクル処理するため、Discord channel-level PATCH rate limit (5/5s) には収まるはず。429 受信時は当該 edit をスキップして次サイクルで再試行 (`Retry-After` ヘッダがあれば respect)。
-- **multimodal 統合のタイミングずれ**: V2 spec を先に書き、multimodal 着手後に Phase B 以降。multimodal の API が固まる前に Phase A を着手する場合、`MediaGallery` / `File` のスロットは builder 側に「将来追加」枠だけ用意して中身は noop。
 - **stream 中の partial markdown**: fenced code block は分割時に表示用 fence を補って message ごとの Markdown を成立させる。Markdown table は行の途中や header と body の間で分割される可能性が残るため、実害が確認された場合に別 change で扱う。
-- **ephemeral 経路の漏れ**: 本 spec では chat 返信が ephemeral ではないため影響なしの見込みだが、`ephemeral: true` を grep して deprecated 警告が残っていないか念のため確認 (Phase B 着手時)。
-- **`code-execution` change との連携**: 本 spec が提供する `chatContainerBuilder` の streaming updater は code-execution の tool call 中の進捗表示 (「コード実行中...」) で利用される。code-execution が `chat-response-v2` 完成前に Phase C に着手する場合は updater stub + legacy 描画フォールバックが必要。共通 primitive は本 spec の builder にのみ集約し、code-execution は **独自の `codeContainerBuilder` (tool 結果出力専用)** を別途持つ (chat の text stream と code 実行結果は構造的に異なるため、無理に共通化しない)。
+- **`code-execution` change との連携**: 本 spec が提供する streaming updater は tool の text stream を描画する。tool block hook は consumer が描画を実装する拡張点であり、code-execution は独自の `codeContainerBuilder` と attachment-capable な hook 処理を追加する。
 - **`conversation-context` / `model-compare` との V2 一貫性**: ユーザ方針により、回答再生成 UI（[conversation-context](../conversation-context/design.md)）とモデル比較表示（[model-compare](../model-compare/design.md)）も Components V2 で組む。両者は本 spec の `chatContainerBuilder`（特に `buildFinalContainer` / 前回応答の折りたたみ相当・モデル別 Container）を再利用する想定で、本 spec が先行して builder を確定させる。再生成ボタンや「比較」用の Section accessory は本 spec の停止ボタンと同じ「Section は accessory 必須」「allowedMentions 強制」ルールに従う。なお Regenerate ボタン等の **新規インタラクションのハンドラ実装**は引き続き各 change 側の責務（本 spec は描画 primitive のみ提供）。
 
 ## 参照

@@ -15,7 +15,8 @@ summary: "画像・PDF 添付の LLM 入力対応"
 OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "file"` content part）、モデルがネイティブ対応していなくても OpenRouter 側でテキスト化して渡せる。
 画像入力（`type: "image_url"`）と同じ仕組みの延長で扱えるため、画像と PDF を本 change にまとめる。
 
-**出力モダリティ（生成画像／生成ファイル）は本 change の対象外**。出力側のリッチ表現は後続 change `chat-response-v2` の MediaGallery / File コンポーネント経路で扱う。本 change は **入力**マルチモーダルに限定する。
+**出力モダリティ（生成画像／生成ファイル）は本 change の対象外**。
+出力側の受信と Discord 表示は [出力マルチモーダル対応](../multimodal-output/design.md) で扱い、本 change は **入力**マルチモーダルに限定する。
 
 ## Goals / Non-Goals
 
@@ -30,7 +31,7 @@ OpenRouter は 2025-04 に PDF/ファイル入力を GA しており（`type: "f
 **Non-Goals:**
 
 - 音声・動画の処理
-- 出力マルチモーダル（生成画像／ファイルの受信表示）。`chat-response-v2` で扱う
+- 出力マルチモーダル（生成画像／ファイルの受信表示）。[出力マルチモーダル対応](../multimodal-output/design.md) で扱う
 - Bot 側での画像のリサイズ・前処理
 - PDF 以外のドキュメント形式（docx / xlsx / mp3 等）のネイティブ対応
 - 画像 `detail` フィールドのユーザ制御 UI

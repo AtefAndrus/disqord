@@ -1,6 +1,6 @@
 ---
 title: "モデルコマンドの詳細表示"
-status: in-progress
+status: implemented
 priority: medium
 summary: "/model current と set の詳細表示を共通化し、OpenRouter のモデルページへリンク"
 ---

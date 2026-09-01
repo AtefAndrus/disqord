@@ -21,6 +21,7 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 - 関連: [web-search](../web-search/design.md) — `openrouter:web_search` / `openrouter:web_fetch` は**そちら**で定義。本 change では再定義しない（`web_fetch` は本 change の各 server tool の nested `tools` 候補としてのみ言及）
 - 関連: [model-compare](../model-compare/design.md) — `/model compare`（同一プロンプトを複数モデルへ並列送信し **side-by-side 表示**）は本 change の `openrouter:fusion`（panel→judge の**構造化合議**）とは**目的が異なる**。混同しない（後述）
 - 関連: [openrouter-api-audit](../openrouter-api-audit/design.md) — `ChatCompletionRequest`/`usage` 型の現行 API 整合。本 change の server tool パラメータ型・`server_tool_use` 取り込みはその整合方針に従う
+- 関連: [出力マルチモーダル対応](../multimodal-output/design.md) — `image_generation` の producer adapter が検証済み成果物を渡した後の Discord 添付とレイアウトを所有する
 
 ## Goals / Non-Goals
 
@@ -37,11 +38,11 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 - 本 change での実装そのもの（status は `investigating`。各 server tool は採否確定後、release 単位でフォルダ分割して実装する）
 - `openrouter:web_search` / `openrouter:web_fetch` の定義（[web-search](../web-search/design.md)）
 - client tool calling ループ自体（[tool-calling-foundation](../tool-calling-foundation/design.md)）
-- server tool 結果の Discord 描画ロジックの確定（採用する server tool ごとに別途設計）
+- server tool 結果の Discord 描画ロジックの確定（画像とファイルの共通描画は [出力マルチモーダル対応](../multimodal-output/design.md)、その他の構造化結果は採用する server tool ごとに別途設計）
 
 **将来別 change 候補:**（採用が決まった server tool は release 単位で独立フォルダへ）
 
-- 画像生成 → 別 change `image-generation`（採用時）
+- 画像生成 → 別 change `image-generation`（採用時。API 付与、費用制御、wire 検証、producer adapter を所有し、Discord 描画は [出力マルチモーダル対応](../multimodal-output/design.md) を利用）
 - 合議（fusion）→ 別 change `model-fusion`（採用時。model-compare とは別物）
 - advisor / subagent → 別 change（採用時。下位/上位委譲の UX を別途設計）
 
@@ -92,7 +93,6 @@ tools: [
   - `image_generation`: 生成は 1 枚でも高コスト。`quality`/`size` などの parameters で **1 枚あたり**のコストが変わる（`output_compression` 等の正確なコスト依存は実 API で確認）。**実行回数を縛る parameters は無い**ため、回数は ON/OFF と付与戦略（上記 (b)）で縛る。モデル選択もコスト軸。
   - `fusion`: `analysis_models`（panel、1–8）の数 = panel 並列呼び出し数。さらに **judge 段（`analysis` 生成）の呼び出しが加わる**ため、1 起動あたりのコストは **panel + judge**。`analysis_models` は panel 数（per-call コスト）であって起動回数の上限ではない。OpenRouter 制約は「1 リクエストターンにつき 1 回」だが、**loop 全体（最大 `MAX_TURNS`=5 client ターン）では理論上ターンごとに 1 回起動され得る**ため、1 会話処理あたりの上限ではない。コストは「（panel 数 + judge）× 起動ターン数」で見積もる。
   - `advisor` / `subagent`: `max_tool_calls`（1–25）で **nested server tool** の実行回数上限を縛る。`parameters.model` 選択でコストが大きく変わる（top-level の会話モデルとは別）。
-- **foundation との用語ずれ（要解消）**: [tool-calling-foundation](../tool-calling-foundation/design.md) は caller 側のコスト制御 knob として「fusion/advisor/subagent の `max_tool_calls`」と一括りに記しているが、**fusion の parameters は `analysis_models`（panel 数）で `max_tool_calls` は research facts では未確認**。`max_tool_calls` が効くのは nested tools を持つ `advisor`/`subagent` のみ。本 change（4 ツールの正本）が `analysis_models` を採り、foundation 側の fusion 記述は実 API 確認後に是正する（Tasks/Open Questions 参照）。
 - **`stop_server_tools_when` の扱い（未確定）**: foundation は caller 側のコスト制御 knob として `parameters` のほかに `stop_server_tools_when` を挙げている。これが本 change の 4 ツールに適用できる共通制御なのか `web_search` 系固有なのかは research facts では未確証。**採用時に実 API で確認**し、適用可能なら ON/OFF と並ぶ共通制御として各ツールに加える（Tasks/Open Questions 参照）。
 
 **返り形の検証方針:**
@@ -110,7 +110,7 @@ tools: [
 - **DisQord 適用先候補**:
   - 会話内画像生成（chat 経路で server tool を有効化 → モデルが必要時に呼ぶ）。
   - `/image <prompt>` のような明示コマンド（採用時）。
-  - 既存のマルチモーダル**入力**（`attachmentParser` の `image_url` / `file` part）は入力側で、本ツールは**出力側**。返ってきた画像 URL を Discord に添付/埋め込みする描画は別途設計。
+  - 既存のマルチモーダル**入力**（`attachmentParser` の `image_url` / `file` part）は入力側で、本ツールは**出力側**。producer adapter が画像 URL を検証済み bytes へ変換し、[出力マルチモーダル対応](../multimodal-output/design.md) の描画基盤へ渡す。
 - **検証ポイント**: 返り画像が URL 参照かインライン data URL か。Discord 添付には再取得が要るか。`moderation` 既定挙動。
 
 ---
@@ -165,7 +165,7 @@ tools: [
 
 - 修正: `src/types/index.ts` — `ChatCompletionRequest.tools` の判別 union（`FunctionTool | ServerTool`）に server tool 要素型を追加（`{type:"openrouter:image_generation"|"openrouter:fusion"|"openrouter:advisor"|"openrouter:subagent", parameters?:<各ツールの ToolParameters>}`。パラメータは **`parameters` キー配下**。web-search の `ServerTool` と同一定義を共有し二重定義しない）。`StreamDelta` / `usage` への追加フィールド（実 API 検証後）
 - 修正: `src/services/chatService.ts` — 採用した server tool を設定 ON 時に結合 `tools` へ付与（[tool-calling-foundation](../tool-calling-foundation/design.md) の `serverTools` 経路）
-- 新規（採用時）: 各 server tool の結果を Discord に描画するロジック（image_generation の画像添付、fusion の analysis/responses 提示 など）
+- 新規（採用時）: `image_generation` の API 固有レスポンスを検証済み成果物へ変換する producer adapter。Discord 添付は [出力マルチモーダル対応](../multimodal-output/design.md) を利用し、fusion の analysis/responses など画像以外の構造化表示は各採用 change が所有する
 - 修正: 設定（`guildSettings` / `settingsService` / `/config`）— 課金が絡むため ON/OFF を guild 単位で（web-search と同方針）
 
 > 上記はあくまで採用時の見込み。`investigating` の本 change では**実装しない**。release 単位で切り出した際に各フォルダの design.md で確定させる。
@@ -178,12 +178,12 @@ tools: [
 - [ ] `advisor`/`subagent` の nested `tools` に function tool を渡したときの 400 を実 API で確認（docs 記載の裏取り）。あわせて nested `tools` に渡す server tool の allowlist（既定の curated subset・再帰 advisor/subagent の可否）を設計
 - [ ] `fusion` の「1 リクエストターン 1 回」制約・`analysis_models` 上限（1–8）・コスト増分を確認（multi-turn loop で各ターン起動され得る前提で、1 起動 = panel + judge で見積り）
 - [ ] invocation count（何回起動されるか）の制御責務を確定：`image_generation` は parameters に回数上限が無いため付与戦略（明示コマンド時のみ / 1 ターンのみ付与し再送時に外す）で縛る方針を採用フォルダで設計
-- [ ] foundation の caller 制御記述（「fusion/advisor/subagent の `max_tool_calls`」）を実 API 確認後に是正：fusion は `analysis_models`（panel 数）であり `max_tool_calls` は advisor/subagent 専用
+- [x] foundation の caller 制御記述を是正：fusion は `analysis_models`（panel 数）であり `max_tool_calls` は advisor/subagent 専用
 - [ ] `stop_server_tools_when` が本 4 ツールに適用できる共通制御か（`web_search` 系固有か）を実 API で確認し、適用可能なら ON/OFF・付与戦略と並ぶコスト制御に加える
 - [ ] `ChatCompletionRequest.tools` の判別 union（`FunctionTool | ServerTool`）と `ServerTool` 定義を [web-search](../web-search/design.md) / [tool-calling-foundation](../tool-calling-foundation/design.md) と統一（web-search の `ServerTool[]` typing との食い違いを解消）
 - [ ] 各 server tool のコスト体系（image_generation の `quality`/`size` 依存、fusion の panel 依存、advisor/subagent の `model` 依存）を確認し、`/config` で出す費用警告文言を準備
 - [ ] どの server tool を最初に release 単位で切り出すか決定（採用が決まったものを独立フォルダへ）
-- [ ] 採用分について：設定 ON/OFF（guild 単位）・`serverTools` への付与・結果描画・テストを各フォルダの design.md で設計
+- [ ] 採用分について：設定 ON/OFF（guild 単位）、`serverTools` への付与、API 固有レスポンスの正規化、結果描画との接続、テストを各フォルダの design.md で設計
 - [ ] `model-compare`/`web-search` への参照注記が最新であることを確認（fusion≠model-compare、web_fetch は web-search 側）
 - [ ] `docs/changes/server-tools/` 削除（採用分を別フォルダへ切り出し、本調査束を解消したとき。または release 完了時、git 履歴がアーカイブ）
 
@@ -195,7 +195,6 @@ tools: [
 - **モデル/プロバイダ依存**: server tool の対応・挙動はモデル/プロバイダで差が出うる。`fusion`/`advisor`/`subagent` が任意モデルで使えるか（web_search のような any model 動作か）は実 API で確認。
 - **invocation count の制御**: `MAX_*` も `parameters` の per-call knob（`analysis_models`/`quality` 等）も「何回起動されるか」は縛らない。`image_generation` のように回数上限 parameters が無いツールは、付与戦略（明示コマンド時のみ / 1 ターンのみ付与）か `stop_server_tools_when`（適用可なら）でしか縛れない。chat 経路で常時 ON にするツールと明示コマンド限定にするツールの線引きを採用時に決める。
 - **nested tools の allowlist**: `advisor`/`subagent` の `parameters.tools` は outer request とは別 allowlist。outer の `serverTools` を素通しすると再帰 advisor/subagent や高コスト tool まで許可しうる。既定 subset と再帰可否を採用フォルダで確定する。
-- **foundation との fusion 制御記述ずれ**: foundation は「fusion/advisor/subagent の `max_tool_calls`」と一括りにしているが、fusion の parameters は `analysis_models`。本 change を正本として foundation 側を是正する（実 API 確認後）。
 - **release 粒度**: 4 ツールを一括で出すか個別に出すかは調査後に決定。コスト/UX の確度が高いものから切り出す。
 - **`tools` 型の cross-doc 統一**: foundation の混在配列と [web-search](../web-search/design.md) の `ServerTool[]` typing が食い違う。`ChatCompletionRequest.tools` を `(FunctionTool | ServerTool)[]` の判別 union に統一する方針（上述）だが、3 change（本 change / web-search / foundation）の採用順で誰が `ServerTool` の正本を定義するかを実装時に確定する。
 - **`stop_server_tools_when` の適用範囲**: 本 4 ツールに効く共通コスト制御か `web_search` 系固有かが未確証。実 API で確認し、適用可能なら共通制御に加える。
