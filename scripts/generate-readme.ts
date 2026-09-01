@@ -302,10 +302,10 @@ function main(): void {
   readme = replaceMarkerSection(readme, "COMMANDS", generateCommandTable(commands));
   readme = replaceMarkerSection(readme, "ENV_VARS", generateEnvVarsTable(envVarDefinitions));
 
-  const claudeMdPath = resolve(rootDir, "CLAUDE.md");
-  let claudeMd = readFileSync(claudeMdPath, "utf-8");
-  claudeMd = replaceMarkerSection(
-    claudeMd,
+  const agentsMdPath = resolve(rootDir, "AGENTS.md");
+  let agentsMd = readFileSync(agentsMdPath, "utf-8");
+  agentsMd = replaceMarkerSection(
+    agentsMd,
     "DEFAULT_MODEL",
     generateDefaultModelLine(envVarDefinitions),
   );
@@ -321,11 +321,11 @@ function main(): void {
   // --- Phase 2: Write all files (only after all validation passed) ---
 
   writeFileSync(readmePath, readme);
-  writeFileSync(claudeMdPath, claudeMd);
+  writeFileSync(agentsMdPath, agentsMd);
   writeFileSync(resolve(rootDir, ".env.example"), envExampleContent);
   writeFileSync(progressPath, progress);
 
-  console.log("README.md, CLAUDE.md, .env.example, docs/progress.md updated.");
+  console.log("README.md, AGENTS.md, .env.example, docs/progress.md updated.");
 }
 
 // Only run when executed directly (not when imported for testing)

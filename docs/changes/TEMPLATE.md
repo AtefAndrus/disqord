@@ -54,7 +54,7 @@ summary: ""            # 一行の概要（任意）
 
 ### 設計メモ
 
-（複数サブ機能を束ねる場合は `---` で機能別小節に分割。大規模かつ共有コアありなら `design.<subfeature>.md` へ分割しこの design.md をインデックス化する。粒度方針は CLAUDE.md「docs/changes」を参照）
+（複数サブ機能を束ねる場合は `---` で機能別小節に分割。大規模かつ共有コアありなら `design.<subfeature>.md` へ分割しこの design.md をインデックス化する。粒度方針は AGENTS.md「docs/changes」を参照）
 
 ## Tasks
 
