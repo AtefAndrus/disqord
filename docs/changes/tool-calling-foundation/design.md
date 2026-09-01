@@ -19,7 +19,7 @@ DisQord は現状、OpenRouter に対して単発の chat completion を投げ�
 
 ## 依存 / 関連 change
 
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — tool 実行中の進捗表示・最終応答 stream は V2 の streaming updater を利用する。本基盤は updater をインタフェースとして受け取り、未実装期はスタブ（legacy embed）にフォールバックできるようにする
+- 連携: [chat-response-v2](../chat-response-v2/design.md) — 最終応答の text stream は V2 updater を利用する。本基盤は tool block hook を呼び、`ToolRenderPayload` を透過するが、tool 固有の進捗と結果描画は consumer change が実装する
 - 最初の利用者: [code-execution](../code-execution/design.md) — 既存設計にインラインで書かれていた tool ループを本基盤へ移管し、`execute_code` / `execute_code_with_network` を最初の登録ツールとする
 - 利用者: [discord-tool](../discord-tool/design.md)、[view-image-rehydration](../view-image-rehydration/design.md)
 - 関連: [web-search](../web-search/design.md) / [server-tools](../server-tools/design.md) — server tool は本基盤の外。ただし request 組立で client tool と server tool を同一 `tools` 配列に混在させる経路だけ共有する
@@ -146,7 +146,9 @@ export class ToolRegistry {
 }
 ```
 
-`ToolRenderPayload` は [chat-response-v2](../chat-response-v2/design.md) の updater が解釈できる形（Container 断片など）。本基盤はこれを透過的に updater へ渡すだけで、中身の組み立ては各 tool change の責務。描画（updater 呼び出し）が失敗しても、その call の `role:"tool"` 結果生成は完了させる。
+`ToolRenderPayload` は本基盤にとって不透明な値であり、本基盤は tool block hook へ透過するだけである。
+payload の型、組み立て、Discord 描画は各 consumer change が updater を拡張して所有する。
+hook 呼び出しが失敗しても、その call の `role:"tool"` 結果生成は完了させる。
 
 ### tool ループ（streaming マルチターン）
 
@@ -224,7 +226,7 @@ assistant ターンごとの状態機械にする:
 
 `tools` 配列には client tool（`{type:"function", function:{...}}`）と server tool（`{type:"openrouter:web_search", ...}`）を混在できる。`runToolLoop` は `serverTools`（web-search 等が付与）を引数で受け取り、`registry.buildTools(ctx)` と結合して送る。server tool は OpenRouter がサーバ側で実行し結果も自動で戻すため、`runToolLoop` の dispatch 対象には**ならない**（client の `function` tool だけ dispatch）。omit 判定は**結合後**の配列に対して行い、毎ターン結合済み schema を再送する。
 
-なお server tool は 1 リクエスト内で 0..N 回サーバ側実行されるため、`MAX_TURNS`/`MAX_TOOL_CALLS_PER_TURN` では**抑制できない**。server tool を有効化する呼び出し側（web-search 等）は、各 server tool の `parameters`（web_search の `max_results`/`max_total_results`、fusion/advisor/subagent の `max_tool_calls`、必要なら `stop_server_tools_when` 等）でコスト/回数を別途制限する責務を負う。
+なお server tool は 1 リクエスト内で 0..N 回サーバ側実行されるため、`MAX_TURNS`/`MAX_TOOL_CALLS_PER_TURN` では**抑制できない**。server tool を有効化する呼び出し側（web-search 等）は、各 server tool の `parameters`（web_search の `max_results`/`max_total_results`、fusion の `analysis_models`、advisor/subagent の `max_tool_calls`、image_generation の `model`/`quality`/`size`）と tool の付与戦略でコストおよび回数を別途制限する責務を負う。
 
 ### モデル対応検出
 
@@ -250,7 +252,6 @@ tool calling 対応は `GET /api/v1/models?supported_parameters=tools`（対応�
 - **`length` の注記文言**: tool_call 断片なしの `length` は「打ち切り注記付きで確定」（マトリクスで確定済み）。ユーザ向け注記の具体文言のみ運用調整。
 - **`tool_choice:"required"` の可用性**: parameters reference には記載があるが tool-calling guide / `ToolChoice` 型では未掲載。使うなら実 API + provider 差を検証。
 - **プロバイダ差**: OpenRouter は OpenAI 形状を各プロバイダ向けに変換するため、tool_choice の厳密さや並列挙動・finish_reason の出方に差が出うる。load-bearing な箇所は実装時に再確認。
-- **chat-response-v2 未完時の進捗表示**: updater をスタブ化（legacy embed）して先行実装できる構造にする。
 - **既存単発チャットとの等価性**: tool 未登録時に `runToolLoop` が現行の単発応答と完全に等価（余計な 1 ターンや遅延が出ない）であることをテストで担保する。
 
 ## 参照

@@ -1,6 +1,6 @@
 ---
 title: "コード実行（microsandbox 統合）"
-status: planned
+status: investigating
 priority: medium
 summary: "microsandbox による安全なコード実行（/run・LLM tool 統合）"
 ---
@@ -18,7 +18,7 @@ LLM tool call の protocol 部分（streaming delta 蓄積・`role:"tool"` 整�
 ## 依存 / 関連 change
 
 - 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — client tool calling 基盤（`IClientTool` / `ToolRegistry` / `runToolLoop()`）。本 change の 2 tool はここに登録する**最初の利用者**。streaming tool ループ・id 整合・暴走防止（`MAX_TURNS` / `MAX_TOOL_CALLS_PER_TURN`）・timeout/cancel の `AbortSignal` 配線・空 tool omit は **すべて foundation 側**にあり、本 change では再実装しない
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — tool 実行中の進捗（「コード実行中...」）と最終応答 stream は foundation 経由で V2 の streaming updater を利用。本 change は tool 結果の描画断片を `render`（foundation 契約では `ToolRenderPayload`、現状 updater が解釈する**不透明な payload**）として返す。**ただし本 change は `render` が attachment-capable かつ mention-safe（V2 components + 添付ファイル payload + flags + `allowedMentions`、下記「Discord 出力整形ルール」の `ToolRenderPayloadShape`）であることを upstream 契約への要件として surface する**（生成画像/ファイルを運ぶため必須。foundation/chat-response-v2 がこの shape を採用しているか Phase C で確認・未対応なら反映依頼。Risk「`tool-calling-foundation` への依存」参照）
+- 連携: [chat-response-v2](../chat-response-v2/design.md) — tool のテキスト stream は foundation 経由で V2 updater を利用する。foundation は `ToolRenderPayload` を透過するが、現在の updater の tool block hook は描画しないため、本 change が attachment-capable かつ mention-safe な結果描画を Phase C で追加する
 - 関連: [conversation-context](../conversation-context/design.md) — 将来の per-conversation persistent sandbox は同 change の `session_id` をキーにできる（**sandbox の所有・ライフサイクルは本 change 側**。詳細は Non-Goals の「将来別 change 候補」参照）
 
 ## Goals / Non-Goals
@@ -31,7 +31,7 @@ LLM tool call の protocol 部分（streaming delta 蓄積・`role:"tool"` 整�
 - stdout / stderr / exitCode / 生成ファイル / 生成画像 を Discord Components V2 で整形して返す。長文 stdout は `File` 添付、ビットマップ画像 (PNG/JPEG) は `MediaGallery`、SVG / その他は `File`
 - Guild 単位で機能の ON/OFF を切替可能（`code_execution_enabled` / `code_execution_network_enabled` 2 つのフラグ）
 - 実装時のテスト用に `/run` スラッシュコマンドを `NODE_ENV !== "production"` 限定で提供（dev only、リリース時は未登録）
-- LLM tool 経路の streaming（tool_call delta 蓄積・「コード実行中...」進捗・tool 結果受領後の最終応答 stream）は foundation の `runToolLoop()` に委ね、本 change は tool 結果の描画断片（V2 Container）を供給する
+- LLM tool 経路の streaming protocol（tool_call delta 蓄積、hook 呼び出し、tool 結果受領後の最終応答 stream）は foundation の `runToolLoop()` に委ね、本 change は「コード実行中...」の進捗と tool 結果を V2 updater の hook に描画する
 
 **Non-Goals:**
 
@@ -42,13 +42,13 @@ LLM tool call の protocol 部分（streaming delta 蓄積・`role:"tool"` 整�
 - LLM tool call 時のユーザ事前承認ボタン（per-execution HITL approval）。封じ込めは microVM sandbox が担うため、承認ゲートは封じ込めの代替にならず不要（理由は Decisions「Tool call の承認モデル」参照。default-deny egress + per-guild 2 段階 toggle が承認境界）
 - 永続ボリューム / 会話跨ぎのファイル共有
 - `/run` の production 公開（dev only）
-- 既存の `chat-response-v2` change（別途進行）との V2 builder 統合最適化 — 両者で V2 component を組むが、code-execution の output と chat-response の text stream は構造が大きく異なるため、共通 primitive は最小限（`buildErrorContainer` 等）に留め、それぞれ独立の builder を持つ
+- 実装済みの `chat-response-v2` builder との統合最適化。両者で V2 component を組むが、code-execution の output と chat-response の text stream は構造が大きく異なるため、共通 primitive は最小限（`buildErrorContainer` 等）に留め、それぞれ独立の builder を持つ
 
 **将来別 change 候補:**
 
 - **per-conversation persistent sandbox**（会話文脈下で変数・import・生成ファイルが持続する long-lived sandbox）→ 別 change。**所有・ライフサイクルは本 change（code-execution）系**で、[conversation-context](../conversation-context/design.md) の `session_id` をキーに sandbox を引き当てる。`sandbox_sessions` テーブル・TTL sweeper・LRU 強制停止・起動時孤児検出は **この将来 change で初めて必要**になる（v1 の per-call lifecycle では構造的に不要）。conversation-context は session_id を提供するだけで sandbox を所有しない
 - モデル選定 UI の tool calling 絞り込み（`GET /api/v1/models?supported_parameters=tools` で `/model` choices を動的フィルタ）→ 別 change `model-selection-tool-filter`
-- LLM チャット返信の Components V2 化 + 進捗表示インフラ → 既存 `chat-response-v2` で対応
+- LLM チャット返信の Components V2 化と text stream 描画基盤 → 既存 `chat-response-v2` で対応
 - 設定 SSOT 化（envVars.ts を SSOT 化 + CLAUDE.md AUTO 生成）→ 別 change `default-model-ssot`
 - Re-run button / Regenerate UI → 別 change（ephemeral in-memory store (TTL 短め) + per-user opt-in。コード本体保存がプライバシー方針と矛盾するため v1 不可）
 - L2/L3 boost level に応じた `SANDBOX_FILE_MAX_BYTES` 自動上書き → v1.1
@@ -93,9 +93,9 @@ LLM tool call の protocol 部分（streaming delta 蓄積・`role:"tool"` 整�
 | 言語選択 | modal 内 `StringSelect` の choices で `python` / `node` / `bash` 固定 | v1 は限定。tool 側 `language` enum と同一定義を import |
 | Re-run ボタン | **v1 では不採用**。再実行したい場合は LLM に再依頼または `/run` を再度叩く | Re-run には `last_code` を保存する仕組みが必要だが、コード本体はログしない方針 (プライバシー + token 削減) と矛盾。「コードを ephemeral DB / in-memory map に保存」は追加実装でリスクも増えるため v1 では諦める |
 | DB スキーマ | `guild_settings.code_execution_enabled INTEGER DEFAULT 0` + `code_execution_network_enabled INTEGER DEFAULT 0` のみ | per-call sandbox により `sandbox_sessions` 不要 |
-| Streaming と tool calling の連携 | **foundation の `runToolLoop()` が担う**（delta 蓄積・tool_call 完成判定・マルチターン）。本 change は **完了時の `render`（最終 `ExecResult` を整形した V2 Container）を `handler` の戻りで返すだけ** | `runToolLoop()` の updater が begin（「コード実行中...」の汎用 progress、実行前なので `ExecResult` なし）/ end フックを呼ぶ。begin の汎用 progress 描画は **foundation/updater 側**が担い、本 change はせいぜい tool 表示名などの静的メタを渡す。`codeExecutionService.formatToolBlock(result)` は `ExecResult` を要するので **完了後の `render` 生成にのみ**使う（begin には使えない）。streaming protocol そのものは foundation の責務 |
+| Streaming と tool calling の連携 | foundation の `runToolLoop()` が delta 蓄積、tool_call 完成判定、マルチターン、begin/end hook 呼び出しを担い、本 change が V2 updater の hook に進捗と結果を描画する | foundation は `beginToolBlock(name)` と `endToolBlock(name, render)` を呼んで payload を透過するだけで、tool 固有の表示内容を所有しない。本 change は begin で「コード実行中...」を表示し、end で `ExecResult` を整形した V2 Container と files を描画する |
 | Reasoning モデルでの tool calling | サポート対象として明示しない（warning なし。protocol 整合は foundation 任せ） | DeepSeek V4 / GPT-5 / Claude Haiku 4.5 等は問題ないと判断。問題が出たらモデル選定 UI 側で対処 |
-| PATCH rate limit (output メッセージ更新) | **foundation + chat-response-v2 側で対応**（2 秒 debounce + 429 スキップ）。本 change では別途実装しない | tool 実行中の進捗 edit は updater 経由で発生し、Discord channel-level PATCH rate limit (5/5s) との衝突回避は updater 側の責務 |
+| PATCH rate limit (output メッセージ更新) | `chat-response-v2` の updater が持つ 2 秒 debounce と 429 スキップを進捗および結果描画にも適用する | 本 change は hook の表示内容を実装するが、Discord edit の頻度制御は updater の共通 reconciliation を利用する |
 
 ## Design
 
@@ -585,7 +585,8 @@ streaming マルチターンループ（delta 蓄積・`accumToolCalls` / `norma
      - `render` = `codeExecutionService.formatToolBlock(execResult)`（**attachment-capable** payload: V2 components + 添付ファイル payload + flags。binary file bytes はここで Discord upload に渡す）。foundation 契約では `render?` は任意だが、**本 tool は正常完了時は必ず `render` を返す**（より強い保証）。abort/foundation-timeout 経路は上記のとおり throw するので、この handler からは結果も `render` も返らない。
 2. **`validate(args)`** — `language` enum / `code` 長さ / `timeout_sec` 範囲を runtime 検証。不適合は foundation が tool を実行せず error 結果を返す。
 
-foundation の流れ（参考。本 change は関与しない）: `runToolLoop()` が delta から `tool_calls` を蓄積 → `finish_reason:"tool_calls"` で正規化 → assistant message を先に push → 各 client call を sequential dispatch（`isEnabled` 再評価 → `validate` → `handler` を `signal` 付きで呼ぶ → `role:"tool"` を id 整合で push → updater に `render` 反映）→ 次ターン。begin/end の progress 表示（「コード実行中...」）も foundation の updater フックで行われ、本 change はその描画内容（`render`）を供給するだけ。
+foundation の流れ（参考）: `runToolLoop()` が delta から `tool_calls` を蓄積 → `finish_reason:"tool_calls"` で正規化 → assistant message を先に push → 各 client call を sequential dispatch（`isEnabled` 再評価 → `validate` → `handler` を `signal` 付きで呼ぶ → `role:"tool"` を id 整合で push → updater の begin/end hook を呼ぶ）→ 次ターン。
+本 change は V2 updater を拡張し、begin hook で「コード実行中...」を描画し、end hook で handler が返した `render` を描画する。
 
 `toolResultForLlm()` 定義 (LLM context 圧迫対策で head+tail clip。本 change が所有する serialize ロジック):
 
@@ -731,9 +732,9 @@ function clipHeadTailBytes(s: string, cap: number): string {
 - [ ] `handler(args, ctx, signal, meta)` 実装: `sandboxService.execute({ ..., signal })` 呼出 + 正常完了時のみ `{ llmResult: JSON.stringify(toolResultForLlm(...)), render: formatToolBlock(...) }` を返す（`llmResult` は **文字列**。file bytes は LLM context から除外し render の Discord upload にのみ使う）
 - [ ] **foundation `signal` abort 時のセマンティクス**: `signal.aborted`（foundation の request cancel / 180s per-tool wall timeout の双方）で `ExecHandle.kill()` → `sandbox.kill()` を発火し、cleanup 後に handler は正常結果を返さず generic な abort を throw する（**cancel/timeout の分類は foundation が signal 状態で行うので error 型は問わない**）。**args の `timeout_sec`（sandbox 内タイムアウト）は別物**で、これは reject せず `ExecResult.systemError.kind: "timeout"` を載せた正常な `ExecResult` を返し、`{ llmResult, render }` 経路に流す
 - [ ] 2 tool を本 change から export し、合成ルート（`src/index.ts` DI）で foundation の `ToolRegistry.register()` に登録（foundation 所有ファイルは編集しない）
-- [ ] **render payload passthrough の契約検証（Phase C の blocking precondition）**: 上流 `ToolRenderPayload` 型 + updater 実装が `ToolRenderPayloadShape`（components + files + flags + allowedMentions）を **attachment-capable + mention-safe に passthrough できる**ことを Phase C 着手前に確認。**満たす updater（temporary stub でも可、ただし `files`/`flags`/`allowedMentions` を運べること）が無い限り Phase C（LLM tool 経路）は着手しない** — foundation/chat-response-v2 が許す「legacy embed スタブ fallback」は**進捗テキスト（begin フック）専用で本 change の最終 render には不可**（Open Questions の `chat-response-v2` 依存項参照）。`handler.render` → foundation updater → Discord send/edit の経路で **(a) `files` の attachment upload が落ちないこと**と **(b) `allowedMentions: { parse: [] }` が適用されること**を検証する test を追加（updater は mock 可）。型が未対応なら上流 doc 側に反映依頼し、対応が入るまで Phase C を保留（本 change は上流所有ファイルを直接編集しない。`/run` 経路は updater 非依存なので先行可）
+- [ ] **render payload passthrough の契約拡張（Phase C の blocking precondition）**: 現在の `ToolRenderPayload` は `unknown` で、V2 updater の `endToolBlock()` は render を描画しない。Phase C の前に `ToolRenderPayloadShape`（components + files + flags + allowedMentions）を attachment-capable かつ mention-safe に passthrough する実装と test を追加する。`handler.render` から Discord send/edit まで `files` が保持され、`allowedMentions: { parse: [] }` が適用されることを検証する。`/run` 経路は updater 非依存なので先行できる
 - [ ] foundation `IClientTool.timeoutMs` の dispatcher clamp 上限 C を読み、`actualToolTimeoutMs = min(180_000, C)`（tool の `timeoutMs` は 180_000 ハードコードなので C>180s でも実 wall は 180s 頭打ち）と `OVERHEAD_MS = QUEUE_WAIT_MS + SANDBOX_BOOT_DEADLINE_MS + SANDBOX_COLLECT_DEADLINE_MS + SANDBOX_TEARDOWN_DEADLINE_MS`（env 由来、既定 50_000）と `SAFETY_MARGIN_MS=10_000` から `effectiveTimeoutSecMax = floor((actualToolTimeoutMs − OVERHEAD_MS − SAFETY_MARGIN_MS) / 1000)` を導出（既定 env + `C ≥ 180s` なら 120）。`< 1` なら fail closed。さらに `defaultTimeoutSec = min(30, effectiveTimeoutSecMax)` を導出。この 2 値を schema `timeout_sec.maximum`/`default` / `validate` / `/run` modal / docs で共有（固定 120 / 30 をハードコードしない）
-- [ ] `tools` / `tool_choice` 送出・streaming tool_call パース・`runToolLoop()` の `MAX_TURNS` / `MAX_TOOL_CALLS_PER_TURN`・「コード実行中...」progress フックは **foundation 側の Task**（本 change では実装しない）。本 change は `render` 断片の供給と `validate` / `isEnabled` の正しさだけを担保
+- [ ] `tools` / `tool_choice` 送出、streaming tool_call パース、`runToolLoop()` の `MAX_TURNS` / `MAX_TOOL_CALLS_PER_TURN`、progress hook の呼び出しは foundation の実装を利用する。本 change は hook 内の「コード実行中...」表示、`render` 描画、`validate`、`isEnabled` を実装する
 
 ### Phase D: 観測 + 仕上げ
 
@@ -752,7 +753,7 @@ function clipHeadTailBytes(s: string, cap: number): string {
 - **モデル側の tool calling 安定性**: DeepSeek V4 Flash:free / Gemini Flash 系 / Claude Haiku 4.5 で問題が出たケースを観測したら、モデル選定 UI 側の絞り込み (別 spec) を優先する。protocol 整合の安定性そのものは foundation 側の懸念。
 - **Components V2 message が sticky な点**: 一度 V2 として送信した message は legacy に戻せない。本機能の出力は最初から V2 で組むため問題にならない。
 - **PATCH rate limit (chat 中の進捗更新)**: tool 実行中の「コード実行中...」表示で chat message を edit する経路は **foundation + `chat-response-v2`** の 2 秒 debounce + 429 スキップポリシーに乗る (本 spec で別途実装しない)。
-- **`tool-calling-foundation` への依存**: 本 change の Phase C は foundation の `runToolLoop()` / `ToolRegistry` / `IClientTool` が前提。foundation 未完なら Phase 0/A/B（sandbox 基盤 + 出力整形 + `/run` dev UI）は先行できるが、LLM tool 経路（Phase C）は foundation 完了まで着手できない。逆に foundation 側は本 change を「最初の登録ツール」として参照する相互依存があるため、両者は同一バッチで起票・整合する。**3 つの契約要件を foundation/updater 側に surface する**: (1) `IClientTool.timeoutMs` の dispatcher clamp 上限が **≥ 180_000** であり、**かつその clamp 上限値 C を consumer が読めること**。foundation 設計は現状「`timeoutMs` を上下限で**クランプ**する」とだけ述べ clamp 上限の**名前付き定数も取得 API も定義していない**ので、本 change は foundation 側に **`CLIENT_TOOL_TIMEOUT_MAX_MS`（または同等の export/config 値）を定義・export すること**を依頼する（Phase C はそれを import して `actualToolTimeoutMs = min(180_000, C)` を計算する）。**この値が foundation から取得できない/未定義の場合の保守的フォールバック**: 本 change は C を foundation の**ドキュメント化された既定 clamp 上限**として扱い、それも不明なら `effectiveTimeoutSecMax` を導出できないため **fail-closed**（feature 無効化）にして、根拠のない 180s 想定で正規実行を wall timeout に倒すリスクを避ける。さもなくば本 change は実 clamp 値 C から effective `timeout_sec` 上限を `effectiveTimeoutSecMax = floor((actualToolTimeoutMs − OVERHEAD_MS − SAFETY_MARGIN_MS)/1000)`〔`actualToolTimeoutMs = min(180_000, C)`、= `actualToolTimeoutMs − 60s` 相当、OVERHEAD_MS は env デッドラインから算出〕に下げて budget 不変条件を維持。Decisions「wall timeout budget 不変条件」参照）、(2) `ToolRenderPayload` が **attachment-capable**（`components` + `files` + `flags` を運べる、正確な shape は Design「Discord 出力整形ルール」の `ToolRenderPayloadShape` 参照）であること（生成画像/ファイルの Discord upload に必須）、(3) **mention safety**: render 由来の send/edit に updater が `allowedMentions: { parse: [] }` を必ず適用すること（payload に載せて honor するか、updater が tool-block 描画時に常時 inject するか、いずれか。LLM tool 経路では実 send を行うのが updater であり、本 change は直接 `allowedMentions` を付けられないため）。**(2)(3) を満たさない狭い updater 型（components+flags のみ等）では本機能の binary 出力・mention 安全が崩れる**ので、Phase C で上流 doc 側の payload 型がこの shape を採用しているか確認し、未対応なら本 change の着手前に上流へ反映依頼する（本 change は上流所有ファイルを直接編集しない）。
-- **`chat-response-v2` change との依存関係**: tool 進捗・最終応答 stream は foundation 経由で `chat-response-v2` の V2 streaming updater を利用する。`chat-response-v2` が未完でも foundation は updater をスタブ化して先行できるが、**本 change の `render` は attachment-capable + mention-safe（`ToolRenderPayloadShape`: components + files + flags + allowedMentions）を要求する**ため、**legacy text/embed のみの updater スタブでは不十分**（生成画像/ファイルを運べず `allowedMentions: { parse: [] }` も保証できない）。したがって Phase C（LLM tool 経路）の前提は「最低限 files/flags/allowedMentions を運べる updater（temporary stub でも可）」であり、純粋な legacy embed フォールバックには乗らない。**`chat-response-v2` 側で「updater スタブ + legacy 描画フォールバックで code-execution を先行可」と読める記述があれば、それは進捗テキスト（「コード実行中...」の begin フック）に限った話**で、本 change の**最終 tool render（`formatToolBlock()` の `ToolRenderPayloadShape`）には適用されない**点を両 doc 間で揃える（生成画像/ファイルの `files` upload・`attachment://` 参照・`IsComponentsV2`・`allowedMentions` を legacy text/embed は運べないため）。`/run` 経路は updater 非依存なのでこの制約を受けない（先行可能）。
+- **`tool-calling-foundation` への依存**: `runToolLoop()`、`ToolRegistry`、`IClientTool` は実装済みである。ただし dispatcher の `MAX_TOOL_TIMEOUT_MS` は 120 秒で、code-execution が要求する 180 秒より短い。Phase C の前に foundation の上限を広げるか、sandbox 実行時間と cleanup overhead を 120 秒内へ収めるかを決める。`ToolRenderPayload` と updater の attachment-capable かつ mention-safe な拡張も Phase C の前提である
+- **`chat-response-v2` change との依存関係**: 最終応答の text stream は実装済みの V2 updater を利用する。現在の `beginToolBlock()` と `endToolBlock()` は描画しないため、本 change が begin hook の進捗表示と end hook の files、flags、allowedMentions を含む結果描画を Phase C で追加する。`/run` 経路は updater 非依存なので先行できる
 - **`code_execution_network_enabled` の悪用リスク**: 二段階 toggle で対応するが、サーバ管理者が ON にした後の悪用 (LLM が悪意ある npm package をインストールする等) のリスクは構造的に残る。allow-list を厳しめに保つ + 監査ログ + 必要ならサーバ管理者向けに「最近実行された install コマンド」の表示機能を v1.1 で検討。
 - **`_with_network` のデータ持ち出し境界（exfiltration）**: microVM は host 副作用を封じ込めるが、egress を許すと allow-list ホストや **DNS が prompt/コード由来データの exfil チャネル**になりうる（DNS tunneling 含む）。Phase A で network policy の DNS スコープ（任意ドメイン解決を許さない／resolver を絞れるか）を確認し、許せないなら残余リスクとして admin に明示する。allow-list は egress 宛先を絞るが「何を送るか」は止められない点を運用前提とする。
