@@ -187,7 +187,7 @@ The skill handles: version bump, CHANGELOG.md generation, deleting the changes f
 
 - Release notes are delivered to Discord users via webhook.
 - Only include user-facing changes (new features, bug fixes, UX improvements).
-- Do NOT include internal technical changes (test fixes, refactoring, code cleanup).
+- Do not include test changes, refactoring, documentation, dependency updates, or other internal technical changes.
 - Write the notes in Japanese with detailed feature descriptions (see existing releases for style reference).
 - End with: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v{current}`
 
@@ -208,7 +208,7 @@ The skill handles: version bump, CHANGELOG.md generation, deleting the changes f
 
 - [OpenRouter API Documentation](https://openrouter.ai/docs)
 - [OpenRouter TypeScript SDK](https://www.npmjs.com/package/@openrouter/sdk)
-- [discord.js v14 Documentation](https://discord.js.org/docs/packages/discord.js/14.16.3)
+- [discord.js v14 Documentation](https://discord.js.org/docs/packages/discord.js/main)
 - [discord.js Guide](https://discordjs.guide/)
 
 ### Infrastructure

@@ -21,9 +21,15 @@ Edit `package.json` to set `"version": "<version>"`.
 
 Run `bun run changelog` to regenerate CHANGELOG.md from git history.
 
-## Step 3: Update progress.md
+## Step 3: Prune released change docs
 
-Read `docs/progress.md` and remove any backlog items that were completed in this release.
+Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`.
+`docs/progress.md` is generated from the remaining folders' frontmatter, so do not edit it by hand.
+Step 5 commits with `LEFTHOOK=0`, which skips the pre-commit generator, so regenerate it explicitly:
+
+```bash
+bun run generate:readme
+```
 
 ## Step 4: Markdown Lint
 
@@ -33,11 +39,11 @@ Run `bun run format:md` to auto-fix any markdown formatting issues.
 
 リリースコミットは main 上で作る（この手順に限り意図的）。pre-commit のブランチガードが
 main への直コミットを止めるので `LEFTHOOK=0` で明示的にバイパスする。
-対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` のみでソースを含まないため、
+対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` と `docs/changes/` 配下の削除のみでソースを含まないため、
 lint / typecheck / test をこのコミットで走らせないことによるリスクは無い。
 
 ```bash
-git add package.json CHANGELOG.md docs/progress.md
+git add package.json CHANGELOG.md docs/progress.md docs/changes
 LEFTHOOK=0 git commit -m "[release] bump version to v<version>"
 git tag v<version>
 git push && git push --tags
