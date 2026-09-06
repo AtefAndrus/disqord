@@ -26,9 +26,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.11",
+    "@biomejs/biome": "2.5.12",
     "@skyra/discord-components-core": "4.0.2",
-    "@types/node": "26.4.0",
+    "@types/node": "26.4.1",
     "bun-types": "1.4.0",
     "lefthook": "2.1.12",
     "markdownlint-cli2": "0.23.2",
