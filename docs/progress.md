@@ -29,6 +29,7 @@
 | [OpenRouter API 整合監査](changes/openrouter-api-audit/design.md) | 中 | planned | 実装済み OpenRouter 連携を現行 API へ整合（deprecated な usage:{include} 撤去ほか） |
 | [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | OpenRouter の reasoning / reasoning_details を安全に受け取り、設定に応じて Discord へ表示 |
 | [GitHub Release 通知機能の削除](changes/release-notification-removal/design.md) | 中 | in-progress | Discord への GitHub Release 通知とそのための Webhook、設定、永続化項目をアプリケーションから削除 |
+| [リリース手順の簡素化](changes/release-workflow-simplification/design.md) | 中 | in-progress | GitHub 自動生成ノートと対象バージョン付き CHANGELOG によるリリース |
 | [Renovate 移行](changes/renovate-migration/design.md) | 中 | in-progress | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |

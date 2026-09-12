@@ -1,6 +1,6 @@
 ---
 name: release
-description: Run the DisQord release process. Use when cutting a new version (e.g. `/release 1.5.0`) — bumps the version, regenerates CHANGELOG.md, prunes released change docs, commits, tags, pushes, and publishes a GitHub release with hand-crafted Japanese notes.
+description: Run the DisQord release process. Use when cutting a new version (e.g. `/release 1.5.0`) — bumps the version, generates a versioned CHANGELOG.md, prunes released change docs, commits, tags, pushes, and publishes a GitHub release with automatically generated notes.
 ---
 
 # Release Workflow
@@ -10,8 +10,8 @@ Create a new release for DisQord version v<version>.
 ## Pre-flight Checks
 
 1. Confirm the working tree is clean: `git status`
-2. Confirm all tests pass: `bun test`
-3. Determine the previous version tag: `git describe --tags --abbrev=0`
+2. Confirm lint passes: `bun run lint`
+3. Confirm typecheck and the test suite pass: `bun run test`
 
 ## Step 1: Update package.json
 
@@ -19,7 +19,13 @@ Edit `package.json` to set `"version": "<version>"`.
 
 ## Step 2: Update CHANGELOG.md
 
-Run `bun run changelog` to regenerate CHANGELOG.md from git history.
+Generate CHANGELOG.md before creating the tag, and assign the unreleased commits to the target version explicitly:
+
+```bash
+git-cliff --tag v<version> --output CHANGELOG.md
+```
+
+Confirm the first release heading is `## [<version>]` rather than `## [Unreleased]`.
 
 ## Step 3: Prune released change docs
 
@@ -31,16 +37,21 @@ Step 5 commits with `LEFTHOOK=0`, which skips the pre-commit generator, so regen
 bun run generate:readme
 ```
 
-## Step 4: Markdown Lint
+## Step 4: Format and Validate Markdown
 
-Run `bun run format:md` to auto-fix any markdown formatting issues.
+Format Markdown, then confirm no Markdown lint errors remain:
+
+```bash
+bun run format:md
+bun run lint:md
+```
 
 ## Step 5: Commit and Tag
 
-リリースコミットは main 上で作る（この手順に限り意図的）。pre-commit のブランチガードが
-main への直コミットを止めるので `LEFTHOOK=0` で明示的にバイパスする。
-対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` と `docs/changes/` 配下の削除のみでソースを含まないため、
-lint / typecheck / test をこのコミットで走らせないことによるリスクは無い。
+リリースコミットは main 上で作る（この手順に限り意図的）。
+pre-commit のブランチガードが main への直コミットを止めるので `LEFTHOOK=0` で明示的にバイパスする。
+対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` と `docs/changes/` 配下の削除に限定する。
+lint / typecheck / test は pre-flight で完了しているため、リリースコミットでは再実行しない。
 
 ```bash
 git add package.json CHANGELOG.md docs/progress.md docs/changes
@@ -51,25 +62,13 @@ git push && git push --tags
 
 ## Step 6: Create GitHub Release
 
-Write release notes following these rules:
-
-1. **Read the diff** to understand all changes since the previous tag:
-   - `git log --oneline $(git describe --tags --abbrev=0 HEAD~1)..HEAD`
-   - `git diff $(git describe --tags --abbrev=0 HEAD~1)..HEAD -- src/`
-2. **Read existing releases** for style reference:
-   - `gh release list --limit 3` then `gh release view <tag>` for recent examples
-3. **Write notes in Japanese** with detailed, user-friendly descriptions:
-   - Group by feature area with headers (e.g., `## UX改善`, `## 新機能`, `## バグ修正`)
-   - Explain each change from the user's perspective, not the developer's
-   - Include command syntax examples where relevant (e.g., `/config auto-reply add <channel>`)
-   - Only include user-facing changes: new features, bug fixes, UX improvements
-   - Exclude: test changes, refactoring, documentation, dependency updates, internal technical changes
-4. **End with**: `**Full Changelog**: https://github.com/AtefAndrus/disqord/compare/v{previous}...v<version>`
-5. **Create the release**:
+Create the GitHub Release from the pushed tag and let GitHub generate its notes:
 
 ```bash
-gh release create v<version> --title "v<version>" --notes "..."
+gh release create v<version> --title "v<version>" --generate-notes --verify-tag
 ```
+
+`--verify-tag` must remain enabled so the command fails instead of creating a tag from another revision.
 
 ## Step 7: Verify
 
