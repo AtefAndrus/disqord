@@ -1,6 +1,6 @@
 ---
 title: "GitHub Release 通知機能の削除"
-status: in-progress
+status: implemented
 priority: medium
 summary: "Discord への GitHub Release 通知とそのための Webhook、設定、永続化項目をアプリケーションから削除"
 ---

@@ -1,6 +1,6 @@
 ---
 title: "リリース手順の簡素化"
-status: in-progress
+status: implemented
 priority: medium
 summary: "GitHub 自動生成ノートと対象バージョン付き CHANGELOG によるリリース"
 ---
