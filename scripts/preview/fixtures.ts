@@ -43,7 +43,6 @@ const settings: GuildSettings = {
   guildId: "100000000000000000",
   defaultModel: DEMO_MODEL,
   freeModelsOnly: true,
-  releaseChannelId: "200000000000000000",
   showLlmDetails: false,
   autoReplyChannels: ["300000000000000000"],
   createdAt: new Date().toISOString(),

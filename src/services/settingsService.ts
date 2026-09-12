@@ -5,10 +5,8 @@ export interface ISettingsService {
   getGuildSettings(guildId: string): Promise<GuildSettings>;
   setGuildModel(guildId: string, model: string): Promise<GuildSettings>;
   setFreeModelsOnly(guildId: string, freeModelsOnly: boolean): Promise<GuildSettings>;
-  setReleaseChannel(guildId: string, channelId: string | null): Promise<GuildSettings>;
   setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void>;
   toggleShowLlmDetails(guildId: string): Promise<boolean>;
-  getGuildsWithReleaseChannel(): Promise<GuildSettings[]>;
   addAutoReplyChannel(guildId: string, channelId: string): Promise<void>;
   removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
 }
@@ -29,7 +27,6 @@ export class SettingsService implements ISettingsService {
       guildId,
       defaultModel: this.defaultModel,
       freeModelsOnly: false,
-      releaseChannelId: null,
       showLlmDetails: true,
       autoReplyChannels: [],
       createdAt: new Date().toISOString(),
@@ -58,15 +55,6 @@ export class SettingsService implements ISettingsService {
     });
   }
 
-  async setReleaseChannel(guildId: string, channelId: string | null): Promise<GuildSettings> {
-    const existing = await this.getGuildSettings(guildId);
-    return this.repo.upsert(guildId, {
-      ...existing,
-      releaseChannelId: channelId,
-      updatedAt: new Date().toISOString(),
-    });
-  }
-
   async setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void> {
     await this.repo.updateShowLlmDetails(guildId, showLlmDetails);
   }
@@ -76,10 +64,6 @@ export class SettingsService implements ISettingsService {
     const newValue = !settings.showLlmDetails;
     await this.repo.updateShowLlmDetails(guildId, newValue);
     return newValue;
-  }
-
-  async getGuildsWithReleaseChannel(): Promise<GuildSettings[]> {
-    return this.repo.findAllWithReleaseChannel();
   }
 
   async addAutoReplyChannel(guildId: string, channelId: string): Promise<void> {

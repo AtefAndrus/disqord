@@ -3,7 +3,7 @@
 Discord bot that answers in a channel by relaying the conversation to an LLM through OpenRouter.
 
 Read [docs/progress.md](docs/progress.md) first for the active backlog.
-The command list and environment variables are in [README.md](README.md), infrastructure steps in [docs/infrastructure-setup.md](docs/infrastructure-setup.md), and per-feature designs in `docs/changes/<name>/design.md`.
+The command list and environment variables are in [README.md](README.md), management API operations in [docs/admin-api.md](docs/admin-api.md), and per-feature designs in `docs/changes/<name>/design.md`.
 
 ## Commands
 
@@ -60,7 +60,6 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 
 Run the `/release` skill with the target version, for example `/release 1.5.0`.
 It owns the whole procedure, including the one intentional `LEFTHOOK=0` commit on `main` and the release-note rules.
-Release notes reach Discord users through a webhook, so they are written in Japanese and cover user-facing changes only.
 
 ## Gotchas
 

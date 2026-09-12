@@ -44,7 +44,6 @@ Discord が 2025-04 にリリースした **Components V2** (`IS_COMPONENTS_V2` 
 **Non-Goals:**
 
 - `/help` `/status` `/config` `/model` 等 slash command 系の V2 化（embed のままで十分、利得なし）
-- `releaseNotificationService` の V2 化（リリースノートは embed が読みやすい、別途検討）
 - 編集後の rendering を legacy 互換に戻す機能（V2 sticky 仕様により不可、戻したい場合は新規送信）
 - showLlmDetails の per-response toggle 化（current は per-guild config、本 spec で変えない）
 - 古い Discord client での見た目最適化（V2 GA、Discord 側でフォールバックされる）
@@ -72,7 +71,7 @@ Discord が 2025-04 にリリースした **Components V2** (`IS_COMPONENTS_V2` 
 | エラー表示 | `Container { accent_color: red, TextDisplay(エラー本文) }` | `createErrorEmbed` の役割を V2 で再現 |
 | 停止時表示 | 最終 message から Section を削除、代わりに `Separator + TextDisplay("🛑 Stopped \| xx.xs \| Tokens: ...")` を末尾配置 | 上記 Metadata footer と同じ理由で Section は外す |
 | Mention safety | **全 `channel.send` / `message.edit` / `message.reply` 経路で `allowedMentions: { parse: [] }` を強制**。`message.reply()` 経路では追加で `repliedUser: false` を併用 (元投稿者の意図しない ping を防ぐ、現状の messageCreate.ts:92 と同じ) | TextDisplay は legacy embed.description と違い content と同じ ping 挙動。送信ヘルパに必ず allowedMentions を含めて、edit 経路で漏れないよう builder の型シグネチャ側で強制する |
-| `embedBuilder.ts` の扱い | chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages` / `splitTextIntoChunks`) を削除し、文字数と UTF-8 バイト数に対応する `splitTextByCharsAndBytes` を `chatContainerBuilder.ts` に置く。slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す | slash command の embed UI は本 spec では変えない。`statusMessage.ts` / `handlers.ts` / `releaseNotificationService.ts` から引き続き利用 |
+| `embedBuilder.ts` の扱い | chat 用関数 (`createStreamingEmbed` / `splitTextToMultipleMessages` / `splitTextIntoChunks`) を削除し、文字数と UTF-8 バイト数に対応する `splitTextByCharsAndBytes` を `chatContainerBuilder.ts` に置く。slash command 系で使われる `createEmbed` / `createErrorEmbed` / `createSuccessEmbed` / `getColorForModel` は残す | slash command の embed UI は本 spec では変えない。`statusMessage.ts` と `handlers.ts` から引き続き利用 |
 | 新規 builder ファイル | `src/utils/chatContainerBuilder.ts` を新設 | embed-V2 を完全に分離。V2 関連の型 (`ContainerBuilder`, `TextDisplayBuilder`, etc.) を集中させる |
 | 多言語化 / i18n | しない (現状の hardcoded ja を踏襲) | 別 spec が立つまで現状維持 |
 | 旧 client 互換性 | 配慮しない | V2 は GA、Discord client 側でフォールバック処理 |

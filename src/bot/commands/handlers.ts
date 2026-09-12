@@ -28,7 +28,6 @@ export function createCommandHandlers(
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
-- \`/config release-channel [channel]\` - リリース通知チャンネルを設定
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
@@ -190,30 +189,6 @@ export function createCommandHandlers(
         "無料モデル限定設定",
       );
       await interaction.reply({ embeds: [successEmbed] });
-    },
-
-    async configReleaseChannel(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
-        return;
-      }
-
-      const channel = interaction.options.getChannel("channel");
-
-      if (!channel) {
-        await settingsService.setReleaseChannel(interaction.guildId, null);
-        const embed = createSuccessEmbed("リリース通知を無効にしました。", "リリース通知設定");
-        await interaction.reply({ embeds: [embed] });
-        return;
-      }
-
-      await settingsService.setReleaseChannel(interaction.guildId, channel.id);
-      const embed = createSuccessEmbed(
-        `リリース通知を <#${channel.id}> に設定しました。`,
-        "リリース通知設定",
-      );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configLlmDetails(interaction: ChatInputCommandInteraction): Promise<void> {

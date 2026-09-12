@@ -81,6 +81,18 @@ describe("Health Server", () => {
 
       expect(response.status).toBe(404);
     });
+
+    test("POST /webhook/github returns 404 after the release endpoint is removed", async () => {
+      const mockClient = createMockClient(true, 42);
+      server = startHealthServer(mockClient, TEST_PORT + 10);
+
+      const response = await fetch(`http://localhost:${TEST_PORT + 10}/webhook/github`, {
+        method: "POST",
+      });
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("Not Found");
+    });
   });
 
   describe("Admin endpoints (integrated through Bun.serve)", () => {
