@@ -19,7 +19,6 @@ export interface CommandHandlers {
   modelRefresh: (interaction: ChatInputCommandInteraction) => Promise<void>;
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configReleaseChannel: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -106,9 +105,6 @@ export function createInteractionCreateHandler(
             switch (subcommand) {
               case "free-only":
                 await handlers.configFreeOnly(interaction);
-                break;
-              case "release-channel":
-                await handlers.configReleaseChannel(interaction);
                 break;
               case "llm-details":
                 await handlers.configLlmDetails(interaction);

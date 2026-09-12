@@ -3,7 +3,6 @@ import type { GuildId, GuildSettings } from "../../types";
 
 export interface IGuildSettingsRepository {
   findByGuildId(guildId: GuildId): Promise<GuildSettings | null>;
-  findAllWithReleaseChannel(): Promise<GuildSettings[]>;
   upsert(guildId: GuildId, settings: Partial<GuildSettings>): Promise<GuildSettings>;
   updateShowLlmDetails(guildId: GuildId, showLlmDetails: boolean): Promise<void>;
   updateAutoReplyChannels(guildId: GuildId, channels: string[]): Promise<void>;
@@ -14,7 +13,6 @@ interface RawGuildSettings {
   guildId: GuildId;
   defaultModel: string;
   freeModelsOnly: number;
-  releaseChannelId: string | null;
   showLlmDetails: number;
   autoReplyChannels: string | null;
   createdAt: string;
@@ -36,7 +34,6 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
     guildId: raw.guildId,
     defaultModel: raw.defaultModel,
     freeModelsOnly: Boolean(raw.freeModelsOnly),
-    releaseChannelId: raw.releaseChannelId,
     showLlmDetails: Boolean(raw.showLlmDetails ?? 1),
     autoReplyChannels: parseAutoReplyChannels(raw.autoReplyChannels),
     createdAt: raw.createdAt,
@@ -53,24 +50,12 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
   async findByGuildId(guildId: GuildId): Promise<GuildSettings | null> {
     const stmt = this.db.query<RawGuildSettings, [string]>(
       `SELECT guild_id as guildId, default_model as defaultModel, free_models_only as freeModelsOnly,
-       release_channel_id as releaseChannelId, show_llm_details as showLlmDetails,
-       auto_reply_channels as autoReplyChannels, created_at as createdAt, updated_at as updatedAt
-       FROM guild_settings WHERE guild_id = ?`,
+       show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
+       created_at as createdAt, updated_at as updatedAt FROM guild_settings WHERE guild_id = ?`,
     );
     const result = stmt.get(guildId);
     if (!result) return null;
     return rawToGuildSettings(result);
-  }
-
-  async findAllWithReleaseChannel(): Promise<GuildSettings[]> {
-    const stmt = this.db.query<RawGuildSettings, []>(
-      `SELECT guild_id as guildId, default_model as defaultModel, free_models_only as freeModelsOnly,
-       release_channel_id as releaseChannelId, show_llm_details as showLlmDetails,
-       auto_reply_channels as autoReplyChannels, created_at as createdAt, updated_at as updatedAt
-       FROM guild_settings WHERE release_channel_id IS NOT NULL`,
-    );
-    const results = stmt.all();
-    return results.map(rawToGuildSettings);
   }
 
   async upsert(guildId: GuildId, settings: Partial<GuildSettings>): Promise<GuildSettings> {
@@ -78,7 +63,6 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
       guildId,
       defaultModel: settings.defaultModel ?? this.defaultModel,
       freeModelsOnly: settings.freeModelsOnly ?? false,
-      releaseChannelId: settings.releaseChannelId ?? null,
       showLlmDetails: settings.showLlmDetails ?? true,
       autoReplyChannels: settings.autoReplyChannels ?? [],
       createdAt: settings.createdAt ?? new Date().toISOString(),
@@ -90,12 +74,11 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
 
     this.db
       .query(
-        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, release_channel_id, show_llm_details, auto_reply_channels, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, show_llm_details, auto_reply_channels, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(guild_id) DO UPDATE SET
          default_model = excluded.default_model,
          free_models_only = excluded.free_models_only,
-         release_channel_id = excluded.release_channel_id,
          show_llm_details = excluded.show_llm_details,
          auto_reply_channels = excluded.auto_reply_channels,
          updated_at = excluded.updated_at`,
@@ -104,7 +87,6 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         guildId,
         defaults.defaultModel,
         defaults.freeModelsOnly ? 1 : 0,
-        defaults.releaseChannelId,
         defaults.showLlmDetails ? 1 : 0,
         autoReplyChannelsJson,
         defaults.createdAt,

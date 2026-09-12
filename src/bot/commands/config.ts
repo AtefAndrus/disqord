@@ -17,17 +17,6 @@ export const configCommand = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
-      .setName("release-channel")
-      .setDescription("リリース通知チャンネルを設定（省略で無効化）")
-      .addChannelOption((option) =>
-        option
-          .setName("channel")
-          .setDescription("通知先チャンネル")
-          .addChannelTypes(ChannelType.GuildText),
-      ),
-  )
-  .addSubcommand((sub) =>
-    sub
       .setName("llm-details")
       .setDescription("LLM詳細情報表示の切り替え")
       .addStringOption((option) =>

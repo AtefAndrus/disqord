@@ -34,11 +34,6 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     default: "3000",
   },
   {
-    name: "GITHUB_WEBHOOK_SECRET",
-    required: false,
-    description: "GitHub Webhook署名検証用（リリース通知使用時は必須）",
-  },
-  {
     name: "ADMIN_API_SECRET",
     required: false,
     description: "管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503）",

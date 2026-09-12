@@ -45,7 +45,6 @@ docker run -d \
 | DATABASE_PATH | No | SQLiteパス（デフォルト: `data/disqord.db`） |
 | DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `google/gemma-4-26b-a4b-it:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |
-| GITHUB_WEBHOOK_SECRET | No | GitHub Webhook署名検証用（リリース通知使用時は必須） |
 | ADMIN_API_SECRET | No | 管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503） |
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
@@ -63,7 +62,6 @@ docker run -d \
 | `/model list` | OpenRouterのモデル一覧ページへ |
 | `/model refresh` | モデルキャッシュを更新 |
 | `/config free-only <enabled>` | 無料モデル限定の切り替え |
-| `/config release-channel [channel]` | リリース通知チャンネルを設定（省略で無効化） |
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |

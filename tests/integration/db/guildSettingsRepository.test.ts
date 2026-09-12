@@ -102,6 +102,70 @@ describe("GuildSettingsRepository", () => {
     });
   });
 
+  describe("旧スキーマ互換", () => {
+    test("新規DBにrelease_channel_idカラムを作成しない", () => {
+      const columns = db
+        .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+        .all()
+        .map((column) => column.name);
+
+      expect(columns).not.toContain("release_channel_id");
+    });
+
+    test("既存のrelease_channel_idカラムを保持したまま他の設定を読み書きできる", async () => {
+      const legacyDb = new Database(":memory:");
+      try {
+        legacyDb.run(`
+          CREATE TABLE guild_settings (
+            guild_id TEXT PRIMARY KEY,
+            default_model TEXT NOT NULL,
+            free_models_only INTEGER NOT NULL DEFAULT 0,
+            release_channel_id TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `);
+        legacyDb
+          .query(
+            `INSERT INTO guild_settings (guild_id, default_model, release_channel_id)
+             VALUES (?, ?, ?)`,
+          )
+          .run("legacy-guild", "legacy-model", "legacy-channel");
+
+        applyMigrations(legacyDb);
+        const legacyRepo = new GuildSettingsRepository(legacyDb, TEST_DEFAULT_MODEL);
+
+        const before = await legacyRepo.findByGuildId("legacy-guild");
+        expect(before?.defaultModel).toBe("legacy-model");
+        expect(before).not.toHaveProperty("releaseChannelId");
+
+        await legacyRepo.upsert("legacy-guild", {
+          defaultModel: "updated-model",
+          freeModelsOnly: true,
+          showLlmDetails: false,
+          autoReplyChannels: ["channel-1"],
+        });
+
+        const after = await legacyRepo.findByGuildId("legacy-guild");
+        const legacyColumn = legacyDb
+          .query<{ releaseChannelId: string | null }, [string]>(
+            `SELECT release_channel_id as releaseChannelId
+             FROM guild_settings WHERE guild_id = ?`,
+          )
+          .get("legacy-guild");
+        expect(after).toMatchObject({
+          defaultModel: "updated-model",
+          freeModelsOnly: true,
+          showLlmDetails: false,
+          autoReplyChannels: ["channel-1"],
+        });
+        expect(legacyColumn?.releaseChannelId).toBe("legacy-channel");
+      } finally {
+        legacyDb.close();
+      }
+    });
+  });
+
   describe("delete", () => {
     test("存在するレコードを削除してtrueを返す", async () => {
       await repo.upsert("guild-to-delete", { defaultModel: "test" });

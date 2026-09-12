@@ -15,7 +15,6 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `GET /admin/logs` 
 
 ## 依存 / 関連 change
 
-- 連携: [release-polling](../release-polling/design.md) — 同じ HMAC 検証コア（Web Crypto + `timingSafeEqual`）を共有する。`release-polling` 側は Webhook 撤去のために `src/http/hmac.ts` への切り出しを Phase 2 task として明文化している。本 change が先着なら **本 change で `src/http/hmac.ts` を新規作成し**、`webhookHandler.ts` を helper 経由に薄くリファクタする（`release-polling` 着手時に再切り出しが不要になる）。`release-polling` が先着なら本 change は既存 helper を import するだけでよい。
 - 独立: [oauth-byok](../oauth-byok/design.md) — ユーザー / ギルドの OpenRouter キー接続（OAuth PKCE）。認証主体・スコープが直交。重複懸念なし。
 - 独立: [permissions-stats](../permissions-stats/design.md) — Discord ギルド内のコマンド実行権限（`admin_role_id`）。本 change の HMAC は Bot 運用者向けで、ギルド管理者権限とは別レイヤ。
 
@@ -41,15 +40,15 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `GET /admin/logs` 
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 認証方式 | HMAC-SHA256 over `METHOD\npath\ncanonicalQuery\ntimestamp` | 既存 `verifyGitHubSignature` と同じ Web Crypto + `timingSafeEqual` パターンを共通 helper として再利用 |
-| HMAC 共通化 | `src/http/hmac.ts` を新設し、Web Crypto による HMAC-SHA256 計算と `timingSafeEqual` を 1 箇所で持つ。`webhookHandler` / `adminAuth` の双方から呼ぶ | `release-polling` でも同じ切り出しが必要。同じロジックを 2 箇所に重複させない |
+| 認証方式 | HMAC-SHA256 over `METHOD\npath\ncanonicalQuery\ntimestamp` | Web Crypto と `timingSafeEqual` を使い、組み込み API だけで署名生成と比較を実装できる |
+| HMAC helper | `src/http/hmac.ts` に Web Crypto による HMAC-SHA256 計算と `timingSafeEqual` による比較を分離する | 署名生成と hex 比較を個別に検証し、認証処理の分岐と切り分けるため |
 | ボディ署名 | しない | GET 読み取り専用で副作用なし、body そのものが存在しない |
 | Replay 保護（nonce） | 採用しない | TLS 終端された inbound 経路で攻撃者が暗号文を捕捉できる前提なら応答も復号可能。nonce ストアの複雑性に見合う防御効果がない。残存リスクは「5 分以内の同一 GET 再送が成功」のみで副作用ゼロ |
-| Timestamp ドリフト窓 | 5 分 | GitHub Webhook と同等の標準値 |
+| Timestamp ドリフト窓 | 5 分 | 運用者とサーバーの時計差を許容しつつ、署名付きリクエストの再利用可能時間を制限する値 |
 | Timestamp バリデーション | `/^\d{1,15}$/` + `Number.isSafeInteger && >0` | `Math.abs(Date.now() - NaN)` が `false` 評価される NaN バイパスを塞ぐ |
 | Query 正規化 | `URLSearchParams` パース → key/value 昇順安定ソート → `encodeURIComponent` で `&` 連結。query が無ければ空文字 | クライアントとサーバの順序差異を吸収。`+` と `%20` は `URLSearchParams` が両方 space に正規化するため同じ署名になる |
 | HTTP メソッド | GET のみ | 副作用なしの読み取り専用 API。それ以外は 405 + `Allow: GET` |
-| ルーティング実装 | Bun.serve の `routes` オプションで `/admin/logs` `/admin/metrics` を per-method 定義しつつ、**確実性のため各 route で全 method を受け、非 GET は明示的に 405 + `Allow: GET` を返す**（Bun のバージョン差異で 404 や `fetch` フォールバックに落ちる既知 issue を避ける） | 現状 `src/health.ts:28-55` は `fetch(req)` 内で `url.pathname` を手動分岐している。`/health` `/webhook/github` は既存どおり `fetch` フォールバックに残し、本 change は `/admin/*` のみ `routes` で追加する（最小差分） |
+| ルーティング実装 | Bun.serve の `routes` オプションで `/admin/logs` `/admin/metrics` を per-method 定義しつつ、**確実性のため各 route で全 method を受け、非 GET は明示的に 405 + `Allow: GET` を返す**（Bun のバージョン差異で 404 や `fetch` フォールバックに落ちる既知 issue を避ける） | `/health` は `fetch` フォールバックに残し、`/admin/*` のみ `routes` で定義する |
 | ログローテーション実装 | 自前（外部ライブラリなし） | 30 LOC 程度。Bun の `fs.writeSync(fd, ...)` で十分。pino 等を入れると `logger.ts` 全面書き換えが必要 |
 | ローテーション 2-phase | Phase 1（古い世代の shuffling: `.5` 削除 → `.4→.5`, … `.1→.2`）と Phase 2（current の close → `.1` リネーム → 再 open）を分け、Phase 1 失敗は warning + writes 継続、Phase 2 失敗のみ no-op 化 | Phase 1 はアーカイブ維持の補助作業で、失敗しても `disqord.log` は無傷で append 可能。Phase 1 失敗で writer を破綻させると、disk 不調や arch-shuffling の単発エラーで全ファイル logging が止まる |
 | ログ書込みエラー時の挙動 | `console.error` に 1 回フォールバック報告し、`write()` を no-op 化 | disk full 時に `logger.error()` から二次例外を投げて Bot を落とさない |
@@ -57,7 +56,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `GET /admin/logs` 
 | SQLite サイズ計算 | 本体 + `-wal` + `-shm` を合計 | WAL モード有効下では本体のみだと実ディスク使用量を過小評価 |
 | OpenRouter リクエスト計上のスコープ | `isRateLimited()` の short-circuit はカウントから除外し、`fetch` の試行直前で `openrouter.requests` を、その後に throw された場合のみ `openrouter.errors` を計上 | `docs/admin-api.md` の「OpenRouter API 呼び出し」は実 fetch を指す。ローカル rate-limit cooldown は API 呼び出しではなく、計上すると本数が膨らんで現場の指標がブレる |
 | 開発モード時のファイル書込み | `nodeEnv !== "production"` かつ `LOG_DIR` 未設定なら no-op | `bun --hot` の HMR で fd リークするのを回避 |
-| テスト配置 | 既存の `tests/unit/<name>.test.ts` フラット配置に揃える（http/ サブディレクトリは新設しない）。utils 配下のみ既存どおり `tests/unit/utils/<name>.test.ts` | `webhookHandler.test.ts` / `health.test.ts` と同列に並ぶ方が grep / find しやすい |
+| テスト配置 | 既存の `tests/unit/<name>.test.ts` フラット配置に揃える（http/ サブディレクトリは新設しない）。utils 配下のみ既存どおり `tests/unit/utils/<name>.test.ts` | `health.test.ts` と同列に並べれば grep や find で探しやすい |
 
 ## Design
 
@@ -79,9 +78,8 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `GET /admin/logs` 
 
 **修正:**
 
-- `src/http/webhookHandler.ts` — `verifyGitHubSignature` の HMAC 計算 / 比較部分を `src/http/hmac.ts` 経由に置き換える。挙動・型・export 名は維持し、既存テスト (`tests/unit/webhookHandler.test.ts`) を変更せず緑通過
 - `src/utils/logger.ts` — `console[level]()` 直後に遅延初期化された `logFileWriter.write(line)` を呼ぶ
-- `src/health.ts` — `HttpServerOptions` に `adminApiSecret?: string` / `logFileWriter?: LogFileWriter` を追加。Bun.serve に `routes` プロパティを追加し、`/admin/logs` `/admin/metrics` をそれぞれ全 method 受けるハンドラとして登録（GET のみ処理、それ以外は 405 + `Allow: GET`）。既存 `fetch` 分岐（`/health` `/webhook/github`）はフォールバックとして温存
+- `src/health.ts` — `HttpServerOptions` に `adminApiSecret?: string` / `logFileWriter?: LogFileWriter` を追加。Bun.serve に `routes` プロパティを追加し、`/admin/logs` `/admin/metrics` をそれぞれ全 method 受けるハンドラとして登録（GET のみ処理、それ以外は 405 + `Allow: GET`）。既存 `fetch` 分岐の `/health` はフォールバックとして温存
 - `src/index.ts` — `metrics.attach({ client, databasePath: config.databasePath, logFileWriter })` を呼び、`startHttpServer` に `adminApiSecret` / `logFileWriter` を渡す。shutdown フックに `logFileWriter.flush(); close()` を追加
 - `src/config/envVars.ts` — `ADMIN_API_SECRET` / `LOG_DIR` / `LOG_MAX_BYTES` を追加（README env vars は pre-commit hook で自動再生成）
 - `src/config/index.ts` — Zod `configSchema` に `adminApiSecret: z.string().optional()` / `logDir: z.string().optional()` / `logMaxBytes: z.coerce.number().int().min(1024).default(10_485_760)` を追加し、`loadConfig()` に渡す
@@ -97,7 +95,6 @@ export function timingSafeEqualHex(expectedHex: string, actualHex: string): bool
 
 - `hmacSha256Hex`: `crypto.subtle.importKey` + `subtle.sign("HMAC", ...)` → hex 文字列。
 - `timingSafeEqualHex`: 両辺を hex として `Buffer.from(..., "hex")` でパースし `node:crypto`'s `timingSafeEqual` を呼ぶ。長さ不一致は即 `false`。
-- `webhookHandler.verifyGitHubSignature` は内部で `hmacSha256Hex` → `timingSafeEqualHex` を呼ぶ薄いラッパに変える。`tests/unit/webhookHandler.test.ts` は無修正で緑通過。
 
 ### `adminAuth.ts` の HMAC スキーム
 
@@ -243,7 +240,6 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 ### Phase 1: HMAC helper 切り出し
 
 - [x] `src/http/hmac.ts` 新規 + `tests/unit/hmac.test.ts`（既知ベクタ + 長さ不一致 + 正常系）
-- [x] `src/http/webhookHandler.ts` を helper 経由にリファクタ。既存 `tests/unit/webhookHandler.test.ts` を無修正で緑通過
 
 ### Phase 2: ログ / メトリクス基盤
 
@@ -275,8 +271,8 @@ curl -sS "https://webhook.example.com$PATH_?$QUERY" \
 
 ## 参照
 
-- HMAC 実装の範: `src/http/webhookHandler.ts:9-49`（`verifyGitHubSignature`）
+- HMAC helper: `src/http/hmac.ts`
 - 既存 logger: `src/utils/logger.ts`
-- 既存 HTTP サーバ: `src/health.ts`（`startHttpServer` と `fetch` 内の `/health` / `/webhook/github` 分岐）
+- 既存 HTTP サーバ: `src/health.ts`（`startHttpServer` と `fetch` 内の `/health` 分岐）
 - 既存 env var 定義: `src/config/envVars.ts` / Zod スキーマ: `src/config/index.ts`
 - DB 接続パス: `src/db/index.ts`（`getDatabase()` が `DATABASE_PATH` を読む）

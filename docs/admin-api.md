@@ -140,9 +140,42 @@ LOG_DIR=data/logs
 
 ホスト（Coolify など）の環境変数に `ADMIN_API_SECRET` を設定する。
 `LOG_DIR` は永続ボリュームを指すパスを推奨（コンテナ再起動でログを失わないため）。
-`/admin/*` は既存の公開 HTTPS 経路（例: Cloudflare Tunnel）にそのまま乗る。経路自体に追加設定は不要。
+
+既存の公開 HTTPS 経路がある場合、`/admin/*` はその経路を流用できる。
+Cloudflare Tunnel で新しく公開する場合は、次の手順で DisQord の HTTP サーバーへ接続する。
+
+#### Coolify のポートマッピング
+
+1. Coolify ダッシュボードで DisQord プロジェクトを開く
+2. DisQord の **Port Mappings** に `3000:3000` を設定する（左がホストポート、右がコンテナポート）
+3. **Deploy** を選択する
+
+#### Cloudflare Tunnel と公開ホスト名
+
+1. Cloudflare ダッシュボードの **Networking** → **Tunnels** を開く
+2. **Add a tunnel** から Cloudflared を選択し、トンネル名（例: `disqord-admin`）を設定する
+3. 表示された実行コマンドからトンネルトークンを取得して安全に保管する
+4. トンネルの **Routes** で **Add route** → **Published application** を選択する
+5. 管理 API 用のドメインまたはサブドメイン（例: `disqord.example.com`）を指定する
+6. Service type に **HTTP**、Service URL に `localhost:3000` を指定してルートを追加する
+
+トンネルトークンを取得した第三者はトンネルを実行できるため、リポジトリやログに記録しない。
+
+#### Coolify での Cloudflared デプロイ
+
+1. Coolify ダッシュボードで DisQord と同じプロジェクトを開く
+2. **+ New** から `Cloudflared` を検索して選択する
+3. Cloudflared の環境変数 `TUNNEL_TOKEN` に取得したトンネルトークンを設定する
+4. **Deploy** を選択し、Cloudflare Tunnel が接続済みになることを確認する
+
+公開後は、上の curl 例の `BASE` を公開 URL（例: `https://disqord.example.com`）へ変更して管理 API の応答を確認する。
 
 ### Claude Code から呼ぶ
 
 `Bash` から `curl`、または `WebFetch` から URL を叩く。
 `WebFetch` を使う場合は HMAC を別途計算した URL は使えないため、`Bash` 経由を推奨する。
+
+## 参考リンク
+
+- [Coolify: Access Single Resource via Cloudflare Tunnels](https://coolify.io/docs/integrations/cloudflare/tunnels/single-resource)
+- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)

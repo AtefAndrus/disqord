@@ -20,23 +20,11 @@ export function applyMigrations(db: Database) {
     `);
   }
 
-  // Migration: Add release_channel_id column
+  // Migration: Add show_llm_details column
   const columnsAfterFreeModels = db
     .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
     .all();
-  const hasReleaseChannelId = columnsAfterFreeModels.some((c) => c.name === "release_channel_id");
-  if (!hasReleaseChannelId) {
-    db.run(`
-      ALTER TABLE guild_settings
-      ADD COLUMN release_channel_id TEXT DEFAULT NULL
-    `);
-  }
-
-  // Migration: Add show_llm_details column
-  const columnsAfterRelease = db
-    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
-    .all();
-  const hasShowLlmDetails = columnsAfterRelease.some((c) => c.name === "show_llm_details");
+  const hasShowLlmDetails = columnsAfterFreeModels.some((c) => c.name === "show_llm_details");
   if (!hasShowLlmDetails) {
     db.run(`
       ALTER TABLE guild_settings

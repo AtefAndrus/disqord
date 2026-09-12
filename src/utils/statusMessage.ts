@@ -37,10 +37,6 @@ export function buildStatusMessage(data: StatusMessageData): {
   ];
 
   if (data.settings) {
-    const releaseChannelText = data.settings.releaseChannelId
-      ? `<#${data.settings.releaseChannelId}>`
-      : "未設定";
-
     fields.push(
       { name: "デフォルトモデル", value: `\`${data.settings.defaultModel}\``, inline: true },
       {
@@ -49,7 +45,6 @@ export function buildStatusMessage(data: StatusMessageData): {
         inline: true,
       },
       { name: "LLM詳細表示", value: data.settings.showLlmDetails ? "有効" : "無効", inline: true },
-      { name: "リリース通知先", value: releaseChannelText, inline: true },
     );
   }
 

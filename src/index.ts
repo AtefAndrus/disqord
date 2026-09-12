@@ -13,7 +13,6 @@ import { OpenRouterClient } from "./llm/openrouter";
 import { ToolRegistry } from "./llm/tools/registry";
 import { ChatService } from "./services/chatService";
 import { ModelService } from "./services/modelService";
-import { ReleaseNotificationService } from "./services/releaseNotificationService";
 import { SettingsService } from "./services/settingsService";
 import { createLogFileWriter } from "./utils/logFile";
 import { logger, setLogFileWriter } from "./utils/logger";
@@ -77,13 +76,9 @@ async function bootstrap(): Promise<void> {
   await client.login(config.discordToken);
   logger.info("Bot logged in");
 
-  const releaseNotificationService = new ReleaseNotificationService(client, settingsService);
-
   const httpServer = startHttpServer({
     client,
     port: config.healthPort,
-    githubWebhookSecret: config.githubWebhookSecret,
-    releaseNotificationService,
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });

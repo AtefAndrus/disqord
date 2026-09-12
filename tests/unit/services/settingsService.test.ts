@@ -88,7 +88,6 @@ describe("SettingsService", () => {
       const existingSettings = createMockGuildSettings({
         guildId: "guild-123",
         defaultModel: "old-model",
-        releaseChannelId: "channel-456",
         freeModelsOnly: true,
         showLlmDetails: false,
       });
@@ -100,7 +99,6 @@ describe("SettingsService", () => {
         "guild-123",
         expect.objectContaining({
           defaultModel: "new-model",
-          releaseChannelId: "channel-456",
           freeModelsOnly: true,
           showLlmDetails: false,
         }),

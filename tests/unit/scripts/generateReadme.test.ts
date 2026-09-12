@@ -105,8 +105,8 @@ describe("generateCommandTable", () => {
         options: [
           {
             type: ApplicationCommandOptionType.Subcommand,
-            name: "release-channel",
-            description: "通知チャンネルを設定",
+            name: "optional-channel",
+            description: "任意のチャンネルを設定",
             options: [
               {
                 type: ApplicationCommandOptionType.Channel,
@@ -120,7 +120,7 @@ describe("generateCommandTable", () => {
       },
     ];
     const result = generateCommandTable(commands);
-    expect(result).toContain("| `/config release-channel [channel]` | 通知チャンネルを設定 |");
+    expect(result).toContain("| `/config optional-channel [channel]` | 任意のチャンネルを設定 |");
   });
 
   test("テーブルヘッダーが含まれる", () => {

@@ -7,13 +7,11 @@ import type { ChatCompletionResponse, GuildSettings } from "../../src/types";
 export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
   return {
     findByGuildId: mock(() => Promise.resolve(null)),
-    findAllWithReleaseChannel: mock(() => Promise.resolve([])),
     upsert: mock((guildId: string, settings: Partial<GuildSettings>) =>
       Promise.resolve({
         guildId,
         defaultModel: settings.defaultModel ?? "test-model:fixture",
         freeModelsOnly: settings.freeModelsOnly ?? false,
-        releaseChannelId: settings.releaseChannelId ?? null,
         showLlmDetails: settings.showLlmDetails ?? true,
         autoReplyChannels: settings.autoReplyChannels ?? [],
         createdAt: settings.createdAt ?? new Date().toISOString(),
@@ -88,7 +86,6 @@ export function createMockSettingsService(): ISettingsService {
         guildId,
         defaultModel: "test-model:fixture",
         freeModelsOnly: false,
-        releaseChannelId: null,
         showLlmDetails: true,
         autoReplyChannels: [],
         createdAt: new Date().toISOString(),
@@ -100,7 +97,6 @@ export function createMockSettingsService(): ISettingsService {
         guildId,
         defaultModel: model,
         freeModelsOnly: false,
-        releaseChannelId: null,
         showLlmDetails: true,
         autoReplyChannels: [],
         createdAt: new Date().toISOString(),
@@ -112,19 +108,6 @@ export function createMockSettingsService(): ISettingsService {
         guildId,
         defaultModel: "test-model:fixture",
         freeModelsOnly,
-        releaseChannelId: null,
-        showLlmDetails: true,
-        autoReplyChannels: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
-    ),
-    setReleaseChannel: mock((guildId: string, channelId: string | null) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: "test-model:fixture",
-        freeModelsOnly: false,
-        releaseChannelId: channelId,
         showLlmDetails: true,
         autoReplyChannels: [],
         createdAt: new Date().toISOString(),
@@ -133,7 +116,6 @@ export function createMockSettingsService(): ISettingsService {
     ),
     setShowLlmDetails: mock((_guildId: string, _showLlmDetails: boolean) => Promise.resolve()),
     toggleShowLlmDetails: mock((_guildId: string) => Promise.resolve(true)),
-    getGuildsWithReleaseChannel: mock(() => Promise.resolve([])),
     addAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve()),
     removeAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve(true)),
   };
@@ -144,7 +126,6 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     guildId: "test-guild-id",
     defaultModel: "test-model:fixture",
     freeModelsOnly: false,
-    releaseChannelId: null,
     showLlmDetails: true,
     autoReplyChannels: [],
     createdAt: "2025-01-01T00:00:00.000Z",
