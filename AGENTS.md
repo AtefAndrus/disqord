@@ -59,7 +59,8 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 ## Release
 
 Run the `/release` skill with the target version, for example `/release 1.5.0`.
-It owns the whole procedure, including the one intentional `LEFTHOOK=0` commit on `main` and the release-note rules.
+It owns the whole procedure, including the one intentional `LEFTHOOK=0` commit on `main`.
+GitHub Releases use GitHub's automatically generated notes; the workflow does not manually curate Japanese notes or deliver them to Discord.
 
 ## Gotchas
 
