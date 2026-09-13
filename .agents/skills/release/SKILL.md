@@ -22,8 +22,10 @@ Edit `package.json` to set `"version": "<version>"`.
 Generate CHANGELOG.md before creating the tag, and assign the unreleased commits to the target version explicitly:
 
 ```bash
-git-cliff --tag v<version> --output CHANGELOG.md
+mise exec -- git-cliff --tag v<version> --output CHANGELOG.md
 ```
+
+`mise exec` を通すのは、シェルの PATH に別の backend や版の git-cliff が残っていても `mise.toml` で固定した版を使うため。
 
 Confirm the first release heading is `## [<version>]` rather than `## [Unreleased]`.
 
