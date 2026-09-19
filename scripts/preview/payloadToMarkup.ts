@@ -14,13 +14,25 @@
  * 壊すことを防ぐ。
  */
 
-import type { APIActionRowComponent, APIEmbed, APIMessageActionRowComponent } from "discord.js";
-import { ButtonStyle, ComponentType } from "discord.js";
+import type {
+  APIActionRowComponent,
+  APIButtonComponent,
+  APIComponentInContainer,
+  APIComponentInMessageActionRow,
+  APIContainerComponent,
+  APIEmbed,
+  APIMessageTopLevelComponent,
+  APISectionComponent,
+  APISeparatorComponent,
+  APITextDisplayComponent,
+} from "discord.js";
+import { ButtonStyle, ComponentType, SeparatorSpacingSize } from "discord.js";
 
 export interface IRenderMessage {
   content?: string;
   embeds: APIEmbed[];
-  components: APIActionRowComponent<APIMessageActionRowComponent>[];
+  /** message の最上位コンポーネント。ActionRow（従来）と Container（Components V2）の両方を含む */
+  components: APIMessageTopLevelComponent[];
 }
 
 // ButtonStyle → discord-button の type 属性（Link はボタン type ではなく url で表現）
@@ -31,7 +43,11 @@ const BUTTON_TYPE: Partial<Record<ButtonStyle, string>> = {
   [ButtonStyle.Danger]: "destructive",
 };
 
-// 退避プレースホルダ境界（本文に出現しない私用領域文字。衝突安全）
+// 退避の入れ子を展開する深さの上限。実際の入れ子は「コードブロック → インラインコード → 見出し」の
+// 3 段程度で、これは想定外の循環でも描画が止まらないようにするための保険。
+const MAX_RESTORE_DEPTH = 8;
+
+// 退避プレースホルダ境界（私用領域文字。入力に同じ文字があっても衝突しないよう、入力側も退避する）
 const SENTINEL = "\uE000";
 
 // 絵文字: 国旗(Regional Indicator 2連) / キーキャップ / 肌色修飾子・ZWJ 連結を含む基本絵文字
@@ -127,8 +143,18 @@ function linkMarkup(escapedUrl: string): string {
 function markdownToHtml(input: string, opts: { headings?: boolean } = {}): string {
   const stash: string[] = [];
   const hold = (html: string): string => `${SENTINEL}${stash.push(html) - 1}${SENTINEL}`;
+  // ブロック要素として退避した ID。直後の <br> を落とす判定に使う（後述の 7.5）
+  const blockIds = new Set<number>();
+  const holdBlock = (html: string): string => {
+    blockIds.add(stash.length);
+    return hold(html);
+  };
 
-  let text = input;
+  // SENTINEL は私用領域文字だが、入力に含められないわけではない。そのまま残すと入力由来の文字列が
+  // 退避プレースホルダとして解釈され、自分自身を指す退避ができて復元が終わらなくなる。
+  // 入力中の SENTINEL もここで退避しておけば、以降の処理は本物の退避だけを見ればよく、
+  // 復元時にその文字がそのまま戻るので入力も欠落しない。
+  let text = input.replace(/\uE000/g, () => hold(SENTINEL));
 
   // 1. コードブロック / インラインコード → 退避
   text = text.replace(/```(?:[a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, code: string) =>
@@ -170,12 +196,14 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     return hold(linkMarkup(url)) + rest;
   });
 
-  // 5. 見出し（description のみ。H1-H3）→ 退避
+  // 5. 見出し（description / TextDisplay のみ。H1-H3）→ 退避。
+  // 見出し行を終端する改行はここで消費しない。消費すると後続行が行頭でなくなり、連続する見出しや
+  // 見出し直後の箇条書きが検出されなくなる（改行そのものの処理は 7.5 で行う）。
   if (opts.headings) {
     text = text.replace(
       /(^|\n)(#{1,3}) +([^\n]*)/g,
       (_m, br: string, hashes: string, body: string) =>
-        `${br}${hold(`<discord-header level="${hashes.length}">${body}</discord-header>`)}`,
+        `${br}${holdBlock(`<discord-header level="${hashes.length}">${body}</discord-header>`)}`,
     );
   }
 
@@ -191,9 +219,23 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
   text = text.replace(/(^|\n)- /g, "$1• ");
   text = text.replace(/\n/g, "<br>");
 
-  // 8. 退避を復元（退避内容に SENTINEL は含まれないため一括で可）
-  text = text.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => stash[Number(i)] ?? "");
-  return text;
+  // 7.5. ブロック要素（見出し）の直後の <br> を落とす。<discord-header> は上下マージンを自前で
+  // 持つため、行の改行をそのまま <br> にすると Discord より 1-2 行分間延びする。
+  text = text.replace(/\uE000(\d+)\uE000(?:<br>)+/g, (m, id: string) =>
+    blockIds.has(Number(id)) ? `${SENTINEL}${id}${SENTINEL}` : m,
+  );
+
+  // 8. 退避を復元。見出しの退避内容はその行にある絵文字・コード等の退避を入れ子に持つため、
+  // 展開した中身をさらに展開する。展開結果そのものは再走査しないので、入力由来の SENTINEL が
+  // 戻って偶然プレースホルダの形になっても、それが退避として解釈されることはない。
+  const restore = (value: string, depth: number): string => {
+    if (depth >= MAX_RESTORE_DEPTH) return value;
+    return value.replace(/\uE000(\d+)\uE000/g, (m, i: string) => {
+      const held = stash[Number(i)];
+      return held === undefined ? m : restore(held, depth + 1);
+    });
+  };
+  return restore(text, 0);
 }
 
 function embedToMarkup(embed: APIEmbed): string {
@@ -249,38 +291,115 @@ function embedToMarkup(embed: APIEmbed): string {
   return `<discord-embed ${attrs.join(" ")}>${parts.join("")}</discord-embed>`;
 }
 
-function componentsToMarkup(rows: APIActionRowComponent<APIMessageActionRowComponent>[]): string {
-  return rows
-    .map((row) => {
-      const inner = (row.components ?? [])
-        .map((c) => {
-          if (c.type === ComponentType.Button) {
-            const isLink = c.style === ButtonStyle.Link;
-            const typeAttr = isLink ? "" : ` type="${BUTTON_TYPE[c.style] ?? "secondary"}"`;
-            const urlAttr = isLink && "url" in c && c.url ? ` url="${escapeAttr(c.url)}"` : "";
-            const disabled = c.disabled ? " disabled" : "";
-            // unicode 絵文字（id 無し）は Twemoji 画像 URL を emoji 属性へ
-            const emojiAttr =
-              c.emoji && !c.emoji.id && c.emoji.name
-                ? ` emoji="${escapeAttr(twemojiUrl(c.emoji.name))}" emoji-name="${escapeAttr(c.emoji.name)}"`
-                : "";
-            const label = c.label ? escapeHtml(c.label) : "";
-            return `<discord-button${typeAttr}${urlAttr}${disabled}${emojiAttr}>${label}</discord-button>`;
-          }
-          if (c.type === ComponentType.StringSelect) {
-            const opts = (c.options ?? [])
-              .map(
-                (o) =>
-                  `<discord-string-select-menu-option label="${escapeAttr(o.label)}"></discord-string-select-menu-option>`,
-              )
-              .join("");
-            const placeholder = c.placeholder ? ` placeholder="${escapeAttr(c.placeholder)}"` : "";
-            return `<discord-string-select-menu${placeholder}>${opts}</discord-string-select-menu>`;
-          }
+function buttonToMarkup(c: APIButtonComponent): string {
+  const isLink = c.style === ButtonStyle.Link;
+  const typeAttr = isLink ? "" : ` type="${BUTTON_TYPE[c.style] ?? "secondary"}"`;
+  const urlAttr = isLink && "url" in c && c.url ? ` url="${escapeAttr(c.url)}"` : "";
+  const disabled = c.disabled ? " disabled" : "";
+  // Premium(SKU) ボタンだけは label / emoji を持たないため存在チェックで分岐する
+  const emoji = "emoji" in c ? c.emoji : undefined;
+  // unicode 絵文字（id 無し）は Twemoji 画像 URL を emoji 属性へ
+  const emojiAttr =
+    emoji && !emoji.id && emoji.name
+      ? ` emoji="${escapeAttr(twemojiUrl(emoji.name))}" emoji-name="${escapeAttr(emoji.name)}"`
+      : "";
+  const label = "label" in c && c.label ? escapeHtml(c.label) : "";
+  return `<discord-button${typeAttr}${urlAttr}${disabled}${emojiAttr}>${label}</discord-button>`;
+}
+
+/**
+ * ActionRow の中身。`slot` は呼び出し側が決める（message 直下では slot="components"、
+ * Container 内や Section accessory では slot 無し）。
+ * <discord-button> は親が <discord-action-row> でないと実行時に throw するため、
+ * Section accessory のボタンもこのラッパを通す。
+ */
+function actionRowInnerToMarkup(
+  row: APIActionRowComponent<APIComponentInMessageActionRow>,
+): string {
+  return (row.components ?? [])
+    .map((c) => {
+      if (c.type === ComponentType.Button) return buttonToMarkup(c);
+      if (c.type === ComponentType.StringSelect) {
+        const opts = (c.options ?? [])
+          .map(
+            (o) =>
+              `<discord-string-select-menu-option label="${escapeAttr(o.label)}"></discord-string-select-menu-option>`,
+          )
+          .join("");
+        const placeholder = c.placeholder ? ` placeholder="${escapeAttr(c.placeholder)}"` : "";
+        return `<discord-string-select-menu${placeholder}>${opts}</discord-string-select-menu>`;
+      }
+      return "";
+    })
+    .join("");
+}
+
+function textDisplayToMarkup(c: APITextDisplayComponent): string {
+  // TextDisplay は通常のメッセージ本文と同じマークダウン（見出しを含む）を解釈する
+  return `<div class="dq-text">${markdownToHtml(c.content, { headings: true })}</div>`;
+}
+
+function separatorToMarkup(c: APISeparatorComponent): string {
+  // Discord の既定は divider: true / spacing: Small（Small は .dq-separator の既定余白）
+  const classes = ["dq-separator"];
+  if (c.divider ?? true) classes.push("dq-separator-divider");
+  if (c.spacing === SeparatorSpacingSize.Large) classes.push("dq-spacing-large");
+  return `<div class="${classes.join(" ")}"></div>`;
+}
+
+function sectionToMarkup(c: APISectionComponent): string {
+  const body = (c.components ?? []).map(textDisplayToMarkup).join("");
+  const accessory = c.accessory;
+  // accessory は Button か Thumbnail。Bot は Button しか使わないため Thumbnail は未対応。
+  const accessoryMarkup =
+    accessory.type === ComponentType.Button
+      ? `<discord-action-row>${buttonToMarkup(accessory)}</discord-action-row>`
+      : "";
+  return `<div class="dq-section"><div class="dq-section-body">${body}</div><div class="dq-section-accessory">${accessoryMarkup}</div></div>`;
+}
+
+function containerToMarkup(c: APIContainerComponent): string {
+  const accent =
+    c.accent_color === undefined || c.accent_color === null
+      ? ""
+      : ` style="border-left-color:${numberToHexColor(c.accent_color)}"`;
+  const inner = (c.components ?? []).map(componentInContainerToMarkup).join("");
+  return `<div class="dq-container"${accent}>${inner}</div>`;
+}
+
+function componentInContainerToMarkup(c: APIComponentInContainer): string {
+  switch (c.type) {
+    case ComponentType.TextDisplay:
+      return textDisplayToMarkup(c);
+    case ComponentType.Separator:
+      return separatorToMarkup(c);
+    case ComponentType.Section:
+      return sectionToMarkup(c);
+    case ComponentType.ActionRow:
+      return `<discord-action-row>${actionRowInnerToMarkup(c)}</discord-action-row>`;
+    default:
+      // File / MediaGallery は Bot が未使用（chat-response-v2 Phase D で追加予定）
+      return "";
+  }
+}
+
+function componentsToMarkup(components: APIMessageTopLevelComponent[]): string {
+  return components
+    .map((c) => {
+      switch (c.type) {
+        case ComponentType.ActionRow:
+          return `<discord-action-row slot="components">${actionRowInnerToMarkup(c)}</discord-action-row>`;
+        case ComponentType.Container:
+          return containerToMarkup(c);
+        case ComponentType.TextDisplay:
+          return textDisplayToMarkup(c);
+        case ComponentType.Separator:
+          return separatorToMarkup(c);
+        case ComponentType.Section:
+          return sectionToMarkup(c);
+        default:
           return "";
-        })
-        .join("");
-      return `<discord-action-row slot="components">${inner}</discord-action-row>`;
+      }
     })
     .join("");
 }
