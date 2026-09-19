@@ -85,7 +85,7 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 - `tool_choice: "none"` が効く。function tool を渡した状態で送っても `function_call` item は出ない
 - tool 実行後の再リクエストが通る。`{role:"assistant"}` の message、`function_call` item、`function_call_output` item を `input` に並べ、reasoning item を含めずに送って 200 が返る（`openai/gpt-5-nano` と `google/gemini-2.5-flash-lite` で確認）
 - `ChatCompletionRequest` に無いフィールド（`max_output_tokens`）を透過させて送ると効き、打ち切りが `response.incomplete` として返る
-- `OpenRouterClient` と `runToolLoop()` を通して、テキスト、並行 tool call 2 件の往復、画像入力、`file-parser` を使う PDF 入力が次のモデルで通る（2026-09-19）: `openai/gpt-6-astra`、`anthropic/claude-sonnet-5`、`google/gemini-3.8-flash`、`google/gemini-3.5-flash-lite`、`google/gemini-3.1-pro-preview`、`x-ai/grok-4.6`、`qwen/qwen3.8-max-0902`、`moonshotai/kimi-k3`、`mistralai/mistral-medium-3-5`。`deepseek/deepseek-v4-pro-0813` と `z-ai/glm-5.3` は画像入力に対応しないモデルで、画像だけ 404（`No endpoints found that support image input`）になり、ほかの 3 項目は通る
+- `OpenRouterClient` と `runToolLoop()` を通して、テキスト、並行 tool call 2 件の往復、画像入力、`file-parser` を使う PDF 入力が次のモデルで通る（2026-09-19）: `openai/gpt-6-astra`、`anthropic/claude-sonnet-5`、`google/gemini-3.8-flash`、`google/gemini-3.5-flash-lite`、`google/gemini-3.1-pro-preview`、`x-ai/grok-4.6`、`qwen/qwen3.8-max-0902`、`moonshotai/kimi-k3`、`mistralai/mistral-medium-3-5`。`deepseek/deepseek-v4-pro-0813` と `z-ai/glm-5.3` は画像入力に対応しないモデルで、画像だけ `No endpoints found that support image input` のエラーになり、ほかの 3 項目は通る
 - 無料モデル（`google/gemma-4-26b-a4b-it:free`、`qwen/qwen3.8-27b:free`）は同日、上流の共有プールの 429 が続き、`RateLimitError` に分類されることだけを確認した
 
 **書き換えが要るもの:**
