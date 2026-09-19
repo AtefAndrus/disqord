@@ -22,7 +22,7 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 
 ## 依存 / 関連 change
 
-- 後続: [コード実行](../code-execution/design.md) — `openrouter:shell` の導入は本 change の完了が前提。同 change の microsandbox 統合の設計は本 change 完了後に書き直す
+- 後続: [コード実行](../code-execution/design.md) — `openrouter:shell` の導入は本 change の完了が前提
 - 連携: [推論内容の取得・表示](../reasoning-output/design.md) — Responses では reasoning が専用イベントで流れるため、同 change の受信側の設計が単純になる。ただし本 change では表示を実装しない
 - 連携: [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) — Responses で送れる生成パラメータが狭くなり、`supported_parameters` をそのまま許可リストにする方針が成立しなくなる（後述）
 - 連携: [Web 検索 + ツイート展開](../web-search/design.md) / [OpenRouter サーバツール群](../server-tools/design.md) — server tool の送り方は両 API で同じだが、usage の読み取り先が変わる
@@ -313,7 +313,7 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 
 ### Phase 4: 後続への引き継ぎ
 
-- [ ] [コード実行](../code-execution/design.md) の design を、microsandbox 統合から `openrouter:shell` 前提へ書き直す
+- [x] [コード実行](../code-execution/design.md) の design を、microsandbox 統合から `openrouter:shell` 前提へ書き直す
 - [x] [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) へ、`supported_parameters` をそのまま許可リストにできない制約を注記する
 - [x] [推論内容の取得・表示](../reasoning-output/design.md) へ、reasoning が専用イベントで流れることを注記する
 - [x] [Web 検索 + ツイート展開](../web-search/design.md) の usage 読み取り先を `usage.server_tool_use_details` へ訂正する

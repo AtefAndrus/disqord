@@ -19,7 +19,7 @@
 | [Responses API への移行](changes/responses-api-migration/design.md) | 高 | in-progress | LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える |
 | [ツール呼び出し基盤](changes/tool-calling-foundation/design.md) | 高 | implemented | OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
-| [コード実行（microsandbox 統合）](changes/code-execution/design.md) | 中 | investigating | microsandbox による安全なコード実行（/run・LLM tool 統合） |
+| [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [回答の再生成・編集/undo・compaction](changes/conversation-regeneration/design.md) | 中 | planned | 会話履歴ストアの上に載る再生成（generation_number）・undo（active）・履歴 compaction（要約圧縮） |
 | [デフォルトモデル定数の SSOT 化](changes/default-model-ssot/design.md) | 中 | implemented | envVars.ts を DEFAULT_MODEL の単一ソース化 |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | planned | LLM に境界付きの Discord 操作（履歴取得/メンバー検索/スレッド作成/ピン/追加文脈取得）を与える client tool 群 |
