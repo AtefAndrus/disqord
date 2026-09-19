@@ -28,6 +28,20 @@ body{padding:24px;display:inline-block;}
 discord-messages{display:block;width:560px;border-radius:8px;overflow:hidden;}
 .dq-ts{background:rgba(88,101,242,0.3);border-radius:3px;padding:0 2px;}
 .dq-emoji{height:1.25em;width:1.25em;vertical-align:bottom;margin:0 .05em;object-fit:contain;}
+/* Components V2: Container / TextDisplay / Separator / Section の近似。
+   ライブラリ(@skyra/discord-components-core)に V2 要素が無いため、Embed と同系の
+   ボックス（左アクセントバー + 角丸）で描画する。 */
+.dq-container{
+  max-width:520px;background:#2b2d31;border-left:4px solid #4f545c;border-radius:4px;
+  padding:8px 16px;color:#dbdee1;font-size:1rem;line-height:1.375;
+}
+.dq-container .dq-text{margin:8px 0;word-wrap:break-word;}
+.dq-separator{height:0;margin:8px 0;}
+.dq-separator.dq-spacing-large{margin:16px 0;}
+.dq-separator.dq-separator-divider{border-top:1px solid rgba(255,255,255,0.1);}
+.dq-section{display:flex;align-items:flex-start;gap:8px;}
+.dq-section-body{flex:1 1 auto;min-width:0;}
+.dq-section-accessory{flex:0 0 auto;padding-top:6px;}
 </style></head><body><div id="root">${markup}</div></body></html>`;
 }
 
