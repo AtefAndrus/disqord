@@ -98,7 +98,7 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 1. Guild設定で Web検索が OFF → 何も付与しない。
 2. ON → 既存の `tools` 配列へ `{ type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 5, max_uses: 2 } }` を**追加**する（配列を置き換えない）。
 3. server tool は any model で動作するため、`isToolCallingSupported` のような事前判定もモデル分岐も不要。
-4. server tool/検索に起因すると判定できるエラーの場合のみ、**`openrouter:web_search` の要素だけを外して**同一リクエストを1回だけ再試行する（検索なしで応答継続）。client tool と他の server tool は残す。認証・残高不足・rate limit・モデル不正・moderation など既存の `AppError` 系は再試行せず従来どおりエラー処理へ渡す（課金・認証・レート制限を隠さず、不要な二重リクエストも避ける）。deprecated な `:online` には逃がさない。
+4. server tool/検索に起因すると判定できるエラーの場合のみ、**`openrouter:web_search` の要素だけを外して**同一リクエストを1回だけ再試行する（検索なしで応答継続）。client tool と他の server tool は残す。ただし [コード実行](../code-execution/design.md) の `openrouter:shell` が載っている場合は shell も外す。失敗したリクエストが shell のコマンドを実行し終えていることがあり、残したまま再送すると同じ変更と課金が二重になるためである。認証・残高不足・rate limit・モデル不正・moderation など既存の `AppError` 系は再試行せず従来どおりエラー処理へ渡す（課金・認証・レート制限を隠さず、不要な二重リクエストも避ける）。deprecated な `:online` には逃がさない。
 
 **検索回数の制御:**
 
