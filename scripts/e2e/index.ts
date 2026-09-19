@@ -23,29 +23,21 @@
  * the code.
  */
 import { loadConfig } from "../../src/config";
+import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
   type DiscordMessage,
-  isFinished,
+  modelOf,
   type Reply,
   SCENARIOS,
   type Scenario,
-  snapshotKey,
   toReply,
 } from "./scenarios";
 
 const API = "https://discord.com/api/v10";
 const POLL_INTERVAL_MS = 2_500;
-/**
- * Consecutive unchanged polls required once a reply shows a terminal state
- * (see `isFinished`), so that the last edits of a final render have landed
- * before the reply is read.
- */
-const SETTLED_POLLS = 2;
 const REPLY_TIMEOUT_MS = 180_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
 const BOT_EXIT_TIMEOUT_MS = 5_000;
-
-class DeadlineError extends Error {}
 
 const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
@@ -129,52 +121,13 @@ async function repliesAfter(messageId: string, deadline: number): Promise<Reply>
   return toReply(messages);
 }
 
-async function waitForReply(messageId: string, deadline: number): Promise<Reply> {
-  let last: Reply = { messages: [], text: "" };
-  let lastKey = "";
-  let unchanged = 0;
-  try {
-    while (true) {
-      await Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline)));
-      try {
-        last = await repliesAfter(messageId, deadline);
-      } catch (error) {
-        // A failed read says nothing about the reply: keep polling until the
-        // deadline rather than moving on while the bot is still generating.
-        if (error instanceof DeadlineError) throw error;
-        console.log(`  read failed, retrying: ${error instanceof Error ? error.message : error}`);
-        continue;
-      }
-      const key = snapshotKey(last);
-      unchanged = key === lastKey ? unchanged + 1 : 0;
-      lastKey = key;
-      if (isFinished(last) && unchanged >= SETTLED_POLLS) return last;
-    }
-  } catch (error) {
-    if (!(error instanceof DeadlineError)) throw error;
-    throw new DeadlineError(
-      last.messages.length === 0 ? "the bot never replied" : "the reply never settled in time",
-    );
-  }
-}
-
 interface RunningBot {
   stop: () => Promise<void>;
 }
 
 async function startBot(): Promise<RunningBot> {
   const child = Bun.spawn(["bun", "run", "src/index.ts"], { stdout: "pipe", stderr: "inherit" });
-  let stopped = false;
-  const stop = async (): Promise<void> => {
-    if (stopped) return;
-    stopped = true;
-    child.kill();
-    const exited = await Promise.race([
-      child.exited.then(() => true),
-      Bun.sleep(BOT_EXIT_TIMEOUT_MS).then(() => false),
-    ]);
-    if (!exited) child.kill("SIGKILL");
-  };
+  const stop = createStopper(child, BOT_EXIT_TIMEOUT_MS, (ms) => Bun.sleep(ms));
   // Registered before waiting for readiness: an interrupt during startup
   // must not leave a bot connected to Discord for the next run to collide with.
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -234,16 +187,23 @@ async function main(): Promise<number> {
       try {
         const messageId = await send(scenario, deadline);
         if (scenario.manual) console.log(`  ${scenario.name}: waiting for a manual action…`);
-        const reply = await waitForReply(messageId, deadline);
+        const reply = await waitForReply({
+          read: () => repliesAfter(messageId, deadline),
+          pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
+          log: console.log,
+        });
         const problems = scenario.check(reply);
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
         if (problems.length === 0) {
-          console.log(`PASS ${scenario.name} (${seconds}s, ${reply.messages.length} message(s))`);
+          console.log(
+            `PASS ${scenario.name} (${seconds}s, ${reply.messages.length} message(s), model ${modelOf(reply) ?? "unknown"})`,
+          );
         } else {
           failures++;
           console.log(`FAIL ${scenario.name} (${seconds}s)`);
           for (const problem of problems) console.log(`     - ${problem}`);
-          console.log(`     reply: ${reply.text.replace(/\s+/g, " ").slice(0, 300)}`);
+          console.log(`     reply: ${reply.body.replace(/\s+/g, " ").slice(0, 300)}`);
+          console.log(`     footers: ${reply.footers.join(" / ").slice(0, 300)}`);
         }
       } catch (error) {
         failures++;
