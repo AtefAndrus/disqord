@@ -64,7 +64,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | 実行基盤 | `openrouter:shell` server tool | ホストに KVM や常駐プロセスを要さず、隔離、リソース上限、タイムアウト、出力上限を OpenRouter が強制する。モデルを問わず使える |
 | engine | `"openrouter"` に固定する | 既定の `"auto"` は OpenAI のモデルで OpenAI 自身の hosted shell を使い、出力 item が `shell_call` になる。engine を固定すれば、どのモデルでも item の形（`openrouter:shell`）、コンテナとファイルの API、課金が同じになる |
 | tool の渡し方 | `runToolLoop()` の `serverTools` に載せる。`IClientTool` は作らない | 実行は OpenRouter 側で完結し、Bot が受け取るのは結果の item だけである。client tool として包むと、実行の往復が 1 ターン増え、引数検証や timeout の実装が二重になる |
-| コンテナの単位 | `environment: { type: "container_reference", container_id: "run_<messageId>_<乱数 8 桁の 16 進>" }`。ID は `runToolLoop()` の開始時に一度だけ採番し、その生成の全ターンで使う | `runToolLoop()` は client tool を挟むと同じ生成の中で複数回リクエストする。`container_auto` は `session_id` が無いとリクエストごとに別コンテナになり、ターンをまたぐとファイルが消える。message ID だけを ID にしない理由は、同じ発言に対する再生成（[conversation-regeneration](../conversation-regeneration/design.md)）やリトライが同じコンテナに当たり、前回の生成のファイルや実行中のコマンドを引き継いでしまうこと、その間に guild がネットワークのトグルを変えていると 409 になることである。ID は 1〜40 文字の英数字と `_` `-` という制約を満たす（`run_` + 最大 20 桁 + `_` + 8 桁 = 最大 33 文字） |
+| コンテナの単位 | `environment: { type: "container_reference", container_id: "run_<messageId>_<乱数 8 桁の 16 進>" }`。ID は `runToolLoop()` の開始時に一度だけ採番し、その生成の全ターンで使う | `runToolLoop()` は client tool を挟むと同じ生成の中で複数回リクエストする。`container_auto` は、`session_id` が無く、再送した会話に過去の `container_id` も含まれない場合、リクエストごとに別コンテナになり、ターンをまたぐとファイルが消える。message ID だけを ID にしない理由は、同じ発言に対する再生成（[conversation-regeneration](../conversation-regeneration/design.md)）やリトライが同じコンテナに当たり、前回の生成のファイルや実行中のコマンドを引き継いでしまうこと、その間に guild がネットワークのトグルを変えていると 409 になることである。ID は 1〜40 文字の英数字と `_` `-` という制約を満たす（`run_` + 最大 20 桁 + `_` + 8 桁 = 最大 33 文字） |
 | `container_auto` を使わない理由 | 同上 | `container_auto` は `session_id` があると `sess_<session_id>` をコンテナ ID にする。[対話UX改善](../conversation-context/design.md) が `session_id` を送り始めた時点で、コンテナが暗黙に会話単位へ変わり、途中でネットワークのトグルを変えた guild のリクエストが 409 になる。コンテナの寿命を他 change のフィールドに左右させない |
 | ネットワーク既定 | `network_policy` を送らない（= `disabled`） | 最小権限。実測でも既定のコンテナから `pypi.org` へは接続できなかった |
 | ネットワーク許可時 | `{ type: "allowlist", allowed_domains: [...] }`。既定の一覧は `pypi.org` / `files.pythonhosted.org` / `registry.npmjs.org`。一覧に書けるのは完全一致のホスト名だけで、`*` を含む項目は起動時に拒否する | OpenRouter の allowlist は glob を受け付け、`*.*` のような項目は事実上すべての公開ホストを許す。`*` 単体だけを弾いても無制限の egress は防げないので、glob 自体を受け付けない。このトグルが許すのは「一覧のホストへの通信」であり、用途をパッケージ取得に限定する手段は無い。パッケージのインストールは任意コードの実行を伴うため、コード実行とは別のトグルで意識して許可する |
@@ -72,18 +72,18 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | 有効化ゲート | `guild_settings.code_execution_enabled`（既定 0）と `code_execution_network_enabled`（既定 0）。前者が 1 のときだけ shell tool を載せ、両方が 1 のときだけ allowlist を付ける。どちらも新しい生成を始めるときの入口の制御であり、実行中の生成は止めない | 課金と第三者サンドボックスの利用を伴うので opt-in にする。`serverTools` は生成の開始時に凍結するので、トグルを off にしても進行中の生成の残りのターンには効かない。止めたい場合は停止ボタンを使う |
 | トグルの認可 | 2 つのトグルの変更は [権限管理](../permissions/design.md) の共通認可契約（`admin_role_id`）に従う。同 change が未実装の間は、handler で `ManageGuild` 権限を要求する | 現行の `/config` の handler は guild 内であることしか確認しておらず、同じ作りで足すと一般メンバーが課金を伴う実行と外部通信を有効化できてしまう |
 | グローバルな無効化 | 環境変数 `CODE_EXECUTION_ENABLED`（既定 `false`）。`false` なら guild 設定に関係なく tool を載せない。環境変数は起動時に読むので、切り替えには Bot の再起動が要る | beta の tool であり、挙動や課金が変わったときに、再ビルドや guild ごとの設定変更なしで止められるようにする |
-| 1 発言あたりの実行回数 | `runToolLoop()` に server tool の実行回数の予算（既定 8）を持たせる。各ターンのリクエストに残り予算を `max_tool_calls` として載せ、ターンの usage の `server_tool_use_details.tool_calls_requested` を予算から引く。予算が尽きたターン以降は server tool を `tools` から外す。`stop_server_tools_when` は送らない | `max_tool_calls` は 1 HTTP リクエストの上限であり、`runToolLoop()` は 1 発言で最大 4 回、tool を載せたリクエストを送る。固定値をそのまま全ターンへ送ると 1 発言の上限はその 4 倍になる。`max_tool_calls` は shell だけでなく全 server tool の合計に効くので、予算は shell ではなく loop が持ち、[Web 検索](../web-search/design.md) など他の server tool と共有する。`stop_server_tools_when` は指定すると `max_tool_calls` が無視されるので使わない |
+| 1 発言あたりの実行回数 | `runToolLoop()` に server tool の実行回数の予算（既定 8）を持たせる。各ターンのリクエストに残り予算を `max_tool_calls` として載せ、ターンの usage の `server_tool_use_details.tool_calls_requested` を予算から引く。usage にこの値が無いターンは、そのターンに送った `max_tool_calls` の全量を消費したものとして扱う。予算が尽きたターン以降は server tool を `tools` から外す。`max_tool_calls` と `stop_server_tools_when` は loop が所有するフィールドに加え、`requestFields` から取り除く | `max_tool_calls` は 1 HTTP リクエストの上限であり、`runToolLoop()` は 1 発言で、tool を実行できるリクエストを最大 4 回送る（5 回目は `tool_choice: "none"` の最終ターンで、`tools` は載るが実行はされない）。固定値をそのまま全ターンへ送ると 1 発言の上限はその 4 倍になる。`max_tool_calls` は shell だけでなく全 server tool の合計に効くので、予算は shell ではなく loop が持ち、[Web 検索](../web-search/design.md) など他の server tool と共有する。回数が報告されないターンを 0 回と見なすと、実行したのに予算が減らないので、報告が無い場合は安全側に倒す。`stop_server_tools_when` は指定すると `max_tool_calls` が無視されるので、呼び出し側から指定できないようにする |
 | 待ち時間の上限 | `runToolLoop()` の `STREAM_WALL_TIMEOUT_MS`（1 ターン 600 秒）に任せる。これは Bot が待つ時間の上限であり、課金の上限ではない | HTTP リクエストを中断したあと、コンテナ側で実行中や実行待ちのコマンドが止まるか、課金がいつ止まるかは未検証である（Open Questions）。1 call は最大 100 コマンドを順に実行でき、timeout はコマンドごとに掛かるので、中断後の実行時間を Bot 側からは制限できない。課金が中断時点で止まると仮定した場合、1 ターンの上限は 600 秒 × $0.0001 = 約 $0.06 になる |
 | コマンドの timeout と出力上限 | モデルが指定する `timeout_ms` / `max_output_length` と、OpenRouter 側の上限（300 秒、65,536 文字）に任せる | Bot からは個々のコマンドに介入できない。Bot 側の上限は wall-clock と `max_tool_calls` で掛ける |
 | 結果の受け取り | `response.output_item.added` / `done` のうち `item.type` が `openrouter:` で始まるものを、新しい正規化チャンク `StreamServerToolChunk` として yield する。item の外形（object であること、`type`、`output_index` の範囲、`added` と `done` の対応）は client と loop の境界で検証し、tool 固有の中身は renderer が検証する | 現行の client は server tool の item を heartbeat として捨てている。進捗表示と結果表示の両方に item が要る。中身の形は server tool ごとに違い、client に全種類の形を持たせると、server tool を足すたびに client を触ることになる |
-| 進捗表示 | updater に `beginServerToolBlock(key, type)` と `endServerToolBlock(key, type, result)` を足し、`added` で前者、`done` で後者を呼ぶ。`key` は `<ターン番号>:<output_index>` | 既存の `beginToolBlock(name)` / `endToolBlock(name, render)` は tool 名しか受け取らず、同じ生成の中で shell が複数回呼ばれたときや、`output_index` が後のターンで再び現れたときに、開始と終了を対応づけられない。既存の hook は client tool 用にそのまま残す |
+| 進捗表示と結果の公開 | 生成中は進捗だけを表示する。updater に `beginServerToolBlock(key, type)` と `endServerToolBlock(key, type, outcome)` を足し、`added` で「コード実行中」、`done` で「完了（n コマンド、うち失敗 m）」に変える。`key` は `<ターン番号>:<output_index>`。コマンド、出力、ファイルを含む実行結果は、`runToolLoop()` が返ったあとにまとめて公開する | 実行結果を生成と並行して公開すると、ファイルの取得と Discord への送信が、本文の確定（finalization）やキャンセルと競合する。短い回答では取得が終わる前に生成が終わり、結果が出るかどうかが取得の速さで決まってしまう。生成のあとに順に公開すれば、この競合は起きない。結果が出るのが回答の完了後になる点は受け入れる。既存の `beginToolBlock(name)` / `endToolBlock(name, render)` は tool 名しか受け取らず、同じ生成の中の複数の実行を区別できないので、client tool 用にそのまま残し、server tool 用の hook を別に足す |
 | idle timeout | 変更しない | 実測で、コマンド実行中は約 0.4 秒間隔で SSE コメント行が流れ、最大の空白は約 4 秒だった。client はコメント行を heartbeat として yield するので、100 秒のコマンドでも `STREAM_IDLE_TIMEOUT_MS`（90 秒）は発火しない |
-| 生成ファイルの取得 | `done` の item の `files[]`（`container_file_citation`）を `GET /api/v1/containers/{container_id}/files/{file_id}/content` で取得する | item が返すのはファイルの参照だけで、中身は含まれない。1 コマンド結果あたり最大 10 件で、Discord の添付上限（10）と一致する |
-| 表示の割り付け | 1 回の shell call は論理的な 1 つの結果であり、複数の Container や複数のメッセージにまたがってよい。添付（1 メッセージ 10 件、1 ファイル 9 MB）、component 数、合計バイト数の予算は、ファイルを取得する前に [出力マルチモーダル対応](../multimodal-output/design.md) の layout planner でまとめて配分する。PNG / JPEG は `MediaGallery`、それ以外は `File`。割り付けから漏れた分は件数だけを本文に示す | 添付 10 件と文字数の splitter だけでは、1 つの Container が有効になることを保証できない。`File` 10 個だけで component の枠を使い、見出しやコマンドや出力が入らなくなる。SVG は client の inline 描画が安定しないので `File` にする |
+| 生成ファイルの扱い | ファイルは個々の shell call の成果物ではなく、生成の終了時点のコンテナの状態として扱う。全 call の `files[]` をパスで重複排除し、生成が終わってから `GET /api/v1/containers/{container_id}/files/{file_id}/content` で一度だけ取得する | `file_id` はパスを符号化したもので、内容の版を指さない。ある call が作ったファイルを後の call が上書きすると、前の call の参照からも新しい内容が返る。call ごとの表示にファイルを付けると、表示と中身が食い違いうる。版つきの取得手段は API に無い |
+| 表示の割り付け | 2 段階で行う。取得の前に、`GET /api/v1/containers/{container_id}/files/{file_id}` のメタデータでサイズを調べ、添付 10 件と合計バイト数の枠に収まるファイルを選ぶ。取得と検証のあと、[出力マルチモーダル対応](../multimodal-output/design.md) の layout planner に検証済みのバイト列を渡して、Container とメッセージの列を確定する。PNG / JPEG は `MediaGallery`、それ以外は `File`。枠から漏れた分は件数だけを本文に示す | 同 change の planner は取得と検証が済んだバイト列を入力にする契約で、`files[]` の参照にはサイズが含まれない。取得の前に選ばないと、表示しないファイルまで取得することになる。添付 10 件と文字数の splitter だけでは、1 つの Container が有効になることも保証できない。SVG は client の inline 描画が安定しないので `File` にする |
 | コマンドと出力の表示 | コマンド、stdout、stderr をそれぞれコードブロックで表示し、長いものは `File` 添付へ逃がす。フェンスを壊さないための加工は renderer が行う: 表示用の文字列では、3 個以上連続するバッククォートの間にゼロ幅スペース（U+200B）を挟む。加工していない全文は `File` 添付で取得できる | 既存の splitter は 3 連バッククォートのフェンスをチャンク境界で閉じて開き直すだけで、任意の出力に含まれるバッククォートからフェンスを守る機能は無い |
 | mention の抑止 | 実行結果を含むメッセージはすべて `allowedMentions: { parse: [] }` で送る | サンドボックスの出力に `@everyone` やロール mention を書かせて ping を発火させる経路を塞ぐ。`TextDisplay` は embed の description と違い mention を発火する |
-| キャンセル | 停止ボタンは既存どおり `AbortSignal` で HTTP リクエストを中断する。同じ signal で、進行中のファイル取得も中断する | Bot から実行中のコマンドを直接止める API は無い。中断後にコンテナ側のコマンドが止まるか、課金がいつ止まるかは未検証（Open Questions） |
-| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を `input` にそのまま再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する server tool item の列を持つ。再送する item の合計は 64 KB までとし、超える場合は古い item の stdout / stderr を切り詰める | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態、ファイルの参照は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、item の再送は想定された使い方だと読めるが、実測はしていない（Phase D で確認し、受け付けられない場合は、コマンドと出力の要約を system メッセージとして次のターンに渡す） |
+| キャンセル | 停止ボタンは既存どおり `AbortSignal` で HTTP リクエストを中断する。キャンセルされた生成では実行結果を公開しない | Bot から実行中のコマンドを直接止める API は無い。中断後にコンテナ側のコマンドが止まるか、課金がいつ止まるかは未検証（Open Questions）。結果の公開は生成が返ったあとに行うので、停止ボタンの対象にはならない。公開には全体の期限を置く（後述） |
+| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、item の再送は想定された使い方だと読めるが、実測はしていない（Phase D で確認する） |
 | 会話履歴への載せ方 | 生成が終わったあとの会話履歴には、assistant の本文だけを入れる | 内部 DTO（`ChatMessage`）に server tool の item を表す型が無く、コンテナも生成ごとに新しくなる。次の発言でモデルが参照できるのは前回の本文だけである（Open Questions） |
 | 課金の表示 | `usage.cost_details.server_tool_cost` を footer に `Server tools: $…` として出す。値が報告されなかった場合は 0 と表示せず、項目ごと出さない | この値は shell に限らず、計量課金される server tool 全体の合計である。shell 以外の server tool と併用したときに内訳は分からないので、shell の費用として表示しない。実測では 126 秒の実行で推論コストの約 3 倍だった |
 
@@ -150,11 +150,12 @@ messageCreate
               → StreamServerToolChunk(started)  → updater.beginServerToolBlock(key, type)
           … SSE コメント行（heartbeat）…
           response.output_item.done  (openrouter:shell, completed)
-              → StreamServerToolChunk(finished) → shellResultRenderer → updater.endServerToolBlock(key, type, result)
+              → StreamServerToolChunk(finished) → normalizeShellItem → updater.endServerToolBlock(key, type, outcome)
           response.output_text.delta → 既存の本文ストリーム
-      ターン終了: usage から予算を引き、server tool の item をその生成の文脈に足す
-  → shellResultPublisher: layout planner で割り付け → containerFileClient で取得 → 結果メッセージを送る
-  → messageCreate の finalization: 本文のメッセージだけを確定し、結果メッセージには触れない
+      ターン終了: usage から予算を引き、正規化済みの item をその生成の文脈に足す
+  → runToolLoop() が返る（正規化済みの item の列を結果に含める）
+  → messageCreate の finalization: 本文のメッセージを確定する
+  → shellResultPublisher: 実行結果を送る → ファイルを選んで取得 → layout planner → 添付を送る
 ```
 
 ### `StreamServerToolChunk`
@@ -187,6 +188,18 @@ server tool の実行は OpenRouter 側で完結し、loop が dispatch する�
 `started` のまま `finished` が届かずにターンが終わった block（キャンセル、timeout、エラー、`response.incomplete`）は、loop がターンの終了時に `endServerToolBlock(key, type, { kind: "aborted" })` を呼んで閉じる。
 updater は「実行中」の表示を「中断されました」に変える。
 
+### item の正規化と保持の上限
+
+`finished` の item は、表示にも再送にも、そのままは使わない。
+tool ごとの normalizer（shell では `normalizeShellItem`）が中身を検証し、既知のフィールドだけを持つ正規化済みの item を作る。
+shell の場合は `type` / `status` / `call_id` / `container_id` / `action.commands` / `output[]`（`stdout` / `stderr` / `outcome`）/ `files[]` を残し、`action` と重複する `arguments` と未知のフィールドは落とす。
+検証に失敗した item は、表示では「実行結果を表示できませんでした」になり、再送の対象から外す。
+表示と再送が同じ正規化結果を使うので、「表示できないが再送はされて次のリクエストを壊す」状態にならない。
+
+loop が 1 回の生成で保持する正規化済みの item は、16 件かつ直列化後の UTF-8 で合計 1 MiB までとする。
+上限を超える item は保持せず、件数だけを数えて「n 件の実行結果は大きすぎるため表示できません」と示す。
+SSE のフレーム上限は 1 イベントの大きさしか縛らないので、複数の item が積み上がる量はここで縛る。
+
 ### 大きな item と SSE のフレーム上限
 
 client は 1 行の SSE フレームを `MAX_SSE_FRAME_BYTES`（1 MiB）で打ち切っている。
@@ -203,9 +216,11 @@ shell の `done` の item は全コマンドの stdout と stderr を 1 フレ�
 
 ### 生成の途中の文脈
 
-`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する server tool item の列を持つ。
-ターンが `tool_calls` で終わって次のリクエストを組むとき、そのターンまでに `finished` になった item を、assistant の function call より前の位置で `input` に再送する。
-再送する item の合計が 64 KB を超える場合は、古い item から順に `output[].stdout` / `stderr` を先頭と末尾だけ残して切り詰める。
+ターンが `tool_calls` で終わって次のリクエストを組むとき、そのターンまでに保持した正規化済みの item を、assistant の function call より前の位置で `input` に再送する。
+再送する item の列は、直列化後の UTF-8 で 64 KB までとする。
+超える場合は、古い item から順に `stdout` / `stderr` を先頭と末尾だけ残して切り詰める。
+それでも超える場合は、古い item から順に列から外す。
+1 件だけで 64 KB を超える item は、出力をすべて落として `action.commands` と `outcome` だけにし、なお超えるなら外す。
 
 内部 DTO には、`OpenRouterClient` が `input` へそのまま写す型を 1 つ足す。
 
@@ -218,6 +233,10 @@ export interface ServerToolItemMessage {
 ```
 
 生成が終わって会話履歴へ返すときは、この型のメッセージを取り除く。
+
+item の再送が API に受け付けられなかった場合の代替は、Phase D の結果を見て設計する。
+その場合も、コマンドの出力を `system` メッセージへ入れることはしない。
+出力は信頼できないデータであり、指示としての優先度を与えないためである。
 
 ### shell の ServerTool の組み立て
 
@@ -248,37 +267,31 @@ tool calling に対応しないモデルへ `tools` を送るとエラーにな�
 モデルの `supported_parameters` に `tools` が無い場合は shell tool を載せない。
 この判定は [tool-calling-foundation](../tool-calling-foundation/design.md) の client tool と共通の問題なので、判定関数は同 change の registry 側に置く。
 
-### 実行結果の表示
+### 実行結果の表示と公開
 
-1 回の shell call は論理的な 1 つの結果で、次の要素からなる。
+実行結果は、`runToolLoop()` が返ったあと、`messageCreate` が本文を確定してから公開する。
+公開は `shellResultPublisher` が所有し、本文のメッセージに続く別のメッセージとして、実行の順に送る。
 
 ```text
-見出し（### コード実行）と成否（成功 GREEN / 失敗あり RED / timeout あり ORANGE）
-コマンドごとに: コマンド、stdout、stderr（あれば）、exit code が 0 以外または timeout ならその旨
-MediaGallery（PNG / JPEG）
-File（その他の生成ファイル、本文に収まらなかった stdout / stderr の全文）
+実行ごとに:
+  見出し（### コード実行 n）と成否（成功 GREEN / 失敗あり RED / timeout あり ORANGE）
+  コマンドごとに: コマンド、stdout、stderr（あれば）、exit code が 0 以外または timeout ならその旨
+最後に 1 回:
+  生成ファイル（MediaGallery に PNG / JPEG、File にその他）
+  本文に収まらなかった stdout / stderr の全文（File）
 ```
 
 - 成否は `outcome` で判定する。`{type:"exit", exit_code:0}` だけが成功で、0 以外の exit code と `{type:"timeout"}` は失敗として色と文言を変える
 - コマンド、stdout、stderr はコードブロックで表示する。表示用の文字列では、3 個以上連続するバッククォートの間にゼロ幅スペース（U+200B）を挟み、出力の中身でフェンスが閉じないようにする。加工していない全文は `File` 添付に入れる
-- 割り付けは layout planner が行う。planner は、表示したい要素の一覧（テキストの長さ、画像とファイルの件数とサイズ）を受け取り、1 メッセージの文字数、バイト数、component 数、添付 10 件の上限を満たす Container とメッセージの列を返す。1 つの結果が複数のメッセージに分かれてよい
-- ファイルの取得は割り付けのあとに行い、割り付けられたファイルだけを取得する。添付の枠は、stdout / stderr の全文、画像、その他のファイルの順に使う
+- 生成ファイルは、全実行の `files[]` をパスで重複排除したものを、生成の終了時点の内容として 1 回だけ取得する。どの実行が作ったファイルかは表示しない
+- 添付の枠（1 回の生成で 10 件、合計 `CODE_EXECUTION_ATTACHMENT_MAX_BYTES`）は、stdout / stderr の全文、画像、その他のファイルの順に使う。メッセージを分けても枠は増やさない
 - ファイルの取得に失敗した場合は、ファイル名と「取得に失敗しました」を本文に出し、結果の表示は続ける
 
-### 結果メッセージの所有と finalization
+公開の条件と上限は次のとおりである。
 
-実行結果は、モデルの本文とは別のメッセージとして、`done` が届いた時点で送る。
-
-現行の `messageCreate` の finalization は、`updater.messages` を本文のページとして書き直し、余ったメッセージを削除する。
-結果メッセージをこの列に入れると、finalization で上書きされるか削除される。
-そこで updater は結果メッセージを別の列（`resultMessages`）で持ち、finalization は本文の列だけを扱う。
-
-結果の公開（割り付け、ファイルの取得、送信）は `shellResultPublisher` が所有し、次を守る。
-
-- ファイルの取得には、リクエストの `AbortSignal` と、1 ファイルあたりの期限（`CODE_EXECUTION_FILE_DEADLINE_MS`）を組み合わせた signal を渡す。サイズ上限つきの読み取りだけでは、応答が途中で止まった取得が終わらない
-- finalization は、成功、キャンセル、エラーのどの経路でも、進行中の公開をまず中断してから本文を確定する。中断された公開は、送信済みの結果メッセージを残し、未送信の分は送らない
-- finalization のあとに完了した取得や送信が結果を公開しないよう、publisher は finalization 済みのフラグを送信の直前に確認する
-- 停止ボタンで中断された生成では、`started` のままの block を「中断されました」で閉じる
+- 生成が `final` で終わった場合と `error` で終わった場合に公開する。`cancelled` で終わった場合は公開しない（ユーザが止めた生成の続きを出さない）
+- ファイルの取得は 1 件ずつ順に行い、1 件あたりの期限（`CODE_EXECUTION_FILE_DEADLINE_MS`）と、公開全体の期限（`CODE_EXECUTION_PUBLISH_DEADLINE_MS`）を置く。全体の期限に達したら、送信済みのメッセージを残し、残りは「表示を打ち切りました」と示して終える
+- 公開は本文の確定のあとに始まるので、finalization が結果メッセージを書き換えたり削除したりすることは無い。結果メッセージは updater の本文の列（`messages`）には入れない
 
 ### 環境変数
 
@@ -289,6 +302,8 @@ File（その他の生成ファイル、本文に収まらなかった stdout / 
 | `CODE_EXECUTION_ALLOWED_DOMAINS` | `pypi.org,files.pythonhosted.org,registry.npmjs.org` | ネットワーク許可時の allowlist。完全一致のホスト名だけを受け付け、`*` を含む項目や、scheme、path、port を含む項目は起動時に拒否する |
 | `CODE_EXECUTION_FILE_MAX_BYTES` | `9437184` | 取得して添付する 1 ファイルの上限 |
 | `CODE_EXECUTION_FILE_DEADLINE_MS` | `15000` | 1 ファイルの取得に掛ける時間の上限 |
+| `CODE_EXECUTION_PUBLISH_DEADLINE_MS` | `60000` | 1 回の生成の実行結果の公開（取得と送信）全体に掛ける時間の上限 |
+| `CODE_EXECUTION_ATTACHMENT_MAX_BYTES` | `26214400` | 1 回の生成で添付するファイルの合計バイト数の上限 |
 
 ### DB スキーマ
 
@@ -311,13 +326,13 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 - 修正: `src/types/index.ts` — `StreamServerToolChunk` を追加
 - 修正: `src/llm/openrouter.ts` — `openrouter:` 接頭辞の item を `StreamServerToolChunk` へ写像し、外形を検証する。`server_tool_item` を `input` へ写す。`MAX_SSE_FRAME_BYTES` を 4 MiB にする
-- 修正: `src/llm/toolLoop.ts` — `StreamServerToolChunk` を updater の server tool block hook へ渡す。server tool の実行回数の予算、生成の途中の文脈、閉じられなかった block の後始末
-- 新規: `src/llm/serverTools/shell.ts` — `buildShellTool()` と `shellResultRenderer`（item の中身の検証と、表示用の要素への変換）
-- 新規: `src/bot/shellResultPublisher.ts` — 割り付け、ファイルの取得、結果メッセージの送信、中断
+- 修正: `src/llm/toolLoop.ts` — `StreamServerToolChunk` を updater の server tool block hook へ渡す。server tool の実行回数の予算、item の保持の上限、生成の途中の文脈、閉じられなかった block の後始末。`ToolLoopResult` に正規化済みの item の列を足す
+- 新規: `src/llm/serverTools/shell.ts` — `buildShellTool()` と `normalizeShellItem`（item の中身の検証と正規化）
+- 新規: `src/bot/shellResultPublisher.ts` — 実行結果の表示用の要素への変換、ファイルの選択と取得、結果メッセージの送信、期限
 - 新規: `src/llm/containerFileClient.ts` — コンテナのファイル取得（サイズ上限つきの bounded read）
 - 修正: `src/services/chatService.ts` — guild 設定に応じて `serverTools` と `requestFields` を組み立てる
-- 修正: V2 updater と `src/utils/chatContainerBuilder.ts` — `beginServerToolBlock` / `endServerToolBlock`、結果メッセージの列、footer の `Server tools:` 表示
-- 修正: `src/bot/events/messageCreate.ts` — finalization で進行中の公開を中断し、結果メッセージを本文の確定から除外する
+- 修正: V2 updater と `src/utils/chatContainerBuilder.ts` — `beginServerToolBlock` / `endServerToolBlock` による進捗表示、footer の `Server tools:` 表示
+- 修正: `src/bot/events/messageCreate.ts` — 本文の確定のあとに、生成の結果に応じて実行結果を公開する
 - 修正: `src/bot/commands/config.ts` と handler — 2 つのトグルと、その認可
 - 修正: `src/db/` — migration と repository
 - 修正: `src/config/envVars.ts` — 上表の環境変数
@@ -337,8 +352,9 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 - [ ] `StreamServerToolChunk` を追加し、client で `openrouter:` 接頭辞の item を写像する。外形の違反（`added` の無い `done`、`type` の食い違い、二重の `done`）が protocol error になること、それ以外の item が heartbeat のままであることをテストで固定
 - [ ] `MAX_SSE_FRAME_BYTES` を 4 MiB にし、上限を超える shell item が protocol error になることをフィクスチャで固定
 - [ ] updater に `beginServerToolBlock` / `endServerToolBlock` を足し、`runToolLoop()` から `<ターン番号>:<index>` を key にして呼ぶ。閉じられなかった block を `aborted` で閉じる
-- [ ] `runToolLoop()` に server tool の実行回数の予算を実装する（残り予算を `max_tool_calls` に載せる、usage から引く、尽きたら server tool を外す）
-- [ ] 生成の途中の文脈（`server_tool_item` の再送と 64 KB の切り詰め）を実装し、shell → client tool → 継続の列で、2 回目のリクエストに shell の item が含まれることをテストで固定。会話履歴へ返す前に取り除くこともテストで固定
+- [ ] `runToolLoop()` に server tool の実行回数の予算を実装する（残り予算を `max_tool_calls` に載せる、usage から引く、報告が無いターンは全量を消費、尽きたら server tool を外す、`max_tool_calls` と `stop_server_tools_when` を `requestFields` から取り除く）
+- [ ] `normalizeShellItem` と、item の保持の上限（16 件、1 MiB）
+- [ ] 生成の途中の文脈（正規化済みの item の再送と 64 KB の上限）を実装し、shell → client tool → 継続の列で、2 回目のリクエストに shell の item が含まれることをテストで固定。会話履歴へ返す前に取り除くこともテストで固定
 - [ ] 実 wire から採取した shell の item をフィクスチャにする
 
 ### Phase B: shell tool の有効化
@@ -350,10 +366,11 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 ### Phase C: 結果の表示
 
-- [ ] `shellResultRenderer`（item の中身の検証、成否の判定、表示用の要素への変換、バッククォートの加工）
-- [ ] layout planner による割り付け（[出力マルチモーダル対応](../multimodal-output/design.md) が未実装なら本 change で実装する）
-- [ ] `containerFileClient`（サイズ上限、期限、`AbortSignal`）
-- [ ] `shellResultPublisher` と `messageCreate` の finalization の統合。成功、キャンセル、エラーの各経路で、結果メッセージが上書きも削除もされないこと、finalization のあとに結果が公開されないことをテストで固定
+- [ ] updater の進捗表示（実行中、完了、中断）
+- [ ] `shellResultPublisher` の表示（成否の判定、表示用の要素への変換、バッククォートの加工）
+- [ ] `containerFileClient`（メタデータの取得、サイズ上限、期限）と、取得前のファイルの選択
+- [ ] layout planner による割り付け（[出力マルチモーダル対応](../multimodal-output/design.md) が未実装なら本 change で実装する。検証済みのバイト列を入力にする契約は同 change に合わせる）
+- [ ] `messageCreate` での公開。`final` と `error` では公開され `cancelled` では公開されないこと、公開全体の期限で打ち切られること、本文の確定が結果メッセージに触れないことをテストで固定
 - [ ] `allowedMentions: { parse: [] }`（返信では既存どおり `repliedUser: false`）
 - [ ] footer の `Server tools:` 表示
 - [ ] `bun run preview` に実行中、成功、失敗、timeout、中断、添付ありの fixture を追加
@@ -375,6 +392,8 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 - **実行環境は選べない**: イメージ、言語のバージョン、CPU とメモリは OpenRouter が決める。`gcc` が無いので、コンパイルを要する Python パッケージはインストールできないことがある
 - **in-region endpoint では使えない**: shell とコンテナは `openrouter.ai` でのみ動き、`eu.` / `us.` の endpoint では拒否される。現行の Bot は `openrouter.ai` を使っているので影響は無い
 - **コンテナの sleep**: コンテナは 5 分の idle で sleep し、再開時に復元されるのは home 配下のファイルだけである。1 発言の途中で client tool が 5 分以上かかった場合、インストール済みのパッケージやプロセスは失われる
+- **生成ファイルは終了時点の内容になる**: ある実行が作ったファイルを後の実行が上書きした場合、表示されるのは上書き後の内容だけである。実行ごとの版を取得する手段は API に無い
+- **実行結果は回答のあとに出る**: 生成中に見えるのは進捗だけで、コマンドや出力は回答が完了してから表示される。長い実行では、ユーザは結果を見ないまま回答を読み始めることになる
 - **履歴に実行結果が残らない**: 次の発言でモデルが参照できるのは前回の本文だけである。「さっきのスクリプトを直して」のような依頼では、モデルは本文に書かれた範囲でしか前回を知らない。会話単位の持続コンテナ（将来別 change）と合わせて扱う
 
 ## 参照
