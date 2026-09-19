@@ -15,8 +15,8 @@
  *
  * The channel must be used by nothing else while this runs. Reply pages
  * carry no reference to the message that triggered them, so replies are
- * attributed by author and position alone; after a scenario times out the
- * rest are skipped, because its late pages would be read as theirs.
+ * attributed by author and position alone; after a scenario errors or times
+ * out the rest are skipped, because its late pages would be read as theirs.
  *
  * Not part of CI on purpose: it needs two bot tokens and an LLM key, costs
  * money per run, and its failures are as often the network or the model as
@@ -25,7 +25,7 @@
 import { loadConfig } from "../../src/config";
 import {
   type DiscordMessage,
-  isStreaming,
+  isFinished,
   type Reply,
   SCENARIOS,
   type Scenario,
@@ -36,11 +36,9 @@ import {
 const API = "https://discord.com/api/v10";
 const POLL_INTERVAL_MS = 2_500;
 /**
- * Consecutive unchanged polls required before a reply counts as finished.
- * The updater drops the streaming section from one message and only then
- * sends the next page, so a single poll can land in between and see no
- * streaming marker on an unfinished reply. Two unchanged polls mean five
- * quiet seconds, more than twice the updater's two-second edit interval.
+ * Consecutive unchanged polls required once a reply shows a terminal state
+ * (see `isFinished`), so that the last edits of a final render have landed
+ * before the reply is read.
  */
 const SETTLED_POLLS = 2;
 const REPLY_TIMEOUT_MS = 180_000;
@@ -138,13 +136,19 @@ async function waitForReply(messageId: string, deadline: number): Promise<Reply>
   try {
     while (true) {
       await Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline)));
-      last = await repliesAfter(messageId, deadline);
+      try {
+        last = await repliesAfter(messageId, deadline);
+      } catch (error) {
+        // A failed read says nothing about the reply: keep polling until the
+        // deadline rather than moving on while the bot is still generating.
+        if (error instanceof DeadlineError) throw error;
+        console.log(`  read failed, retrying: ${error instanceof Error ? error.message : error}`);
+        continue;
+      }
       const key = snapshotKey(last);
       unchanged = key === lastKey ? unchanged + 1 : 0;
       lastKey = key;
-      if (last.messages.length > 0 && !isStreaming(last) && unchanged >= SETTLED_POLLS) {
-        return last;
-      }
+      if (isFinished(last) && unchanged >= SETTLED_POLLS) return last;
     }
   } catch (error) {
     if (!(error instanceof DeadlineError)) throw error;
@@ -244,8 +248,11 @@ async function main(): Promise<number> {
       } catch (error) {
         failures++;
         console.log(`FAIL ${scenario.name}: ${error instanceof Error ? error.message : error}`);
+        // Whatever went wrong, the state of this scenario's reply is unknown
+        // (even a failed POST may have been accepted), so nothing after it
+        // can be attributed safely.
         const skipped = selected.slice(index + 1).map((s) => s.name);
-        if (error instanceof DeadlineError && skipped.length > 0) {
+        if (skipped.length > 0) {
           failures += skipped.length;
           console.log(
             `SKIP ${skipped.join(", ")}: late pages of "${scenario.name}" could be read as theirs`,

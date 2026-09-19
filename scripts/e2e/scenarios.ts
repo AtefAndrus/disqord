@@ -1,4 +1,3 @@
-import { STREAMING_LABEL } from "../../src/utils/chatContainerBuilder";
 import { PDF_DATA, PNG_DATA } from "./fixtures";
 
 export interface DiscordMessage {
@@ -26,7 +25,7 @@ export interface Scenario {
   check: (reply: Reply) => string[];
 }
 
-const STOP_BUTTON = "[button:停止]";
+const STOP_BUTTON_ID_PREFIX = "stop_response_";
 
 function collectText(node: unknown, out: string[]): void {
   if (Array.isArray(node)) {
@@ -50,8 +49,38 @@ export function toReply(messages: DiscordMessage[]): Reply {
   return { messages, text: parts.join("\n") };
 }
 
+function hasStopButton(node: unknown): boolean {
+  if (Array.isArray(node)) return node.some(hasStopButton);
+  if (typeof node !== "object" || node === null) return false;
+  const record = node as Record<string, unknown>;
+  if (typeof record.custom_id === "string" && record.custom_id.startsWith(STOP_BUTTON_ID_PREFIX)) {
+    return true;
+  }
+  return hasStopButton(record.components) || hasStopButton(record.accessory);
+}
+
+/**
+ * Read off the stop button component, not the "生成中..." label: the label is
+ * plain text, and a finished answer that quotes it would never count as done.
+ */
 export function isStreaming(reply: Reply): boolean {
-  return reply.text.includes(STREAMING_LABEL) || reply.text.includes(STOP_BUTTON);
+  return reply.messages.some((message) => hasStopButton(message.components));
+}
+
+/**
+ * A reply is finished only when it shows a terminal state: the usage footer
+ * of a final reply, the stopped footer, or an error container. "No stop
+ * button" alone is not enough. The updater drops the streaming section from
+ * one page before it sends the next, and that send can take longer than any
+ * fixed quiet period, so an unfinished first page looks exactly like that.
+ */
+export function isFinished(reply: Reply): boolean {
+  if (reply.messages.length === 0 || isStreaming(reply)) return false;
+  return (
+    /Tokens: \d+\+\d+=\d+/.test(reply.text) ||
+    /🛑 Stopped \| \d+(\.\d+)?s/u.test(reply.text) ||
+    /^## ⚠️ /mu.test(reply.text)
+  );
 }
 
 /** Changes whenever a message is added, removed, or edited. */
@@ -101,8 +130,11 @@ export const SCENARIOS: Scenario[] = [
     prompt:
       "[e2e] この画像を塗りつぶしている色が赤なら COLOR-RED、青なら COLOR-BLUE、画像が見えなければ NO-IMAGE とだけ答えて。",
     files: [{ name: "square.png", type: "image/png", data: PNG_DATA }],
+    // The prompt names every token, so an explanation such as "NO-IMAGE. If
+    // it were red the answer would be COLOR-RED" must not pass.
     check: (reply) => [
       ...(reply.text.includes("COLOR-RED") ? [] : ["the reply is not COLOR-RED"]),
+      ...(/NO-IMAGE|COLOR-BLUE/.test(reply.text) ? ["the reply also names another answer"] : []),
       ...hasFooter(reply),
     ],
   },

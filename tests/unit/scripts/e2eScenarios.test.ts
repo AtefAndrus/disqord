@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   type DiscordMessage,
+  isFinished,
   isStreaming,
   SCENARIOS,
   snapshotKey,
@@ -27,14 +28,42 @@ function check(name: string, messages: DiscordMessage[]): string[] {
 }
 
 describe("e2e scenarios: 完了判定の材料", () => {
-  test("生成中ラベルか停止ボタンがあれば streaming と判定する", () => {
-    expect(isStreaming(toReply([message("1", ["本文", STREAMING_LABEL])]))).toBe(true);
-    const withButton = message("1", ["本文"]);
-    withButton.components = [
-      { type: 17, components: [{ type: 9, accessory: { type: 2, label: "停止" } }] },
+  function streamingPage(id: string): DiscordMessage {
+    const page = message(id, ["本文"]);
+    page.components = [
+      {
+        type: 17,
+        components: [
+          { type: 10, content: "本文" },
+          {
+            type: 9,
+            components: [{ type: 10, content: STREAMING_LABEL }],
+            accessory: { type: 2, label: "停止", custom_id: "stop_response_123" },
+          },
+        ],
+      },
     ];
-    expect(isStreaming(toReply([withButton]))).toBe(true);
-    expect(isStreaming(toReply([message("1", ["本文", FOOTER])]))).toBe(false);
+    return page;
+  }
+
+  test("streaming は停止ボタンの component で判定し、本文が「生成中...」を引用していても完了した返信を streaming と見なさない", () => {
+    expect(isStreaming(toReply([streamingPage("1")]))).toBe(true);
+    const quoting = toReply([message("1", [`ラベルは「${STREAMING_LABEL}」です`, FOOTER])]);
+    expect(isStreaming(quoting)).toBe(false);
+    expect(isFinished(quoting)).toBe(true);
+  });
+
+  test("停止ボタンが消えただけの途中のページは完了と見なさない（次ページの送信が遅れている間の誤判定を防ぐ）", () => {
+    // updater は前ページから streaming の Section を外してから次ページを送る。
+    expect(isFinished(toReply([message("1", ["1 ページ目の本文"])]))).toBe(false);
+    expect(isFinished(toReply([message("1", ["1 ページ目"]), streamingPage("2")]))).toBe(false);
+    expect(isFinished(toReply([]))).toBe(false);
+  });
+
+  test("final の footer、停止 footer、エラー表示のいずれかがあれば完了と見なす", () => {
+    expect(isFinished(toReply([message("1", ["本文", FOOTER])]))).toBe(true);
+    expect(isFinished(toReply([message("1", ["本文", "🛑 Stopped | 4.9s | 360字"])]))).toBe(true);
+    expect(isFinished(toReply([message("1", ["## ⚠️ エラー\n\n失敗しました"])]))).toBe(true);
   });
 
   test("snapshotKey はメッセージの追加と編集で変わる（ページ送信の合間を完了と誤認しないため）", () => {
@@ -51,6 +80,11 @@ describe("e2e scenarios: check", () => {
   test("image: 画像が渡っていない返答（'An image is required.'）では通らない", () => {
     expect(check("image", [message("1", ["An image is required.", FOOTER])])).not.toEqual([]);
     expect(check("image", [message("1", ["NO-IMAGE", FOOTER])])).not.toEqual([]);
+    expect(
+      check("image", [
+        message("1", ["NO-IMAGE. If the image were red the answer would be COLOR-RED.", FOOTER]),
+      ]),
+    ).not.toEqual([]);
     expect(check("image", [message("1", ["COLOR-RED", FOOTER])])).toEqual([]);
   });
 
@@ -65,6 +99,8 @@ describe("e2e scenarios: check", () => {
     expect(check("long", [page(1, 3), page(2, 3), page(3, 3, true)])).toEqual([]);
     // 途中までしか届いていない
     expect(check("long", [page(1, 3), page(2, 3)])).not.toEqual([]);
+    // メッセージ数と usage footer は揃っているが、最後のページ番号が n/n でない
+    expect(check("long", [page(1, 3), page(2, 3), page(2, 3, true)])).not.toEqual([]);
     // footer の総数とメッセージ数が食い違う（他の返信が混入した）
     expect(check("long", [page(1, 2), page(2, 2, true), message("x", ["別の返信"])])).not.toEqual(
       [],
