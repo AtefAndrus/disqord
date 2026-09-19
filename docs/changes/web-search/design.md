@@ -14,6 +14,13 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 加えて、Twitter/X のツイートは検索エンジン経由では本文を取得しづらく（ログインウォール・ボット遮断）、URLを貼られても内容を読めない。
 ツイートURLについては fxtwitter（FxEmbed）の公開APIから構造化データを取得し、本文・メディアを文脈に注入する。
 
+## 依存 / 関連 change
+
+- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `tools` の混在配列と、毎ターンの結合・再送はここが所有する。本 change は `ServerTool` の要素を 1 つ足す側
+- 連携: [Responses API への移行](../responses-api-migration/design.md) — server tool の要素の形は両 API で同じ。ターンをまたぐ `usage.server_tool_use_details` の累計は同 change が所有する
+- 連携: [権限管理](../permissions/design.md) — `/config web-search` の認可。未成立時は暫定 `ManageGuild`
+- 連携: [使用統計](../usage-stats/design.md) — 検索回数とコストの保存先
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -32,7 +39,7 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 - NSFW ツイートの展開（self-host時の elongator 連携は別途検討）
 - マルチモーダル（画像入力）連携の実装本体（[multimodal](../multimodal/design.md) 側で対応。本changeはメディアURLの受け渡しまで）
 - 検索引用元（`url_citation`）のUI表示（段階的に対応。本changeでは本文表示と検索回数ログまで）
-- 設定コマンドの権限機構そのものの実装（[permissions-stats](../permissions-stats/design.md) に一本化）
+- 設定コマンドの権限機構そのものの実装（[権限管理](../permissions/design.md) に一本化）
 
 ## Decisions
 
@@ -40,7 +47,9 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 | -------- | ---- | ---- |
 | 一般Web検索の実装 | OpenRouter server tools（`openrouter:web_search`） | OpenRouterがサーバ側で実行し、tool-calling非対応を含む **any model** で動作する。クライアント側のツール実行ループ不要 |
 | `:online` / web plugin | 使用しない | OpenRouter docs で deprecated と明記（server tool への移行が推奨）。新規採用しない |
-| 検索失敗時の挙動 | tool起因エラーのみ tools なしで再試行、他は既存エラー処理 | server tool/検索に起因すると判定できるエラーのみ `tools` を外して同一リクエストを再試行。認証・残高不足・rate limit・モデル不正・moderation は既存の `AppError` 処理へ渡す（隠蔽・二重リクエストを避ける）。deprecated な plugin へは逃がさない |
+| 検索失敗時の挙動 | tool起因エラーのみ **`openrouter:web_search` の要素だけを外して**再試行、他は既存エラー処理 | server tool/検索に起因すると判定できるエラーのみ再試行する。認証・残高不足・rate limit・モデル不正・moderation は既存の `AppError` 処理へ渡す（隠蔽・二重リクエストを避ける）。deprecated な plugin へは逃がさない。**`tools` 配列ごと外さない**（後述） |
+| 再試行時に外す範囲 | `web_search` の要素のみ。client tool と他の server tool は残す | `tools` は client tool と server tool の**混在配列**で、[tool-calling-foundation](../tool-calling-foundation/design.md) が結合・凍結して毎ターン再送する。配列ごと外すと検索障害で Discord 操作やコード実行まで道連れに無効化される |
+| 再試行の所有箇所 | 後続ターンでも外した状態を維持する | 1 ターンだけ外して次ターンで戻すと、同じ失敗を繰り返して費用とレイテンシが増える |
 | Twitter/X の取得 | Bot側で fxtwitter API（`api.fxtwitter.com`）から取得し文脈注入 | X はボット遮断で検索/web_fetch では本文取得が不安定。fxtwitter は構造化JSON・メディア直リンク・APIキー不要・無料 |
 | fxtwitter のAPIバージョン | v2（`GET /2/status/{id}`、返却本体 `status.*`） | v1（`/status/<id>`、`tweet.*`）も稼働中だが、v2 が現行ドキュメントの推奨。レスポンス型を v2 に固定して将来の不整合を避ける |
 | fxtwitter の取り込み位置 | OpenRouter の `web_fetch` ではなくBot側で直接取得 | X のボット遮断を fxtwitter で回避でき、メディアURL等の構造化データを multimodal 連携に再利用できる |
@@ -48,8 +57,8 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 | 外部取得テキストの扱い | 「非信頼データ」として隔離注入 | ツイート本文・検索結果は任意のプロンプトインジェクションを含みうる。命令として解釈させないガードを必須とする |
 | Web検索のデフォルト | OFF | 追加費用が発生するため明示的な有効化が必要 |
 | ツイート展開のデフォルト | ON（外部送信する旨を明示） | fxtwitter は無料。投稿内URLを第三者へ送る挙動は README・`/status` で明示し、サーバー単位でOFF可能。self-host で外部送信も解消できる |
-| 設定コマンドの権限 | [permissions-stats](../permissions-stats/design.md) の `admin_role_id` 機構に一本化 | 権限は専用changeで横断的に設計する。web-search単体で独自権限を作らない |
-| 権限の暫定措置 | permissions-stats 未実装で先行する場合は `ManageGuild` を handler 内で確認 | 課金が絡む `/config web-search` を無権限で叩かせないための保険 |
+| 設定コマンドの権限 | [権限管理](../permissions/design.md) の `admin_role_id` 機構に一本化 | 権限は専用changeで横断的に設計する。web-search単体で独自権限を作らない |
+| 権限の暫定措置 | 権限管理 change 未実装で先行する場合は `ManageGuild` を handler 内で確認 | 課金が絡む `/config web-search` を無権限で叩かせないための保険 |
 | 設定スコープ | Guild単位 | チャンネル/ユーザ単位は [settings-hierarchy](../settings-hierarchy/design.md) で対応 |
 | 障害時の挙動 | フォールバック（素通し）+ ログのみ | 検索もツイート展開も外部依存。失敗してもチャット自体は通常どおり継続させSPOF化を避ける |
 
@@ -66,42 +75,45 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 
 **変更対象ファイル**:
 
-- `src/types/index.ts` - `ChatCompletionRequest` を拡張（`tools?`）、`usage` に `server_tool_use` を追加
+- `src/types/index.ts` - `ServerTool` に `openrouter:web_search` の `parameters` 型を追加（`tools` 自体は [tool-calling-foundation](../tool-calling-foundation/design.md) が実装済み）
 - `src/services/chatService.ts` - 設定ON時に server tool を付与
 - `src/services/settingsService.ts` - `setWebSearchEnabled` setter を追加
 - `src/db/repositories/guildSettings.ts` / `src/db/schema.ts` / `src/types/index.ts`（`GuildSettings`）- 設定フィールド追加
 
 **型拡張（`ChatCompletionRequest` / `usage`）:**
 
+`tools` は client tool と server tool の**混在配列**として [tool-calling-foundation](../tool-calling-foundation/design.md) が既に定義している（`Tool = FunctionTool | ServerTool`）。
+本 change は `ServerTool` の要素を 1 つ足す側であり、`tools?: ServerTool[]` のような server tool 専用の型を新設しない。
+
 ```ts
-export interface ChatCompletionRequest {
-  model: string;
-  messages: ChatMessage[];
-  tools?: ServerTool[]; // 例: [{ type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 5 } }]
-}
+// 既存の混在配列へ web_search の要素を足す
+// tools: [...clientTools, { type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 5, max_uses: 2 } }]
 
 // usage 拡張（検索回数・課金把握用）
-// usage.server_tool_use?: { web_search_requests?: number }
+// usage.server_tool_use_details?: { web_search_requests?: number }
 ```
 
 **リクエスト分岐:**
 
 1. Guild設定で Web検索が OFF → 何も付与しない。
-2. ON → `tools: [{ type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 5 } }]` を付与。
+2. ON → 既存の `tools` 配列へ `{ type: "openrouter:web_search", parameters: { max_results: 5, max_total_results: 5, max_uses: 2 } }` を**追加**する（配列を置き換えない）。
 3. server tool は any model で動作するため、`isToolCallingSupported` のような事前判定もモデル分岐も不要。
-4. server tool/検索に起因すると判定できるエラーの場合のみ、`tools` を外して同一リクエストを1回だけ再試行する（検索なしで応答継続）。認証・残高不足・rate limit・モデル不正・moderation など既存の `AppError` 系は再試行せず従来どおりエラー処理へ渡す（課金・認証・レート制限を隠さず、不要な二重リクエストも避ける）。deprecated な `:online` には逃がさない。
+4. server tool/検索に起因すると判定できるエラーの場合のみ、**`openrouter:web_search` の要素だけを外して**同一リクエストを1回だけ再試行する（検索なしで応答継続）。client tool と他の server tool は残す。認証・残高不足・rate limit・モデル不正・moderation など既存の `AppError` 系は再試行せず従来どおりエラー処理へ渡す（課金・認証・レート制限を隠さず、不要な二重リクエストも避ける）。deprecated な `:online` には逃がさない。
 
 **検索回数の制御:**
 
 - server tool はモデル判断で 0〜N 回検索しうるため、`max_results`（1検索あたりの件数, **範囲 1–25・既定 5**。Exa/Parallel/Firecrawl に適用、native では無視）と `max_total_results`（リクエスト全体の累計上限）を必ず指定し、費用とコンテキスト肥大を抑える。
-- `usage.server_tool_use.web_search_requests` で実際の検索回数を取得できるため、ログ・課金把握に利用する（[permissions-stats](../permissions-stats/design.md) の usage_logs とも整合させる）。
+- あわせて `parameters.max_uses`（このツール自身の実行回数上限）を指定する。native 検索では Anthropic にのみ転送され、他の native provider では無視される。
+- リクエスト直下の `stop_server_tools_when` でも外側ループを止められる。ただし `max_tool_calls` を**上書き**する関係なので、両方を送って厳しい方を効かせることはできない。
+- これらの上限が効く範囲は HTTP リクエスト 1 回である。[tool-calling-foundation](../tool-calling-foundation/design.md) の `MAX_TURNS` は 5 で、最終ターンは `tool_choice: "none"` を送るため、server tool を載せられるリクエストは 1 応答あたり最大 4 回になる。1 応答あたりの回数と費用を縛るには、ターンをまたいで `usage.server_tool_use_details` を累計する必要がある。
+- `usage.server_tool_use_details.web_search_requests` で実際の検索回数を取得できるため、ログ・課金把握に利用する（[使用統計](../usage-stats/design.md) の usage_logs とも整合させる）。server tool が一度も起動しなかったリクエストでは `server_tool_use_details` 自体が usage から省かれるので、未起動と 0 回はキーの有無で区別する。
 
 **ストリーミングの扱い:**
 
-- 現行 `chatStream` は `delta.content` のみ処理している。`StreamDelta` 型に `annotations` / `server_tool_use` はない（`types/index.ts`）。
+- 現行 `chatStream` は `delta.content` のみ処理している。`StreamDelta` 型に `annotations` / `server_tool_use_details` はない（`types/index.ts`）。
 - server tool 使用時はツール実行中のSSEイベント（検索中の状態・`annotations` の引用元）が流れるが、最終回答の `content` は従来どおり取得できる。
-- 初期実装では引用元（`url_citation`）の整形表示は行わず、本文のみ表示する。ただし検索回数ログ・課金表示のため `server_tool_use` の取り込みは行う。引用UIは段階的に対応する。
-- `usage` は全レスポンスで自動返却されるようになったため、`usage: { include: true }` / `stream_options: { include_usage: true }` は **deprecated**。リクエストに付与しない（付けても害はないが不要）。`server_tool_use.web_search_requests` も自動返却の `usage` 内に含まれる。
+- 初期実装では引用元（`url_citation`）の整形表示は行わず、本文のみ表示する。ただし検索回数ログ・課金表示のため `server_tool_use_details` の取り込みは行う。引用UIは段階的に対応する。
+- `usage` は全レスポンスで自動返却される。[Responses API への移行](../responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない。`server_tool_use_details.web_search_requests` も自動返却の `usage` 内に含まれる。
 
 **検索結果の扱い（プロンプトインジェクション対策）:**
 
@@ -111,17 +123,20 @@ export interface ChatCompletionRequest {
 
 **費用（OpenRouter 公式 docs 準拠）:**
 
-- Exa: $0.005/リクエスト（10件まで含む）、超過分 $0.001/件。
-- Parallel: $0.005/リクエスト（10件まで含む）、超過分 $0.001/件。
+- Exa: Instant / Fast / Auto が $0.007/リクエスト、Deep Lite / Deep が $0.012、Deep Reasoning が $0.015。
+- Parallel: Turbo / Fast が $0.001/リクエスト、Basic / Advanced が $0.005。
+- Perplexity: $0.005/リクエスト。
+- 追加結果は Exa / Parallel ともに 1 件 $0.001。
 - Firecrawl: BYOK（自前 API キー）。OpenRouter クレジットは課金されない。本 change の初期実装では採用しない（キー管理が増えるため）。
-- native 検索対応プロバイダ（Anthropic / OpenAI / Perplexity / xAI）はプロバイダ従量。
-- エンジン未指定時の既定は `Auto`（native 優先 → Exa フォールバック）。本 change はコスト把握のためエンジンを明示する（初期は Exa or Parallel）。
+- native 検索対応プロバイダはプロバイダ従量。
+- エンジン未指定時の既定は `auto`（native 対応なら native、そうでなければ Exa へフォールバック）。本 change はコスト把握のためエンジンを明示する。
+- **エンジン選択はここで結論が変わりうる**: Exa と Parallel は同額ではなく、Parallel の Turbo / Fast は Exa の 7 分の 1 である。品質差と合わせて実装時に選ぶ。
 - 料金は変動しうるため実装時に最新ドキュメントを確認する。有効化時に費用警告メッセージを表示する。
 
 **権限:**
 
-- `/config web-search` の実行権限は [permissions-stats](../permissions-stats/design.md) の `admin_role_id` 機構に従う。
-- permissions-stats より先行する場合の暫定として、handler 内で `ManageGuild` を確認する。
+- `/config web-search` の実行権限は [権限管理](../permissions/design.md) の `admin_role_id` 機構に従う。
+- [権限管理](../permissions/design.md) より先行する場合の暫定として、handler 内で `ManageGuild` を確認する。
 
 ### 2. ツイート展開（fxtwitter）
 
@@ -181,7 +196,7 @@ export interface ChatCompletionRequest {
 
 **権限:**
 
-- `/config twitter-expand` の権限も Web検索と同様に [permissions-stats](../permissions-stats/design.md) に従う（暫定 `ManageGuild`）。
+- `/config twitter-expand` の権限も Web検索と同様に [権限管理](../permissions/design.md) に従う（暫定 `ManageGuild`）。
 
 ### DBスキーマ変更
 
@@ -207,7 +222,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 ```
 
 - `src/bot/commands/config.ts` に既存のサブコマンドパターンで追加する。
-- 権限は permissions-stats 機構に従う。暫定対応として handler 内で `ManageGuild` を確認する（`setDefaultMemberPermissions` は `/config` コマンド全体に作用し既存サブコマンドの挙動も変わるため、サブコマンド単位で絞るには handler 内チェックを用いる）。
+- 権限は 権限管理 change の機構に従う。暫定対応として handler 内で `ManageGuild` を確認する（`setDefaultMemberPermissions` は `/config` コマンド全体に作用し既存サブコマンドの挙動も変わるため、サブコマンド単位で絞るには handler 内チェックを用いる）。
 - ハンドラは `src/bot/commands/handlers.ts` に追加する。
 - `/status`（`src/utils/statusMessage.ts`）に Web検索・ツイート展開の状態を表示する。
 
@@ -233,7 +248,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 
 ### 参照
 
-- [OpenRouter Server Tools](https://openrouter.ai/docs/guides/features/server-tools/overview) - server tool は any model が呼べる・サーバ側実行・`usage.server_tool_use.web_search_requests`
+- [OpenRouter Server Tools](https://openrouter.ai/docs/guides/features/server-tools/overview) - server tool は any model が呼べる・サーバ側実行・`usage.server_tool_use_details.web_search_requests`
 - [OpenRouter Web Search Server Tool](https://openrouter.ai/docs/guides/features/server-tools/web-search) - `openrouter:web_search`。料金（Exa/Parallel $0.005/req・10件まで）。web plugin / `:online` は deprecated（migration section 参照）
 - [FxEmbed Self-Hosting](https://docs.fxembed.com/deployment/) - Cloudflare Workers デプロイ手順
 - [FxEmbed elongator](https://github.com/FxEmbed/elongator) - NSFW対応・レート緩和用のアカウントプロキシ（任意）
@@ -242,12 +257,12 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 
 ### 一般Web検索（server tools）
 
-- [ ] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use` を追加
+- [ ] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use_details` を追加
 - [ ] `chatService` で設定ON時に server tool（`max_results` / `max_total_results` 指定）を付与。失敗時は検索なしで継続
-- [ ] `usage.server_tool_use.web_search_requests` のログ取り込み
+- [ ] `usage.server_tool_use_details.web_search_requests` のログ取り込み
 - [ ] 検索失敗時の限定的 retry（tool起因のみ tools を外して再試行、他は既存エラー処理）
 - [ ] Web検索ON時の system ガード（検索結果・Webページ本文を非信頼データ扱い）
-- [ ] `/config web-search` サブコマンド + ハンドラ実装（権限は permissions-stats に従う / 暫定 `ManageGuild`）
+- [ ] `/config web-search` サブコマンド + ハンドラ実装（権限は 権限管理 change に従う / 暫定 `ManageGuild`）
 - [ ] 費用警告メッセージ実装
 - [ ] `/status` に Web検索状態表示追加
 
@@ -259,7 +274,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - [ ] プロセス内グローバルレート制御
 - [ ] `chatService` でツイート抽出と**非信頼データ**としての文脈注入（1メッセージ最大3件・最大長切り詰め・無害化）
 - [ ] `FXTWITTER_API_BASE` を `envVars.ts` と `config/index.ts`（configSchema / loadConfig）に追加
-- [ ] `/config twitter-expand` サブコマンド + ハンドラ実装（権限は permissions-stats に従う / 暫定 `ManageGuild`）
+- [ ] `/config twitter-expand` サブコマンド + ハンドラ実装（権限は 権限管理 change に従う / 暫定 `ManageGuild`）
 - [ ] `/status` にツイート展開状態表示追加
 
 ### 共通

@@ -17,7 +17,7 @@ DisQord は既に OpenRouter 呼び出し経路・スラッシュコマンド・
 
 - 連携（LLM 起点の登録のみ）: [tool-calling-foundation](../tool-calling-foundation/design.md) — LLM が会話中に「cron を作るべき」と判断して `create_cron_job` client tool を呼ぶ経路に必要。`/cron` スラッシュコマンド経路は本基盤に依存しない（先にコマンド経路だけ実装も可能）
 - 連携: [chat-response-v2](../chat-response-v2/design.md) — 登録承認の Approve/Reject ボタンと、配信メッセージの整形に V2 を利用
-- 連携: [permissions-stats](../permissions-stats/design.md) — 誰が cron を登録/承認できるか、使用統計への計上はこの権限機構に合わせる（暫定は `ManageGuild`）
+- 連携: [権限管理](../permissions/design.md) — 誰が cron を登録/承認できるか、使用統計への計上はこの権限機構に合わせる（暫定は `ManageGuild`）
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — ジョブ実行時の system prompt / モデルは guild/channel 設定を尊重する。**未成立時は system prompt なし・ジョブ保存モデル（or デフォルトモデル）で実行**して degrade（下記「実行（ティッカー）」）
 - 連携: [conversation-context](../conversation-context/design.md) — ジョブ実行は会話文脈ゼロだが、`runScheduledJob` が作る単発履歴をオプションで履歴ストアに記録するなら本 change の session/turn モデルに合わせる。v1 は履歴非記録（保存 `prompt` を都度実行するだけ）で本基盤に非依存
 
@@ -39,7 +39,7 @@ DisQord は既に OpenRouter 呼び出し経路・スラッシュコマンド・
 
 - 自然言語日付の独自パーサ実装（LLM に cron/ISO へ変換させる）
 - 秒精度・ミリ秒精度スケジューリング（最小粒度は分、ティッカーは 60 秒）
-- ジョブ実行結果の永続ログ/再実行履歴（使用統計は [permissions-stats](../permissions-stats/design.md) に委ねる）
+- ジョブ実行結果の永続ログ/再実行履歴（使用統計は [使用統計](../usage-stats/design.md) に委ねる）
 - 複数 bot インスタンス間での分散スケジューリング（v1 は単一プロセス前提。`status='running'` の原子的 claim は将来の多重起動にも効くが、リーダー選出までは扱わない）
 - ジョブからの tool 実行（コード実行・Web 検索を cron 実行で使うかは将来。v1 はプレーンなチャット応答のみ）
 
@@ -67,7 +67,7 @@ DisQord は既に OpenRouter 呼び出し経路・スラッシュコマンド・
 | LLM 呼び出し経路 | 現 `chatService.generateResponse(guildId, input)` は**モデル上書きも system prompt 前置も受けない**（`settings.defaultModel` 固定・user メッセージ単発）。`cronService` は (a) `chatService` に `model?` / `systemPrompt?` を受けるオーバーロード or 専用メソッドを足すか、(b) `OpenRouterClient.chat()` を直接呼ぶ。**(a) を採用**し、ジョブごとの `model` と settings-hierarchy 由来 system prompt を渡す | cron は guild 設定の `defaultModel` ではなくジョブ保存 `model` で走る必要があり、現シグネチャでは表現できない。streaming は不要（Discord へは一括 send）なので非 stream の `chat()` 系で足りる |
 | 上限 | 最小間隔（既定 5 分）・ユーザあたり最大ジョブ数（既定 10）・guild あたり最大（既定 50）を環境変数化。**active quota のカウント対象は非終端ジョブ（`pending`/`running`/`paused`）**で、終端（`done`/`failed`）は除外。上限は **INSERT（新規作成）時に強制**する。`paused` も枠を占有するので「paused を溜め込んで後から一斉 resume で超過」は構造的に起きず、`resume`（`paused`→`pending`）は count-neutral なので別途上限チェック不要（env で上限を引き下げて既存が超過状態でも、新規 INSERT は枠が空くまで拒否しつつ、既存 paused の resume は overage を悪化させないので許可する） | クレジット枯渇 / スパム防止。`done`/`failed` を数えると cleanup まで枠を恒久消費するため除外。`paused` を含めることで stockpile-then-resume を入口（INSERT）で閉じ、resume 経路を単純に保つ |
 | 連続失敗の自動停止 | 実行/配信失敗で `fail_count++`、成功で `0` リセット。**定期（cron/interval）は** `fail_count >= CRON_MAX_FAILURES`（既定 3）で `status='paused'` + `next_run_at=NULL` にして登録者へ通知（**`once` は閾値に関係なく初回の実行/配信失敗で終端 `failed`**＝`paused` 化せず `fail_count` 加算は記録のみ・下記 `onFailure`）。**claim〜finish 間の異常終了（crash/hang → stale 復旧）は別カウンタ `stale_count`** で会計し、`>= CRON_MAX_STALE_RECOVERIES`（既定 5）で同様に自動 `paused`。両カウンタとも成功完了でリセット | 削除済みチャンネル/権限喪失/モデル恒常エラーで OpenRouter 課金が無限ループするのを止める。stale を別カウンタにするのは、良性の再起動で in-flight だっただけのジョブを実行失敗と混同せず、かつ toxic な crash ループは止めるため。v1 から有効化（残る未確定は通知 UX のみ） |
-| 権限 | 登録/削除/承認は [permissions-stats](../permissions-stats/design.md) に従う。暫定は `ManageGuild` または「本人のジョブのみ操作可」 | 課金が絡むため無制限にしない |
+| 権限 | 登録/削除/承認は [権限管理](../permissions/design.md) に従う。暫定は `ManageGuild` または「本人のジョブのみ操作可」 | 課金が絡むため無制限にしない |
 
 ## Design
 

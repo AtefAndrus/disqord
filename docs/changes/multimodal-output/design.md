@@ -17,6 +17,7 @@ API 固有の取得処理と Discord 固有の描画処理を分離し、検証�
 
 ## 依存 / 関連 change
 
+- 関連: [Responses API への移行](../responses-api-migration/design.md) — 生成成果物の wire 形は API surface に依存するため、producer adapter の fixture 化は移行後に行う
 - 先行：[LLM チャット返信の Components V2 化](../chat-response-v2/design.md) は、テキスト応答の分割、ストリーミング更新、metadata 表示を担う描画基盤を提供する
 - 関連：[OpenRouter サーバツール群](../server-tools/design.md) は、`openrouter:image_generation` の呼び出し方、実レスポンス、コスト制御を調査し、採用時に producer adapter を実装する画像生成 change を切り出す
 

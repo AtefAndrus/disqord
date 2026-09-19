@@ -17,6 +17,7 @@ LLM tool call の protocol 部分（streaming delta 蓄積・`role:"tool"` 整�
 
 ## 依存 / 関連 change
 
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — 本 change は microsandbox をやめて `openrouter:shell` server tool に寄せる方針であり、shell は Chat Completions で使えない。**下記の microsandbox 統合の設計は移行後に書き直す**。ただし shell が必要とする出力（実行結果・生成ファイル・進捗・cancel・ネットワーク許可）の契約は移行の完了を待たずに決められる。移行側は server tool の item を heartbeat に落とすので、先に必要な出力を確定しておけば adapter を作り直さずに済む
 - 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — client tool calling 基盤（`IClientTool` / `ToolRegistry` / `runToolLoop()`）。本 change の 2 tool はここに登録する**最初の利用者**。streaming tool ループ・id 整合・暴走防止（`MAX_TURNS` / `MAX_TOOL_CALLS_PER_TURN`）・timeout/cancel の `AbortSignal` 配線・空 tool omit は **すべて foundation 側**にあり、本 change では再実装しない
 - 連携: [chat-response-v2](../chat-response-v2/design.md) — tool のテキスト stream は foundation 経由で V2 updater を利用する。foundation は `ToolRenderPayload` を透過するが、現在の updater の tool block hook は描画しないため、本 change が attachment-capable かつ mention-safe な結果描画を Phase C で追加する
 - 関連: [conversation-context](../conversation-context/design.md) — 将来の per-conversation persistent sandbox は同 change の `session_id` をキーにできる（**sandbox の所有・ライフサイクルは本 change 側**。詳細は Non-Goals の「将来別 change 候補」参照）

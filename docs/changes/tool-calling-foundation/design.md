@@ -110,7 +110,7 @@ chatService
 **修正:**
 
 - `src/llm/openrouter.ts` — request に `tools` / `tool_choice` を渡す経路、streaming の `choices[].finish_reason` と `tool_calls` 部分パース。結合 `tools` が空なら body から omit
-- `src/types/index.ts` — `ChatCompletionRequest.tools?`/`tool_choice?`、`StreamDelta.tool_calls?`、`StreamChoice.finish_reason`、`ChatMessage`（`role:"tool"`・`tool_call_id`・assistant の `tool_calls`・**tool_call を持つ assistant message の `content` は `string | null`**）、`usage`（[openrouter-api-audit](../openrouter-api-audit/design.md) と整合）
+- `src/types/index.ts` — `ChatCompletionRequest.tools?`/`tool_choice?`、`StreamDelta.tool_calls?`、`StreamChoice.finish_reason`、`ChatMessage`（`role:"tool"`・`tool_call_id`・assistant の `tool_calls`・**tool_call を持つ assistant message の `content` は `string | null`**）、`usage`（[Responses API への移行](../responses-api-migration/design.md) と整合）
 - `src/services/chatService.ts` / `src/bot/events/messageCreate.ts` — 通常チャット経路を `runToolLoop()`（`Promise<ToolLoopResult>`）経由に統一し、結果で分岐（送信/沈黙/エラー）。content は updater 経由で stream。登録 tool が無ければ実質 1 ターンで現行挙動と等価
 - `src/llm/openrouter.ts`（テスト含む） — SSE parser に frame/carry 最大長と malformed-frame の protocol 失敗化を実装
 

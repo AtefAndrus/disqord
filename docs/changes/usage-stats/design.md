@@ -1,25 +1,33 @@
 ---
-title: "権限管理 + 使用統計"
+title: "使用統計"
 status: planned
 priority: low
-summary: "チャンネル/ロール権限管理と使用統計（/stats）"
+summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
 ---
 
-# 権限管理 + 使用統計
+# 使用統計
 
 ## Why
 
-Botが全チャンネル・全ユーザに無制限でアクセス可能な状態は、大規模サーバーでの運用に適さない。チャンネル/ロール単位の制限が必要。また、利用状況の可視化手段がなく、コスト管理やモデル選択の最適化ができない。
+利用状況の可視化手段がなく、コスト管理やモデル選択の最適化ができない。
+サーバー・ユーザー・モデル別の使用量とコストを記録して `/stats` で表示する。
+
+## 依存 / 関連 change
+
+- 関連: [権限管理](../permissions/design.md) — 同じ `guild_settings` を触るが、リリース単位としては独立。`/stats` の実行権限は同 change の共通認可契約に従う
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — usage のフィールド名と、ターンをまたぐ集計対象は同 change が確定する。本 change は確定した集計結果を保存する側
+- 関連: [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — cache read / write トークンの計上先は本 change の `usage_logs`
+- 関連: [Web 検索 + ツイート展開](../web-search/design.md) — server tool の実行回数（`usage.server_tool_use_details`）の計上先は本 change の `usage_logs`
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Bot利用を特定チャンネル/ロールに制限可能にする
 - サーバー/ユーザー/モデル別の使用統計を記録・表示する
 
 **Non-Goals:**
 
+- 権限管理（[権限管理](../permissions/design.md)）
 - ユーザーごとの使用量制限（レートリミット）
 - 課金・請求システム
 - リアルタイムダッシュボード
@@ -28,41 +36,11 @@ Botが全チャンネル・全ユーザに無制限でアクセス可能な状�
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 権限のデフォルト | 全チャンネル許可 | 既存動作を維持、明示的に制限する方式 |
 | 統計の保存先 | SQLite（usage_logs） | 既存DBインフラを活用 |
 | メッセージ内容の保存 | 保存しない | 個人情報保護 |
 | ログの保持期間 | 永続（削除機能は将来検討） | 長期トレンド分析を可能に |
 
 ## Design
-
-### 権限管理
-
-**変更対象ファイル**:
-
-- `src/db/schema.ts` - guild_settings拡張
-- `src/bot/events/messageCreate.ts` - 権限チェック追加
-- `src/bot/commands/disqord.ts` - configサブコマンド追加
-
-**DBスキーマ変更**:
-
-```sql
-ALTER TABLE guild_settings ADD COLUMN allowed_channels TEXT;  -- JSON array
-ALTER TABLE guild_settings ADD COLUMN admin_role_id TEXT;
-```
-
-**設計メモ**:
-
-- `allowed_channels`: NULL=全チャンネル許可、配列=指定チャンネルのみ
-- `admin_role_id`: 設定変更権限を持つロール
-
-**参照**:
-
-- [discord.js PermissionsBitField](https://discord.js.org/docs/packages/discord.js/14.26.3/PermissionsBitField:Class) - `member.permissions.has()`で権限チェック
-- [discord.js GuildMember](https://discord.js.org/docs/packages/discord.js/14.26.3/GuildMember:Class) - `member.roles.cache.has(roleId)`でロール所属確認
-
----
-
-### 使用統計
 
 **変更対象ファイル**:
 
@@ -152,8 +130,9 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 - ログは永続保存（削除機能は将来検討）
 - 個人情報保護: メッセージ内容は保存しない
 - コスト計算: OpenRouterレスポンスの`usage`から取得。**`usage.cost` は無料モデルでは 0、ストリーミング前段チャンク等では欠落し得る**（公式に「null」と明記はされていない）ため、記録時は `cost ?? 0` でガードする（`usage_logs.cost REAL NOT NULL DEFAULT 0` は null 非許容なので明示フォールバックが必要）
-- `usage` は全レスポンスで自動返却されるため `usage: { include: true }` / `stream_options: { include_usage: true }` は **deprecated**。リクエストに付与しない
-- 追加で `prompt_tokens_details.cached_tokens` / `completion_tokens_details.reasoning_tokens` 等も usage に含まれる（記録するかは任意、初期は基本フィールドのみ）
+- `usage` は全レスポンスで自動返却される。[Responses API への移行](../responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない
+- 記録対象は、同 change が `AggregatedUsage` に載せるフィールドから選ぶ。基本トークンと `cost` のほか、`prompt_tokens_details.cached_tokens` / `cache_write_tokens`、`completion_tokens_details.reasoning_tokens`、`cost_details`、`server_tool_use_details`（server tool の実行回数）が候補になる
+- `server_tool_use_details` は server tool が一度も起動しなかったリクエストでは usage から省かれる。未起動と 0 回を区別するなら、値ではなくキーの有無で判定する
 - パフォーマンス: インデックスで集計クエリを高速化
 
 **参照**:
@@ -163,12 +142,9 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 
 ## Tasks
 
-- [ ] guild_settingsにallowed_channels, admin_role_idカラム追加
-- [ ] messageCreateに権限チェック追加
-- [ ] 権限設定コマンド実装
-- [ ] usage_logsテーブル追加
-- [ ] usageRepository実装
-- [ ] chatServiceにログ記録追加
-- [ ] statsService実装
-- [ ] `/stats`コマンド実装（server/user/model）
-- [ ] `docs/changes/permissions-stats/` 削除（リリース完了時、git 履歴がアーカイブ）
+- [ ] `usage_logs` テーブル追加
+- [ ] `usageRepository` 実装
+- [ ] `chatService` にログ記録追加
+- [ ] `statsService` 実装
+- [ ] `/stats` コマンド実装（server/user/model）
+- [ ] `docs/changes/usage-stats/` 削除（リリース完了時、git 履歴がアーカイブ）

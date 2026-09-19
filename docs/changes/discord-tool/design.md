@@ -22,7 +22,7 @@ DisQord はチャット bot として既に Discord 上で動いており、ユ�
 - 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler`）・`ToolRegistry`・`runToolLoop()` が前提。本 change はここに tool を登録するだけで、protocol ループは持たない
 - 連携: [conversation-context](../conversation-context/design.md) — `fetch_more_context` は履歴ストアの session/exchange モデルと予算境界を使う。本 change の他 action（履歴取得等）は live な Discord API を叩く
 - 連携: [chat-response-v2](../chat-response-v2/design.md) — foundation は `ToolRenderPayload` を V2 updater へ透過するが、現在の tool block hook は描画しない。本 change が Discord tool の結果描画を実装し、tool 自体の可否は `isEnabled` で別管理する
-- 連携: [permissions-stats](../permissions-stats/design.md) — 管理系 action（pin/スレッド作成）の使用ログ/権限境界は将来 stats 側と整合させうる（本 change では tool 単位の log に留める）
+- 連携: [権限管理](../permissions/design.md) — 管理系 action（pin/スレッド作成）の使用ログ/権限境界は将来 stats 側と整合させうる（本 change では tool 単位の log に留める）
 
 ## Goals / Non-Goals
 

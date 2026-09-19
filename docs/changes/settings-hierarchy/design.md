@@ -13,6 +13,7 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 
 ## 依存 / 関連 change
 
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す配管は同 change が用意する。あわせて送信可能なパラメータ集合が狭まる（後述）
 - 連携: [reasoning-output](../reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
 
 ## Goals / Non-Goals
@@ -81,6 +82,18 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 2. `ModelService`でキャッシュ時に保存
 3. `chatService`がモデルのデフォルトパラメータを取得して適用
 4. `supported_parameters`（enum 配列）でモデルが受け付けるパラメータを判定。現行 enum には `temperature` / `top_p` / `top_k` / `min_p` / `top_a` / `frequency_penalty` / `presence_penalty` / `repetition_penalty` / `max_tokens` / `logit_bias` / `logprobs` / `top_logprobs` / `seed` / `response_format` / `structured_outputs` / `stop` / `tools` / `tool_choice` / `parallel_tool_calls` / `reasoning` / `reasoning_effort` / `include_reasoning` / **`web_search_options`** / **`verbosity`** 等が含まれる（実装時に最新を確認）
+
+**`supported_parameters` をそのまま許可リストにできない（重要）:**
+
+[Responses API への移行](../responses-api-migration/design.md) 後、送信できるパラメータ集合は Models API が返す名前と一致しない。
+
+- Responses に無いもの: `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `response_format` / `seed` / `stop` / `top_a` / `prediction`。これらは許可リストに載っていても送れない
+- 名前が違うもの: `max_tokens` / `max_completion_tokens` は Responses では `max_output_tokens`
+- `supported_parameters` は Chat Completions のパラメータ名を返す。全 445 モデル中 432 件が `max_tokens` を返し、`max_completion_tokens` を返すのは 63 件である（2026-09-18 に `GET /api/v1/models` で確認）
+
+したがって `z.literal([...supported_parameters])` で許可リストを組む方針は成立しない。
+**能力判定に使う名前（Models API が返す名前）と、実際に送信する名前の対応表**を本 change が持ち、対応表に無いパラメータは設定できないものとして扱う。
+対応表は、ユーザ設定の検証と、リクエスト組み立ての両方が参照する単一の定義にする。
 
 **Phase 2: ユーザー設定可能パラメータ**:
 
