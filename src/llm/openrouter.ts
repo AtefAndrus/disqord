@@ -1106,10 +1106,11 @@ export class OpenRouterClient implements ILLMClient {
     // event type this client does not know. Yielding a heartbeat keeps
     // `toolLoop.ts`'s idle timer measuring what it is meant to measure — a
     // gap in *receiving* — so a reasoning model that streams only reasoning
-    // for minutes is not mistaken for a stalled connection. Unknown types are
-    // not rejected because the API adds event types without notice (its
-    // OpenAPI definition marks the union as open); a stream that sends such
-    // events forever is still bounded by the wall-clock timeout.
+    // for minutes is not mistaken for a stalled connection. Accepting an
+    // unknown type is this client's own forward-compatibility choice (the
+    // OpenAPI definition lists a closed set): a new event type should not
+    // fail every turn until this file learns about it. A stream that sends
+    // such events forever is still bounded by the wall-clock timeout.
     yield { heartbeat: true, done: false };
     return false;
   }

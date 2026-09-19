@@ -63,7 +63,7 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 | tool call の識別子 | Responses の `call_id` を現行の `ToolCall.id` へ写像する | `toolLoop.ts` は `role:"tool"` の `tool_call_id` で突き合わせる。写像しておけば dispatcher 側は無変更で済む |
 | tool call の index | `output_index` をそのまま `StreamToolCallDelta.index` にする | `output_index` は 1 レスポンス内で item ごとに一意で、出力順に増える。accumulator が要求するのは一意性と順序だけであり、reasoning や message の item が間に入って値が連番にならなくても支障が無い |
 | provider の取得 | `X-OpenRouter-Metadata: enabled` ヘッダを送り、`openrouter_metadata.endpoints.available[]` のうち `selected: true` の `provider` を読む。形が想定外なら provider を不明として扱い、エラーにしない | Responses のレスポンスにはトップレベルの `provider` が無く、footer の「Provider:」行が消える。provider は表示専用なので、本文が届いた turn を metadata の形だけで落とさない |
-| heartbeat として通すイベント | 受理したイベントのうち呼び出し側へ渡すものが無いものすべて。client が知らない `type` も拒否せず heartbeat にする | `STREAM_IDLE_TIMEOUT_MS` が測るのは受信の途絶であり、どのイベントの到着も接続が生きている証拠になる。reasoning だけを数分流すモデルを停止と誤判定しない。API は予告なくイベント型を追加する（OpenAPI 定義が union を open としている）ため未知の型で turn を落とさない。イベントを流し続けるストリームは `STREAM_WALL_TIMEOUT_MS` が打ち切る |
+| heartbeat として通すイベント | 受理したイベントのうち呼び出し側へ渡すものが無いものすべて。client が知らない `type` も拒否せず heartbeat にする | `STREAM_IDLE_TIMEOUT_MS` が測るのは受信の途絶であり、どのイベントの到着も接続が生きている証拠になる。reasoning だけを数分流すモデルを停止と誤判定しない。未知の `type` を受理するのは client 側の前方互換の方針である（OpenAPI 定義の `StreamEvents` は閉じた集合を列挙している）。イベント型が追加されたときに、client が追随するまで全 turn が失敗する状態を避ける。イベントを流し続けるストリームは `STREAM_WALL_TIMEOUT_MS` が打ち切る |
 | deprecated フラグ | `usage: { include: true }` は送らない | Responses に当該フィールドは無く、usage は指定なしで返る |
 | エラー処理 | `handleErrorResponse()` と `AppError` 系の分類を無変更で流用する | 実測でエラーの封筒が両 API で同一（後述） |
 | SSE 読み取り | フレーム分割、UTF-8 の fatal デコード、フレームサイズ上限、carry buffer のガードを無変更で流用する | 実測で `data:` 行の連なりと `data: [DONE]` 終端が同一（後述） |
@@ -322,6 +322,7 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 ## Open Questions / Risks
 
 - **server tool の usage が API で異なる**: Chat Completions と Responses はどちらも `usage.server_tool_use_details` を返すが、Anthropic Messages API は `usage.server_tool_use` を返す。Messages API は採用しないので影響は無いが、ドキュメントの記述を読むときに混同しない
+- **refusal を本文として扱っていない**: Responses は拒否応答を `response.refusal.delta` と、message の `{type:"refusal"}` part で返す。client はどちらも本文に写像しないので、拒否だけの応答は `toolLoop.ts` の空応答エラーになる。Chat Completions 版も `refusal` フィールドを読んでおらず同じ結果だったので、本 change では挙動を変えない。拒否文をユーザへ見せるかどうかは別 change で決める
 - **プロバイダ差**: Responses は OpenRouter が各プロバイダの API へ変換して呼ぶ。Chat Completions で動いていたモデルが Responses で同じ挙動になるとは限らない。既定モデルを含め、実際に使うモデルで回帰を確認する
 - **`instructions` を使わない選択**: system prompt を `input` の `{role:"system"}` として送る。将来 `instructions` 固有の挙動（プロバイダ側で別扱いされる等）が必要になった場合は、その時点で切り替えを検討する
 

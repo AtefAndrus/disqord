@@ -279,6 +279,36 @@ describe("runToolLoop: requestFields", () => {
     expect(requests.map((request) => request.parallel_tool_calls)).toEqual([false, false]);
   });
 
+  test('requestFields also reach the forced-final request (tool_choice:"none")', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t" }));
+    const { client, requests } = makeClient([
+      ...Array.from({ length: MAX_TURNS - 1 }, (_, i) =>
+        scripted(
+          toolCall({ index: 0, id: `c${i}`, name: "t", argumentsDelta: "{}" }),
+          final({ fullText: "", finishReason: "tool_calls" }),
+        ),
+      ),
+      scripted(content("done"), final({ fullText: "done", finishReason: "stop" })),
+    ]);
+
+    expectFinal(
+      await runToolLoop(
+        baseParams({
+          llmClient: client,
+          registry,
+          requestFields: { parallel_tool_calls: false },
+        }),
+      ),
+    );
+
+    expect(requests).toHaveLength(MAX_TURNS);
+    expect(requests.at(-1)?.tool_choice).toBe("none");
+    expect(requests.map((request) => request.parallel_tool_calls)).toEqual(
+      Array.from({ length: MAX_TURNS }, () => false),
+    );
+  });
+
   test("a requestFields entry cannot supply a field the loop owns, including ones the loop omits", async () => {
     const { client, requests } = makeClient([
       scripted(content("hi"), final({ fullText: "hi", finishReason: "stop" })),
