@@ -19,7 +19,7 @@ bun run preview    # render the bot's UI to PNG under .preview/
 ```
 
 - `bun test` runs bun's built-in runner and skips the typecheck. `bun run test` is the one that does both.
-- `bun run preview` renders what `embedBuilder` / `statusMessage` / `buttonBuilder` actually produce, so a UI change can be reviewed by reading the PNGs instead of by starting the bot.
+- `bun run preview` renders what `embedBuilder` / `statusMessage` / `buttonBuilder` / `chatContainerBuilder` actually produce, so a UI change can be reviewed by reading the PNGs instead of by starting the bot. `scripts/` is in `tsconfig.json`'s `include`, so `bun run typecheck` fails when a preview fixture imports a symbol a UI module no longer exports.
 
 ## Conventions that differ from defaults
 
