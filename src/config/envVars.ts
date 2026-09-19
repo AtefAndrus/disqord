@@ -49,4 +49,20 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     description: "ログローテーション閾値（バイト）",
     default: "10485760",
   },
+  {
+    name: "E2E_TESTER_BOT_ID",
+    required: false,
+    description:
+      "e2e 用テスト bot のユーザ ID。この bot からの発言にだけ応答する（NODE_ENV=production では無視）",
+  },
+  {
+    name: "E2E_TESTER_BOT_TOKEN",
+    required: false,
+    description: "e2e 用テスト bot のトークン（`bun run e2e` だけが使う）",
+  },
+  {
+    name: "E2E_CHANNEL_ID",
+    required: false,
+    description: "e2e の発言を送るチャンネル ID（`bun run e2e` だけが使う）",
+  },
 ];

@@ -48,6 +48,9 @@ docker run -d \
 | ADMIN_API_SECRET | No | 管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503） |
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
+| E2E_TESTER_BOT_ID | No | e2e 用テスト bot のユーザ ID。この bot からの発言にだけ応答する（NODE_ENV=production では無視） |
+| E2E_TESTER_BOT_TOKEN | No | e2e 用テスト bot のトークン（`bun run e2e` だけが使う） |
+| E2E_CHANNEL_ID | No | e2e の発言を送るチャンネル ID（`bun run e2e` だけが使う） |
 <!-- AUTO:ENV_VARS:END -->
 
 ## コマンド一覧

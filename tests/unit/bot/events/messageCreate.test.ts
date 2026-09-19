@@ -391,6 +391,50 @@ describe("createMessageCreateHandler", () => {
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
+  describe("e2e テスト bot の許可", () => {
+    test("e2eTesterBotId と一致する bot の発言には応答する", async () => {
+      mockMessage.author = { bot: true, id: "tester-bot" };
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        { e2eTesterBotId: "tester-bot" },
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateChatResponse).toHaveBeenCalledTimes(1);
+    });
+
+    test("e2eTesterBotId と一致しない bot の発言は無視する", async () => {
+      mockMessage.author = { bot: true, id: "another-bot" };
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        { e2eTesterBotId: "tester-bot" },
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+    });
+
+    test("e2eTesterBotId が自分自身の ID でも、自分の発言には応答しない（自己応答ループの防止）", async () => {
+      mockMessage.author = { bot: true, id: "123456789" };
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        { e2eTesterBotId: "123456789" },
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+    });
+  });
+
   test("Guild外のメッセージは無視する", async () => {
     mockMessage.guild = null;
     const handler = createMessageCreateHandler(

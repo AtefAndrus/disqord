@@ -1,0 +1,58 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { loadConfig } from "../../../src/config";
+
+const KEYS = [
+  "DISCORD_TOKEN",
+  "DISCORD_APPLICATION_ID",
+  "OPENROUTER_API_KEY",
+  "NODE_ENV",
+  "E2E_TESTER_BOT_ID",
+] as const;
+
+describe("loadConfig: E2E_TESTER_BOT_ID", () => {
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+    process.env.DISCORD_TOKEN = "token";
+    process.env.DISCORD_APPLICATION_ID = "1";
+    process.env.OPENROUTER_API_KEY = "key";
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  test("development では設定値をそのまま返す", () => {
+    process.env.NODE_ENV = "development";
+    process.env.E2E_TESTER_BOT_ID = "875079314163499040";
+
+    expect(loadConfig().e2eTesterBotId).toBe("875079314163499040");
+  });
+
+  test("production では設定されていても無視する（本番 bot を他の bot から駆動させない）", () => {
+    process.env.NODE_ENV = "production";
+    process.env.E2E_TESTER_BOT_ID = "875079314163499040";
+
+    expect(loadConfig().e2eTesterBotId).toBeUndefined();
+  });
+
+  test("未設定と空文字は undefined になる", () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.E2E_TESTER_BOT_ID;
+    expect(loadConfig().e2eTesterBotId).toBeUndefined();
+
+    process.env.E2E_TESTER_BOT_ID = "";
+    expect(loadConfig().e2eTesterBotId).toBeUndefined();
+  });
+
+  test("数字以外を含む値は起動時に拒否する", () => {
+    process.env.NODE_ENV = "development";
+    process.env.E2E_TESTER_BOT_ID = "not-a-snowflake";
+
+    expect(() => loadConfig()).toThrow();
+  });
+});

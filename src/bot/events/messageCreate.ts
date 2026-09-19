@@ -78,9 +78,18 @@ export function createMessageCreateHandler(
   chatService: IChatService,
   settingsService: ISettingsService,
   modelService: IModelService,
+  options: { e2eTesterBotId?: string } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
-    if (message.author.bot) {
+    // Bots are ignored, with one exception: the e2e tester bot, so that
+    // `bun run e2e` can drive the real message path. This bot's own messages
+    // stay ignored even if the tester id is misconfigured to its own id,
+    // which would otherwise make it answer itself forever.
+    const isE2eTester =
+      options.e2eTesterBotId !== undefined &&
+      message.author.id === options.e2eTesterBotId &&
+      message.author.id !== message.client.user?.id;
+    if (message.author.bot && !isE2eTester) {
       return;
     }
 

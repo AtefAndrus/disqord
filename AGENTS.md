@@ -16,6 +16,7 @@ bun run lint       # biome check
 bun run format     # biome format --write
 bun run lint:md    # markdownlint-cli2
 bun run preview    # render the bot's UI to PNG under .preview/
+bun run e2e        # drive the real bot through Discord with a tester bot (not in CI)
 ```
 
 - `bun test` runs bun's built-in runner and skips the typecheck. `bun run test` is the one that does both.
@@ -48,6 +49,20 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 
 - `bun:test`, with tests under `tests/`.
 - Replace `fetch` globally with `mock()`, open SQLite as `:memory:`, implement repository and service interfaces with `mock()`, and assert console output with `spyOn()`.
+
+### End-to-end (`bun run e2e`)
+
+- A second bot account posts into a dedicated channel over REST and the replies are read back over REST. It starts the bot itself, so stop any running dev bot first or pass `--no-spawn`. It needs `E2E_TESTER_BOT_TOKEN`, `E2E_TESTER_BOT_ID`, and `E2E_CHANNEL_ID` in `.env`, and the tester bot needs the Message Content intent.
+- Run it before merging a PR that touches `src/llm/`, `src/bot/`, or `src/services/`, and put the result in the PR body.
+- It is deliberately not in CI: it needs two bot tokens and an LLM key in Actions, costs money per run, and fails as often from the network or the model as from the code.
+- Do not automate a user account (Playwright against the web client, self-bots). Discord forbids it and terminates accounts for it. A bot can do everything except click a component.
+- The bot answers another bot only when its ID equals `E2E_TESTER_BOT_ID`, and the config loader drops that setting when `NODE_ENV=production`.
+
+### Manual checks
+
+- What only a human can do (clicking a button in a real client, judging how something looks) never blocks a merge. Record it in the design's Tasks as `- [ ] 手動確認: ...`, keep the design's `status` at `in-progress`, and carry on.
+- Manual checks gate the release instead: `/release` lists every open `手動確認` task and stops until the user has done them. Deploys happen only on a published Release, so an unverified merge never reaches production.
+- Make the check one action for the user. `bun run e2e stop` posts a long request and waits up to ten minutes for someone to press 停止, then verifies the stopped state itself.
 
 ## Git
 
