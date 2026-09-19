@@ -15,10 +15,11 @@ OpenRouter の reasoning response はモデルとプロバイダによって tex
 
 ## 依存 / 関連 change
 
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — Responses では reasoning が `response.reasoning_text.delta` という専用イベントで流れるため、本 change の**受信 adapter は移行後に設計する**。ただし移行で単純になるのは受信時の振り分けだけで、text / summary / encrypted data の区別、tool 後の継続用データ再送、永続化と削除、表示設定と描画はそのまま本 change の責務として残る
 - 先行: [chat-response-v2](../chat-response-v2/design.md) — reasoning 表示にも文字数・バイト数・fenced code block 対応済みの分割 primitive を使う。
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — reasoning request の effort / token 上限を scope ごとの LLM parameter として解決する。
 - 連携: [conversation-context](../conversation-context/design.md) — multi-turn 継続で必要な `reasoning_details` を assistant turn と同じ保持・削除規則で扱う。
-- 連携: [openrouter-api-audit](../openrouter-api-audit/design.md) — reasoning metadata と response DTO の型監査を共有する。
+- 連携: [Responses API への移行](../responses-api-migration/design.md) — reasoning metadata と response DTO の型監査を共有する。
 
 ## Goals / Non-Goals
 

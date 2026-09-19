@@ -20,7 +20,7 @@ conversation-context は v1 で「1 user → 1 assistant」を `idx_turns_one_as
 - 連携: [tool-calling-foundation](../tool-calling-foundation/design.md) — 生成は `runToolLoop()`（`Promise<ToolLoopResult>`、判別共用体 final/cancelled/error）経由。再生成で in-flight 生成を打ち切る場合は同基盤の **`AbortSignal` cancellation 経路**（`{status:'cancelled'}`）を使う
 - 連携: [chat-response-v2](../chat-response-v2/design.md) — Components V2 の描画プリミティブ（Container/Section accessory・ボタン・分割送信・stream updater）と制約を利用する。chat-response-v2 自体は再生成 interaction を扱わず描画基盤のみ提供するため、再生成/undo ボタンの追加・customId ルーティング・edit による世代差し替えは**本 change の責務**
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — compaction の要約生成に使う system prompt / モデル / 予算しきい値は precedence 解決した設定を使う
-- 連携: [permissions-stats](../permissions-stats/design.md) — 再生成・compaction 要約生成の usage/cost も計上対象
+- 連携: [使用統計](../usage-stats/design.md) — 再生成・compaction 要約生成の usage/cost も計上対象
 
 ## Goals / Non-Goals
 
@@ -297,7 +297,7 @@ conversation-context は v1 で `messageUpdate` を無視する。本 change は
 
 1. 畳む exchange 範囲 `[oldest .. cutoff]` を確定（上記しきい値）。
 1.5. **生成前の REST 削除検証（プライバシー必須・§4.1 と同水準）**: 要約生成は範囲内の生テキストを LLM リクエストへ送り `session_summaries.content_json` に焼き込む「use」なので、**生成前に**範囲内**各寄与 exchange の `turn_messages`（user + assistant・分割 chunk 含む）を REST 再検証**する（conversation-context §8(a) の「hydrate 直前 REST 再検証」と同じ強さ。要約生成は raw turn の hydrate に相当するので同水準を要求する）。**authoritative な 404/403 を返した exchange は範囲から除外し、対応 exchange を purge**（→ §4.5 の uncompact 経路）。これにより**オフライン中に外部削除された発話のテキストが要約に焼き込まれること自体を防ぐ**（DB 存在チェックだけだと、オフライン削除が DB へ未同期の間は purge 判定をすり抜けて削除済みテキストを要約化してしまう）。transient な REST 失敗では除外せず（best-effort 契約・conversation-context と同じ）、その exchange は今回の compaction を skip して次回に委ねる。
-2. 範囲内の生テキストを集めて要約を生成（**txn 外**。`runToolLoop` ではなく**単発 chat completion**で十分。tool 不要。settings 解決のモデル/プロンプト）。**この completion の `usage`/cost も [permissions-stats](../permissions-stats/design.md) の計上経路に明示的に記録する**（`runToolLoop` の `ToolLoopResult` 経由ではないので、compaction service が単発 completion の usage を別途 stats へ渡す契約を持つ。invoking user/guild に帰属。要約生成のコストが隠れないように）。
+2. 範囲内の生テキストを集めて要約を生成（**txn 外**。`runToolLoop` ではなく**単発 chat completion**で十分。tool 不要。settings 解決のモデル/プロンプト）。**この completion の `usage`/cost も [使用統計](../usage-stats/design.md) の計上経路に明示的に記録する**（`runToolLoop` の `ToolLoopResult` 経由ではないので、compaction service が単発 completion の usage を別途 stats へ渡す契約を持つ。invoking user/guild に帰属。要約生成のコストが隠れないように）。
 3. 生成完了後、**短い `BEGIN IMMEDIATE` txn**で: (a) **要約生成の入力になった各 turn が依然存在・適格か再確認**: 範囲が変化していないか（新規メッセージ・undo・別 compaction で範囲構成が動いていないか、**範囲内に新たな `pending` assistant が現れていないか**）に加え、**要約テキストを生成した元の寄与 turn id 群がすべて `turns` に存在し、外部削除/TTL/guild 退出などで purge されておらず、scope の履歴設定も off 化されていないこと**を検証する。生成は txn 外なので、**生成ウィンドウ中に**範囲内 turn が外部削除（オンライン中の gateway delete が DB へ同期）されると**生成済み要約テキストに削除済み発話が焼き込まれている**。手順 1.5 は**生成前**のオフライン削除を REST で弾き、本手順 3(a) は**生成中**に同期された削除を DB 存在再確認で弾く二段で、削除済みテキストの永続化を防ぐ。1 つでも欠落/不適格なら**当該要約を破棄して再計算 or skip**（焼き込まれた削除済みテキストを永続化しない＝プライバシー）→ (b) `session_summaries` 行を挿入 → (c) `summary_contributors` に**要約テキスト生成の入力になった turn を漏れなく**記録（= 各被要約 exchange の active な user turn + その `active=1` assistant 世代。**abandoned user turn は assistant 世代を持たないので user 行のみが寄与**（§4.2。要約入力にも user テキストだけが入る）。`active=0` の旧世代/failed は文脈外なので寄与に含めない。この「寄与 = 当時 active だった世代」が §4.5 の active 復帰の根拠であり、かつ**寄与を漏れなく記録することで FK + backstop トリガが purge 伝播の第二防衛線になる**〔記録漏れの turn が後で purge されても要約破棄が発火しない穴を作らない〕）→ (d) 範囲内の各寄与 turn に `compacted_into_summary_id = <要約 id>` をセット、**寄与 assistant（=当時の active 世代）の `active=0`**（要約が置き換える）。user turn は active のまま物理保持だが文脈構築では除外（下記）。
 4. 文脈構築（§4.4）は要約 + 畳まれていない直近 exchange を採用。
 

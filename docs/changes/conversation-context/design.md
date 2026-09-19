@@ -22,12 +22,13 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず、`pr
 
 ## 依存 / 関連 change
 
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — `session_id` を通常生成・tool 後の再リクエスト・retry へ渡す配管は同 change が用意する。`runToolLoop()` は毎ターンのリクエストを名前付きフィールドで組み直しており、フィールドを足すだけでは伝搬しない。本 change は値を載せる側
 - 後続: [conversation-regeneration](../conversation-regeneration/design.md) — 本基盤を前提とする回答再生成・編集/undo・compaction
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — **優先順位で解決した単一 system prompt**（override precedence、合成ではない）を前置
 - 連携: [tool-calling-foundation](../tool-calling-foundation/design.md) / [discord-tool](../discord-tool/design.md) — モデル駆動の文脈取得（`fetch_more_context`）は両者成立後の発展
 - 連携: [view-image-rehydration](../view-image-rehydration/design.md) — 本 change の構造化メディア参照を使い剥がした画像をベストエフォート再取得
-- 連携: [permissions-stats](../permissions-stats/design.md) — usage/トークンの**コスト計上**（message 本文は保存しない。履歴本体は本 change）
-- 連携: [openrouter-api-audit](../openrouter-api-audit/design.md) — `cached_tokens` / `cache_write_tokens` を含む usage 型と parser を共有
+- 連携: [使用統計](../usage-stats/design.md) — usage/トークンの**コスト計上**（message 本文は保存しない。履歴本体は本 change）
+- 連携: [Responses API への移行](../responses-api-migration/design.md) — `cached_tokens` / `cache_write_tokens` を含む usage 型と parser を共有
 - 将来: [code-execution](../code-execution/design.md) の persistent sandbox は本 change の **session_id** をキーにできる（**sandbox の所有・ライフサイクルは code-execution 側**）
 
 ## Goals / Non-Goals

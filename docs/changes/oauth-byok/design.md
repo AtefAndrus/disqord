@@ -14,6 +14,10 @@ summary: "OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK）"
 OAuth PKCE でユーザーまたは Guild 管理者が OpenRouter アカウントを接続し、
 自分のクレジットで LLM を利用できるようにする。
 
+## 依存 / 関連 change
+
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — API キーを全ターン・retry・非 streaming 呼び出しへ渡す配管は同 change が用意する。`chatStream()` を実際に呼ぶのは `runToolLoop()` の中であり、`chat()` / `chatStream()` に引数を足すだけでは loop 内の再リクエストへ届かない
+
 ## Goals / Non-Goals
 
 **Goals:**

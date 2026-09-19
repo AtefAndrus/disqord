@@ -16,6 +16,7 @@
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [マルチモーダル対応](changes/multimodal/design.md) | 高 | implemented | 画像・PDF 添付の LLM 入力対応 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
+| [Responses API への移行](changes/responses-api-migration/design.md) | 高 | planned | LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える |
 | [ツール呼び出し基盤](changes/tool-calling-foundation/design.md) | 高 | implemented | OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
 | [コード実行（microsandbox 統合）](changes/code-execution/design.md) | 中 | investigating | microsandbox による安全なコード実行（/run・LLM tool 統合） |
@@ -26,7 +27,7 @@
 | [モデルコマンドの詳細表示](changes/model-command-ux/design.md) | 中 | implemented | /model current と set の詳細表示を共通化し、OpenRouter のモデルページへリンク |
 | [複数モデル並列](changes/model-compare/design.md) | 中 | planned | /compare で複数モデルへ並列リクエストし回答を比較 |
 | [出力マルチモーダル対応](changes/multimodal-output/design.md) | 中 | investigating | 検証済みの生成画像と生成ファイルを Discord の MediaGallery / File で表示 |
-| [OpenRouter API 整合監査](changes/openrouter-api-audit/design.md) | 中 | planned | 実装済み OpenRouter 連携を現行 API へ整合（deprecated な usage:{include} 撤去ほか） |
+| [権限管理](changes/permissions/design.md) | 中 | planned | チャンネル制限と、設定変更の共通認可契約（admin_role_id） |
 | [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | OpenRouter の reasoning / reasoning_details を安全に受け取り、設定に応じて Discord へ表示 |
 | [GitHub Release 通知機能の削除](changes/release-notification-removal/design.md) | 中 | implemented | Discord への GitHub Release 通知とそのための Webhook、設定、永続化項目をアプリケーションから削除 |
 | [リリース手順の簡素化](changes/release-workflow-simplification/design.md) | 中 | implemented | GitHub 自動生成ノートと対象バージョン付き CHANGELOG によるリリース |
@@ -36,8 +37,8 @@
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
 | [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | planned | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
 | [セッション分岐 (/fork)](changes/fork/design.md) | 低 | investigating | 会話履歴の途中から新しいセッションへ分岐する /fork（参照コピー・session_id 安定性前提） |
-| [権限管理 + 使用統計](changes/permissions-stats/design.md) | 低 | planned | チャンネル/ロール権限管理と使用統計（/stats） |
 | [Bot UI プレビュー（visual refine）](changes/ui-preview/design.md) | 低 | implemented | プレビュー描画基盤（残タスクは任意項目のみ） |
+| [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用統計（/stats） |
 <!-- AUTO:PROGRESS:END -->
 
 ---

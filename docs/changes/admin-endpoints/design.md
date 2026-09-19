@@ -16,7 +16,7 @@ Bot 自身に HMAC 認証付きの管理エンドポイント `GET /admin/logs` 
 ## 依存 / 関連 change
 
 - 独立: [oauth-byok](../oauth-byok/design.md) — ユーザー / ギルドの OpenRouter キー接続（OAuth PKCE）。認証主体・スコープが直交。重複懸念なし。
-- 独立: [permissions-stats](../permissions-stats/design.md) — Discord ギルド内のコマンド実行権限（`admin_role_id`）。本 change の HMAC は Bot 運用者向けで、ギルド管理者権限とは別レイヤ。
+- 独立: [権限管理](../permissions/design.md) — Discord ギルド内のコマンド実行権限（`admin_role_id`）。本 change の HMAC は Bot 運用者向けで、ギルド管理者権限とは別レイヤ。
 
 ## Goals / Non-Goals
 
