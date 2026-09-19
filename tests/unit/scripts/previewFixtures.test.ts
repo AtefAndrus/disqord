@@ -35,6 +35,17 @@ describe("プレビュー fixture", () => {
       const rendered = markup.split("<discord-message ").length - 1;
       expect(rendered).toBe(fixture.messages.length);
       expect(markup).not.toContain("");
+
+      // message の個数だけでは、中身の描画が丸ごと空になる回帰を検出できない。
+      // payload にある Embed / Container の個数ぶん、対応する要素が出ていることまで見る。
+      const embeds = fixture.messages.reduce((n, m) => n + m.embeds.length, 0);
+      const containers = fixture.messages.reduce(
+        (n, m) => n + m.components.filter((c) => c.type === ComponentType.Container).length,
+        0,
+      );
+      expect(markup.split("<discord-embed ").length - 1).toBe(embeds);
+      expect(markup.split('class="dq-container"').length - 1).toBe(containers);
+      expect(embeds + containers).toBeGreaterThan(0);
     }
   });
 
