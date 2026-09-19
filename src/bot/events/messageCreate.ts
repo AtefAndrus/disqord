@@ -78,9 +78,18 @@ export function createMessageCreateHandler(
   chatService: IChatService,
   settingsService: ISettingsService,
   modelService: IModelService,
+  options: { e2eTesterBotId?: string } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
-    if (message.author.bot) {
+    // Bots are ignored, with one exception: the e2e tester bot, so that
+    // `bun run e2e` can drive the real message path. This bot's own messages
+    // stay ignored even if the tester id is misconfigured to its own id,
+    // which would otherwise make it answer itself forever.
+    const isE2eTester =
+      options.e2eTesterBotId !== undefined &&
+      message.author.id === options.e2eTesterBotId &&
+      message.author.id !== message.client.user?.id;
+    if (message.author.bot && !isE2eTester) {
       return;
     }
 
@@ -108,6 +117,15 @@ export function createMessageCreateHandler(
 
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
+
+    // The tester bot must mention this bot and say something. Without this,
+    // two development instances that name each other as tester in an
+    // auto-reply channel answer each other forever: their replies are
+    // Components V2 messages with empty `content`, which each side would
+    // take as a new (empty) request.
+    if (isE2eTester && (!isMention || content.length === 0)) {
+      return;
+    }
 
     // 添付ファイルをパース（画像はそのまま、PDF は data URL 化）
     const attachmentResult = await parseAttachments(message.attachments);

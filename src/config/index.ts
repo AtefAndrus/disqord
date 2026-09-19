@@ -67,6 +67,7 @@ const configSchema = z.object({
   adminApiSecret: z.string().optional(),
   logDir: z.string().optional(),
   logMaxBytes: z.coerce.number().int().min(1024).default(10_485_760),
+  e2eTesterBotId: z.string().regex(/^\d+$/).optional(),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -83,6 +84,13 @@ export function loadConfig(): AppConfig {
     adminApiSecret: process.env.ADMIN_API_SECRET,
     logDir: process.env.LOG_DIR,
     logMaxBytes: process.env.LOG_MAX_BYTES,
+    // Dropped before validation rather than checked by each reader: a
+    // production bot must never answer another bot, and a malformed value of
+    // a setting production ignores must not stop it from starting either.
+    e2eTesterBotId:
+      process.env.NODE_ENV === "production"
+        ? undefined
+        : process.env.E2E_TESTER_BOT_ID || undefined,
   });
 
   return parsed;

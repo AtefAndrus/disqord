@@ -12,6 +12,8 @@ Create a new release for DisQord version v<version>.
 1. Confirm the working tree is clean: `git status`
 2. Confirm lint passes: `bun run lint`
 3. Confirm typecheck and the test suite pass: `bun run test`
+4. Run the end-to-end scenarios against the real bot: `bun run e2e`. A failure caused by the model or the network (a 429 from a free model, for example) is not a release blocker by itself; rerun, and report what failed.
+5. List the open manual checks: `grep -rn -- '- \[ \] 手動確認' docs/changes/`. If any exist, stop and ask the user to do them (each task says how; `bun run e2e stop` covers the stop button). Tick the task and move the design to `status: implemented` once its other tasks are done. Do not release past an open manual check unless the user says to.
 
 ## Step 1: Update package.json
 

@@ -54,6 +54,7 @@ async function bootstrap(): Promise<void> {
     chatService,
     settingsService,
     modelService,
+    { e2eTesterBotId: config.e2eTesterBotId },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
     commandHandlers,
