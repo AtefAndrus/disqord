@@ -68,6 +68,8 @@ GitHub Releases use GitHub's automatically generated notes; the workflow does no
 - `biome.json`'s `$schema` must match the exact `@biomejs/biome` version in `package.json`. Biome reports the mismatch as info and exits 0, so CI promotes it to a failure.
 - SQLite runs in WAL mode.
 - Dependencies update through Renovate (`renovate.json5`); there is no `dependabot.yml`. Dependabot security updates are off, so vulnerability PRs come from Renovate as well. GitHub raises no alert for SHA-pinned actions, so those move on version updates rather than alerts.
+- OpenRouter's guide pages and its OpenAPI definition disagree in places, and the definition is the one that matches the live API. Take field names, enums, and defaults from `https://openrouter.ai/openapi.json`; use the guide pages for semantics. Observed 2026-09-18: the server-tools guide reports consumption under `usage.server_tool_use` while `ChatUsage` defines `server_tool_use_details` (the API returns the latter), `max_tool_calls` is documented as a top-level Chat Completions field but is absent from `ChatRequest`, and the `tools` / `max_tool_calls` parameters the advisor guide lists do not exist in `AdvisorServerToolConfig`.
+- `https://openrouter.ai/docs/llms.txt` indexes the doc pages. Resolve a page URL there rather than guessing one.
 <!-- AUTO:DEFAULT_MODEL:START -->
 - Default model: `google/gemma-4-26b-a4b-it:free`
 <!-- AUTO:DEFAULT_MODEL:END -->
