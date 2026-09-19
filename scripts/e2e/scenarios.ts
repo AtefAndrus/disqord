@@ -20,7 +20,7 @@ export interface Reply {
   body: string;
   /** The footer of each page that has one, in page order. */
   footers: string[];
-  /** True when the reply is a single error container. */
+  /** True when the reply ends in an error container (alone, or after the partial pages a failed stream leaves behind). */
   isError: boolean;
 }
 
@@ -98,6 +98,7 @@ function isErrorContainer(message: DiscordMessage): boolean {
 export function toReply(messages: DiscordMessage[]): Reply {
   const body: string[] = [];
   const footers: string[] = [];
+  const lastMessage = messages.at(-1);
   for (const message of messages) {
     const footer = footerOf(message);
     const texts: string[] = [];
@@ -113,7 +114,7 @@ export function toReply(messages: DiscordMessage[]): Reply {
     messages,
     body: body.join("\n"),
     footers,
-    isError: messages.length === 1 && messages[0] !== undefined && isErrorContainer(messages[0]),
+    isError: lastMessage !== undefined && isErrorContainer(lastMessage),
   };
 }
 

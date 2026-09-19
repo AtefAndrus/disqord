@@ -144,6 +144,24 @@ describe("e2e scenarios: 完了判定", () => {
     expect(toReply([red]).isError).toBe(false);
   });
 
+  test("途中まで出力したあとのエラー（部分ページ + 末尾のエラー container）は完了と見なす", () => {
+    const errorPage: DiscordMessage = {
+      id: "2",
+      content: "",
+      author: { id: "bot", username: "bot" },
+      components: [buildErrorContainer("ストリームが途切れました").toJSON()],
+    };
+    const reply = toReply([page("1", ["途中までの本文"]), errorPage]);
+    expect(reply.isError).toBe(true);
+    expect(isFinished(reply)).toBe(true);
+  });
+
+  test("最終ページに usage footer があっても、停止ボタンの残るページがあれば完了と見なさない", () => {
+    const reply = toReply([streamingPage("1", "1 ページ目"), page("2", ["2 ページ目"], USAGE)]);
+    expect(isStreaming(reply)).toBe(true);
+    expect(isFinished(reply)).toBe(false);
+  });
+
   test("停止ボタンが残っているページが 1 つでもあれば完了と見なさない", () => {
     expect(isFinished(toReply([page("1", ["1 ページ目"]), streamingPage("2", "2 ページ目")]))).toBe(
       false,
