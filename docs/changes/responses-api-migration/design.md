@@ -23,7 +23,6 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 ## 依存 / 関連 change
 
 - 後続: [コード実行](../code-execution/design.md) — `openrouter:shell` の導入は本 change の完了が前提。同 change の microsandbox 統合の設計は本 change 完了後に書き直す
-- 吸収済み: 旧 `openrouter-api-audit`（OpenRouter API 整合監査）— Chat Completions の deprecated フラグ撤去と usage 型整合を目的にしていた change で、移行すれば大半が自動的に満たされる。残タスクは本 change が引き取り、フォルダは削除済み
 - 連携: [推論内容の取得・表示](../reasoning-output/design.md) — Responses では reasoning が専用イベントで流れるため、同 change の受信側の設計が単純になる。ただし本 change では表示を実装しない
 - 連携: [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) — Responses で送れる生成パラメータが狭くなり、`supported_parameters` をそのまま許可リストにする方針が成立しなくなる（後述）
 - 連携: [Web 検索 + ツイート展開](../web-search/design.md) / [OpenRouter サーバツール群](../server-tools/design.md) — server tool の送り方は両 API で同じだが、usage の読み取り先が変わる
@@ -65,7 +64,7 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 | tool call の index | `output_index` をそのまま `StreamToolCallDelta.index` にする | `output_index` は 1 レスポンス内で item ごとに一意で、出力順に増える。accumulator が要求するのは一意性と順序だけであり、reasoning や message の item が間に入って値が連番にならなくても支障が無い |
 | provider の取得 | `X-OpenRouter-Metadata: enabled` ヘッダを送り、`openrouter_metadata.endpoints.available[]` のうち `selected: true` の `provider` を読む。形が想定外なら provider を不明として扱い、エラーにしない | Responses のレスポンスにはトップレベルの `provider` が無く、footer の「Provider:」行が消える。provider は表示専用なので、本文が届いた turn を metadata の形だけで落とさない |
 | heartbeat として通すイベント | 受理したイベントのうち呼び出し側へ渡すものが無いものすべて。client が知らない `type` も拒否せず heartbeat にする | `STREAM_IDLE_TIMEOUT_MS` が測るのは受信の途絶であり、どのイベントの到着も接続が生きている証拠になる。reasoning だけを数分流すモデルを停止と誤判定しない。API は予告なくイベント型を追加する（OpenAPI 定義が union を open としている）ため未知の型で turn を落とさない。イベントを流し続けるストリームは `STREAM_WALL_TIMEOUT_MS` が打ち切る |
-| deprecated フラグ | `usage: { include: true }` は送らない | Responses に当該フィールドは無い。吸収した監査 change の目的をここで満たす |
+| deprecated フラグ | `usage: { include: true }` は送らない | Responses に当該フィールドは無く、usage は指定なしで返る |
 | エラー処理 | `handleErrorResponse()` と `AppError` 系の分類を無変更で流用する | 実測でエラーの封筒が両 API で同一（後述） |
 | SSE 読み取り | フレーム分割、UTF-8 の fatal デコード、フレームサイズ上限、carry buffer のガードを無変更で流用する | 実測で `data:` 行の連なりと `data: [DONE]` 終端が同一（後述） |
 | `listModels` / `listModelsWithPricing` / `getCredits` / `isRateLimited` | 無変更 | `/models` と `/key` は API surface に依存しない |
@@ -107,16 +106,19 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 | `{role:"assistant", content, tool_calls}` | `{role:"assistant", content}` と、`tool_calls` 各要素を `{type:"function_call", call_id, name, arguments}` として**並べて置く** |
 | `{role:"tool", content, tool_call_id}` | `{type:"function_call_output", call_id, output}` |
 | `{type:"text", text}` | `{type:"input_text", text}` |
-| `{type:"image_url", image_url:{url}}` | `{type:"input_image", image_url: <url>}`（オブジェクトではなく文字列） |
+| `{type:"image_url", image_url:{url}}` | `{type:"input_image", image_url: <url>, detail:"auto"}`（`image_url` はオブジェクトではなく文字列） |
 | `{type:"file", file:{filename, file_data}}` | `{type:"input_file", filename, file_data}` |
 | `tools: [{type:"function", function:{name, description, parameters}}]` | `tools: [{type:"function", name, description, parameters}]` |
 | `tools: [{type:"openrouter:<id>", parameters}]` | 同じ（server tool は無変更） |
-| `tool_choice` | 同じ |
+| `tool_choice`（`"auto"` / `"none"` / `"required"`） | 同じ |
+| `tool_choice: {type:"function", function:{name}}` | `tool_choice: {type:"function", name}` |
 | `parallel_tool_calls` | 同じ |
 | `plugins` | 同じ |
 | `usage: {include: true}` | 送らない |
 
 `input_image` の `image_url` は、Chat Completions ではオブジェクト（`{url}`）だが Responses では文字列である点に注意する。
+OpenAPI 定義の `InputImage` は `detail` を必須としている。
+実 API は `detail` なしでも受け付けたが、定義に合わせて `"auto"` を送る。
 `input_file` の `file_data` は現行と同じく `data:application/pdf;base64,...` 形式の data URL を受け付ける。
 `file-parser` plugin と組み合わせて PDF の本文がモデルへ渡ることを実測で確認した。
 
@@ -163,6 +165,9 @@ HTTP エラーと同じ `{error:{code,message}}` の封筒が Responses のス�
 
 Responses には `finish_reason: "tool_calls"` に当たる値が無く、打ち切りは `response.completed` の `status` ではなく別イベントの `response.incomplete` で通知される。
 function call は `response.output_item.done` が到達した時点で完成と見なす。
+`response.completed` の時点で `done` に至っていない function call が一つでも残っていれば protocol error にする。
+`toolLoop.ts` は蓄積した call をすべて dispatch するので、受理すると、`arguments` の長さ照合を経ていない call が完成済みの call と並んで実行されるためである。
+`response.incomplete` では未完成の call を許す。打ち切りでは起こりうる状態であり、`toolLoop.ts` は `"length"` / `"content_filter"` で tool call の断片が残っていれば dispatch せずエラーにする。
 `toolLoop.ts` は `finishReason === "tool_calls"` で分岐しているので、client 側で完成した call を数えて合成すれば dispatcher は無変更で動く。
 
 ### usage の対応
@@ -179,13 +184,14 @@ function call は `response.output_item.done` が到達した時点で完成と�
 | `cost_details.upstream_inference_cost` | 同じ |
 | `cost_details.upstream_inference_prompt_cost` | `cost_details.upstream_inference_input_cost` |
 | `cost_details.upstream_inference_completions_cost` | `cost_details.upstream_inference_output_cost` |
+| `cost_details.server_tool_cost`（Responses で新たに読む） | 同じ |
 | `server_tool_use_details` | 同じ |
 | `is_byok` | 同じ |
 
 client 内で Responses 形から現行形へ写像し、下流には現行の形のまま渡す。
 
 あわせて `ChatCompletionResponse["usage"]` の型を、Responses が実際に返すフィールドへ揃える。
-追加するのは `prompt_tokens_details.cache_write_tokens`、`cost_details` の 3 フィールド、`is_byok`、`server_tool_use_details` である。
+追加するのは `prompt_tokens_details.cache_write_tokens`、`cost_details` の 4 フィールド、`is_byok`、`server_tool_use_details` である。
 `video_tokens` / `image_tokens` / `audio_tokens` は Chat Completions の `ChatUsage` にだけあり、Responses の usage には存在しないので型へ入れない。
 `src/utils/chatContainerBuilder.ts` の `UsageMetadata` は同じ形を手書きで複製しているので、`ChatCompletionResponse["usage"]` のエイリアスへ置き換えて定義を一本化する。
 
@@ -214,13 +220,16 @@ loop が自分で組み立てるフィールド（`model` / `messages` / `plugin
 入口が無いと、次の三つの change がそれぞれ同じ配管を通すことになる。
 
 - [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — `session_id` を通常生成・tool 後の再リクエスト・retry のすべてへ渡す
-- [OAuth BYOK](../oauth-byok/design.md) — API キーの上書きを全ターンへ渡す。`chatStream()` を実際に呼ぶのは loop の中であり、現状キー上書きの経路が無い
+- [OAuth BYOK](../oauth-byok/design.md) — ユーザ別の API キーを全ターンへ渡す。`chatStream()` を実際に呼ぶのは loop の中であり、loop を通る経路が無いとキーを切り替えられない
 - [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) — 解決済みの生成パラメータを全ターンへ渡す
 
 本 change は、この三つが値を載せるための器として `IToolLoopParams.requestFields` を用意する。
 型は `ChatCompletionRequest` から loop が所有する 5 フィールドを除いたもので、`ChatCompletionRequest` に項目を足せばそのまま載せられる。
-`requestFields` は毎ターンのリクエストの先頭へ spread するので、通常生成・tool 後の再リクエスト・最終ターンのすべてに同じ値が届き、loop が所有するフィールドを上書きすることはできない。
-`OpenRouterClient` は `ChatCompletionRequest` のうち自分が変換しないフィールドを body へそのまま透過させるので、client 側の変更も要らない。
+`requestFields` は毎ターンのリクエストの先頭へ spread するので、通常生成・tool 後の再リクエスト・最終ターンのすべてに同じ値が届く。
+`OpenRouterClient` は `ChatCompletionRequest` のうち自分が変換しないフィールドを body へそのまま透過させるので、`session_id` や生成パラメータのような body フィールドは client 側の変更なしで届く。
+API キーは body ではなく `Authorization` ヘッダに載るので、この透過だけでは切り替わらない。
+`requestFields` が用意するのは「値を毎ターンの `chatStream()` 呼び出しまで運ぶ経路」までであり、運ばれたキーを client がヘッダへ使い、body からは除く処理は [OAuth BYOK](../oauth-byok/design.md) が実装する。
+`requestFields` に loop が所有するフィールドが紛れ込んでいた場合は、spread の前に取り除く。
 誰も値を入れていない現在は送出内容が変わらないことをテストで固定する。
 どのフィールドを載せるかは各 change が決める。
 
@@ -268,7 +277,7 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 - [x] Responses レスポンス → `ChatCompletionResponse` の変換関数を実装（`output` 配下の `message` item からテキストを組み立て、usage を写像）
 - [x] `chat()` を `/responses` へ載せ替え、`chatService.ts` の呼び出し（1 箇所）が無変更で通ることを確認
 - [x] `ChatCompletionResponse["usage"]` を実返却フィールドへ拡張し、`chatContainerBuilder` の `UsageMetadata` をエイリアス化
-- [x] 吸収した監査の残件: `GET /api/v1/key` の `data.limit_remaining` にドリフトが無いことを確認（上限未設定のキーでは `null` が返り、`getCredits()` の `?? Infinity` は意味的にも正しい）。コード変更は不要
+- [x] `GET /api/v1/key` の `data.limit_remaining` が現行の読み方と食い違っていないことを確認（上限未設定のキーでは `null` が返り、`getCredits()` の `?? Infinity` は意味的にも正しい）。コード変更は不要
 
 ### Phase 2: ストリーミング経路
 
@@ -289,7 +298,6 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 - [x] 実 API で確認する（`OpenRouterClient` と `runToolLoop` を直接駆動）: 非ストリーミング、並行 tool call と server tool の混在、画像入力、PDF 入力、無効モデルの 400、stream 途中のキャンセル、`max_output_tokens` による打ち切り
 - [ ] Discord 上で確認する: 通常のチャット、画像添付、PDF 添付、長文の分割送信、停止ボタン
 - [ ] `bun run preview` で表示の回帰を確認
-- [x] 旧 `openrouter-api-audit` を削除し、残タスクを本 change へ移管
 
 ### Phase 4: 後続への引き継ぎ
 

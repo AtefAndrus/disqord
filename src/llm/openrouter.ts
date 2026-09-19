@@ -100,9 +100,12 @@ interface SseStreamState {
   // observed yet. Once set, the stream is frozen: only [DONE]/comments are
   // legal until EOF.
   finishReasonSeen: string | undefined;
-  // `output_index` of every `function_call` item whose `output_item.done`
-  // arrived. Responses has no `finish_reason:"tool_calls"`; a completed turn
-  // that finished at least one function call is reported as `"tool_calls"`.
+  // `output_index` of every `function_call` item seen so far (through
+  // `output_item.added`, an arguments delta, or `output_item.done`).
+  startedFunctionCalls: Set<number>;
+  // The subset of `startedFunctionCalls` whose `output_item.done` arrived.
+  // Responses has no `finish_reason:"tool_calls"`; a completed turn that
+  // finished at least one function call is reported as `"tool_calls"`.
   completedFunctionCalls: Set<number>;
   // UTF-16 length of the `arguments` deltas yielded so far, per
   // `output_index`. Compared against the finished `arguments` on
@@ -308,6 +311,7 @@ function mapResponsesUsage(raw: unknown): NonNullable<ChatCompletionResponse["us
       ["upstream_inference_cost", "upstream_inference_cost"],
       ["upstream_inference_prompt_cost", "upstream_inference_input_cost"],
       ["upstream_inference_completions_cost", "upstream_inference_output_cost"],
+      ["server_tool_cost", "server_tool_cost"],
     ],
   );
   if (costDetails) usage.cost_details = costDetails;
@@ -393,8 +397,10 @@ function toResponsesContentPart(part: ChatMessageContent): ResponsesInputContent
     case "text":
       return { type: "input_text", text: part.text };
     case "image_url":
-      // A bare string here, not Chat Completions' `{ url }` object.
-      return { type: "input_image", image_url: part.image_url.url };
+      // A bare string here, not Chat Completions' `{ url }` object. `detail`
+      // is required by the API definition even though the live API accepts
+      // its absence; "auto" leaves the resolution to the provider.
+      return { type: "input_image", image_url: part.image_url.url, detail: "auto" };
     case "file":
       return { type: "input_file", filename: part.file.filename, file_data: part.file.file_data };
   }
@@ -654,6 +660,7 @@ export class OpenRouterClient implements ILLMClient {
         lastProvider: undefined,
         lastUsage: undefined,
         finishReasonSeen: undefined,
+        startedFunctionCalls: new Set(),
         completedFunctionCalls: new Set(),
         argumentsLength: new Map(),
       };
@@ -948,6 +955,7 @@ export class OpenRouterClient implements ILLMClient {
             `function_call arguments delta must be a string, got: ${JSON.stringify(event.delta)}`,
           );
         }
+        state.startedFunctionCalls.add(index);
         state.argumentsLength.set(
           index,
           (state.argumentsLength.get(index) ?? 0) + event.delta.length,
@@ -1003,6 +1011,7 @@ export class OpenRouterClient implements ILLMClient {
           }
           state.completedFunctionCalls.add(index);
         }
+        state.startedFunctionCalls.add(index);
         yield {
           toolCall: {
             index,
@@ -1020,6 +1029,20 @@ export class OpenRouterClient implements ILLMClient {
         if (!isPlainObject(event.response)) {
           throw new StreamProtocolError(
             `${event.type} carries a malformed response: ${JSON.stringify(event.response)}`,
+          );
+        }
+        // `toolLoop.ts` dispatches every call it accumulated, so a call that
+        // never reached `output_item.done` would run next to the finished
+        // ones without its arguments ever having been length-checked.
+        // `response.incomplete` is exempt: a truncated turn legitimately
+        // leaves a call unfinished, and the loop never dispatches on
+        // "length"/"content_filter".
+        if (
+          event.type === "response.completed" &&
+          state.startedFunctionCalls.size !== state.completedFunctionCalls.size
+        ) {
+          throw new StreamProtocolError(
+            "response.completed arrived while a function call was still unfinished",
           );
         }
         const finishReason =

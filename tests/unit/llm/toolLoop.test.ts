@@ -279,21 +279,36 @@ describe("runToolLoop: requestFields", () => {
     expect(requests.map((request) => request.parallel_tool_calls)).toEqual([false, false]);
   });
 
-  test("a requestFields entry cannot override a field the loop owns", async () => {
+  test("a requestFields entry cannot supply a field the loop owns, including ones the loop omits", async () => {
     const { client, requests } = makeClient([
       scripted(content("hi"), final({ fullText: "hi", finishReason: "stop" })),
     ]);
 
+    // Empty registry and no plugins: the loop leaves `plugins` / `tools` /
+    // `tool_choice` out of the request, so a plain spread would let these through.
     expectFinal(
       await runToolLoop(
         baseParams({
           llmClient: client,
-          requestFields: { model: "smuggled" } as IToolLoopParams["requestFields"],
+          requestFields: {
+            model: "smuggled",
+            messages: [],
+            plugins: [{ id: "file-parser" }],
+            tools: [{ type: "openrouter:web_search" }],
+            tool_choice: "required",
+            parallel_tool_calls: false,
+          } as IToolLoopParams["requestFields"],
         }),
       ),
     );
 
     expect(requests[0]?.model).toBe(baseParams().model);
+    expect(requests[0]?.messages).toEqual(baseParams().messages);
+    expect(Object.keys(requests[0] ?? {}).sort()).toEqual([
+      "messages",
+      "model",
+      "parallel_tool_calls",
+    ]);
   });
 });
 
@@ -2268,7 +2283,11 @@ describe("runToolLoop: usage aggregation", () => {
           usage: {
             ...usage1(1),
             prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 6 },
-            cost_details: { upstream_inference_cost: 0.5, upstream_inference_prompt_cost: 0.25 },
+            cost_details: {
+              upstream_inference_cost: 0.5,
+              upstream_inference_prompt_cost: 0.25,
+              server_tool_cost: 0.02,
+            },
             server_tool_use_details: { tool_calls_requested: 2, tool_calls_executed: 1 },
             is_byok: true,
           },
@@ -2282,7 +2301,7 @@ describe("runToolLoop: usage aggregation", () => {
           usage: {
             ...usage1(2),
             prompt_tokens_details: { cache_write_tokens: 1 },
-            cost_details: { upstream_inference_cost: 0.25 },
+            cost_details: { upstream_inference_cost: 0.25, server_tool_cost: 0.03 },
             server_tool_use_details: { tool_calls_requested: 1, web_search_requests: 0 },
           },
         }),
@@ -2293,7 +2312,11 @@ describe("runToolLoop: usage aggregation", () => {
     expect(result.usage).toEqual({
       ...usage1(3),
       prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 7 },
-      cost_details: { upstream_inference_cost: 0.75, upstream_inference_prompt_cost: 0.25 },
+      cost_details: {
+        upstream_inference_cost: 0.75,
+        upstream_inference_prompt_cost: 0.25,
+        server_tool_cost: 0.05,
+      },
       // `web_search_requests: 0` was reported, so it is kept as 0;
       // `upstream_inference_completions_cost` was never reported, so it stays absent.
       server_tool_use_details: {
@@ -2757,5 +2780,61 @@ describe("runToolLoop + real OpenRouterClient: usage survives a post-heartbeat, 
     expectFinal(result);
     // Doubled would be { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 }.
     expect(result.usage).toEqual(usage1(5));
+  }, 2_000);
+});
+
+describe("runToolLoop + real OpenRouterClient: an unfinished function call is never dispatched", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test("完成した call の横に done に至らない call が残ると、どの handler も実行されず status:error になる", async () => {
+    const functionCallLine = (
+      phase: "added" | "done",
+      outputIndex: number,
+      args?: string,
+    ): string =>
+      sseLine({
+        type: `response.output_item.${phase}`,
+        output_index: outputIndex,
+        item: {
+          type: "function_call",
+          call_id: `call_${outputIndex}`,
+          name: "t",
+          ...(args !== undefined && { arguments: args }),
+        },
+      });
+    const argumentsLine = (outputIndex: number, delta: string): string =>
+      sseLine({ type: "response.function_call_arguments.delta", output_index: outputIndex, delta });
+
+    mockDelayedSseFetch([
+      { data: functionCallLine("added", 0) },
+      { data: argumentsLine(0, "{}") },
+      { data: functionCallLine("done", 0, "{}") },
+      // Parseable on its own, but never confirmed by `output_item.done`.
+      { data: functionCallLine("added", 1) },
+      { data: argumentsLine(1, "{}") },
+      { data: completedLine() },
+      { data: "data: [DONE]\n\n" },
+    ]);
+
+    const handler = mock(async () => ({ llmResult: "ran" }));
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t", handler }));
+
+    const client = new OpenRouterClient("test-api-key");
+    const result = await runToolLoop(
+      baseParams({ llmClient: client, registry, timeouts: { idleMs: 2_000, wallMs: 5_000 } }),
+    );
+
+    expectError(result);
+    expect(result.error).toBeInstanceOf(StreamProtocolError);
+    expect(handler).not.toHaveBeenCalled();
   }, 2_000);
 });

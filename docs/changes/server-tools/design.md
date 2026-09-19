@@ -100,7 +100,7 @@ tools: [
 
 **返り形の検証方針:**
 
-- パラメータ名・最上位フィールド（`status` / `model` / `advice` / `analysis` / `responses` 等）は docs 由来だが、最終 message の正確な構造（特に `image_generation` が画像をどう返すか）は research でも未確証。**実装着手前に実 API のレスポンスを 1 度取得して fixture 化**し、型を確定する。返りに伴う追加フィールドも同時に確認する：最終 message / delta 側の `annotations`（`url_citation` 等）と、`usage.server_tool_use_details` の各ツール計上キー。`server_tool_use_details` は `usage` 配下にあり、終端イベント（`response.completed`）でだけ届く。server tool の実行結果は `response.output_item.done` の item（`type` が `openrouter:` 接頭辞）として流れ、現行の `chatStream` はこれを heartbeat として捨てている。`annotations` をどのイベントから読むかは実 wire 形状で確定する。
+- パラメータ名・最上位フィールド（`status` / `model` / `advice` / `analysis` / `responses` 等）は docs 由来だが、最終 message の正確な構造（特に `image_generation` が画像をどう返すか）は research でも未確証。**実装着手前に実 API のレスポンスを 1 度取得して fixture 化**し、型を確定する。返りに伴う追加フィールドも同時に確認する：最終 message / delta 側の `annotations`（`url_citation` 等）と、`usage.server_tool_use_details` の各ツール計上キー。`server_tool_use_details` は `usage` 配下にあり、終端イベント（`response.completed` または `response.incomplete`）でだけ届く。server tool の実行結果は `response.output_item.done` の item（`type` が `openrouter:` 接頭辞）として流れ、現行の `chatStream` はこれを heartbeat として捨てている。`annotations` をどのイベントから読むかは実 wire 形状で確定する。
 
 ---
 

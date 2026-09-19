@@ -16,7 +16,7 @@ OAuth PKCE でユーザーまたは Guild 管理者が OpenRouter アカウン�
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](../responses-api-migration/design.md) — API キーを全ターン・retry・非 streaming 呼び出しへ渡す配管は同 change が用意する。`chatStream()` を実際に呼ぶのは `runToolLoop()` の中であり、`chat()` / `chatStream()` に引数を足すだけでは loop 内の再リクエストへ届かない
+- 先行: [Responses API への移行](../responses-api-migration/design.md) — 値を毎ターンの `chatStream()` 呼び出しまで運ぶ経路（`IToolLoopParams.requestFields`）は同 change が用意する。運ばれた API キーを `OpenRouterClient` が `Authorization` ヘッダへ使い、リクエスト body からは除く処理と、非 streaming の `chat()` への適用は本 change が実装する。`chatStream()` を実際に呼ぶのは `runToolLoop()` の中であり、`chat()` / `chatStream()` に引数を足すだけでは loop 内の再リクエストへ届かない
 
 ## Goals / Non-Goals
 

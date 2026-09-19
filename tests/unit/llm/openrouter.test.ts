@@ -370,7 +370,7 @@ describe("OpenRouterClient", () => {
       expect(body.input[0]?.content).toEqual([
         { type: "input_text", text: "Describe these" },
         // Responses の image_url は `{url}` オブジェクトではなく文字列。
-        { type: "input_image", image_url: "https://cdn.discord.test/a.png" },
+        { type: "input_image", image_url: "https://cdn.discord.test/a.png", detail: "auto" },
         {
           type: "input_file",
           filename: "spec.pdf",
@@ -971,7 +971,7 @@ describe("OpenRouterClient", () => {
       );
 
       test(`output_index が MAX_TOOL_CALL_INDEX (${MAX_TOOL_CALL_INDEX}) ちょうどなら受理される`, async () => {
-        respondWithEvents([argumentsDelta(MAX_TOOL_CALL_INDEX, "x"), completed()]);
+        respondWithEvents([argumentsDelta(MAX_TOOL_CALL_INDEX, "x")]);
 
         const results = await drain(client.chatStream(REQUEST));
 
@@ -1037,6 +1037,8 @@ describe("OpenRouterClient", () => {
         const results = await drain(client.chatStream(REQUEST));
 
         expect(results.filter(isToolCallChunk)).toEqual([]);
+        // 3 つの item イベントと、終端の response.completed。
+        expect(results.filter(isHeartbeatChunk)).toHaveLength(4);
         expect((results.find(isFinalResult) as StreamFinalResult).finishReason).toBe("stop");
       });
     });
@@ -1069,17 +1071,44 @@ describe("OpenRouterClient", () => {
         expect(final.fullText).toBe("checking");
       });
 
-      test("added だけで done に至らなかった function_call は tool_calls を成立させない", async () => {
+      test.each([
+        ["added だけ", [functionCallItem("added", 0, { call_id: "call_1", name: "ping" })]],
+        ["arguments delta だけ", [argumentsDelta(0, "{}")]],
+        [
+          "完成した call の横に未完成の call が残る",
+          [
+            functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+            functionCallItem("done", 0, { call_id: "call_1", name: "ping", arguments: "" }),
+            functionCallItem("added", 2, { call_id: "call_2", name: "ping" }),
+            argumentsDelta(2, "{}"),
+          ],
+        ],
+      ])(
+        "done に至らない function call（%s）を残した response.completed は protocol error になる（未完成の call を dispatch させない）",
+        async (_label, events) => {
+          respondWithEvents([...events, completed()]);
+
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
+
+      test("response.incomplete は未完成の function call を残していても受理する（打ち切りでは起こりうる）", async () => {
         respondWithEvents([
           functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
-          completed(),
+          argumentsDelta(0, '{"a":'),
+          {
+            type: "response.incomplete",
+            response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+          },
         ]);
 
         const final = (await drain(client.chatStream(REQUEST))).find(
           isFinalResult,
         ) as StreamFinalResult;
 
-        expect(final.finishReason).toBe("stop");
+        expect(final.finishReason).toBe("length");
       });
 
       test.each([
@@ -1321,10 +1350,11 @@ describe("OpenRouterClient", () => {
       test.each(["response.reasoning_text.delta", "response.reasoning_summary_text.delta"])(
         "%s は heartbeat になり、本文は content にも fullText にも入らない",
         async (type) => {
-          respondWithEvents([{ type, output_index: 0, delta: "thinking..." }, completed()]);
+          respondWithEvents([{ type, output_index: 0, delta: "thinking..." }]);
 
           const results = await drain(client.chatStream(REQUEST));
 
+          expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
           expect(results.filter(isContentChunk)).toEqual([]);
           expect((results.find(isFinalResult) as StreamFinalResult).fullText).toBe("");
         },
@@ -1384,6 +1414,7 @@ describe("OpenRouterClient", () => {
                 upstream_inference_cost: 0.00018725,
                 upstream_inference_input_cost: 0.00002085,
                 upstream_inference_output_cost: 0.0001664,
+                server_tool_cost: 0,
               },
               server_tool_use_details: { tool_calls_requested: 1, tool_calls_executed: 1 },
             },
@@ -1405,6 +1436,8 @@ describe("OpenRouterClient", () => {
             upstream_inference_cost: 0.00018725,
             upstream_inference_prompt_cost: 0.00002085,
             upstream_inference_completions_cost: 0.0001664,
+            // 0 は「計量対象の server tool が走って 0 ドルで確定した」という報告値で、未報告とは別。
+            server_tool_cost: 0,
           },
           is_byok: false,
           server_tool_use_details: { tool_calls_requested: 1, tool_calls_executed: 1 },

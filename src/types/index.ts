@@ -159,6 +159,7 @@ export interface ChatCompletionResponse {
       upstream_inference_cost?: number;
       upstream_inference_prompt_cost?: number;
       upstream_inference_completions_cost?: number;
+      server_tool_cost?: number;
     };
     is_byok?: boolean;
     server_tool_use_details?: ServerToolUseDetails;
@@ -182,7 +183,7 @@ export type ServerToolUseDetails = {
 
 export type ResponsesInputContentPart =
   | { type: "input_text"; text: string }
-  | { type: "input_image"; image_url: string }
+  | { type: "input_image"; image_url: string; detail: "auto" }
   | { type: "input_file"; filename: string; file_data: string };
 
 export type ResponsesInputItem =

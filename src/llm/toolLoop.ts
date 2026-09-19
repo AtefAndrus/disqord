@@ -60,15 +60,16 @@ type TurnUsage = NonNullable<ChatCompletionResponse["usage"]>;
  */
 export type AggregatedUsage = Omit<TurnUsage, "is_byok">;
 
+/** Request fields `runToolLoop()` builds itself; never taken from `requestFields`. */
+const LOOP_OWNED_REQUEST_FIELDS = ["model", "messages", "plugins", "tools", "tool_choice"] as const;
+type LoopOwnedRequestField = (typeof LOOP_OWNED_REQUEST_FIELDS)[number];
+
 /**
  * Request fields `runToolLoop()` does not build itself. Whatever a caller
  * puts here is sent on every turn's request (first request, re-request after
  * tool dispatch, and the forced-final turn alike).
  */
-export type ToolLoopRequestFields = Omit<
-  ChatCompletionRequest,
-  "model" | "messages" | "plugins" | "tools" | "tool_choice"
->;
+export type ToolLoopRequestFields = Omit<ChatCompletionRequest, LoopOwnedRequestField>;
 
 export type ToolLoopResult =
   | {
@@ -960,6 +961,14 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   }
   const hasTools = tools.length > 0;
 
+  // The type already excludes the loop-owned fields, but an object with extra
+  // keys still satisfies it structurally. Spreading alone would not be enough:
+  // the loop *omits* `plugins`/`tools`/`tool_choice` in some requests, and an
+  // omitted key overwrites nothing — a smuggled `tools` would reach the API in
+  // a turn the loop treats as tool-less.
+  const passthroughFields: Record<string, unknown> = { ...requestFields };
+  for (const key of LOOP_OWNED_REQUEST_FIELDS) delete passthroughFields[key];
+
   let aggregatedUsage: AggregatedUsage | undefined;
   // Last non-`undefined` model/provider observed across every turn's final
   // chunk so far (not just the most recent turn's). A turn's `StreamFinalResult`
@@ -980,9 +989,8 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
     }
 
     const toolChoice: ToolChoice = turn < MAX_TURNS ? "auto" : "none";
-    // Spread first so the fields this loop owns always win over a caller's.
     const request: ChatCompletionRequest = {
-      ...requestFields,
+      ...passthroughFields,
       model,
       messages: [...history],
       ...(plugins && { plugins }),
