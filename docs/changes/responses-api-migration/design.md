@@ -1,6 +1,6 @@
 ---
 title: "Responses API への移行"
-status: planned
+status: in-progress
 priority: high
 summary: "LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える"
 ---
@@ -38,8 +38,8 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 - Responses のイベント列を上記の正規化済みチャンクへ写像する
 - usage のフィールド名の差を client 境界で吸収し、下流が現行と同じ形を読めるようにする
 - 現行の機能（system prompt、client tool calling、server tool、画像入力、PDF 入力、停止ボタンによるキャンセル、レート制限とエラー分類）が移行後も同じ結果になることをテストで担保する
-- **後続 change が必要とするリクエストフィールドの伝搬機構を用意する**。`runToolLoop()` は毎ターンのリクエストを明示的な名前付きフィールドで組み直しており（`src/llm/toolLoop.ts:957` 付近）、新しいフィールドは自動伝搬しない。パススルーの器を本 change で作り、呼び出し側が値を入れなければ振る舞いは変わらない状態にする
-- **`AggregatedUsage` を実際に返る usage フィールドへ広げる**。現行は手書きで狭められており（`src/llm/toolLoop.ts:54` 付近）、`cache_write_tokens` / `cost_details` / `server_tool_use_details` を集計しない
+- **後続 change が必要とするリクエストフィールドの伝搬機構を用意する**。`runToolLoop()` は毎ターンのリクエストを明示的な名前付きフィールドで組み直すため、新しいフィールドは自動伝搬しない。パススルーの器（`IToolLoopParams.requestFields`）を本 change で作り、呼び出し側が値を入れなければ振る舞いは変わらない状態にする
+- **`AggregatedUsage` を実際に返る usage フィールドへ広げる**。`cache_write_tokens` / `cost_details` / `server_tool_use_details` をターンをまたいで集計する
 
 **Non-Goals:**
 
@@ -60,8 +60,11 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 | usage の型 | `ChatCompletionResponse["usage"]` の形（`prompt_tokens` / `completion_tokens`）を維持し、client 内で Responses の `input_tokens` / `output_tokens` から写像する | usage は `embedBuilder` の表示と [権限管理](../permissions/design.md) の計上が読む。内部名を変えると両方が巻き込まれる |
 | system prompt | `input` 配下の `{role:"system"}` item として送る（`instructions` フィールドは使わない） | 実測でどちらも効く。`input` に置けば現行の `SystemChatMessage` をそのまま写像でき、`buildChatRequest()` の構造を変えずに済む |
 | reasoning | 現行どおり heartbeat として扱い、本文を捨てる | 表示は [推論内容の取得・表示](../reasoning-output/design.md) の責務。移行を純粋に保つ |
-| tool call の受け取り | `response.function_call_arguments.delta` を蓄積する現行経路を維持し、`response.output_item.done` の完成形は整合確認にのみ使う | 蓄積経路にはフレーム上限と carry buffer のガードが入っている。移行と同時に捨てると、退行したときの切り分けが難しくなる |
+| tool call の受け取り | `response.function_call_arguments.delta` を蓄積する現行経路を維持し、`response.output_item.done` の完成形 `arguments` は蓄積済み delta との長さ照合にのみ使う。delta が一度も流れなかった call に限り、完成形を唯一の `argumentsDelta` として渡す | 蓄積経路にはフレーム上限と carry buffer のガードが入っている。移行と同時に捨てると、退行したときの切り分けが難しくなる。長さ照合は、delta の欠落で切り詰められた JSON が偶然 parse できて tool handler に届く事故を防ぐ |
 | tool call の識別子 | Responses の `call_id` を現行の `ToolCall.id` へ写像する | `toolLoop.ts` は `role:"tool"` の `tool_call_id` で突き合わせる。写像しておけば dispatcher 側は無変更で済む |
+| tool call の index | `output_index` をそのまま `StreamToolCallDelta.index` にする | `output_index` は 1 レスポンス内で item ごとに一意で、出力順に増える。accumulator が要求するのは一意性と順序だけであり、reasoning や message の item が間に入って値が連番にならなくても支障が無い |
+| provider の取得 | `X-OpenRouter-Metadata: enabled` ヘッダを送り、`openrouter_metadata.endpoints.available[]` のうち `selected: true` の `provider` を読む。形が想定外なら provider を不明として扱い、エラーにしない | Responses のレスポンスにはトップレベルの `provider` が無く、footer の「Provider:」行が消える。provider は表示専用なので、本文が届いた turn を metadata の形だけで落とさない |
+| heartbeat として通すイベント | 受理したイベントのうち呼び出し側へ渡すものが無いものすべて。client が知らない `type` も拒否せず heartbeat にする | `STREAM_IDLE_TIMEOUT_MS` が測るのは受信の途絶であり、どのイベントの到着も接続が生きている証拠になる。reasoning だけを数分流すモデルを停止と誤判定しない。API は予告なくイベント型を追加する（OpenAPI 定義が union を open としている）ため未知の型で turn を落とさない。イベントを流し続けるストリームは `STREAM_WALL_TIMEOUT_MS` が打ち切る |
 | deprecated フラグ | `usage: { include: true }` は送らない | Responses に当該フィールドは無い。吸収した監査 change の目的をここで満たす |
 | エラー処理 | `handleErrorResponse()` と `AppError` 系の分類を無変更で流用する | 実測でエラーの封筒が両 API で同一（後述） |
 | SSE 読み取り | フレーム分割、UTF-8 の fatal デコード、フレームサイズ上限、carry buffer のガードを無変更で流用する | 実測で `data:` 行の連なりと `data: [DONE]` 終端が同一（後述） |
@@ -71,7 +74,7 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 
 ### 実測で確認した事実
 
-以下は 2026-09-18 に実際にリクエストを送って確認した。
+以下は 2026-09-18 と 2026-09-19 に実際にリクエストを送って確認した。
 
 **そのまま流用できるもの:**
 
@@ -81,6 +84,8 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 - `session_id` / `provider` / `models`（フォールバック）/ `metadata` / `trace` / `service_tier` / `cache_control` / `reasoning` / `parallel_tool_calls` / `max_tool_calls` / `stop_server_tools_when` / `prompt_cache_key` / `prompt_cache_options` / `modalities` / `image_config` がある
 - client function tool と server tool を同一リクエストへ混在させられる。`{"type":"function",...}` と `{"type":"openrouter:datetime",...}` を同時に渡して 200 が返り、server tool は実行され `usage.server_tool_use_details` に計上された
 - `tool_choice: "none"` が効く。function tool を渡した状態で送っても `function_call` item は出ない
+- tool 実行後の再リクエストが通る。`{role:"assistant"}` の message、`function_call` item、`function_call_output` item を `input` に並べ、reasoning item を含めずに送って 200 が返る（`openai/gpt-5-nano` と `google/gemini-2.5-flash-lite` で確認）
+- `ChatCompletionRequest` に無いフィールド（`max_output_tokens`）を透過させて送ると効き、打ち切りが `response.incomplete` として返る
 
 **書き換えが要るもの:**
 
@@ -89,6 +94,8 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 - usage のフィールド名が変わる
 - ストリームが型付きイベントの列になる
 - マルチモーダル入力の part 名が変わる
+- function を名指しする `tool_choice` が flat になる（`{type:"function", name}`）
+- レスポンスからトップレベルの `provider` が無くなる
 
 ### リクエストの対応
 
@@ -119,25 +126,44 @@ Responses のイベント型と、`chatStream()` が yield する正規化済み
 
 | Responses のイベント | yield するもの |
 | -------------------- | -------------- |
-| `response.created` / `response.in_progress` | `StreamHeartbeatChunk` |
-| `response.output_item.added` / `response.content_part.added` | `StreamHeartbeatChunk` |
-| `response.output_text.delta` | `StreamChunk`（`content` に delta を入れる） |
-| `response.reasoning_text.delta` / `response.reasoning_text.done` | `StreamHeartbeatChunk`（本文は捨てる） |
+| `response.output_text.delta` | `StreamChunk`（`content` に delta を入れる）。空文字の delta は heartbeat |
+| `response.output_item.added`（`item.type === "function_call"`） | `StreamToolCallChunk`（`output_index` を `index` へ、`call_id` を `id` へ、`name` を設定） |
 | `response.function_call_arguments.delta` | `StreamToolCallChunk`（`argumentsDelta`） |
-| `response.output_item.done`（`item.type === "function_call"`） | `StreamToolCallChunk`（`call_id` を `id` へ、`name` を設定） |
-| `response.output_item.done`（`item.type` が `openrouter:` 接頭辞） | `StreamHeartbeatChunk`（server tool の実行。本 change では表示しない） |
-| `response.content_part.done` / `response.output_text.done` | `StreamHeartbeatChunk` |
-| `response.completed` | `StreamFinalResult`（`fullText` / `usage` / `model` / `finishReason`） |
-| `data: [DONE]` | ストリーム終端 |
+| `response.output_item.done`（`item.type === "function_call"`） | `StreamToolCallChunk`（`id` と `name` の再送）。当該 call を完成済みとして記録する |
+| `response.completed` | `usage` を載せた `StreamHeartbeatChunk`。`finishReason` を確定する |
+| `response.incomplete` | 同上。`finishReason` は `incomplete_details.reason` から導く |
+| `response.failed` | `response.error` を API エラーとして throw |
+| `error`（`{type:"error", code, message}`） | API エラーとして throw |
+| 上記以外（`response.created`、`response.content_part.added`、`response.output_text.done`、reasoning の delta、server tool の item、未知の `type` など） | `StreamHeartbeatChunk` |
+| `data: [DONE]` | `StreamFinalResult`（`fullText` / `usage` / `model` / `provider` / `finishReason`）を yield して終端 |
+
+function call の `call_id` と `name` は `response.output_item.added` の時点で届き、`response.output_item.done` で同じ値が再送される。
+両方を `StreamToolCallChunk` として渡し、食い違いの検出は `toolLoop.ts` の既存ガード（同一 index で異なる id / name を拒否する）に任せる。
+
+reasoning の本文は `response.reasoning_text.delta` のほか `response.reasoning_summary_text.delta` でも流れる（`openai/gpt-5-nano` は後者だけを流す）。
+どちらも heartbeat として扱い、本文は捨てる。
 
 `response.output_item.added` は server tool の実行を独立した item として通知する（例: `{"type":"openrouter:datetime","id":"st_tmp_..."}`）。
 Chat Completions では観測できなかった情報だが、本 change では heartbeat として扱い、進捗表示には使わない。
 
-`finishReason` は `response.completed` の `response.status` から導く。
-現行の `finish_reason`（`"stop"` / `"tool_calls"` / `"length"`）に相当する値が Responses のどのフィールドに出るかは実装時に確定する（Open Questions 参照）。
+mid-stream のエラーは Responses では flat な `{type:"error", code, message}` として定義されている。
+HTTP エラーと同じ `{error:{code,message}}` の封筒が Responses のストリームに流れうるかは未検証なので、こちらも引き続き API エラーとして受理する。
 
-**tool call の完成判定**は、現行が `finish_reason: "tool_calls"` で行っているのに対し、Responses では `function_call` item の `response.output_item.done` が到達した時点で当該 tool call が完成する。
-`toolLoop.ts` は「そのターンに完成した tool call が 1 件以上あるか」で分岐しているので、client 側で完成した tool call を集計し、`StreamFinalResult.finishReason` に `"tool_calls"` を立てて渡せば dispatcher は無変更で動く。
+終端イベント（`response.completed` / `response.incomplete`）を受けたあとに許すのは `data: [DONE]` とコメント行だけで、それ以外の `data:` フレームは protocol error にする。
+
+**`finishReason` の導出**は次のとおり。
+
+| 終端イベント | `finishReason` |
+| ------------ | -------------- |
+| `response.completed`、完成した function call が 1 件以上 | `"tool_calls"` |
+| `response.completed`、完成した function call が無い | `"stop"` |
+| `response.incomplete`、`incomplete_details.reason` が `max_output_tokens` | `"length"` |
+| `response.incomplete`、`reason` が `content_filter` | `"content_filter"` |
+| `response.incomplete`、それ以外の `reason` | `reason` の値をそのまま渡す（`toolLoop.ts` が未知の finish_reason として拒否し、暗黙の完了にしない） |
+
+Responses には `finish_reason: "tool_calls"` に当たる値が無く、打ち切りは `response.completed` の `status` ではなく別イベントの `response.incomplete` で通知される。
+function call は `response.output_item.done` が到達した時点で完成と見なす。
+`toolLoop.ts` は `finishReason === "tool_calls"` で分岐しているので、client 側で完成した call を数えて合成すれば dispatcher は無変更で動く。
 
 ### usage の対応
 
@@ -158,19 +184,25 @@ Chat Completions では観測できなかった情報だが、本 change では 
 
 client 内で Responses 形から現行形へ写像し、下流には現行の形のまま渡す。
 
-あわせて `ChatCompletionResponse["usage"]` の型を、実際に返るフィールドへ揃える。
-現行の型に無いのは `prompt_tokens_details.video_tokens`、`completion_tokens_details.image_tokens` と `audio_tokens`、`cost_details` の 3 フィールド、`is_byok`、`server_tool_use_details` である。
-`src/utils/embedBuilder.ts` の `splitTextToMultipleMessages()` が持つ `metadata.usage` のインライン定義は、`ChatCompletionResponse["usage"]` のエイリアスへ置き換えて定義を一本化する。
+あわせて `ChatCompletionResponse["usage"]` の型を、Responses が実際に返すフィールドへ揃える。
+追加するのは `prompt_tokens_details.cache_write_tokens`、`cost_details` の 3 フィールド、`is_byok`、`server_tool_use_details` である。
+`video_tokens` / `image_tokens` / `audio_tokens` は Chat Completions の `ChatUsage` にだけあり、Responses の usage には存在しないので型へ入れない。
+`src/utils/chatContainerBuilder.ts` の `UsageMetadata` は同じ形を手書きで複製しているので、`ChatCompletionResponse["usage"]` のエイリアスへ置き換えて定義を一本化する。
+
+`cost`、`cache_write_tokens`、`cost_details.upstream_inference_cost`、`server_tool_use_details` とその各カウンタは `null` で返ることがある。
+`null` は未報告を意味するので 0 にはせず、キーごと省く。
 
 `server_tool_use_details` は、server tool が一度も起動しなかったリクエストでは usage から省かれる。
 未起動と 0 回を区別する必要があるので、値ではなくキーの有無で判定する。
+カウンタが一つも報告されなかった場合も、キー自体は空オブジェクトとして残す。
 
 ### リクエストフィールドの伝搬機構
 
-`runToolLoop()` は毎ターンのリクエストを次の形で組み立てる（`src/llm/toolLoop.ts:957` 付近）。
+`runToolLoop()` は毎ターンのリクエストを次の形で組み立てる。
 
 ```ts
 const request: ChatCompletionRequest = {
+  ...requestFields,
   model,
   messages: [...history],
   ...(plugins && { plugins }),
@@ -178,23 +210,26 @@ const request: ChatCompletionRequest = {
 };
 ```
 
-base request を spread せず名前付きフィールドを列挙しているため、`ChatCompletionRequest` に項目を足しても loop 内の再リクエストへは伝わらない。
-この構造のままだと、次の三つの change がそれぞれ同じ配管を通すことになる。
+loop が自分で組み立てるフィールド（`model` / `messages` / `plugins` / `tools` / `tool_choice`）は名前付きで列挙しており、それ以外のフィールドには入口が要る。
+入口が無いと、次の三つの change がそれぞれ同じ配管を通すことになる。
 
 - [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — `session_id` を通常生成・tool 後の再リクエスト・retry のすべてへ渡す
 - [OAuth BYOK](../oauth-byok/design.md) — API キーの上書きを全ターンへ渡す。`chatStream()` を実際に呼ぶのは loop の中であり、現状キー上書きの経路が無い
 - [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) — 解決済みの生成パラメータを全ターンへ渡す
 
-本 change は、この三つが値を載せるための器を用意する。
-`runToolLoop()` が受け取ったリクエスト由来のフィールドを毎ターンのリクエストへ**そのまま引き継ぐ**ようにし、誰も値を入れていない現在は送出内容が変わらないことをテストで固定する。
+本 change は、この三つが値を載せるための器として `IToolLoopParams.requestFields` を用意する。
+型は `ChatCompletionRequest` から loop が所有する 5 フィールドを除いたもので、`ChatCompletionRequest` に項目を足せばそのまま載せられる。
+`requestFields` は毎ターンのリクエストの先頭へ spread するので、通常生成・tool 後の再リクエスト・最終ターンのすべてに同じ値が届き、loop が所有するフィールドを上書きすることはできない。
+`OpenRouterClient` は `ChatCompletionRequest` のうち自分が変換しないフィールドを body へそのまま透過させるので、client 側の変更も要らない。
+誰も値を入れていない現在は送出内容が変わらないことをテストで固定する。
 どのフィールドを載せるかは各 change が決める。
 
 ### usage 集計の拡張
 
-`AggregatedUsage`（`src/llm/toolLoop.ts:54` 付近）は基本トークン、`cost`、`cached_tokens`、`reasoning_tokens` だけを集計する手書きの型である。
-`addUsage()` はこの型に列挙された項目だけを足し込むため、型を広げないと下流へ届かない。
+`AggregatedUsage` は `ChatCompletionResponse["usage"]` から `is_byok` を除いた型とし、`addUsage()` は各 details オブジェクトのうちターンが実際に報告したキーだけを足し込む。
+`is_byok` はリクエスト単位のフラグで、合算に意味が無いので集計しない。
 
-一方、後続 change は次を要求している。
+後続 change は次を要求している。
 
 - [Web 検索 + ツイート展開](../web-search/design.md) — ターンをまたいだ server tool 実行回数の累計（`usage.server_tool_use_details`）
 - [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — cache read / write トークンの記録（`prompt_tokens_details.cache_write_tokens`）
@@ -207,11 +242,11 @@ parser から集計までを本 change が所有し、保存は [使用統計](.
 
 - 修正: `src/llm/openrouter.ts` — エンドポイントを `/responses` へ変更。リクエスト変換（`messages` → `input`、tool 定義の flat 化、part 名の変換）、イベント写像、usage 写像を追加。SSE 読み取りの枠組みとエラー処理は維持
 - 修正: `src/types/index.ts` — Responses の wire 形を表す内部型を追加。`ChatCompletionResponse["usage"]` を実返却フィールドへ拡張
-- 修正: `src/utils/embedBuilder.ts` — `metadata.usage` のインライン定義を `ChatCompletionResponse["usage"]` のエイリアスへ置換
-- 修正: `src/llm/toolLoop.ts` — リクエストフィールドの毎ターン引き継ぎ、`AggregatedUsage` の拡張と `addUsage()` の集計対象追加
-- 確認のみ: `src/services/chatService.ts` — 正規化済みチャンクの契約を維持するため無変更が目標。変更が要る場合はその理由を design へ追記する
+- 修正: `src/utils/chatContainerBuilder.ts` — `UsageMetadata` を `ChatCompletionResponse["usage"]` のエイリアスへ置換
+- 修正: `src/llm/toolLoop.ts` — `requestFields` の毎ターン引き継ぎ、`AggregatedUsage` の拡張と `addUsage()` の集計対象追加
+- 無変更: `src/services/chatService.ts` — 正規化済みチャンクの契約が維持されるため変更しない
 - 修正: `tests/unit/llm/openrouter.test.ts` — リクエストボディのアサーションを Responses 形へ更新。イベント写像のフィクスチャを追加
-- 修正: `tests/unit/llm/toolLoop.test.ts` — mock クライアントが yield する正規化済みチャンクは変わらないため、原則無変更。落ちる場合は契約の破れなので写像側を直す
+- 修正: `tests/unit/llm/toolLoop.test.ts` — mock クライアントを使うテストは、yield される正規化済みチャンクが変わらないため無変更。実 `OpenRouterClient` を通す結合テストだけ SSE フィクスチャを Responses 形へ更新する。usage を content と同じフレームに載せるケースは Responses に対応する wire 形が無い（usage は終端イベントにしか載らない）ので削除する
 
 ### 移行で送れなくなる生成パラメータ
 
@@ -228,46 +263,44 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 
 ### Phase 1: 非ストリーミング経路
 
-- [ ] Responses の wire 形を表す内部型を `src/types/index.ts` へ追加
-- [ ] `ChatCompletionRequest` → Responses リクエストの変換関数を実装（`input` への写像、tool 定義の flat 化、part 名の変換、`usage:{include:true}` の非送出）
-- [ ] Responses レスポンス → `ChatCompletionResponse` の変換関数を実装（`output` 配下の `message` item からテキストを組み立て、usage を写像）
-- [ ] `chat()` を `/responses` へ載せ替え、`chatService.ts` の呼び出し（1 箇所）が無変更で通ることを確認
-- [ ] `ChatCompletionResponse["usage"]` を実返却フィールドへ拡張し、`embedBuilder` のインライン定義をエイリアス化
+- [x] Responses の wire 形を表す内部型を `src/types/index.ts` へ追加
+- [x] `ChatCompletionRequest` → Responses リクエストの変換関数を実装（`input` への写像、tool 定義の flat 化、part 名の変換、`usage:{include:true}` の非送出）
+- [x] Responses レスポンス → `ChatCompletionResponse` の変換関数を実装（`output` 配下の `message` item からテキストを組み立て、usage を写像）
+- [x] `chat()` を `/responses` へ載せ替え、`chatService.ts` の呼び出し（1 箇所）が無変更で通ることを確認
+- [x] `ChatCompletionResponse["usage"]` を実返却フィールドへ拡張し、`chatContainerBuilder` の `UsageMetadata` をエイリアス化
 - [x] 吸収した監査の残件: `GET /api/v1/key` の `data.limit_remaining` にドリフトが無いことを確認（上限未設定のキーでは `null` が返り、`getCredits()` の `?? Infinity` は意味的にも正しい）。コード変更は不要
 
 ### Phase 2: ストリーミング経路
 
-- [ ] イベント写像を実装（上表）。SSE 読み取りの枠組み、UTF-8 の fatal デコード、フレーム上限、carry buffer のガードは流用する
-- [ ] tool call の写像を実装（`call_id` → `id`、`arguments` の delta 蓄積、完成判定から `finishReason: "tool_calls"` の合成）
-- [ ] `response.completed` から `StreamFinalResult` を組み立て、`finishReason` の導出元を実 wire で確定する
-- [ ] reasoning イベントを heartbeat として扱い、本文を捨てることを確認する
-- [ ] `chatStream()` を `/responses` へ載せ替え、`chatService.ts` が無変更で通ることを確認
-- [ ] `runToolLoop()` にリクエストフィールドの毎ターン引き継ぎを実装し、誰も値を入れていない状態で送出内容が変わらないことをテストで固定
-- [ ] `AggregatedUsage` を拡張し、`addUsage()` に `cache_write_tokens` / `cost_details` / `server_tool_use_details` の集計を追加。未返却フィールドを 0 と同一視しないことをテストで固定
+- [x] イベント写像を実装（上表）。SSE 読み取りの枠組み、UTF-8 の fatal デコード、フレーム上限、carry buffer のガードは流用する
+- [x] tool call の写像を実装（`call_id` → `id`、`arguments` の delta 蓄積、完成判定から `finishReason: "tool_calls"` の合成）
+- [x] 終端イベントから `StreamFinalResult` を組み立て、`finishReason` の導出元を実 wire で確定する
+- [x] reasoning イベントを heartbeat として扱い、本文を捨てることを確認する
+- [x] `chatStream()` を `/responses` へ載せ替え、`chatService.ts` が無変更で通ることを確認
+- [x] `runToolLoop()` にリクエストフィールドの毎ターン引き継ぎを実装し、誰も値を入れていない状態で送出内容が変わらないことをテストで固定
+- [x] `AggregatedUsage` を拡張し、`addUsage()` に `cache_write_tokens` / `cost_details` / `server_tool_use_details` の集計を追加。未返却フィールドを 0 と同一視しないことをテストで固定
 
 ### Phase 3: 回帰
 
-- [ ] 既存の unit test を通す。`tests/unit/llm/openrouter.test.ts` のボディアサーションを Responses 形へ更新
-- [ ] イベント写像のフィクスチャを追加（テキストのみ、tool call を含む、server tool を含む、reasoning を含む、`choices` 相当が空の最終イベント）
-- [ ] キャンセル（停止ボタン）が `AbortSignal` で従来どおり効くことを確認
-- [ ] エラー分類の回帰（401 / 400 invalid model / 429）を確認
-- [ ] 実機で確認する: 通常のチャット、画像添付、PDF 添付、長文の分割送信、停止ボタン
+- [x] 既存の unit test を通す。`tests/unit/llm/openrouter.test.ts` のボディアサーションを Responses 形へ更新
+- [x] イベント写像のフィクスチャを追加（テキストのみ、tool call を含む、server tool を含む、reasoning を含む、`response.incomplete` / `response.failed` / `error`）
+- [x] キャンセル（停止ボタン）が `AbortSignal` で従来どおり効くことを確認
+- [x] エラー分類の回帰（401 / 400 invalid model / 429）を確認
+- [x] 実 API で確認する（`OpenRouterClient` と `runToolLoop` を直接駆動）: 非ストリーミング、並行 tool call と server tool の混在、画像入力、PDF 入力、無効モデルの 400、stream 途中のキャンセル、`max_output_tokens` による打ち切り
+- [ ] Discord 上で確認する: 通常のチャット、画像添付、PDF 添付、長文の分割送信、停止ボタン
 - [ ] `bun run preview` で表示の回帰を確認
 - [x] 旧 `openrouter-api-audit` を削除し、残タスクを本 change へ移管
 
 ### Phase 4: 後続への引き継ぎ
 
 - [ ] [コード実行](../code-execution/design.md) の design を、microsandbox 統合から `openrouter:shell` 前提へ書き直す
-- [ ] [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) へ、`supported_parameters` をそのまま許可リストにできない制約を注記する
-- [ ] [推論内容の取得・表示](../reasoning-output/design.md) へ、reasoning が専用イベントで流れることを注記する
-- [ ] [Web 検索 + ツイート展開](../web-search/design.md) の usage 読み取り先を `usage.server_tool_use_details` へ訂正する
+- [x] [設定階層化 + LLMパラメータ](../settings-hierarchy/design.md) へ、`supported_parameters` をそのまま許可リストにできない制約を注記する
+- [x] [推論内容の取得・表示](../reasoning-output/design.md) へ、reasoning が専用イベントで流れることを注記する
+- [x] [Web 検索 + ツイート展開](../web-search/design.md) の usage 読み取り先を `usage.server_tool_use_details` へ訂正する
 - [ ] `docs/changes/responses-api-migration/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **`finishReason` の導出元**: 現行は `finish_reason` の `"stop"` / `"tool_calls"` / `"length"` を読んでいる。Responses の `response.completed` は `status: "completed"` を返すが、打ち切り理由に相当する値がどのフィールドに出るかは未確認である。`incomplete_details` が候補になる。実装時に実 wire で確定する
-- **tool call の並行実行**: Responses は `parallel_tool_calls` を受け付け、`output_index` で item を区別する。現行の `StreamToolCallDelta.index` へどう写像するかを実装時に確定する
-- **heartbeat の粒度**: Responses は Chat Completions より多くのイベントを流す。すべてを heartbeat として yield すると `toolLoop.ts` の idle timer が実質無効になりうる。どのイベントを heartbeat として通すかは、`STREAM_IDLE_TIMEOUT_MS` の意図（受信の途絶を検知する）に照らして選ぶ
 - **server tool の usage が API で異なる**: Chat Completions と Responses はどちらも `usage.server_tool_use_details` を返すが、Anthropic Messages API は `usage.server_tool_use` を返す。Messages API は採用しないので影響は無いが、ドキュメントの記述を読むときに混同しない
 - **プロバイダ差**: Responses は OpenRouter が各プロバイダの API へ変換して呼ぶ。Chat Completions で動いていたモデルが Responses で同じ挙動になるとは限らない。既定モデルを含め、実際に使うモデルで回帰を確認する
 - **`instructions` を使わない選択**: system prompt を `input` の `{role:"system"}` として送る。将来 `instructions` 固有の挙動（プロバイダ側で別扱いされる等）が必要になった場合は、その時点で切り替えを検討する

@@ -136,6 +136,13 @@ export interface ChatCompletionResponse {
       content: string;
     };
   }[];
+  /**
+   * Chat Completions field names are kept as the internal shape even though
+   * the wire is the Responses API: the footer and the usage accounting of
+   * later changes read these names, so `OpenRouterClient` maps
+   * `input_tokens`/`output_tokens` onto them at the boundary. Optional keys
+   * are absent when the API did not report them; absent is "unknown", not 0.
+   */
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -143,11 +150,67 @@ export interface ChatCompletionResponse {
     cost?: number;
     prompt_tokens_details?: {
       cached_tokens?: number;
+      cache_write_tokens?: number;
     };
     completion_tokens_details?: {
       reasoning_tokens?: number;
     };
+    cost_details?: {
+      upstream_inference_cost?: number;
+      upstream_inference_prompt_cost?: number;
+      upstream_inference_completions_cost?: number;
+    };
+    is_byok?: boolean;
+    server_tool_use_details?: ServerToolUseDetails;
   };
+}
+
+/**
+ * Omitted from `usage` entirely when no server tool ran in the request.
+ * A type alias rather than an interface: `toolLoop.ts` sums usage detail
+ * objects generically, and only an alias is assignable to a string-keyed record.
+ */
+export type ServerToolUseDetails = {
+  tool_calls_requested?: number;
+  tool_calls_executed?: number;
+  web_search_requests?: number;
+};
+
+// ---- Responses API wire shapes (`POST /api/v1/responses`). Only
+// `OpenRouterClient` sees these; everything else keeps the
+// `ChatCompletionRequest` / `ChatCompletionResponse` shapes above. ----
+
+export type ResponsesInputContentPart =
+  | { type: "input_text"; text: string }
+  | { type: "input_image"; image_url: string }
+  | { type: "input_file"; filename: string; file_data: string };
+
+export type ResponsesInputItem =
+  | { role: "system" | "user"; content: string | ResponsesInputContentPart[] }
+  | { role: "assistant"; content: string }
+  | { type: "function_call"; call_id: string; name: string; arguments: string }
+  | { type: "function_call_output"; call_id: string; output: string };
+
+export interface ResponsesFunctionTool extends FunctionToolDefinition {
+  type: "function";
+}
+
+export type ResponsesToolChoice = "auto" | "none" | "required" | { type: "function"; name: string };
+
+export interface ResponsesOutputItem {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface ResponsesResult {
+  id?: string;
+  model?: string;
+  status?: string;
+  error?: { code?: number | string; message: string } | null;
+  incomplete_details?: { reason?: string } | null;
+  output?: ResponsesOutputItem[];
+  usage?: unknown;
+  openrouter_metadata?: unknown;
 }
 
 export interface OpenRouterError {
@@ -181,17 +244,14 @@ export interface StreamToolCallChunk {
 
 /**
  * Yielded for an SSE comment line (e.g. OpenRouter's `: OPENROUTER PROCESSING`
- * keep-alive), a non-`data:` field line, or an accepted `data:` frame that
- * carries no content/tool_call for the caller (role-only delta, usage-only
- * trailer, finish_reason-only terminal frame, ...) — it exists so a consumer
+ * keep-alive), a non-`data:` field line, or an accepted event that carries
+ * no content/tool_call for the caller (lifecycle events, reasoning deltas,
+ * server tool items, the terminal event, ...) — it exists so a consumer
  * measuring inter-chunk gaps (e.g. an idle timeout) observes stream liveness
  * during a heartbeat-only lull instead of mistaking it for a stalled
- * connection. `usage` is populated whenever the underlying `data:` frame
- * carries a validated `usage` — most notably OpenRouter's empty-`choices`
- * trailer sent right before `[DONE]`, but also a frame that pairs `usage`
- * with `content`/`tool_calls`: that payload is yielded through
- * `StreamChunk`/`StreamToolCallChunk` as usual, and this heartbeat follows
- * immediately after as a separate chunk carrying just the frame's `usage`.
+ * connection. `usage` is populated on the heartbeat yielded for the terminal
+ * event (`response.completed` / `response.incomplete`), sent right before
+ * `[DONE]`.
  * Without this, that usage is otherwise only observable via the terminal
  * `StreamFinalResult` — unreachable if the caller cancels or the stream
  * errors between this heartbeat and the terminal chunk — so surfacing it

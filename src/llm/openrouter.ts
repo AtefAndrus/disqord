@@ -16,7 +16,15 @@ import {
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ChatMessage,
+  ChatMessageContent,
+  FunctionTool,
   OpenRouterModel,
+  ResponsesFunctionTool,
+  ResponsesInputContentPart,
+  ResponsesInputItem,
+  ResponsesToolChoice,
+  ServerTool,
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
@@ -53,7 +61,8 @@ export const MAX_SSE_FRAME_BYTES = 1024 * 1024; // 1 MiB
 export const SSE_CARRY_FRAGMENT_OVERHEAD_BYTES = 32;
 
 /**
- * Maximum accepted `tool_call.index` value on a stream delta. `index` keys
+ * Maximum accepted `output_index` of a function call (yielded as
+ * `StreamToolCallDelta.index`). `index` keys
  * the in-progress-call accumulation map by numeric value, so any bound above
  * `Number.MAX_SAFE_INTEGER` would let two distinct indices round to the same
  * `number` (e.g. `2**53` and `2**53+1`) and have their fragments merge into
@@ -87,22 +96,31 @@ interface SseStreamState {
   lastModel: string | undefined;
   lastProvider: string | undefined;
   lastUsage: ChatCompletionResponse["usage"] | undefined;
-  // undefined = no terminal finish_reason observed yet. Once set, the
-  // stream is frozen: only [DONE]/comments and content-free usage accounting
-  // frames that repeat the same finish_reason are legal until EOF.
+  // undefined = no terminal event (`response.completed` / `response.incomplete`)
+  // observed yet. Once set, the stream is frozen: only [DONE]/comments are
+  // legal until EOF.
   finishReasonSeen: string | undefined;
+  // `output_index` of every `function_call` item whose `output_item.done`
+  // arrived. Responses has no `finish_reason:"tool_calls"`; a completed turn
+  // that finished at least one function call is reported as `"tool_calls"`.
+  completedFunctionCalls: Set<number>;
+  // UTF-16 length of the `arguments` deltas yielded so far, per
+  // `output_index`. Compared against the finished `arguments` on
+  // `output_item.done` so a dropped delta fails loudly instead of reaching a
+  // tool handler as truncated JSON that may still parse.
+  argumentsLength: Map<number, number>;
 }
 
 /**
  * Runtime object-shape check for wire data. The JSON payload is untyped at
- * the wire (`JSON.parse(...) as StreamDelta` only asserts a shape, it never
- * validates one), so a provider sending e.g. `null` or a bare scalar where an
- * object is expected must be caught here — otherwise it either silently
- * corrupts state (e.g. `content: 123` stringified into `fullText`) or reaches
+ * the wire (a cast only asserts a shape, it never validates one), so a
+ * provider sending e.g. `null` or a bare scalar where an object is expected
+ * must be caught here — otherwise it either silently corrupts state (e.g.
+ * `delta: 123` stringified into `fullText`) or reaches
  * a property access on `null`/a primitive and throws a raw `TypeError`
  * instead of the documented "reject-never" `StreamProtocolError` contract.
  * Arrays are excluded: a JSON array is `typeof "object"` but never the
- * intended shape for `choice`/`delta`/a `tool_calls` element.
+ * intended shape for an event, its `item`, or its `response`.
  */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -169,85 +187,12 @@ interface OpenRouterErrorResponse {
   };
 }
 
-interface StreamDeltaToolCall {
-  index: number;
-  id?: string;
-  type?: string;
-  function?: {
-    name?: string;
-    arguments?: string;
-  };
-}
-
-interface StreamDelta {
-  id?: string;
-  model?: string;
-  provider?: string;
-  choices: {
-    index?: number;
-    delta: {
-      content?: string;
-      role?: string;
-      reasoning?: unknown;
-      reasoning_details?: unknown;
-      tool_calls?: StreamDeltaToolCall[];
-      // Some providers surface finish_reason on the delta instead of the
-      // choice; treated as a fallback (see resolveFinishReason).
-      finish_reason?: string | null;
-    };
-    finish_reason?: string | null;
-  }[];
-  usage?: ChatCompletionResponse["usage"];
-  // Mid-stream error event: sibling to `choices`, documented by OpenRouter.
-  error?: OpenRouterErrorResponse["error"];
-}
-
 /**
- * Resolves the authoritative finish_reason for a chunk, preferring the
- * choice-level field and falling back to the delta-level field (provider
- * quirk). A non-null mismatch between the two is a protocol error.
- *
- * Both inputs are `unknown` (not the `string | null | undefined` the
- * `StreamDelta` interface claims) because that interface is only a
- * compile-time assertion over untyped wire JSON — a provider sending e.g.
- * `finish_reason: 42` is not caught by the type system. Rejecting a
- * non-string/non-null value here, before this function's caller mutates
- * `state` or yields anything, keeps this frame subject to the same
- * whole-frame validation as every other field: a frame with valid `content`
- * alongside a malformed `finish_reason` must fail without ever staging that
- * content to the caller.
- */
-function resolveFinishReason(choiceFinish: unknown, deltaFinish: unknown): string | null {
-  for (const [value, fieldName] of [
-    [choiceFinish, "choice.finish_reason"],
-    [deltaFinish, "delta.finish_reason"],
-  ] as const) {
-    if (value !== undefined && value !== null && typeof value !== "string") {
-      throw new StreamProtocolError(
-        `${fieldName} must be a string or null, got: ${JSON.stringify(value)}`,
-      );
-    }
-  }
-  const choice = choiceFinish as string | null | undefined;
-  const delta = deltaFinish as string | null | undefined;
-  if (choice != null && delta != null && choice !== delta) {
-    throw new StreamProtocolError(
-      `finish_reason mismatch between choice (${choice}) and delta (${delta})`,
-    );
-  }
-  return choice ?? delta ?? null;
-}
-
-/**
- * Runtime validation for `chunk.model`/`chunk.provider`. Untyped wire JSON
- * like every other field here: a provider sending e.g. `model: {}` must be
- * rejected before it ever reaches `state.lastModel`, which a later footer
- * render stringifies verbatim (`[object Object]`) or, for a value with no
- * sane string coercion, throws a raw TypeError downstream instead of the
- * documented protocol-error contract. `null` is treated the same as absent
- * — callers only assign a truthy value, so a `null` here still results in no
- * assignment, matching the "not present on this chunk" convention every
- * other optional field on `StreamDelta` already follows.
+ * Runtime validation for an optional string field such as `response.model`.
+ * Untyped wire JSON like every other field here: a provider sending e.g.
+ * `model: {}` must be rejected before it ever reaches `state.lastModel`,
+ * which a later footer render stringifies verbatim (`[object Object]`).
+ * `null` is treated the same as absent.
  */
 function assertValidOptionalStringField(value: unknown, fieldName: string): void {
   if (value !== undefined && value !== null && typeof value !== "string") {
@@ -258,60 +203,304 @@ function assertValidOptionalStringField(value: unknown, fieldName: string): void
 }
 
 /**
- * Runtime validation for a chunk's `usage` field. Like every other field
- * parsed off the wire here, `usage` is untyped JSON at runtime — a provider
- * sending e.g. `cost:"bad"` or `prompt_tokens:"1"` must be rejected here,
- * otherwise it is stored as-is and only surfaces once a downstream consumer
- * reads it: `buildUsageDetailsText()`'s `.toFixed()` throws a raw TypeError
- * on a non-number `cost`, and turn aggregation (`+=`) silently produces a
- * corrupted string total instead of failing loudly with the documented
- * protocol-error contract.
- *
- * Token counts are further constrained to non-negative safe integers (not
- * merely "finite"): a negative or fractional token count is nonsensical, and
- * left unchecked it flows straight into `toolLoop.ts`'s cross-turn `+=`
- * aggregation, corrupting a total that is otherwise safe to sum. `cost` stays
- * a plain non-negative finite-number check — it's a monetary amount, not a
- * count, so fractional values are expected.
+ * Reads a non-negative number off untyped wire JSON. `null` is how the API
+ * spells "not reported" for several usage fields and is treated as absent.
+ * Token counts must be safe integers (they are summed across turns as exact
+ * counts in `toolLoop.ts`); monetary amounts only need to be finite.
  */
-function assertValidUsage(
-  usage: unknown,
-): asserts usage is NonNullable<ChatCompletionResponse["usage"]> {
-  if (!isPlainObject(usage)) {
-    throw new StreamProtocolError(`Stream chunk usage is not an object: ${JSON.stringify(usage)}`);
-  }
-  for (const key of ["prompt_tokens", "completion_tokens", "total_tokens"] as const) {
-    const value = usage[key];
-    if (!Number.isSafeInteger(value) || (value as number) < 0) {
-      throw new StreamProtocolError(
-        `usage.${key} must be a non-negative safe integer, got: ${JSON.stringify(value)}`,
-      );
-    }
-  }
-  if (usage.cost !== undefined && (!Number.isFinite(usage.cost) || (usage.cost as number) < 0)) {
+function readOptionalNumber(
+  source: Record<string, unknown>,
+  key: string,
+  path: string,
+  kind: "count" | "amount",
+): number | undefined {
+  const value = source[key];
+  if (value === undefined || value === null) return undefined;
+  const valid = kind === "count" ? Number.isSafeInteger(value) : Number.isFinite(value);
+  if (!valid || (value as number) < 0) {
     throw new StreamProtocolError(
-      `usage.cost must be a non-negative finite number, got: ${JSON.stringify(usage.cost)}`,
+      `${path}.${key} must be a non-negative ${kind === "count" ? "safe integer" : "finite number"}, got: ${JSON.stringify(value)}`,
     );
   }
-  const detailChecks: readonly [detailsKey: string, innerKey: string][] = [
-    ["prompt_tokens_details", "cached_tokens"],
-    ["completion_tokens_details", "reasoning_tokens"],
-  ];
-  for (const [detailsKey, innerKey] of detailChecks) {
-    const details = usage[detailsKey];
-    if (details === undefined) continue;
-    if (!isPlainObject(details)) {
+  return value as number;
+}
+
+function readOptionalObject(
+  source: Record<string, unknown>,
+  key: string,
+  path: string,
+): Record<string, unknown> | undefined {
+  const value = source[key];
+  if (value === undefined || value === null) return undefined;
+  if (!isPlainObject(value)) {
+    throw new StreamProtocolError(`${path}.${key} is not an object: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
+/** Copies `[targetKey, sourceKey]` pairs that the wire actually reported; an unreported key stays absent. */
+function pickNumbers<T extends string>(
+  source: Record<string, unknown> | undefined,
+  path: string,
+  kind: "count" | "amount",
+  keys: readonly (readonly [T, string])[],
+): Partial<Record<T, number>> | undefined {
+  if (!source) return undefined;
+  const picked: Partial<Record<T, number>> = {};
+  for (const [targetKey, sourceKey] of keys) {
+    const value = readOptionalNumber(source, sourceKey, path, kind);
+    if (value !== undefined) picked[targetKey] = value;
+  }
+  return Object.keys(picked).length > 0 ? picked : undefined;
+}
+
+/**
+ * Validates a Responses `usage` object and maps it onto the Chat Completions
+ * field names the rest of the app reads (see `ChatCompletionResponse.usage`).
+ * Validation happens here, at the wire, because a malformed value otherwise
+ * only surfaces downstream: `buildUsageDetailsText()`'s `.toFixed()` throws a
+ * raw TypeError on a non-number `cost`, and turn aggregation (`+=`) silently
+ * produces a corrupted total.
+ */
+function mapResponsesUsage(raw: unknown): NonNullable<ChatCompletionResponse["usage"]> {
+  if (!isPlainObject(raw)) {
+    throw new StreamProtocolError(`usage is not an object: ${JSON.stringify(raw)}`);
+  }
+  const required = (key: string): number => {
+    const value = readOptionalNumber(raw, key, "usage", "count");
+    if (value === undefined) {
+      throw new StreamProtocolError(`usage.${key} must be a non-negative safe integer, got: null`);
+    }
+    return value;
+  };
+  const usage: NonNullable<ChatCompletionResponse["usage"]> = {
+    prompt_tokens: required("input_tokens"),
+    completion_tokens: required("output_tokens"),
+    total_tokens: required("total_tokens"),
+  };
+  const cost = readOptionalNumber(raw, "cost", "usage", "amount");
+  if (cost !== undefined) usage.cost = cost;
+
+  const promptDetails = pickNumbers(
+    readOptionalObject(raw, "input_tokens_details", "usage"),
+    "usage.input_tokens_details",
+    "count",
+    [
+      ["cached_tokens", "cached_tokens"],
+      ["cache_write_tokens", "cache_write_tokens"],
+    ],
+  );
+  if (promptDetails) usage.prompt_tokens_details = promptDetails;
+
+  const completionDetails = pickNumbers(
+    readOptionalObject(raw, "output_tokens_details", "usage"),
+    "usage.output_tokens_details",
+    "count",
+    [["reasoning_tokens", "reasoning_tokens"]],
+  );
+  if (completionDetails) usage.completion_tokens_details = completionDetails;
+
+  const costDetails = pickNumbers(
+    readOptionalObject(raw, "cost_details", "usage"),
+    "usage.cost_details",
+    "amount",
+    [
+      ["upstream_inference_cost", "upstream_inference_cost"],
+      ["upstream_inference_prompt_cost", "upstream_inference_input_cost"],
+      ["upstream_inference_completions_cost", "upstream_inference_output_cost"],
+    ],
+  );
+  if (costDetails) usage.cost_details = costDetails;
+
+  if (raw.is_byok !== undefined && raw.is_byok !== null) {
+    if (typeof raw.is_byok !== "boolean") {
       throw new StreamProtocolError(
-        `usage.${detailsKey} is not an object: ${JSON.stringify(details)}`,
+        `usage.is_byok must be a boolean, got: ${JSON.stringify(raw.is_byok)}`,
       );
     }
-    const inner = details[innerKey];
-    if (inner !== undefined && (!Number.isSafeInteger(inner) || (inner as number) < 0)) {
-      throw new StreamProtocolError(
-        `usage.${detailsKey}.${innerKey} must be a non-negative safe integer, got: ${JSON.stringify(inner)}`,
-      );
+    usage.is_byok = raw.is_byok;
+  }
+
+  // Kept even when every counter inside is unreported: the key's presence
+  // alone means a server tool ran, which a consumer must be able to tell
+  // apart from "no server tool ran" (key absent).
+  const serverToolUse = readOptionalObject(raw, "server_tool_use_details", "usage");
+  if (serverToolUse) {
+    usage.server_tool_use_details =
+      pickNumbers(serverToolUse, "usage.server_tool_use_details", "count", [
+        ["tool_calls_requested", "tool_calls_requested"],
+        ["tool_calls_executed", "tool_calls_executed"],
+        ["web_search_requests", "web_search_requests"],
+      ]) ?? {};
+  }
+  return usage;
+}
+
+/**
+ * Responses carries no top-level `provider`. The serving provider is only
+ * reported under `openrouter_metadata` (opted into with the
+ * `X-OpenRouter-Metadata` header) as the endpoint marked `selected`.
+ * Deliberately lenient, unlike every other wire read here: the provider is a
+ * display-only footer line, so an unexpected metadata shape drops that line
+ * rather than failing a turn whose content arrived intact.
+ */
+function readSelectedProvider(metadata: unknown): string | undefined {
+  if (!isPlainObject(metadata) || !isPlainObject(metadata.endpoints)) return undefined;
+  const available = metadata.endpoints.available;
+  if (!Array.isArray(available)) return undefined;
+  for (const endpoint of available) {
+    if (isPlainObject(endpoint) && endpoint.selected === true) {
+      return typeof endpoint.provider === "string" ? endpoint.provider : undefined;
     }
   }
+  return undefined;
+}
+
+/** `model` / `provider` / `usage` of a Responses result object, validated and mapped. */
+function readResultMetadata(response: Record<string, unknown>): {
+  model: string | undefined;
+  provider: string | undefined;
+  usage: ChatCompletionResponse["usage"] | undefined;
+} {
+  assertValidOptionalStringField(response.model, "response.model");
+  return {
+    model: typeof response.model === "string" ? response.model : undefined,
+    provider: readSelectedProvider(response.openrouter_metadata),
+    usage:
+      response.usage === undefined || response.usage === null
+        ? undefined
+        : mapResponsesUsage(response.usage),
+  };
+}
+
+/** Concatenated `output_text` of every `message` item, in output order. */
+function readOutputText(output: unknown): string {
+  if (!Array.isArray(output)) return "";
+  let text = "";
+  for (const item of output) {
+    if (!isPlainObject(item) || item.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (isPlainObject(part) && part.type === "output_text" && typeof part.text === "string") {
+        text += part.text;
+      }
+    }
+  }
+  return text;
+}
+
+function toResponsesContentPart(part: ChatMessageContent): ResponsesInputContentPart {
+  switch (part.type) {
+    case "text":
+      return { type: "input_text", text: part.text };
+    case "image_url":
+      // A bare string here, not Chat Completions' `{ url }` object.
+      return { type: "input_image", image_url: part.image_url.url };
+    case "file":
+      return { type: "input_file", filename: part.file.filename, file_data: part.file.file_data };
+  }
+}
+
+function toResponsesContent(
+  content: string | ChatMessageContent[],
+): string | ResponsesInputContentPart[] {
+  return typeof content === "string" ? content : content.map(toResponsesContentPart);
+}
+
+function toResponsesInput(messages: ChatMessage[]): ResponsesInputItem[] {
+  const input: ResponsesInputItem[] = [];
+  for (const message of messages) {
+    switch (message.role) {
+      case "system":
+      case "user":
+        input.push({ role: message.role, content: toResponsesContent(message.content) });
+        break;
+      case "assistant":
+        // A tool-calling turn with no text has `content: null`; Responses has
+        // no empty assistant message, so only the function_call items remain.
+        if (message.content) input.push({ role: "assistant", content: message.content });
+        for (const call of message.tool_calls ?? []) {
+          input.push({
+            type: "function_call",
+            call_id: call.id,
+            name: call.function.name,
+            arguments: call.function.arguments,
+          });
+        }
+        break;
+      case "tool":
+        input.push({
+          type: "function_call_output",
+          call_id: message.tool_call_id,
+          output: message.content,
+        });
+        break;
+    }
+  }
+  return input;
+}
+
+/**
+ * Builds the `POST /responses` body from the internal Chat Completions
+ * shaped request. Fields this function does not name are forwarded as-is
+ * (`...rest`), which is what lets a later change add a request field such as
+ * `session_id` to `ChatCompletionRequest` without touching this client.
+ */
+function toResponsesBody(request: ChatCompletionRequest, stream: boolean): Record<string, unknown> {
+  const { messages, plugins, tools, tool_choice, parallel_tool_calls, ...rest } = request;
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  // Responses takes a function tool's definition flat, without Chat
+  // Completions' `function` wrapper. Server tools are the same on both APIs.
+  const responsesTools = tools?.map((tool): ResponsesFunctionTool | ServerTool =>
+    tool.type === "function"
+      ? { type: "function", ...(tool as FunctionTool).function }
+      : (tool as ServerTool),
+  );
+  const responsesToolChoice: ResponsesToolChoice | undefined =
+    typeof tool_choice === "object"
+      ? { type: "function", name: tool_choice.function.name }
+      : tool_choice;
+  return {
+    ...rest,
+    input: toResponsesInput(messages),
+    ...(plugins && { plugins }),
+    ...(hasTools && {
+      tools: responsesTools,
+      ...(responsesToolChoice !== undefined && { tool_choice: responsesToolChoice }),
+      ...(parallel_tool_calls !== undefined && { parallel_tool_calls }),
+    }),
+    ...(stream && { stream: true }),
+  };
+}
+
+/**
+ * `output_index` keys tool-call accumulation in `toolLoop.ts` (as
+ * `StreamToolCallDelta.index`): it is unique per output item within one
+ * response and increases in emission order, which is all the accumulator and
+ * its index-ordered dispatch need. The values are not contiguous (reasoning
+ * and message items take indices too).
+ */
+function readOutputIndex(value: unknown): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < 0 ||
+    (value as number) > MAX_TOOL_CALL_INDEX
+  ) {
+    throw new StreamProtocolError(`invalid output_index: ${JSON.stringify(value)}`);
+  }
+  return value as number;
+}
+
+/**
+ * Maps `response.incomplete`'s reason onto the Chat Completions
+ * `finish_reason` vocabulary `toolLoop.ts` branches on. A reason outside the
+ * two documented ones is passed through verbatim so the loop rejects it as an
+ * unknown finish_reason instead of treating it as a normal completion.
+ */
+function readIncompleteFinishReason(details: unknown): string {
+  const reason = isPlainObject(details) ? details.reason : undefined;
+  if (reason === "max_output_tokens") return "length";
+  if (typeof reason === "string" && reason.length > 0) return reason;
+  return "incomplete";
 }
 
 export class OpenRouterClient implements ILLMClient {
@@ -344,41 +533,56 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
-      const { plugins, tools, tool_choice, parallel_tool_calls, ...rest } = request;
-      const hasTools = Array.isArray(tools) && tools.length > 0;
-      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": OPENROUTER_APP_URL,
-          "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
-          "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
-        },
-        body: JSON.stringify({
-          ...rest,
-          ...(plugins && { plugins }),
-          ...(hasTools && {
-            tools,
-            ...(tool_choice !== undefined && { tool_choice }),
-            ...(parallel_tool_calls !== undefined && { parallel_tool_calls }),
-          }),
-          usage: {
-            include: true,
-          },
-        }),
-      });
+      const response = await this.postResponses(request, false);
 
       if (!response.ok) {
         await this.handleErrorResponse(response);
       }
 
-      const data = (await response.json()) as ChatCompletionResponse;
-      return data;
+      const data: unknown = await response.json();
+      if (!isPlainObject(data)) {
+        throw new StreamProtocolError(`Response body is not an object: ${JSON.stringify(data)}`);
+      }
+      // A generation that failed after the request was accepted comes back
+      // as HTTP 200 with `status:"failed"`, so `handleErrorResponse()` above
+      // never sees it.
+      if (data.status === "failed") {
+        this.throwForFailedResponse(data);
+      }
+      const { model, provider, usage } = readResultMetadata(data);
+      return {
+        ...(typeof data.id === "string" && { id: data.id }),
+        ...(model !== undefined && { model }),
+        ...(provider !== undefined && { provider }),
+        choices: [{ message: { role: "assistant", content: readOutputText(data.output) } }],
+        ...(usage !== undefined && { usage }),
+      };
     } catch (err) {
       metrics.increment("openrouter.errors");
       throw err;
     }
+  }
+
+  private postResponses(
+    request: ChatCompletionRequest,
+    stream: boolean,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    return fetch(`${OPENROUTER_BASE_URL}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_APP_URL,
+        "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+        "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
+        // Responses reports the serving provider only under the opt-in
+        // `openrouter_metadata` (see `readSelectedProvider()`).
+        "X-OpenRouter-Metadata": "enabled",
+      },
+      body: JSON.stringify(toResponsesBody(request, stream)),
+      signal,
+    });
   }
 
   async *chatStream(
@@ -398,32 +602,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
-      const { plugins, tools, tool_choice, parallel_tool_calls, ...rest } = request;
-      const hasTools = Array.isArray(tools) && tools.length > 0;
-      const response = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": OPENROUTER_APP_URL,
-          "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
-          "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
-        },
-        body: JSON.stringify({
-          ...rest,
-          ...(plugins && { plugins }),
-          ...(hasTools && {
-            tools,
-            ...(tool_choice !== undefined && { tool_choice }),
-            ...(parallel_tool_calls !== undefined && { parallel_tool_calls }),
-          }),
-          stream: true,
-          usage: {
-            include: true,
-          },
-        }),
-        signal,
-      });
+      const response = await this.postResponses(request, true, signal);
 
       if (!response.ok) {
         await this.handleErrorResponse(response);
@@ -475,6 +654,8 @@ export class OpenRouterClient implements ILLMClient {
         lastProvider: undefined,
         lastUsage: undefined,
         finishReasonSeen: undefined,
+        completedFunctionCalls: new Set(),
+        argumentsLength: new Map(),
       };
 
       try {
@@ -567,7 +748,7 @@ export class OpenRouterClient implements ILLMClient {
         }
 
         // Handle case where stream ends without [DONE]. A clean EOF after a
-        // terminal finish_reason was observed is a normal completion.
+        // terminal event was observed is a normal completion.
         yield {
           done: true,
           fullText: state.fullText,
@@ -617,20 +798,11 @@ export class OpenRouterClient implements ILLMClient {
    * draining immediately (`return`) rather than yield its own fallback final
    * result.
    *
-   * Every field of a `data:` frame (delta shape, content type, the
-   * `tool_calls` array and each element's shape/types/index, finish_reason
-   * resolution and post-terminal freeze, `usage`) is validated *before* this
-   * method mutates `state` (`fullText`, `finishReasonSeen`, `lastUsage`, ...)
-   * or yields anything derived from the frame. Without this ordering, a
-   * single frame that is partly valid and partly malformed — e.g. legitimate
-   * `content` alongside a malformed `tool_calls` entry — could have its valid
-   * part (`content`) staged to the caller (and `fullText` mutated) before the
-   * malformed part is even reached, so the frame ends up "half applied" right
-   * before the whole call throws. Each early-return branch below (comment,
-   * non-`data:` field line, blank line, `[DONE]`, empty-`choices` trailer,
-   * absent `choices[0]`) is already fully validated by the time it is
-   * reached, so it mutates+yields immediately; only the main
-   * single-choice/delta path defers its mutations+yields to the end.
+   * Every field of an event is validated *before* this method mutates
+   * `state` (`fullText`, `finishReasonSeen`, `lastUsage`, ...) or yields
+   * anything derived from it, so a throw leaves `state` exactly as it was
+   * before the line was processed and never stages a half-applied event to
+   * the caller.
    */
   private *processSseLine(
     line: string,
@@ -647,7 +819,7 @@ export class OpenRouterClient implements ILLMClient {
       // keep-alive). Carries no data, but yielding it lets a consumer
       // measuring inter-chunk gaps (idle timeout) see the stream is still
       // alive during a heartbeat-only lull instead of timing it out.
-      // Always allowed, including after a terminal finish_reason (state is
+      // Always allowed, including after a terminal event (state is
       // never consulted here) — same "comments are never subject to the
       // post-terminal freeze" rule as before this chunk started being
       // yielded at all.
@@ -693,341 +865,204 @@ export class OpenRouterClient implements ILLMClient {
       throw new StreamProtocolError(`Malformed SSE data frame: ${data}`);
     }
     // A top-level frame that parses but isn't an object (e.g. `null`, a bare
-    // number) must not reach the property accesses below (`chunk.error`,
-    // `chunk.choices`, ...), which would throw a raw TypeError on `null`
+    // number) must not reach the property accesses below (`event.type`,
+    // `event.error`, ...), which would throw a raw TypeError on `null`
     // instead of the documented protocol-error contract.
     if (!isPlainObject(parsedData)) {
       throw new StreamProtocolError(`Stream chunk is not an object: ${JSON.stringify(parsedData)}`);
     }
-    const chunk = parsedData as unknown as StreamDelta;
+    const event = parsedData;
 
-    if (chunk.error) {
-      // Once a terminal `finish_reason` has been observed, the only frames
-      // this stream still tolerates are `[DONE]`/comments/the usage trailer
-      // (see the `finishReasonSeen` freeze check further below, applied to
-      // `choices` frames) — an `error` event arriving after that point is
-      // not the API reporting a genuine failure for a turn already declared
-      // done, so it must fail as a protocol violation here rather than being
-      // mapped through `throwForStreamErrorPayload()` to an API error class
-      // (e.g. `InsufficientCreditsError`) that would misrepresent an
-      // otherwise-successfully-completed turn as having errored.
-      if (state.finishReasonSeen !== undefined) {
-        throw new StreamProtocolError("received an error event after terminal finish_reason");
-      }
-      // `chunk.error` is only typed as `{code,message,...}` at compile time —
-      // the wire payload is untyped, so a provider sending e.g. a bare string
+    // Once a terminal event has been observed, the only lines this stream
+    // still tolerates are `[DONE]` and comments/field lines (handled above).
+    // This includes an error event: one arriving after the turn was already
+    // declared done is not the API reporting a genuine failure, so it fails
+    // as a protocol violation rather than being mapped to an API error class
+    // (e.g. `InsufficientCreditsError`) that would misrepresent a completed
+    // turn as having errored.
+    if (state.finishReasonSeen !== undefined) {
+      throw new StreamProtocolError("received additional stream data after the terminal event");
+    }
+
+    // Responses spells a mid-stream error as a flat `{type:"error", code,
+    // message}` event. The `{error:{code,message}}` envelope is what
+    // OpenRouter's HTTP errors use and what its Chat Completions streams sent
+    // mid-stream; whether a Responses stream can still emit it is unverified,
+    // so it stays accepted rather than being reclassified as an unknown event
+    // (which would turn a real upstream failure into a silent heartbeat).
+    const errorPayload = event.type === "error" ? event : event.error;
+    if (errorPayload !== undefined && errorPayload !== null) {
+      // The wire payload is untyped, so a provider sending e.g. a bare string
       // must be caught here rather than reach `throwForStreamErrorPayload()`,
-      // which destructures `message` and would otherwise pass `undefined`
-      // straight into `buildApiError()`.
-      if (!isPlainObject(chunk.error) || typeof chunk.error.message !== "string") {
+      // which destructures `message`.
+      if (!isPlainObject(errorPayload) || typeof errorPayload.message !== "string") {
         throw new StreamProtocolError(
-          `Stream error event is malformed: ${JSON.stringify(chunk.error)}`,
+          `Stream error event is malformed: ${JSON.stringify(errorPayload)}`,
         );
       }
-      // `code` is untyped at the wire like every other field here: OpenRouter's
-      // streaming docs document both an integer HTTP-status-like code and a
-      // symbolic string code (e.g. `"server_error"`) as legitimate shapes, so
-      // only a value that is neither is a genuine protocol violation (e.g. a
-      // boolean or a float). A missing `code` is left alone — that's the
-      // pre-existing, still-supported shape — and falls through to
+      // Both an integer HTTP-status-like code and a symbolic string code
+      // (e.g. `"server_error"`) are legitimate shapes; only a value that is
+      // neither is a protocol violation. A missing `code` falls through to
       // `throwForStreamErrorPayload()`'s own handling.
       if (
-        chunk.error.code !== undefined &&
-        !Number.isInteger(chunk.error.code) &&
-        typeof chunk.error.code !== "string"
+        errorPayload.code !== undefined &&
+        errorPayload.code !== null &&
+        !Number.isInteger(errorPayload.code) &&
+        typeof errorPayload.code !== "string"
       ) {
         throw new StreamProtocolError(
-          `Stream error event has a non-integer, non-string code: ${JSON.stringify(chunk.error.code)}`,
+          `Stream error event has a non-integer, non-string code: ${JSON.stringify(errorPayload.code)}`,
         );
       }
-      this.throwForStreamErrorPayload(chunk.error); // always throws
+      this.throwForStreamErrorPayload(
+        errorPayload as NonNullable<OpenRouterErrorResponse["error"]>,
+      ); // always throws
     }
 
-    // ---- Validation phase: every field below is checked (and, for
-    // `usage`/`tool_calls`, normalized into a local value) without touching
-    // `state` or yielding anything. A throw anywhere in this phase leaves
-    // `state` exactly as it was before this line was processed. ----
-
-    // Checked here — ahead of every branch below, including the
-    // empty-`choices`/absent-`choices[0]` usage-only trailers, which also
-    // read `chunk.model`/`chunk.provider` — so a malformed value on any kind
-    // of data frame is rejected before it can be committed to `state`.
-    assertValidOptionalStringField(chunk.model, "model");
-    assertValidOptionalStringField(chunk.provider, "provider");
-
-    // `usage` counts as "absent" only for a missing key or an explicit
-    // `null` — OpenAI-compatible streams conventionally send `usage: null`
-    // on every non-final chunk ahead of the terminal usage trailer, and that
-    // must keep being tolerated. A truthy-guard (`if (chunk.usage)`) instead
-    // let any other falsy value (`false`/`0`/`""`) through as "absent" too,
-    // silently skipping validation for a malformed-but-present field.
-    let validatedUsage: ChatCompletionResponse["usage"] | undefined;
-    if (chunk.usage !== undefined && chunk.usage !== null) {
-      assertValidUsage(chunk.usage);
-      validatedUsage = chunk.usage;
-    }
-
-    if (!Array.isArray(chunk.choices)) {
-      // A missing/non-array `choices` is structurally invalid, not
-      // the documented usage-trailer exception — that exception is
-      // specifically an *empty array* (see below), not an absent key.
+    if (typeof event.type !== "string") {
       throw new StreamProtocolError(
-        "Stream chunk is missing a `choices` array (and is not an error event).",
+        `Stream event has no string \`type\`: ${JSON.stringify(event.type)}`,
       );
     }
 
-    if (chunk.choices.length === 0) {
-      // Empty `choices` is only the documented usage-only trailer shape when
-      // it actually carries `usage` — see the module-level fix note on
-      // `assertFrameSize`'s neighbors: without a `usage` payload, an empty
-      // `choices` array has no defined meaning and must not be silently
-      // accepted as a heartbeat (that would let a malformed/adversarial
-      // stream reset the idle timer indefinitely with content-free frames).
-      if (validatedUsage === undefined) {
-        throw new StreamProtocolError(
-          "Stream chunk has an empty `choices` array without a `usage` payload " +
-            "(the only documented shape for an empty-choices frame is the usage trailer).",
+    switch (event.type) {
+      case "response.output_text.delta": {
+        // A non-string `delta` (e.g. a bare number) must not get concatenated
+        // into `fullText` (which coerces it to a string) — that would let the
+        // stream "succeed" with corrupted text instead of failing.
+        if (typeof event.delta !== "string") {
+          throw new StreamProtocolError(
+            `output_text delta must be a string, got: ${JSON.stringify(event.delta)}`,
+          );
+        }
+        if (event.delta.length === 0) break;
+        state.fullText += event.delta;
+        yield { content: event.delta, done: false };
+        return false;
+      }
+
+      case "response.function_call_arguments.delta": {
+        const index = readOutputIndex(event.output_index);
+        if (typeof event.delta !== "string") {
+          throw new StreamProtocolError(
+            `function_call arguments delta must be a string, got: ${JSON.stringify(event.delta)}`,
+          );
+        }
+        state.argumentsLength.set(
+          index,
+          (state.argumentsLength.get(index) ?? 0) + event.delta.length,
         );
-      }
-      // Fully validated at this point, so commit + yield now. `usage` is
-      // attached to the heartbeat itself (not just `state.lastUsage`) so a
-      // caller that never reaches the terminal chunk (cancelled or errored
-      // before `[DONE]`) can still observe the usage this trailer carried —
-      // see `StreamHeartbeatChunk`'s doc comment.
-      if (chunk.model) state.lastModel = chunk.model;
-      if (chunk.provider) state.lastProvider = chunk.provider;
-      state.lastUsage = validatedUsage;
-      yield { heartbeat: true, done: false, usage: validatedUsage };
-      return false;
-    }
-
-    // We always request/expect exactly one choice (no `n` parameter is ever
-    // sent); a provider sending more than one is a protocol violation, not a
-    // shape this client can silently narrow by only reading `choices[0]`.
-    if (chunk.choices.length > 1) {
-      throw new StreamProtocolError(
-        `Stream chunk has more than one choice (expected exactly 1): ${chunk.choices.length}`,
-      );
-    }
-
-    const choice = chunk.choices[0];
-    if (choice === undefined) {
-      // Fully validated at this point, same as the empty-choices branch above
-      // (including attaching `usage` to the heartbeat itself, if present).
-      if (chunk.model) state.lastModel = chunk.model;
-      if (chunk.provider) state.lastProvider = chunk.provider;
-      if (validatedUsage !== undefined) state.lastUsage = validatedUsage;
-      yield {
-        heartbeat: true,
-        done: false,
-        ...(validatedUsage !== undefined && { usage: validatedUsage }),
-      };
-      return false;
-    }
-    // `choice` (including `null`) must be an object before any
-    // property on it is read — otherwise malformed input (e.g.
-    // `choices: [null]`) reaches `choice.index` below and throws a
-    // raw TypeError instead of the documented protocol error.
-    if (!isPlainObject(choice)) {
-      throw new StreamProtocolError(`Stream choice is not an object: ${JSON.stringify(choice)}`);
-    }
-    if (choice.index !== undefined && choice.index !== 0) {
-      throw new StreamProtocolError(`unexpected choice index: ${choice.index}`);
-    }
-
-    // `delta` must be present (an object, `{}` included) on a non-empty
-    // choice — it is the only field this client relies on to know a frame
-    // is a legitimate incremental update rather than a content-free shell.
-    // Without this, a frame like `{choices:[{finish_reason:"stop"}]}` (no
-    // `delta` at all) would still fall through to the "accepted but nothing
-    // to yield" heartbeat path below, letting a stream that only ever sends
-    // such shells reset the idle timer indefinitely with frames that carry
-    // no actual delta payload.
-    const delta = choice.delta;
-    if (!isPlainObject(delta)) {
-      throw new StreamProtocolError(
-        `Stream choice.delta must be an object, got: ${JSON.stringify(delta)}`,
-      );
-    }
-    const content = delta.content;
-    // A non-string/non-null `content` (e.g. a bare number) must not
-    // silently pass through `if (content)` and get concatenated into
-    // `fullText` (which coerces it to a string) — that would let the
-    // stream "succeed" with corrupted text instead of failing.
-    if (content !== undefined && content !== null && typeof content !== "string") {
-      throw new StreamProtocolError(
-        `delta.content must be a string or null, got: ${JSON.stringify(content)}`,
-      );
-    }
-
-    const toolCalls = delta?.tool_calls;
-    if (toolCalls !== undefined && !Array.isArray(toolCalls)) {
-      throw new StreamProtocolError(
-        `delta.tool_calls must be an array, got: ${JSON.stringify(toolCalls)}`,
-      );
-    }
-
-    // Validated and normalized here, but not yielded yet: a later tool_call
-    // entry in this same frame failing validation must not leave an earlier
-    // entry's chunk already yielded (see the method-level comment).
-    const normalizedToolCalls: StreamToolCallChunk["toolCall"][] = [];
-    for (const toolCall of toolCalls ?? []) {
-      if (!isPlainObject(toolCall)) {
-        throw new StreamProtocolError(
-          `tool_call entry is not an object: ${JSON.stringify(toolCall)}`,
-        );
-      }
-      if (
-        !Number.isSafeInteger(toolCall.index) ||
-        toolCall.index < 0 ||
-        toolCall.index > MAX_TOOL_CALL_INDEX
-      ) {
-        throw new StreamProtocolError(`invalid tool_call index: ${toolCall.index}`);
-      }
-      // The JSON payload is untyped at the wire: a provider sending a
-      // non-string id/name/arguments (e.g. a bare number) must fail
-      // here rather than reach normalizeToolCalls(), whose
-      // `call.name.trim()` assumes a string and would throw instead
-      // of producing the "reject-never" status:"error" contract.
-      if (toolCall.id !== undefined && typeof toolCall.id !== "string") {
-        throw new StreamProtocolError(
-          `tool_call.id must be a string, got: ${JSON.stringify(toolCall.id)}`,
-        );
-      }
-      if (toolCall.type !== undefined && toolCall.type !== "function") {
-        throw new StreamProtocolError(
-          `unsupported tool_call.type: ${JSON.stringify(toolCall.type)}`,
-        );
-      }
-      // A present-but-non-object `function` (e.g. a bare string) must not be
-      // treated the same as an absent one: `toolCall.function?.name` below
-      // would silently read `undefined` off it instead of rejecting the frame.
-      if (toolCall.function !== undefined && !isPlainObject(toolCall.function)) {
-        throw new StreamProtocolError(
-          `tool_call.function is not an object: ${JSON.stringify(toolCall.function)}`,
-        );
-      }
-      if (toolCall.function?.name !== undefined && typeof toolCall.function.name !== "string") {
-        throw new StreamProtocolError(
-          `tool_call.function.name must be a string, got: ${JSON.stringify(toolCall.function.name)}`,
-        );
-      }
-      if (
-        toolCall.function?.arguments !== undefined &&
-        typeof toolCall.function.arguments !== "string"
-      ) {
-        throw new StreamProtocolError(
-          `tool_call.function.arguments must be a string, got: ${JSON.stringify(toolCall.function.arguments)}`,
-        );
-      }
-      normalizedToolCalls.push({
-        index: toolCall.index,
-        ...(toolCall.id !== undefined && { id: toolCall.id }),
-        ...(toolCall.function?.name !== undefined && {
-          name: toolCall.function.name,
-        }),
-        ...(toolCall.function?.arguments !== undefined && {
-          argumentsDelta: toolCall.function.arguments,
-        }),
-      });
-    }
-
-    // Resolving finish_reason can itself throw (choice/delta mismatch); doing
-    // so here keeps it inside the validation phase, before any mutation.
-    const finishReason = resolveFinishReason(choice.finish_reason, delta?.finish_reason);
-
-    if (state.finishReasonSeen !== undefined) {
-      // OpenRouter's final Chat Completions usage frame deliberately keeps a
-      // non-empty choices array for client compatibility. It repeats the
-      // terminal finish_reason with a content-free delta and adds usage just
-      // before [DONE]. Treat only that exact accounting shape as legal after
-      // the stream is frozen; late content/tool calls remain protocol errors.
-      const hasReasoningPayload =
-        (delta.reasoning !== undefined && delta.reasoning !== null && delta.reasoning !== "") ||
-        (delta.reasoning_details !== undefined &&
-          delta.reasoning_details !== null &&
-          (!Array.isArray(delta.reasoning_details) || delta.reasoning_details.length > 0));
-      const isUsageAccountingFrame =
-        validatedUsage !== undefined &&
-        (content === undefined || content === null || content === "") &&
-        normalizedToolCalls.length === 0 &&
-        !hasReasoningPayload &&
-        finishReason === state.finishReasonSeen;
-      if (!isUsageAccountingFrame) {
-        throw new StreamProtocolError(
-          "received additional stream data after terminal finish_reason",
-        );
+        yield { toolCall: { index, argumentsDelta: event.delta }, done: false };
+        return false;
       }
 
-      if (chunk.model) state.lastModel = chunk.model;
-      if (chunk.provider) state.lastProvider = chunk.provider;
-      state.lastUsage = validatedUsage;
-      yield { heartbeat: true, done: false, usage: validatedUsage };
-      return false;
+      case "response.output_item.added":
+      case "response.output_item.done": {
+        const item = event.item;
+        if (!isPlainObject(item) || typeof item.type !== "string") {
+          throw new StreamProtocolError(
+            `${event.type} carries a malformed item: ${JSON.stringify(item)}`,
+          );
+        }
+        // Every other item type (`message`, `reasoning`, a server tool run
+        // such as `openrouter:datetime`, ...) has nothing for the caller.
+        if (item.type !== "function_call") break;
+
+        const index = readOutputIndex(event.output_index);
+        // A non-string id/name/arguments must fail here rather than reach
+        // `normalizeToolCalls()`, whose `call.name.trim()` assumes a string.
+        for (const key of ["call_id", "name", "arguments"] as const) {
+          if (item[key] !== undefined && typeof item[key] !== "string") {
+            throw new StreamProtocolError(
+              `function_call.${key} must be a string, got: ${JSON.stringify(item[key])}`,
+            );
+          }
+        }
+        const callId = item.call_id as string | undefined;
+        const name = item.name as string | undefined;
+        const finishedArguments = item.arguments as string | undefined;
+
+        // `call_id` and `name` arrive on `added` and are repeated on `done`;
+        // both are forwarded, and `toolLoop.ts` rejects a repeat that
+        // disagrees with the first value. `arguments` on `added` is ignored:
+        // the deltas are the transport, and the finished string on `done` is
+        // only checked against them.
+        let argumentsDelta: string | undefined;
+        if (event.type === "response.output_item.done") {
+          const streamedLength = state.argumentsLength.get(index) ?? 0;
+          if (finishedArguments !== undefined && finishedArguments.length !== streamedLength) {
+            if (streamedLength > 0) {
+              throw new StreamProtocolError(
+                `function_call arguments at output_index ${index} finished with ${finishedArguments.length} characters but ${streamedLength} were streamed`,
+              );
+            }
+            // No delta was ever streamed for this call, so the finished
+            // string is the only copy of the arguments.
+            argumentsDelta = finishedArguments;
+            state.argumentsLength.set(index, finishedArguments.length);
+          }
+          state.completedFunctionCalls.add(index);
+        }
+        yield {
+          toolCall: {
+            index,
+            ...(callId !== undefined && { id: callId }),
+            ...(name !== undefined && { name }),
+            ...(argumentsDelta !== undefined && { argumentsDelta }),
+          },
+          done: false,
+        };
+        return false;
+      }
+
+      case "response.completed":
+      case "response.incomplete": {
+        if (!isPlainObject(event.response)) {
+          throw new StreamProtocolError(
+            `${event.type} carries a malformed response: ${JSON.stringify(event.response)}`,
+          );
+        }
+        const finishReason =
+          event.type === "response.completed"
+            ? state.completedFunctionCalls.size > 0
+              ? "tool_calls"
+              : "stop"
+            : readIncompleteFinishReason(event.response.incomplete_details);
+        const { model, provider, usage } = readResultMetadata(event.response);
+
+        if (model !== undefined) state.lastModel = model;
+        if (provider !== undefined) state.lastProvider = provider;
+        if (usage !== undefined) state.lastUsage = usage;
+        state.finishReasonSeen = finishReason;
+        // `usage` rides on the heartbeat itself (not just `state.lastUsage`)
+        // so a caller that never reaches the terminal chunk (cancelled or
+        // errored before `[DONE]`) can still observe it — see
+        // `StreamHeartbeatChunk`'s doc comment.
+        yield { heartbeat: true, done: false, ...(usage !== undefined && { usage }) };
+        return false;
+      }
+
+      case "response.failed": {
+        if (!isPlainObject(event.response)) {
+          throw new StreamProtocolError(
+            `response.failed carries a malformed response: ${JSON.stringify(event.response)}`,
+          );
+        }
+        this.throwForFailedResponse(event.response); // always throws
+      }
     }
 
-    // ---- Apply phase: every element of this frame validated successfully,
-    // so `state` is now mutated and the frame's chunks are yielded. ----
-    if (chunk.model) state.lastModel = chunk.model;
-    if (chunk.provider) state.lastProvider = chunk.provider;
-    if (validatedUsage !== undefined) state.lastUsage = validatedUsage;
-
-    // Set once this frame actually yields a content/tool_call chunk to the
-    // caller. A `data:` frame that is accepted (parses, passes every
-    // validation) but carries nothing a consumer can see — a role-only or
-    // reasoning-only delta, a usage-only trailer, a finish_reason-only
-    // terminal frame — must still surface *something*, or a stream that only
-    // ever sends these (e.g. a reasoning model streaming reasoning deltas,
-    // or a slow usage trailer arriving long after the last content) starves
-    // the idle-timeout liveness signal in `toolLoop.ts` even though the
-    // connection is perfectly healthy. Reusing the heartbeat chunk type
-    // means the loop's existing heartbeat branch (idle reset + continue)
-    // handles it with no changes there.
-    let yieldedPayload = false;
-    if (content) {
-      state.fullText += content;
-      yield { content, done: false };
-      yieldedPayload = true;
-    }
-    for (const toolCall of normalizedToolCalls) {
-      yield { toolCall, done: false };
-      yieldedPayload = true;
-    }
-    if (finishReason !== null) {
-      state.finishReasonSeen = finishReason;
-    }
-
-    // Frame was accepted (parsed, validated, no error) but never yielded a
-    // content/tool_call chunk above — e.g. a role-only or reasoning-only
-    // delta, or a finish_reason-only terminal frame. See the comment at
-    // `yieldedPayload`'s declaration for why this must still yield. `usage`
-    // is attached here too on the rare frame that pairs a content-free
-    // choice with a top-level `usage` sibling — see `StreamHeartbeatChunk`'s
-    // doc comment for why the heartbeat itself (not just `state.lastUsage`)
-    // carries it.
-    if (!yieldedPayload) {
-      yield {
-        heartbeat: true,
-        done: false,
-        ...(validatedUsage !== undefined && { usage: validatedUsage }),
-      };
-    } else if (validatedUsage !== undefined) {
-      // Frame yielded content/tool_call above *and* carries `usage`. That
-      // usage was already committed to `state.lastUsage`, but `toolLoop.ts`
-      // only tracks a turn's "usage observed so far" off heartbeat chunks
-      // (see `StreamHeartbeatChunk`'s doc comment) — a content/tool_call
-      // chunk alone doesn't update it. Without this extra yield, a
-      // cancel/malformed frame landing between this frame and `[DONE]` would
-      // lose this frame's usage from the early-exit `ToolLoopResult` even
-      // though `state.lastUsage` (and thus a normal completion) has it. Kept
-      // as its own chunk, after the payload, rather than merged onto it: the
-      // payload chunk types (`StreamChunk`/`StreamToolCallChunk`) carry no
-      // `usage` field, and this frame already took the `!yieldedPayload`
-      // branch's heartbeat if it had nothing else to yield, so exactly one
-      // heartbeat is ever yielded per frame.
-      yield { heartbeat: true, done: false, usage: validatedUsage };
-    }
-
+    // An accepted event with nothing for the caller: lifecycle events
+    // (`response.created`, `content_part.added`, `output_text.done`, ...),
+    // reasoning deltas (their text is dropped), server tool progress, and any
+    // event type this client does not know. Yielding a heartbeat keeps
+    // `toolLoop.ts`'s idle timer measuring what it is meant to measure — a
+    // gap in *receiving* — so a reasoning model that streams only reasoning
+    // for minutes is not mistaken for a stalled connection. Unknown types are
+    // not rejected because the API adds event types without notice (its
+    // OpenAPI definition marks the union as open); a stream that sends such
+    // events forever is still bounded by the wall-clock timeout.
+    yield { heartbeat: true, done: false };
     return false;
   }
 
@@ -1106,8 +1141,9 @@ export class OpenRouterClient implements ILLMClient {
   }
 
   /**
-   * Mid-stream error event (`{error:{code,message,...}}`, sibling to
-   * `choices`). An integer `code` is mapped to the same error classes as
+   * Mid-stream error payload (`{code,message,...}`, from either error
+   * shape `processSseLine()` accepts or a failed response's `error`). An
+   * integer `code` is mapped to the same error classes as
    * HTTP-level failures via `buildApiError()`. A symbolic string `code`
    * (e.g. `"server_error"`, a documented OpenRouter provider-disconnect
    * shape) has no corresponding HTTP status to map through that switch, so
@@ -1127,6 +1163,24 @@ export class OpenRouterClient implements ILLMClient {
       throw new UnknownApiError(message);
     }
     throw this.buildApiError(code, message);
+  }
+
+  /** A Responses result with `status:"failed"`: its `error` has the same `{code,message}` shape as a stream error event. */
+  private throwForFailedResponse(response: Record<string, unknown>): never {
+    const error = response.error;
+    if (
+      !isPlainObject(error) ||
+      typeof error.message !== "string" ||
+      (error.code !== undefined &&
+        error.code !== null &&
+        !Number.isInteger(error.code) &&
+        typeof error.code !== "string")
+    ) {
+      throw new StreamProtocolError(
+        `Failed response carries a malformed error: ${JSON.stringify(error)}`,
+      );
+    }
+    this.throwForStreamErrorPayload(error as NonNullable<OpenRouterErrorResponse["error"]>);
   }
 
   /** Maps an OpenRouter error code + message to the corresponding AppError subclass. */

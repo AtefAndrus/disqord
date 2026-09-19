@@ -110,7 +110,7 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 
 **ストリーミングの扱い:**
 
-- 現行 `chatStream` は `delta.content` のみ処理している。`StreamDelta` 型に `annotations` / `server_tool_use_details` はない（`types/index.ts`）。
+- `chatStream` は Responses のイベントのうち `response.output_text.delta` の本文と function call だけを呼び出し側へ渡し、server tool の item（`openrouter:web_search` 等の `response.output_item.added` / `done`）は heartbeat として捨てている。`annotations` は読んでいない。`usage.server_tool_use_details` は [Responses API への移行](../responses-api-migration/design.md) が parser と `AggregatedUsage` の集計まで用意している。
 - server tool 使用時はツール実行中のSSEイベント（検索中の状態・`annotations` の引用元）が流れるが、最終回答の `content` は従来どおり取得できる。
 - 初期実装では引用元（`url_citation`）の整形表示は行わず、本文のみ表示する。ただし検索回数ログ・課金表示のため `server_tool_use_details` の取り込みは行う。引用UIは段階的に対応する。
 - `usage` は全レスポンスで自動返却される。[Responses API への移行](../responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない。`server_tool_use_details.web_search_requests` も自動返却の `usage` 内に含まれる。
@@ -257,7 +257,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 
 ### 一般Web検索（server tools）
 
-- [ ] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use_details` を追加
+- [x] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use_details` を追加（[tool-calling-foundation](../tool-calling-foundation/design.md) と [Responses API への移行](../responses-api-migration/design.md) で実装済み）
 - [ ] `chatService` で設定ON時に server tool（`max_results` / `max_total_results` 指定）を付与。失敗時は検索なしで継続
 - [ ] `usage.server_tool_use_details.web_search_requests` のログ取り込み
 - [ ] 検索失敗時の限定的 retry（tool起因のみ tools を外して再試行、他は既存エラー処理）

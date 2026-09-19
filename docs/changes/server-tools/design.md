@@ -21,7 +21,7 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 - 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — client tool と server tool を結合した `tools` 配列を送る経路（`runToolLoop` の `serverTools` 引数）を提供する。本 change の server tool はそこへ載せる
 - 関連: [web-search](../web-search/design.md) — `openrouter:web_search` / `openrouter:web_fetch` は**そちら**で定義。本 change では再定義しない（`web_fetch` は本 change の各 server tool の nested `tools` 候補としてのみ言及）
 - 関連: [model-compare](../model-compare/design.md) — `/model compare`（同一プロンプトを複数モデルへ並列送信し **side-by-side 表示**）は本 change の `openrouter:fusion`（panel→judge の**構造化合議**）とは**目的が異なる**。混同しない（後述）
-- 関連: [Responses API への移行](../responses-api-migration/design.md) — `ChatCompletionRequest`/`usage` 型の現行 API 整合。本 change の server tool パラメータ型・`server_tool_use` 取り込みはその整合方針に従う
+- 関連: [Responses API への移行](../responses-api-migration/design.md) — `ChatCompletionRequest`/`usage` 型の現行 API 整合。本 change の server tool パラメータ型・`server_tool_use_details` 取り込みはその整合方針に従う
 - 関連: [出力マルチモーダル対応](../multimodal-output/design.md) — `image_generation` の producer adapter が検証済み成果物を渡した後の Discord 添付とレイアウトを所有する
 
 ## Goals / Non-Goals
@@ -100,7 +100,7 @@ tools: [
 
 **返り形の検証方針:**
 
-- パラメータ名・最上位フィールド（`status` / `model` / `advice` / `analysis` / `responses` 等）は docs 由来だが、最終 message の正確な構造（特に `image_generation` が画像をどう返すか）は research でも未確証。**実装着手前に実 API のレスポンスを 1 度取得して fixture 化**し、型を確定する。返りに伴う追加フィールドも同時に確認する：最終 message / delta 側の `annotations`（`url_citation` 等）と、`usage.server_tool_use_details` の各ツール計上キー。**`server_tool_use` は `usage` 配下**であり `StreamDelta` 直下ではない（現行 `StreamDelta` は `content`/`role`/`finish_reason`/`usage` のみ。`annotations` を delta/message のどこに足すかは実 wire 形状で確定）。
+- パラメータ名・最上位フィールド（`status` / `model` / `advice` / `analysis` / `responses` 等）は docs 由来だが、最終 message の正確な構造（特に `image_generation` が画像をどう返すか）は research でも未確証。**実装着手前に実 API のレスポンスを 1 度取得して fixture 化**し、型を確定する。返りに伴う追加フィールドも同時に確認する：最終 message / delta 側の `annotations`（`url_citation` 等）と、`usage.server_tool_use_details` の各ツール計上キー。`server_tool_use_details` は `usage` 配下にあり、終端イベント（`response.completed`）でだけ届く。server tool の実行結果は `response.output_item.done` の item（`type` が `openrouter:` 接頭辞）として流れ、現行の `chatStream` はこれを heartbeat として捨てている。`annotations` をどのイベントから読むかは実 wire 形状で確定する。
 
 ---
 

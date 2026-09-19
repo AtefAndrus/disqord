@@ -72,6 +72,40 @@ function isHeartbeatChunk(chunk: StreamYield): chunk is StreamHeartbeatChunk {
   return "heartbeat" in chunk;
 }
 
+const REQUEST: ChatCompletionRequest = {
+  model: "test-model",
+  messages: [{ role: "user", content: "Hi" }],
+};
+
+// Responses stream events, reduced to the fields `chatStream()` reads. The
+// shapes follow a capture of the live API (2026-09-19).
+function textDelta(delta: string): Record<string, unknown> {
+  return { type: "response.output_text.delta", output_index: 0, content_index: 0, delta };
+}
+
+function argumentsDelta(outputIndex: number, delta: string): Record<string, unknown> {
+  return { type: "response.function_call_arguments.delta", output_index: outputIndex, delta };
+}
+
+function functionCallItem(
+  phase: "added" | "done",
+  outputIndex: number,
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    type: `response.output_item.${phase}`,
+    output_index: outputIndex,
+    item: { type: "function_call", ...item },
+  };
+}
+
+function completed(response: Record<string, unknown> = {}): Record<string, unknown> {
+  return { type: "response.completed", response: { status: "completed", ...response } };
+}
+
+const RESPONSES_USAGE = { input_tokens: 10, output_tokens: 5, total_tokens: 15 };
+const MAPPED_USAGE = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
+
 describe("OpenRouterClient", () => {
   let client: OpenRouterClient;
   let originalFetch: typeof globalThis.fetch;
@@ -95,30 +129,72 @@ describe("OpenRouterClient", () => {
     metrics.reset();
   });
 
+  /** Queues a streaming response made of `events`, terminated by `data: [DONE]`. */
+  function respondWithEvents(events: unknown[]): void {
+    mockFetch.mockResolvedValueOnce(sseResponse([...events.map(sseData), "data: [DONE]\n\n"]));
+  }
+
   describe("chat", () => {
-    test("正常なレスポンスを返す", async () => {
-      const expectedResponse: ChatCompletionResponse = {
-        id: "chatcmpl-123",
-        choices: [{ message: { role: "assistant", content: "Hello!" } }],
-      };
+    test("Responses の結果を ChatCompletionResponse の形へ写像する", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve(expectedResponse),
+        json: () =>
+          Promise.resolve({
+            id: "gen-123",
+            model: "openai/gpt-5-nano",
+            status: "completed",
+            output: [
+              { type: "reasoning", summary: [{ type: "summary_text", text: "thinking" }] },
+              {
+                type: "message",
+                role: "assistant",
+                content: [
+                  { type: "output_text", text: "Hel" },
+                  { type: "output_text", text: "lo!" },
+                ],
+              },
+            ],
+            usage: RESPONSES_USAGE,
+            openrouter_metadata: {
+              endpoints: { available: [{ provider: "OpenAI", selected: true }] },
+            },
+          }),
       });
 
-      const request: ChatCompletionRequest = {
-        model: "test-model",
-        messages: [{ role: "user", content: "Hi" }],
-      };
-      const result = await client.chat(request);
+      const result = await client.chat(REQUEST);
 
-      expect(result).toEqual(expectedResponse);
+      expect(result).toEqual({
+        id: "gen-123",
+        model: "openai/gpt-5-nano",
+        provider: "OpenAI",
+        choices: [{ message: { role: "assistant", content: "Hello!" } }],
+        usage: MAPPED_USAGE,
+      } satisfies ChatCompletionResponse);
+    });
+
+    test("HTTP 200 でも status:'failed' の結果は API エラーとして throw する", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            status: "failed",
+            error: { code: 402, message: "Insufficient credits" },
+          }),
+      });
+
+      await expect(client.chat(REQUEST)).rejects.toBeInstanceOf(InsufficientCreditsError);
+    });
+
+    test("body が object でなければ protocol error になる", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(null) });
+
+      await expect(client.chat(REQUEST)).rejects.toBeInstanceOf(StreamProtocolError);
     });
 
     test("正しいエンドポイントとヘッダーでfetchを呼び出す", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -128,7 +204,7 @@ describe("OpenRouterClient", () => {
       await client.chat(request);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://openrouter.ai/api/v1/chat/completions",
+        "https://openrouter.ai/api/v1/responses",
         expect.objectContaining({
           method: "POST",
           headers: {
@@ -137,6 +213,7 @@ describe("OpenRouterClient", () => {
             "HTTP-Referer": "https://github.com/AtefAndrus/disqord",
             "X-OpenRouter-Title": "DisQord",
             "X-OpenRouter-Categories": "general-chat",
+            "X-OpenRouter-Metadata": "enabled",
           },
         }),
       );
@@ -145,7 +222,7 @@ describe("OpenRouterClient", () => {
     test("リクエストボディが正しくJSONシリアライズされる", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -156,16 +233,76 @@ describe("OpenRouterClient", () => {
 
       const callArgs = mockFetch.mock.calls[0];
       const options = callArgs[1] as RequestInit;
+      // `messages` は `input` になり、deprecated な `usage:{include:true}` と
+      // `stream` は載らない。
       expect(JSON.parse(options.body as string)).toEqual({
-        ...request,
-        usage: { include: true },
+        model: "test-model",
+        input: [{ role: "user", content: "Test message" }],
       });
+    });
+
+    test("ChatCompletionRequest に後から足されたフィールドは body へそのまま透過する", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await client.chat({ ...REQUEST, session_id: "s-1" } as ChatCompletionRequest);
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body.session_id).toBe("s-1");
+    });
+
+    test("assistant の tool_calls と tool メッセージは function_call / function_call_output item になる", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await client.chat({
+        model: "test-model",
+        messages: [
+          { role: "system", content: "Be brief." },
+          { role: "user", content: "Weather?" },
+          {
+            role: "assistant",
+            content: "Let me check.",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "w", arguments: '{"c":"Tokyo"}' },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_1", content: '{"temp":21}' },
+          // テキストを伴わない tool-calling turn: 空の assistant message は送らない。
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: "call_2", type: "function", function: { name: "w", arguments: "{}" } },
+            ],
+          },
+          { role: "tool", tool_call_id: "call_2", content: "ok" },
+        ],
+      });
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        input: unknown[];
+      };
+      expect(body.input).toEqual([
+        { role: "system", content: "Be brief." },
+        { role: "user", content: "Weather?" },
+        { role: "assistant", content: "Let me check." },
+        { type: "function_call", call_id: "call_1", name: "w", arguments: '{"c":"Tokyo"}' },
+        { type: "function_call_output", call_id: "call_1", output: '{"temp":21}' },
+        { type: "function_call", call_id: "call_2", name: "w", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_2", output: "ok" },
+      ]);
     });
 
     test("plugins が未指定の場合は body の JSON に含まれない", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -184,7 +321,7 @@ describe("OpenRouterClient", () => {
     test("plugins が指定された場合は body の JSON に正しく載る", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -201,10 +338,10 @@ describe("OpenRouterClient", () => {
       expect(body.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
     });
 
-    test("content 配列 (text + image_url + file 混在) が round-trip する", async () => {
+    test("content 配列 (text + image_url + file 混在) は input_text / input_image / input_file へ写像される", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -227,15 +364,17 @@ describe("OpenRouterClient", () => {
       await client.chat(request);
 
       const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
-        messages: ChatCompletionRequest["messages"];
+        input: { content: unknown }[];
         plugins: ChatCompletionRequest["plugins"];
       };
-      expect(body.messages[0]?.content).toEqual([
-        { type: "text", text: "Describe these" },
-        { type: "image_url", image_url: { url: "https://cdn.discord.test/a.png" } },
+      expect(body.input[0]?.content).toEqual([
+        { type: "input_text", text: "Describe these" },
+        // Responses の image_url は `{url}` オブジェクトではなく文字列。
+        { type: "input_image", image_url: "https://cdn.discord.test/a.png" },
         {
-          type: "file",
-          file: { filename: "spec.pdf", file_data: "https://cdn.discord.test/spec.pdf" },
+          type: "input_file",
+          filename: "spec.pdf",
+          file_data: "https://cdn.discord.test/spec.pdf",
         },
       ]);
       expect(body.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
@@ -244,7 +383,7 @@ describe("OpenRouterClient", () => {
     test("tools が未指定の場合は body の JSON に tools/tool_choice/parallel_tool_calls が含まれない", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -265,7 +404,7 @@ describe("OpenRouterClient", () => {
     test("tools が空配列の場合は body の JSON に tools/tool_choice/parallel_tool_calls が含まれない", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -287,7 +426,7 @@ describe("OpenRouterClient", () => {
     test("tools が非空配列の場合は body に tools/tool_choice/parallel_tool_calls が正しく載る", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
-        json: () => Promise.resolve({ choices: [] }),
+        json: () => Promise.resolve({}),
       });
 
       const request: ChatCompletionRequest = {
@@ -308,9 +447,35 @@ describe("OpenRouterClient", () => {
         string,
         unknown
       >;
-      expect(body.tools).toEqual(request.tools);
+      // function tool の定義は `function` ラッパーなしの flat な形で送る。
+      expect(body.tools).toEqual([
+        { type: "function", name: "get_weather", description: "Get weather", parameters: {} },
+      ]);
       expect(body.tool_choice).toBe("auto");
       expect(body.parallel_tool_calls).toBe(false);
+    });
+
+    test("server tool は無変更で載り、function を名指しする tool_choice は flat な形になる", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await client.chat({
+        ...REQUEST,
+        tools: [
+          { type: "function", function: { name: "ping", description: "", parameters: {} } },
+          { type: "openrouter:web_search", parameters: { max_results: 3 } },
+        ],
+        tool_choice: { type: "function", function: { name: "ping" } },
+      });
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body.tools).toEqual([
+        { type: "function", name: "ping", description: "", parameters: {} },
+        { type: "openrouter:web_search", parameters: { max_results: 3 } },
+      ]);
+      expect(body.tool_choice).toEqual({ type: "function", name: "ping" });
     });
 
     test("レート制限時はRateLimitErrorをスローする", async () => {
@@ -603,8 +768,8 @@ describe("OpenRouterClient", () => {
         json: () =>
           Promise.resolve({
             id: "ok",
-            choices: [{ message: { role: "assistant", content: "hi" } }],
-          } satisfies ChatCompletionResponse),
+            output: [{ type: "message", content: [{ type: "output_text", text: "hi" }] }],
+          }),
       });
 
       await client.chat({
@@ -631,7 +796,7 @@ describe("OpenRouterClient", () => {
       }
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://openrouter.ai/api/v1/chat/completions",
+        "https://openrouter.ai/api/v1/responses",
         expect.objectContaining({
           method: "POST",
           headers: {
@@ -640,6 +805,7 @@ describe("OpenRouterClient", () => {
             "HTTP-Referer": "https://github.com/AtefAndrus/disqord",
             "X-OpenRouter-Title": "DisQord",
             "X-OpenRouter-Categories": "general-chat",
+            "X-OpenRouter-Metadata": "enabled",
           },
         }),
       );
@@ -698,823 +864,390 @@ describe("OpenRouterClient", () => {
         const body = JSON.parse(
           (mockFetch.mock.calls[0][1] as RequestInit).body as string,
         ) as Record<string, unknown>;
-        expect(body.tools).toEqual(request.tools);
+        expect(body.tools).toEqual([
+          { type: "function", name: "ping", description: "", parameters: {} },
+        ]);
         expect(body.tool_choice).toBe("required");
         expect(body.parallel_tool_calls).toBe(true);
+        expect(body.stream).toBe(true);
       });
     });
 
-    describe("tool_call delta の逐次 yield", () => {
-      test("id/name は最初の断片のみ、arguments は分割到着をそのまま透過する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [
-                      {
-                        index: 0,
-                        id: "call_1",
-                        type: "function",
-                        function: { name: "get_weather", arguments: "" },
-                      },
-                    ],
-                  },
-                },
-              ],
-            }),
-            sseData({
-              choices: [
-                { delta: { tool_calls: [{ index: 0, function: { arguments: '{"loc' } }] } },
-              ],
-            }),
-            sseData({
-              choices: [
-                {
-                  delta: { tool_calls: [{ index: 0, function: { arguments: 'ation":"Tokyo"}' } }] },
-                },
-              ],
-            }),
-            sseData({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+    describe("tool call イベントの写像", () => {
+      test("call_id/name は output_item.added と done で届き、arguments は delta をそのまま透過する", async () => {
+        respondWithEvents([
+          functionCallItem("added", 1, { call_id: "call_1", name: "get_weather", arguments: "" }),
+          argumentsDelta(1, '{"loc'),
+          argumentsDelta(1, 'ation":"Tokyo"}'),
+          { type: "response.function_call_arguments.done", output_index: 1 },
+          functionCallItem("done", 1, {
+            call_id: "call_1",
+            name: "get_weather",
+            arguments: '{"location":"Tokyo"}',
+          }),
+          completed(),
+        ]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const toolCallChunks = results.filter(isToolCallChunk);
+        const results = await drain(client.chatStream(REQUEST));
 
-        expect(toolCallChunks).toEqual([
+        expect(results.filter(isToolCallChunk)).toEqual([
+          { toolCall: { index: 1, id: "call_1", name: "get_weather" }, done: false },
+          { toolCall: { index: 1, argumentsDelta: '{"loc' }, done: false },
+          { toolCall: { index: 1, argumentsDelta: 'ation":"Tokyo"}' }, done: false },
+          { toolCall: { index: 1, id: "call_1", name: "get_weather" }, done: false },
+        ]);
+      });
+
+      test("並行 tool call は output_index を index として区別される", async () => {
+        // 実 wire では reasoning item が output_index 0 を占め、function_call は 1, 2 に並ぶ。
+        respondWithEvents([
+          { type: "response.output_item.added", output_index: 0, item: { type: "reasoning" } },
+          functionCallItem("added", 1, { call_id: "call_a", name: "a" }),
+          argumentsDelta(1, "1"),
+          functionCallItem("done", 1, { call_id: "call_a", name: "a", arguments: "1" }),
+          functionCallItem("added", 2, { call_id: "call_b", name: "b" }),
+          argumentsDelta(2, "2"),
+          functionCallItem("done", 2, { call_id: "call_b", name: "b", arguments: "2" }),
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isToolCallChunk).map((c) => c.toolCall.index)).toEqual([
+          1, 1, 1, 2, 2, 2,
+        ]);
+      });
+
+      test("delta が一度も流れなかった call は done の完成形 arguments を argumentsDelta として受け取る", async () => {
+        respondWithEvents([
+          functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+          functionCallItem("done", 0, { call_id: "call_1", name: "ping", arguments: '{"a":1}' }),
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isToolCallChunk)).toEqual([
+          { toolCall: { index: 0, id: "call_1", name: "ping" }, done: false },
           {
-            toolCall: { index: 0, id: "call_1", name: "get_weather", argumentsDelta: "" },
+            toolCall: { index: 0, id: "call_1", name: "ping", argumentsDelta: '{"a":1}' },
             done: false,
           },
-          { toolCall: { index: 0, argumentsDelta: '{"loc' }, done: false },
-          { toolCall: { index: 0, argumentsDelta: 'ation":"Tokyo"}' }, done: false },
         ]);
       });
 
-      test("複数 index の tool_call が並行して yield される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [
-                      { index: 0, id: "call_a", function: { name: "a", arguments: "" } },
-                      { index: 1, id: "call_b", function: { name: "b", arguments: "" } },
-                    ],
-                  },
-                },
-              ],
-            }),
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [
-                      { index: 1, function: { arguments: "1" } },
-                      { index: 0, function: { arguments: "0" } },
-                    ],
-                  },
-                },
-              ],
-            }),
-            sseData({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const indices = results.filter(isToolCallChunk).map((c) => c.toolCall.index);
-
-        expect(indices).toEqual([0, 1, 1, 0]);
-      });
-
-      test("index が非負整数でない tool_call は protocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { tool_calls: [{ index: -1, function: { arguments: "x" } }] } }],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("MAX_SAFE_INTEGER を超える index は protocol error になる（安全整数の範囲外は別 index との衝突を避けるため拒否）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [
-                      { index: Number.MAX_SAFE_INTEGER + 1, function: { arguments: "x" } },
-                    ],
-                  },
-                },
-              ],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("MAX_SAFE_INTEGER+1 と +2 はどちらも同一 number に丸まらず、いずれも protocol error になる（合流の再現防止）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [
-                      { index: Number.MAX_SAFE_INTEGER + 2, function: { arguments: "y" } },
-                    ],
-                  },
-                },
-              ],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test(`MAX_TOOL_CALL_INDEX (${MAX_TOOL_CALL_INDEX}) を超える index は protocol error になる`, async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [{ index: MAX_TOOL_CALL_INDEX + 1, function: { arguments: "x" } }],
-                  },
-                },
-              ],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test(`index が MAX_TOOL_CALL_INDEX (${MAX_TOOL_CALL_INDEX}) ちょうどなら受理される`, async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [{ index: MAX_TOOL_CALL_INDEX, function: { arguments: "x" } }],
-                  },
-                },
-              ],
-            }),
-            sseData({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        expect(results.filter(isToolCallChunk).map((c) => c.toolCall.index)).toEqual([
-          MAX_TOOL_CALL_INDEX,
+      test("done の完成形 arguments と蓄積した delta の長さが食い違うと protocol error（delta の欠落を黙って通さない）", async () => {
+        respondWithEvents([
+          functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+          argumentsDelta(0, '{"a":'),
+          functionCallItem("done", 0, { call_id: "call_1", name: "ping", arguments: '{"a":1}' }),
         ]);
-      });
 
-      test("function.name が文字列でない tool_call は protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 42 } }] } }],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("function.arguments が文字列でない tool_call は protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 42 } }] } }],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("id が文字列でない tool_call は protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [{ delta: { tool_calls: [{ index: 0, id: 42 }] } }] })]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test('type が "function" 以外の tool_call は protocol error になる', async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { tool_calls: [{ index: 0, type: "not-function" }] } }],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-    });
-
-    describe("finish_reason の判定", () => {
-      test("choice 直下の finish_reason が正として使われる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: null }] }),
-            sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-      });
-
-      test("delta 側の finish_reason がフォールバックとして使われる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { finish_reason: "stop" } }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-      });
-
-      test("choice と delta の finish_reason が一致する場合は正常終了する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { finish_reason: "stop" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-      });
-
-      test("choice と delta の finish_reason が食い違う場合は protocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { finish_reason: "length" }, finish_reason: "stop" }] }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("finish_reason が文字列/null以外（数値など）の場合、同一フレームの content も含めて一切 yield されず protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "leaked" }, finish_reason: 42 }] }),
-          ]),
-        );
-
-        const gen = client.chatStream({
-          model: "test-model",
-          messages: [{ role: "user", content: "Hi" }],
-        });
-        const received: StreamYield[] = [];
-        let thrown: unknown;
-        try {
-          for await (const chunk of gen) {
-            received.push(chunk);
-          }
-        } catch (err) {
-          thrown = err;
-        }
-
-        expect(thrown).toBeInstanceOf(StreamProtocolError);
-        // Whole-frame validation: the malformed finish_reason must be caught
-        // before the frame's valid `content` is ever staged to the caller.
-        expect(received.filter(isContentChunk)).toHaveLength(0);
-      });
-
-      test("finish_reason:'tool_calls' が伝搬する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [
-                {
-                  delta: {
-                    tool_calls: [{ index: 0, id: "c1", function: { name: "f", arguments: "{}" } }],
-                  },
-                },
-              ],
-            }),
-            sseData({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("tool_calls");
-      });
-
-      test("terminal finish_reason 受領後の content delta は protocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
-            sseData({ choices: [{ delta: { content: "late" } }] }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("terminal finish_reason 受領後の tool_call delta は protocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
-            sseData({
-              choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "x" } }] } }],
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("terminal後に同じfinish_reasonを繰り返すOpenRouter最終usage frameを許容する", async () => {
-        const usage = { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 };
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            ": OPENROUTER PROCESSING\n\n",
-            sseData({
-              choices: [
-                {
-                  index: 0,
-                  delta: {
-                    content: "",
-                    role: "assistant",
-                    reasoning: null,
-                    reasoning_details: [],
-                  },
-                  finish_reason: "stop",
-                },
-              ],
-              usage,
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-        expect(final.fullText).toBe("hi");
-        expect(final.usage).toEqual(usage);
-        expect(results.filter(isHeartbeatChunk)).toEqual([
-          { heartbeat: true, done: false },
-          { heartbeat: true, done: false, usage },
-        ]);
-      });
-
-      test("terminal後のusage frameでもcontentを含む場合はprotocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            sseData({
-              choices: [{ delta: { content: "late" }, finish_reason: "stop" }],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("terminal後に同じfinish_reasonを繰り返してもusage無しならprotocol error", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            sseData({ choices: [{ delta: { content: "" }, finish_reason: "stop" }] }),
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
       test.each([
-        ["reasoning", { reasoning: "late reasoning" }],
-        ["reasoning_details", { reasoning_details: [{ type: "reasoning.text", text: "late" }] }],
-      ])("terminal後のusage frameに%s payloadがあればprotocol error", async (_name, delta) => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            sseData({
-              choices: [{ delta: { content: "", ...delta }, finish_reason: "stop" }],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-          ]),
-        );
+        ["負値", -1],
+        ["小数", 1.5],
+        ["文字列", "0"],
+        ["欠落", undefined],
+        ["MAX_SAFE_INTEGER 超（別 index と同一 number に丸まる範囲）", Number.MAX_SAFE_INTEGER + 2],
+        [`MAX_TOOL_CALL_INDEX (${MAX_TOOL_CALL_INDEX}) 超`, MAX_TOOL_CALL_INDEX + 1],
+      ])(
+        "output_index が%sの function_call は protocol error になる",
+        async (_label, outputIndex) => {
+          respondWithEvents([
+            {
+              type: "response.function_call_arguments.delta",
+              output_index: outputIndex,
+              delta: "x",
+            },
+          ]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
+
+      test(`output_index が MAX_TOOL_CALL_INDEX (${MAX_TOOL_CALL_INDEX}) ちょうどなら受理される`, async () => {
+        respondWithEvents([argumentsDelta(MAX_TOOL_CALL_INDEX, "x"), completed()]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isToolCallChunk)).toEqual([
+          { toolCall: { index: MAX_TOOL_CALL_INDEX, argumentsDelta: "x" }, done: false },
+        ]);
       });
 
-      test("finish_reason 受領後に [DONE] なしで EOF になっても正常終了する", async () => {
+      test.each(["call_id", "name", "arguments"])(
+        "function_call の %s が文字列でなければ protocol error になる",
+        async (key) => {
+          respondWithEvents([
+            functionCallItem("done", 0, {
+              call_id: "call_1",
+              name: "ping",
+              arguments: "",
+              [key]: 42,
+            }),
+          ]);
+
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
+
+      test("arguments delta が文字列でなければ protocol error になる", async () => {
+        respondWithEvents([
+          { type: "response.function_call_arguments.delta", output_index: 0, delta: 42 },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test.each([
+        ["null", null],
+        ["type を欠く object", {}],
+        ["文字列", "function_call"],
+      ])(
+        "output_item の item が%sなら protocol error になる（生 TypeError にならない）",
+        async (_label, item) => {
+          respondWithEvents([{ type: "response.output_item.added", output_index: 0, item }]);
+
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
+
+      test("function_call 以外の item（message / reasoning / server tool）は heartbeat になり tool call を生まない", async () => {
+        respondWithEvents([
+          { type: "response.output_item.added", output_index: 0, item: { type: "reasoning" } },
+          {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: { type: "openrouter:datetime", status: "completed" },
+          },
+          { type: "response.output_item.added", output_index: 2, item: { type: "message" } },
+          textDelta("hi"),
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isToolCallChunk)).toEqual([]);
+        expect((results.find(isFinalResult) as StreamFinalResult).finishReason).toBe("stop");
+      });
+    });
+
+    describe("終端イベントと finishReason", () => {
+      test("function call を伴わない response.completed は finishReason:'stop' になる", async () => {
+        respondWithEvents([textDelta("he"), textDelta("llo"), completed()]);
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.finishReason).toBe("stop");
+        expect(final.fullText).toBe("hello");
+      });
+
+      test("function_call item が完成した response.completed は finishReason:'tool_calls' になる", async () => {
+        respondWithEvents([
+          textDelta("checking"),
+          functionCallItem("added", 1, { call_id: "call_1", name: "ping" }),
+          functionCallItem("done", 1, { call_id: "call_1", name: "ping", arguments: "" }),
+          completed(),
+        ]);
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.finishReason).toBe("tool_calls");
+        expect(final.fullText).toBe("checking");
+      });
+
+      test("added だけで done に至らなかった function_call は tool_calls を成立させない", async () => {
+        respondWithEvents([
+          functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+          completed(),
+        ]);
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.finishReason).toBe("stop");
+      });
+
+      test.each([
+        ["max_output_tokens", { reason: "max_output_tokens" }, "length"],
+        ["content_filter", { reason: "content_filter" }, "content_filter"],
+        ["未知の reason はそのまま渡す（暗黙の完了にしない）", { reason: "quota" }, "quota"],
+        ["incomplete_details が null", null, "incomplete"],
+      ])("response.incomplete（%s）", async (_label, incompleteDetails, expected) => {
+        respondWithEvents([
+          textDelta("partial"),
+          {
+            type: "response.incomplete",
+            response: { status: "incomplete", incomplete_details: incompleteDetails },
+          },
+        ]);
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.finishReason).toBe(expected);
+        expect(final.fullText).toBe("partial");
+      });
+
+      test("response.failed は response.error を API エラーとして throw する", async () => {
+        respondWithEvents([
+          {
+            type: "response.failed",
+            response: { status: "failed", error: { code: 402, message: "Insufficient credits" } },
+          },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+          InsufficientCreditsError,
+        );
+      });
+
+      test("response.failed の error.code がシンボリック文字列なら UnknownApiError になる", async () => {
+        respondWithEvents([
+          {
+            type: "response.failed",
+            response: { status: "failed", error: { code: "server_error", message: "failed" } },
+          },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(UnknownApiError);
+      });
+
+      test("response.failed が error を伴わなければ protocol error になる", async () => {
+        respondWithEvents([
+          { type: "response.failed", response: { status: "failed", error: null } },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test.each([
+        ["response が null の response.completed", { type: "response.completed", response: null }],
+        ["response を欠く response.incomplete", { type: "response.incomplete" }],
+        ["response が文字列の response.failed", { type: "response.failed", response: "failed" }],
+      ])("%sは protocol error になる（生 TypeError にならない）", async (_label, event) => {
+        respondWithEvents([event]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test.each([
+        ["text delta", textDelta("late")],
+        ["tool call delta", argumentsDelta(0, "x")],
+        ["2 つ目の終端イベント", completed()],
+        ["未知のイベント", { type: "response.something_new" }],
+      ])("終端イベント受領後の%sは protocol error になる", async (_label, lateEvent) => {
+        respondWithEvents([textDelta("hi"), completed(), lateEvent]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test("終端イベント受領後に [DONE] なしで EOF になっても正常終了する", async () => {
         mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-          ]),
+          sseResponse([sseData(textDelta("hi")), sseData(completed())]),
         );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
         expect(final.finishReason).toBe("stop");
         expect(final.fullText).toBe("hi");
+      });
+
+      test("終端イベントなしで EOF になると finishReason は undefined のまま（完了と見なさない）", async () => {
+        mockFetch.mockResolvedValueOnce(sseResponse([sseData(textDelta("hi"))]));
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.finishReason).toBeUndefined();
       });
 
       test("改行なしで EOF になった完全な data: 行（carry として残った分）も通常どおり処理される", async () => {
         // sseData() の末尾 "\n\n" を付けず、この行が改行で確定されないまま EOF を迎える状況を作る。
-        const line = `data: ${JSON.stringify({
-          choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-        })}`;
-        mockFetch.mockResolvedValueOnce(sseResponse([line]));
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([sseData(textDelta("hi")), `data: ${JSON.stringify(completed())}`]),
         );
-        const contentChunks = results.filter(isContentChunk);
-        expect(contentChunks).toEqual([{ content: "hi", done: false }]);
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-        expect(final.fullText).toBe("hi");
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isContentChunk)).toEqual([{ content: "hi", done: false }]);
+        expect((results.find(isFinalResult) as StreamFinalResult).finishReason).toBe("stop");
       });
 
-      test("terminal finish_reason 受領後、改行なしの truncated data: 行のまま EOF になると protocol error（黙って捨てられない）", async () => {
+      test("終端イベント受領後、改行なしの truncated data: 行のまま EOF になると protocol error（黙って捨てられない）", async () => {
         mockFetch.mockResolvedValueOnce(
           sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData(completed()),
             'data: {"truncated', // 改行なし・不完全な JSON のまま EOF を迎える
           ]),
         );
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
     });
 
     describe("malformed SSE フレーム", () => {
       test("不正な JSON の data: 行は protocol error になる（silent skip しない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse(["data: {not valid json\n\n", "data: [DONE]\n\n"]),
-        );
+        mockFetch.mockResolvedValueOnce(sseResponse(["data: {not valid json\n\n"]));
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
-      test("choices フィールドを持たないチャンク（例: `{}`）は usage トレーラー扱いされず protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(sseResponse([sseData({}), "data: [DONE]\n\n"]));
+      test.each([
+        ["type を欠く object（`{}`）", {}],
+        ["type が文字列でない object", { type: 42 }],
+        ["null", null],
+        ["scalar", 42],
+        ["配列", [{ type: "response.created" }]],
+      ])(
+        "data: が%sなら protocol error になる（heartbeat として受理しない）",
+        async (_label, payload) => {
+          respondWithEvents([payload]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
 
-      test("choices が配列でないチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: "not-an-array" }), "data: [DONE]\n\n"]),
-        );
+      test("output_text delta が数値なら protocol error になる（文字列化して混入させない）", async () => {
+        respondWithEvents([{ type: "response.output_text.delta", delta: 123 }]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("choices[0] が null のチャンクは protocol error になる（生 TypeError にならない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [null] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("choices: [] が usage を伴わない場合は protocol error になる（反復送信で idle timeout を無限にリセットできない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("choice が delta を完全に欠く場合は protocol error になる（`{}`）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [{}] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("finish_reason だけを持ち delta を欠く terminal チャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [{ finish_reason: "stop" }] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("delta: {} と finish_reason を伴うチャンクは従来どおり正常終了する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-        expect(final.fullText).toBe("");
-      });
-
-      test("delta.content が数値のチャンクは protocol error になる（文字列化して混入させない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [{ delta: { content: 123 } }] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("delta.tool_calls が配列でない（オブジェクト）チャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [{ delta: { tool_calls: {} } }] }), "data: [DONE]\n\n"]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("delta.tool_calls の要素が null のチャンクは protocol error になる（生 TypeError にならない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { tool_calls: [null] } }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("正当な content と不正な tool_calls:[null] が同一フレームに混在する場合、content は一度も yield されずに protocol error になる", async () => {
-        // フレーム内の全要素（content, tool_calls の各要素）は yield/状態変更の
-        // 前にすべて検証される。content が先に staged されてから tool_calls の
-        // 不正が見つかって throw する — という「部分適用されたフレーム」が
-        // 起きないことを確認する。
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi", tool_calls: [null] } }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const gen = client.chatStream({
-          model: "test-model",
-          messages: [{ role: "user", content: "Hi" }],
-        });
-        const collected: StreamYield[] = [];
-        let caught: unknown;
-        try {
-          for await (const chunk of gen) {
-            collected.push(chunk);
-          }
-        } catch (err) {
-          caught = err;
-        }
-        expect(caught).toBeInstanceOf(StreamProtocolError);
-        expect(collected.filter(isContentChunk)).toEqual([]);
-      });
-
-      test("data: null（トップレベルが object でない）は protocol error になる（生 TypeError にならない）", async () => {
-        mockFetch.mockResolvedValueOnce(sseResponse([sseData(null), "data: [DONE]\n\n"]));
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("data: 42（トップレベルが scalar）は protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(sseResponse([sseData(42), "data: [DONE]\n\n"]));
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("tool_call.function が非 object（文字列）のチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { tool_calls: [{ index: 0, function: "x" }] } }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("choices が2要素のチャンクは protocol error になる（n=1 前提の違反）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { content: "a" } }, { delta: { content: "b" } }],
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("choices: []（明示的な空配列）は usage トレーラーとして引き続き許容される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
       test("スペースなしの `data:` prefix でも正当なフレームはパースされる", async () => {
         mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            `data:${JSON.stringify({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] })}\n\n`,
-            "data:[DONE]\n\n",
-          ]),
+          sseResponse([`data:${JSON.stringify(textDelta("hi"))}\n\n`, "data:[DONE]\n\n"]),
         );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const contentChunks = results.filter(isContentChunk);
-        expect(contentChunks).toEqual([{ content: "hi", done: false }]);
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isContentChunk)).toEqual([{ content: "hi", done: false }]);
       });
 
       test("スペースなしの malformed JSON も protocol error として検出される", async () => {
         mockFetch.mockResolvedValueOnce(sseResponse(["data:{not valid json\n\n"]));
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
       test("空行は無視され、コメント行は heartbeat チャンクとして yield される", async () => {
@@ -1522,21 +1255,18 @@ describe("OpenRouterClient", () => {
           sseResponse([
             ": OPENROUTER PROCESSING\n\n",
             "\n",
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData(textDelta("hi")),
             ": another comment\n\n",
             "data: [DONE]\n\n",
           ]),
         );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const contentChunks = results.filter(isContentChunk);
-        expect(contentChunks).toEqual([{ content: "hi", done: false }]);
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isContentChunk)).toEqual([{ content: "hi", done: false }]);
         // 2 つのコメント行それぞれについて 1 つずつ heartbeat が yield される
         // （空行は heartbeat にもならず、純粋に無視される）。
-        const heartbeatChunks = results.filter(isHeartbeatChunk);
-        expect(heartbeatChunks).toEqual([
+        expect(results.filter(isHeartbeatChunk)).toEqual([
           { heartbeat: true, done: false },
           { heartbeat: true, done: false },
         ]);
@@ -1545,508 +1275,313 @@ describe("OpenRouterClient", () => {
       test("event:/id:/retry: など data: 以外の非空フィールド行も heartbeat チャンクとして yield される", async () => {
         mockFetch.mockResolvedValueOnce(
           sseResponse([
-            "event: ping\n\n",
-            "id: 1\n\n",
-            "retry: 3000\n\n",
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            "event: response.output_text.delta\n",
+            "id: 1\n",
+            "retry: 3000\n",
+            sseData(textDelta("hi")),
             "data: [DONE]\n\n",
           ]),
         );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const contentChunks = results.filter(isContentChunk);
-        expect(contentChunks).toEqual([{ content: "hi", done: false }]);
-        // event:/id:/retry: の3行それぞれについて1つずつ heartbeat が yield される。
-        const heartbeatChunks = results.filter(isHeartbeatChunk);
-        expect(heartbeatChunks).toEqual([
-          { heartbeat: true, done: false },
-          { heartbeat: true, done: false },
-          { heartbeat: true, done: false },
-        ]);
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isContentChunk)).toEqual([{ content: "hi", done: false }]);
+        expect(results.filter(isHeartbeatChunk)).toHaveLength(3);
       });
 
-      test("terminal finish_reason 受領後のコメント行も heartbeat として yield される（凍結の対象外）", async () => {
+      test("終端イベント受領後のコメント行も heartbeat として yield される（凍結の対象外）", async () => {
         mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            ": OPENROUTER PROCESSING\n\n",
-            "data: [DONE]\n\n",
-          ]),
+          sseResponse([sseData(completed()), ": OPENROUTER PROCESSING\n\n", "data: [DONE]\n\n"]),
         );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
+        const results = await drain(client.chatStream(REQUEST));
+
+        // 1 つは response.completed 自身、もう 1 つがコメント行。
+        expect(results.filter(isHeartbeatChunk)).toHaveLength(2);
+        expect((results.find(isFinalResult) as StreamFinalResult).finishReason).toBe("stop");
       });
     });
 
-    describe("受理されたが何も yield しないフレームは heartbeat になる（idle timeout の誤発火防止）", () => {
-      test("role のみの delta フレームは heartbeat として yield される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { role: "assistant" } }] }),
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+    describe("呼び出し側へ渡すものが無いイベントは heartbeat になる（idle timeout の誤発火防止）", () => {
+      test.each([
+        "response.created",
+        "response.in_progress",
+        "response.content_part.added",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.function_call_arguments.done",
+      ])("%s は heartbeat として yield される", async (type) => {
+        respondWithEvents([{ type, response: {}, output_index: 0 }]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
+        const results = await drain(client.chatStream(REQUEST));
+
         expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
       });
 
-      test("reasoning のみの delta フレームは heartbeat として yield される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { reasoning: "thinking..." } }] }),
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+      test.each(["response.reasoning_text.delta", "response.reasoning_summary_text.delta"])(
+        "%s は heartbeat になり、本文は content にも fullText にも入らない",
+        async (type) => {
+          respondWithEvents([{ type, output_index: 0, delta: "thinking..." }, completed()]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
+          const results = await drain(client.chatStream(REQUEST));
+
+          expect(results.filter(isContentChunk)).toEqual([]);
+          expect((results.find(isFinalResult) as StreamFinalResult).fullText).toBe("");
+        },
+      );
+
+      test("この client が知らない type のイベントは拒否せず heartbeat として受理する", async () => {
+        respondWithEvents([{ type: "response.something_new", payload: 1 }, textDelta("hi")]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
+        expect(results.filter(isContentChunk)).toEqual([{ content: "hi", done: false }]);
+      });
+
+      test("空文字の text delta は content を yield せず heartbeat になる", async () => {
+        respondWithEvents([textDelta("")]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results.filter(isContentChunk)).toEqual([]);
         expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
       });
 
-      test("usage-only トレーラー（choices: []）は heartbeat として yield される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+      test("content を伴うイベントは heartbeat を二重 yield しない", async () => {
+        respondWithEvents([textDelta("hi")]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        // The usage-only trailer's `usage` is attached to the heartbeat itself
-        // (not just the terminal StreamFinalResult) — see the fix note on
-        // `StreamHeartbeatChunk` for why: a cancel/error between this trailer
-        // and `[DONE]` must not lose it.
-        expect(results.filter(isHeartbeatChunk)).toEqual([
-          {
-            heartbeat: true,
-            done: false,
-            usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-          },
-        ]);
-      });
+        const results = await drain(client.chatStream(REQUEST));
 
-      test("finish_reason だけの terminal フレーム（content 同梱なし）は heartbeat として yield される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" } }] }),
-            sseData({ choices: [{ delta: {}, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        // content フレーム自体は content を yield 済みなので heartbeat は
-        // terminal フレーム分の 1 つだけ。
-        expect(results.filter(isHeartbeatChunk)).toEqual([{ heartbeat: true, done: false }]);
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.finishReason).toBe("stop");
-        expect(final.fullText).toBe("hi");
-      });
-
-      test("content を伴うフレームは heartbeat を二重 yield しない", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
         expect(results.filter(isHeartbeatChunk)).toEqual([]);
       });
 
-      test("content と usage を併載するフレームは、content の yield 後に usage 付き heartbeat を1つ追加で yield する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+      test("response.completed は usage を載せた heartbeat を 1 つ yield する（[DONE] 前の早期終了でも usage を失わない）", async () => {
+        respondWithEvents([textDelta("hi"), completed({ usage: RESPONSES_USAGE })]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const contentChunks = results.filter(isContentChunk);
-        expect(contentChunks).toEqual([{ content: "hi", done: false }]);
-        // Exactly one heartbeat for this frame (not two — the `!yieldedPayload`
-        // branch and the payload-carried-usage branch are mutually exclusive).
+        const results = await drain(client.chatStream(REQUEST));
+
         expect(results.filter(isHeartbeatChunk)).toEqual([
-          {
-            heartbeat: true,
-            done: false,
-            usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-          },
+          { heartbeat: true, done: false, usage: MAPPED_USAGE },
         ]);
-        // Ordering: content chunk before the usage heartbeat.
-        const contentIndex = results.findIndex(isContentChunk);
-        const heartbeatIndex = results.findIndex(isHeartbeatChunk);
-        expect(contentIndex).toBeLessThan(heartbeatIndex);
+        expect((results.find(isFinalResult) as StreamFinalResult).usage).toEqual(MAPPED_USAGE);
       });
     });
 
-    describe("usage フィールドの検証", () => {
-      test("usage.cost が数値でないチャンクは protocol error になる（.toFixed() の生 throw を防ぐ）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-                cost: "bad",
+    describe("usage の写像と検証", () => {
+      test("Responses の usage を Chat Completions の名前へ写像する", async () => {
+        respondWithEvents([
+          completed({
+            usage: {
+              input_tokens: 417,
+              input_tokens_details: { cached_tokens: 3, cache_write_tokens: 7 },
+              output_tokens: 416,
+              output_tokens_details: { reasoning_tokens: 256 },
+              total_tokens: 833,
+              cost: 0.00018725,
+              is_byok: false,
+              cost_details: {
+                upstream_inference_cost: 0.00018725,
+                upstream_inference_input_cost: 0.00002085,
+                upstream_inference_output_cost: 0.0001664,
               },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+              server_tool_use_details: { tool_calls_requested: 1, tool_calls_executed: 1 },
+            },
+          }),
+        ]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
 
-      test("usage.prompt_tokens が数値でないチャンクは protocol error になる（文字列連結での集計破壊を防ぐ）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: "1", completion_tokens: 2, total_tokens: 3 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("usage.prompt_tokens が負値のチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: -1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("usage.total_tokens が小数のチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3.5 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("usage.cost が負値のチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, cost: -1 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("cached_tokens / reasoning_tokens が負値・小数の場合も protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-                prompt_tokens_details: { cached_tokens: -1 },
-              },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("usage.prompt_tokens_details がオブジェクトでないチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-                prompt_tokens_details: 5,
-              },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("cached_tokens / reasoning_tokens が数値でない場合も protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-                completion_tokens_details: { reasoning_tokens: "1" },
-              },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
-
-      test("正当な usage（cost・details 込み）は従来どおり最終結果へ伝搬する", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [],
-              usage: {
-                prompt_tokens: 1,
-                completion_tokens: 2,
-                total_tokens: 3,
-                cost: 0.001,
-                prompt_tokens_details: { cached_tokens: 1 },
-                completion_tokens_details: { reasoning_tokens: 1 },
-              },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
         expect(final.usage).toEqual({
-          prompt_tokens: 1,
-          completion_tokens: 2,
-          total_tokens: 3,
-          cost: 0.001,
-          prompt_tokens_details: { cached_tokens: 1 },
-          completion_tokens_details: { reasoning_tokens: 1 },
+          prompt_tokens: 417,
+          completion_tokens: 416,
+          total_tokens: 833,
+          cost: 0.00018725,
+          prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 7 },
+          completion_tokens_details: { reasoning_tokens: 256 },
+          cost_details: {
+            upstream_inference_cost: 0.00018725,
+            upstream_inference_prompt_cost: 0.00002085,
+            upstream_inference_completions_cost: 0.0001664,
+          },
+          is_byok: false,
+          server_tool_use_details: { tool_calls_requested: 1, tool_calls_executed: 1 },
         });
       });
 
-      test("usage が false のチャンクは protocol error になる（falsy だが present な値は不在扱いにしない）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [], usage: false }), "data: [DONE]\n\n"]),
-        );
+      test("null で返るフィールドは 0 にせず、キーごと省く（未報告と 0 を区別する）", async () => {
+        respondWithEvents([
+          completed({
+            usage: {
+              ...RESPONSES_USAGE,
+              cost: null,
+              input_tokens_details: { cached_tokens: 0, cache_write_tokens: null },
+              cost_details: { upstream_inference_cost: null },
+              server_tool_use_details: null,
+            },
+          }),
+        ]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.usage).toEqual({
+          ...MAPPED_USAGE,
+          prompt_tokens_details: { cached_tokens: 0 },
+        });
       });
 
-      test("usage が 0 のチャンクは protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [], usage: 0 }), "data: [DONE]\n\n"]),
-        );
+      test("server_tool_use_details はカウンタが空でもキーを残す（server tool が起動した事実を失わない）", async () => {
+        respondWithEvents([
+          completed({ usage: { ...RESPONSES_USAGE, server_tool_use_details: {} } }),
+        ]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.usage).toEqual({ ...MAPPED_USAGE, server_tool_use_details: {} });
       });
 
-      test('usage が "" のチャンクは protocol error になる', async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([sseData({ choices: [], usage: "" }), "data: [DONE]\n\n"]),
-        );
+      test.each([
+        ["cost が数値でない（.toFixed() の生 throw を防ぐ）", { cost: "bad" }],
+        ["cost が負値", { cost: -1 }],
+        ["input_tokens が文字列（文字列連結での集計破壊を防ぐ）", { input_tokens: "1" }],
+        ["input_tokens が負値", { input_tokens: -1 }],
+        ["input_tokens が null", { input_tokens: null }],
+        ["total_tokens が小数", { total_tokens: 1.5 }],
+        ["output_tokens が欠落", { output_tokens: undefined }],
+        ["cached_tokens が負値", { input_tokens_details: { cached_tokens: -1 } }],
+        ["cache_write_tokens が小数", { input_tokens_details: { cache_write_tokens: 0.5 } }],
+        ["reasoning_tokens が文字列", { output_tokens_details: { reasoning_tokens: "3" } }],
+        ["input_tokens_details が object でない", { input_tokens_details: "oops" }],
+        ["cost_details の値が文字列", { cost_details: { upstream_inference_cost: "1" } }],
+        ["is_byok が真偽値でない", { is_byok: "yes" }],
+        [
+          "server_tool_use_details のカウンタが負値",
+          { server_tool_use_details: { tool_calls_executed: -1 } },
+        ],
+      ])(
+        "usage の %s 場合は protocol error になり、final は yield されない",
+        async (_label, override) => {
+          respondWithEvents([
+            textDelta("hi"),
+            completed({ usage: { ...RESPONSES_USAGE, ...override } }),
+          ]);
 
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
-      });
+          const results: StreamYield[] = [];
+          const thrown: unknown = await (async () => {
+            for await (const chunk of client.chatStream(REQUEST)) results.push(chunk);
+          })().catch((err) => err);
 
-      test("usage が null のチャンクは従来どおり「不在」として許容される（非最終チャンクの usage:null 慣行）", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-              usage: null,
-            }),
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+          expect(thrown).toBeInstanceOf(StreamProtocolError);
+          expect(results.filter(isFinalResult)).toEqual([]);
+          expect(results.filter(isHeartbeatChunk)).toEqual([]);
+        },
+      );
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
-        expect(final.usage).toEqual({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 });
+      test.each([
+        ["false", false],
+        ["0", 0],
+        ['""', ""],
+        ["配列", []],
+      ])(
+        "usage が %s の場合は protocol error になる（falsy だが present な値は不在扱いにしない）",
+        async (_label, usage) => {
+          respondWithEvents([completed({ usage })]);
+
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
+
+      test("usage が null / 欠落の場合は「不在」として許容される", async () => {
+        respondWithEvents([completed({ usage: null })]);
+
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.usage).toBeUndefined();
+        expect(final.finishReason).toBe("stop");
       });
     });
 
-    describe("model / provider フィールドの検証", () => {
-      test("model がオブジェクトのチャンクは protocol error になり、同一フレームの正当な content も yield されない", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              model: {},
-              choices: [{ delta: { content: "hi" }, finish_reason: null }],
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+    describe("model / provider の読み取り", () => {
+      test("model は response.model、provider は openrouter_metadata で selected の endpoint から読む", async () => {
+        respondWithEvents([
+          completed({
+            model: "openai/gpt-5-nano",
+            openrouter_metadata: {
+              endpoints: {
+                available: [
+                  { provider: "Azure", model: "openai/gpt-5-nano", selected: false },
+                  { provider: "OpenAI", model: "openai/gpt-5-nano", selected: true },
+                ],
+              },
+            },
+          }),
+        ]);
 
-        const gen = client.chatStream({
-          model: "test-model",
-          messages: [{ role: "user", content: "Hi" }],
-        });
-        await expect(drain(gen)).rejects.toBeInstanceOf(StreamProtocolError);
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
+        expect(final.model).toBe("openai/gpt-5-nano");
+        expect(final.provider).toBe("OpenAI");
       });
 
-      test("provider が数値のチャンクは protocol error になり、同一フレームの正当な content も yield されない", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              provider: 42,
-              choices: [{ delta: { content: "hi" }, finish_reason: null }],
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+      test.each([
+        ["欠落", undefined],
+        ["文字列", "OpenAI"],
+        ["endpoints が配列", { endpoints: [] }],
+        [
+          "selected の endpoint が無い",
+          { endpoints: { available: [{ provider: "OpenAI", selected: false }] } },
+        ],
+        [
+          "provider が文字列でない",
+          { endpoints: { available: [{ provider: 1, selected: true }] } },
+        ],
+      ])(
+        "openrouter_metadata が%sなら provider は不明のまま正常終了する（表示専用の値で turn を落とさない）",
+        async (_label, metadata) => {
+          respondWithEvents([textDelta("hi"), completed({ openrouter_metadata: metadata })]);
 
-        const gen = client.chatStream({
-          model: "test-model",
-          messages: [{ role: "user", content: "Hi" }],
-        });
-        await expect(drain(gen)).rejects.toBeInstanceOf(StreamProtocolError);
+          const final = (await drain(client.chatStream(REQUEST))).find(
+            isFinalResult,
+          ) as StreamFinalResult;
+
+          expect(final.provider).toBeUndefined();
+          expect(final.finishReason).toBe("stop");
+        },
+      );
+
+      test("response.model がオブジェクトなら protocol error になる（footer に [object Object] を出さない）", async () => {
+        respondWithEvents([completed({ model: {} })]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
-      test("model/provider が null のチャンクは従来どおり「不在」として許容される", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              model: null,
-              provider: null,
-              choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
+      test("response.model が null なら「不在」として許容される", async () => {
+        respondWithEvents([completed({ model: null })]);
 
-        const results = await drain(
-          client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-        );
-        const final = results.find(isFinalResult) as StreamFinalResult;
+        const final = (await drain(client.chatStream(REQUEST))).find(
+          isFinalResult,
+        ) as StreamFinalResult;
+
         expect(final.model).toBeUndefined();
-        expect(final.provider).toBeUndefined();
-      });
-
-      test("model が非オブジェクト・非文字列のチャンク（usage-only トレーラー）も protocol error になる", async () => {
-        mockFetch.mockResolvedValueOnce(
-          sseResponse([
-            sseData({
-              model: 123,
-              choices: [],
-              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-            }),
-            "data: [DONE]\n\n",
-          ]),
-        );
-
-        await expect(
-          drain(
-            client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
-          ),
-        ).rejects.toBeInstanceOf(StreamProtocolError);
       });
     });
 
     describe("SSE フレーム / carry の最大 byte 長", () => {
       function buildContentDataLine(totalBytes: number): string {
-        const prefix = 'data: {"choices":[{"delta":{"content":"';
-        const suffix = '"},"finish_reason":null}]}';
+        const prefix = 'data: {"type":"response.output_text.delta","delta":"';
+        const suffix = '"}';
         const overhead = prefix.length + suffix.length;
         const padLen = totalBytes - overhead;
         if (padLen < 0) {
@@ -2122,11 +1657,8 @@ describe("OpenRouterClient", () => {
         // Derived from `line` itself (rather than re-deriving the padding
         // arithmetic here) so this assertion can't drift from
         // `buildContentDataLine`'s own prefix/suffix lengths.
-        const expectedContent = (
-          JSON.parse(line.slice("data: ".length)) as {
-            choices: { delta: { content: string } }[];
-          }
-        ).choices[0]?.delta.content;
+        const expectedContent = (JSON.parse(line.slice("data: ".length)) as { delta: string })
+          .delta;
         const full = `${line}\n\n`;
         const encoder = new TextEncoder();
         const fullBytes = encoder.encode(full);
@@ -2178,9 +1710,7 @@ describe("OpenRouterClient", () => {
 
       test("多バイト UTF-8 文字が chunk 境界を跨いでも正しく処理される", async () => {
         const encoder = new TextEncoder();
-        const payload = sseData({
-          choices: [{ delta: { content: "😀AB" }, finish_reason: "stop" }],
-        });
+        const payload = sseData(textDelta("😀AB"));
         const bytes = encoder.encode(payload);
         const emojiBytes = encoder.encode("😀");
 
@@ -2212,12 +1742,12 @@ describe("OpenRouterClient", () => {
 
       test("JSON 文字列中の単独 0xFF（不正な UTF-8 バイト）は U+FFFD に化けず protocol error になる", async () => {
         const encoder = new TextEncoder();
-        // `data: {"choices":[{"delta":{"content":"` の直後に単独の 0xFF を挟み、
-        // 文字列を JSON として閉じてから finish_reason を付ける。0xFF は単独では
+        // text delta の `delta` 文字列の途中に単独の 0xFF を挟み、文字列を JSON
+        // として閉じる。0xFF は単独では
         // 有効な UTF-8 の先頭バイトになり得ないため、非 fatal decoder なら U+FFFD
         // に化けて（malformed frame 検出をすり抜けて）通ってしまう入力。
-        const prefix = encoder.encode('data: {"choices":[{"delta":{"content":"');
-        const suffix = encoder.encode('"},"finish_reason":"stop"}]}\n\n');
+        const prefix = encoder.encode('data: {"type":"response.output_text.delta","delta":"');
+        const suffix = encoder.encode('"}\n\n');
         const bytes = new Uint8Array(prefix.length + 1 + suffix.length);
         bytes.set(prefix, 0);
         bytes.set([0xff], prefix.length);
@@ -2234,14 +1764,14 @@ describe("OpenRouterClient", () => {
 
       test("切断された多バイトシーケンスの直後に無関係なバイトが続く場合も protocol error になる", async () => {
         const encoder = new TextEncoder();
-        const prefix = encoder.encode('data: {"choices":[{"delta":{"content":"');
+        const prefix = encoder.encode('data: {"type":"response.output_text.delta","delta":"');
         // 4バイトの絵文字シーケンスの先頭2バイトだけを送り、続きとして本来の
         // 継続バイト（0x80-0xBF）ではない ASCII バイトを送る — decoder が
         // `stream:true` で保留していた2バイトを、後続との不整合ごと破棄・エラー
         // 化すべきケース。
         const emojiBytes = encoder.encode("😀");
         const truncatedEmoji = emojiBytes.slice(0, 2);
-        const bogusContinuation = encoder.encode('AB"},"finish_reason":"stop"}]}\n\n');
+        const bogusContinuation = encoder.encode('AB"}\n\n');
         const bytes = new Uint8Array(
           prefix.length + truncatedEmoji.length + bogusContinuation.length,
         );
@@ -2280,9 +1810,7 @@ describe("OpenRouterClient", () => {
 
     describe("CR / CRLF / LF いずれの行区切りも受理する", () => {
       test("CR のみで区切られたストリーム（LF を一切含まない）も正しく parse される", async () => {
-        const body =
-          `data: ${JSON.stringify({ choices: [{ delta: { content: "hello" }, finish_reason: null }] })}` +
-          `\r\rdata: [DONE]\r\r`;
+        const body = `data: ${JSON.stringify(textDelta("hello"))}\r\rdata: [DONE]\r\r`;
         mockFetch.mockResolvedValueOnce(sseResponse([body]));
 
         const results = await drain(
@@ -2293,9 +1821,7 @@ describe("OpenRouterClient", () => {
       });
 
       test("CRLF で区切られたストリームも正しく parse される", async () => {
-        const body =
-          `data: ${JSON.stringify({ choices: [{ delta: { content: "hello" }, finish_reason: null }] })}` +
-          `\r\n\r\ndata: [DONE]\r\n\r\n`;
+        const body = `data: ${JSON.stringify(textDelta("hello"))}\r\n\r\ndata: [DONE]\r\n\r\n`;
         mockFetch.mockResolvedValueOnce(sseResponse([body]));
 
         const results = await drain(
@@ -2306,9 +1832,7 @@ describe("OpenRouterClient", () => {
       });
 
       test("CR が chunk 境界の末尾に、対応する LF が次 chunk 先頭に来る（CRLF が chunk をまたぐ）場合も正しく parse される", async () => {
-        const line = `data: ${JSON.stringify({
-          choices: [{ delta: { content: "split" }, finish_reason: null }],
-        })}`;
+        const line = `data: ${JSON.stringify(textDelta("split"))}`;
         // 1個目の chunk は「行本体 + CR」で終わり、2個目の chunk が LF から始まる:
         // carry がリセットされた直後に LF だけの空行が来る経路を踏む。
         const chunk1 = `${line}\r`;
@@ -2336,6 +1860,28 @@ describe("OpenRouterClient", () => {
             client.chatStream({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
           ),
         ).rejects.toBeInstanceOf(InsufficientCreditsError);
+      });
+
+      test("Responses の flat な error イベント（type:'error'）も OpenRouter エラーとして throw する", async () => {
+        respondWithEvents([
+          { type: "error", code: 402, message: "Insufficient credits", param: null },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+          InsufficientCreditsError,
+        );
+      });
+
+      test("flat な error イベントの code がシンボリック文字列なら UnknownApiError になる", async () => {
+        respondWithEvents([{ type: "error", code: "rate_limit_exceeded", message: "slow down" }]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(UnknownApiError);
+      });
+
+      test("flat な error イベントが message を欠く場合は protocol error になる", async () => {
+        respondWithEvents([{ type: "error", code: 402 }]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
       test("error フィールドが非 object（文字列）の場合は buildApiError に渡さず protocol error になる", async () => {
@@ -2399,16 +1945,16 @@ describe("OpenRouterClient", () => {
         ).rejects.toBeInstanceOf(UnknownApiError);
       });
 
-      test("terminal finish_reason 受領後の error イベントは protocol error になる（InsufficientCreditsError ではない）", async () => {
-        // Once finish_reason:"stop" has been observed, the stream is frozen —
-        // only [DONE]/comments/the usage trailer are still legal (see the
-        // `finishReasonSeen` tests above). A `{error:{...}}` frame arriving
+      test("終端イベント受領後の error イベントは protocol error になる（InsufficientCreditsError ではない）", async () => {
+        // Once a terminal event has been observed, the stream is frozen —
+        // only [DONE]/comments are still legal. An error event arriving
         // after that point is not a genuine API failure for a turn already
         // declared done, so it must be rejected as a protocol violation
         // rather than mapped through buildApiError() to an API error class.
         mockFetch.mockResolvedValueOnce(
           sseResponse([
-            sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
+            sseData(textDelta("hi")),
+            sseData(completed()),
             sseData({ error: { code: 402, message: "Insufficient credits mid-stream" } }),
           ]),
         );
@@ -2454,10 +2000,7 @@ describe("OpenRouterClient", () => {
           // finally 自体が同期的に完了することを検証する。
           cancelSpy.mockImplementation(() => new Promise(() => {}));
           mockFetch.mockResolvedValueOnce(
-            sseResponse([
-              sseData({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }),
-              "data: [DONE]\n\n",
-            ]),
+            sseResponse([sseData(textDelta("hi")), "data: [DONE]\n\n"]),
           );
 
           const gen = client.chatStream({

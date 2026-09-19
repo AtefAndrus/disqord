@@ -6,7 +6,7 @@ import {
   type MessageReplyOptions,
   SeparatorSpacingSize,
 } from "discord.js";
-import type { MessageId } from "../types";
+import type { ChatCompletionResponse, MessageId } from "../types";
 import { EmbedColors } from "../types/embed";
 import { createStopButton } from "./buttonBuilder";
 
@@ -62,14 +62,7 @@ export function measureTextBudget(text: string): TextBudget {
   return { chars: text.length, bytes: byteLength(text) };
 }
 
-export interface UsageMetadata {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  cost?: number;
-  prompt_tokens_details?: { cached_tokens?: number };
-  completion_tokens_details?: { reasoning_tokens?: number };
-}
+export type UsageMetadata = NonNullable<ChatCompletionResponse["usage"]>;
 
 export interface FinalMetadata {
   showDetails: boolean;

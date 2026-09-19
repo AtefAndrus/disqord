@@ -234,6 +234,70 @@ function expectCancelled(
 }
 
 // ---------------------------------------------------------------------------
+// Request fields carried onto every turn
+// ---------------------------------------------------------------------------
+
+describe("runToolLoop: requestFields", () => {
+  function twoTurnClient(): ReturnType<typeof makeClient> {
+    return makeClient([
+      scripted(
+        toolCall({ index: 0, id: "c1", name: "t", argumentsDelta: "{}" }),
+        final({ fullText: "", finishReason: "tool_calls" }),
+      ),
+      scripted(content("done"), final({ fullText: "done", finishReason: "stop" })),
+    ]);
+  }
+
+  test("with no requestFields, each turn's request holds exactly the fields the loop builds", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t" }));
+    const { client, requests } = twoTurnClient();
+
+    expectFinal(await runToolLoop(baseParams({ llmClient: client, registry })));
+
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(Object.keys(request).sort()).toEqual(["messages", "model", "tool_choice", "tools"]);
+    }
+  });
+
+  test("requestFields reach the first request and the re-request after tool dispatch alike", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t" }));
+    const { client, requests } = twoTurnClient();
+
+    expectFinal(
+      await runToolLoop(
+        baseParams({
+          llmClient: client,
+          registry,
+          requestFields: { parallel_tool_calls: false },
+        }),
+      ),
+    );
+
+    expect(requests.map((request) => request.parallel_tool_calls)).toEqual([false, false]);
+  });
+
+  test("a requestFields entry cannot override a field the loop owns", async () => {
+    const { client, requests } = makeClient([
+      scripted(content("hi"), final({ fullText: "hi", finishReason: "stop" })),
+    ]);
+
+    expectFinal(
+      await runToolLoop(
+        baseParams({
+          llmClient: client,
+          requestFields: { model: "smuggled" } as IToolLoopParams["requestFields"],
+        }),
+      ),
+    );
+
+    expect(requests[0]?.model).toBe(baseParams().model);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // No tools registered
 // ---------------------------------------------------------------------------
 
@@ -2192,6 +2256,77 @@ describe("runToolLoop: usage aggregation", () => {
     });
   });
 
+  test("sums cache_write_tokens / cost_details / server_tool_use_details, and never invents a field no turn reported", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t" }));
+    const { client } = makeClient([
+      scripted(
+        toolCall({ index: 0, id: "c1", name: "t", argumentsDelta: "{}" }),
+        final({
+          fullText: "",
+          finishReason: "tool_calls",
+          usage: {
+            ...usage1(1),
+            prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 6 },
+            cost_details: { upstream_inference_cost: 0.5, upstream_inference_prompt_cost: 0.25 },
+            server_tool_use_details: { tool_calls_requested: 2, tool_calls_executed: 1 },
+            is_byok: true,
+          },
+        }),
+      ),
+      scripted(
+        content("done"),
+        final({
+          fullText: "done",
+          finishReason: "stop",
+          usage: {
+            ...usage1(2),
+            prompt_tokens_details: { cache_write_tokens: 1 },
+            cost_details: { upstream_inference_cost: 0.25 },
+            server_tool_use_details: { tool_calls_requested: 1, web_search_requests: 0 },
+          },
+        }),
+      ),
+    ]);
+    const result = await runToolLoop(baseParams({ llmClient: client, registry }));
+    expectFinal(result);
+    expect(result.usage).toEqual({
+      ...usage1(3),
+      prompt_tokens_details: { cached_tokens: 4, cache_write_tokens: 7 },
+      cost_details: { upstream_inference_cost: 0.75, upstream_inference_prompt_cost: 0.25 },
+      // `web_search_requests: 0` was reported, so it is kept as 0;
+      // `upstream_inference_completions_cost` was never reported, so it stays absent.
+      server_tool_use_details: {
+        tool_calls_requested: 3,
+        tool_calls_executed: 1,
+        web_search_requests: 0,
+      },
+    });
+  });
+
+  test("keeps server_tool_use_details absent when no turn ran a server tool, and present (even empty) when one did", async () => {
+    const { client: noServerTool } = makeClient([
+      scripted(content("a"), final({ fullText: "a", finishReason: "stop", usage: usage1(1) })),
+    ]);
+    const without = await runToolLoop(baseParams({ llmClient: noServerTool }));
+    expectFinal(without);
+    expect(without.usage).toEqual(usage1(1));
+
+    const { client: ranServerTool } = makeClient([
+      scripted(
+        content("a"),
+        final({
+          fullText: "a",
+          finishReason: "stop",
+          usage: { ...usage1(1), server_tool_use_details: {} },
+        }),
+      ),
+    ]);
+    const withTool = await runToolLoop(baseParams({ llmClient: ranServerTool }));
+    expectFinal(withTool);
+    expect(withTool.usage).toEqual({ ...usage1(1), server_tool_use_details: {} });
+  });
+
   test("returns partial usage on cancellation", async () => {
     const controller = new AbortController();
     const registry = new ToolRegistry();
@@ -2328,6 +2463,24 @@ function sseLine(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
+/** Responses `response.output_text.delta` event line. */
+function textDeltaLine(delta: string): string {
+  return sseLine({ type: "response.output_text.delta", output_index: 0, delta });
+}
+
+/** Responses `response.completed` event line; `n` is `usage1(n)` spelled in the wire's field names. */
+function completedLine(n?: number): string {
+  return sseLine({
+    type: "response.completed",
+    response: {
+      status: "completed",
+      ...(n !== undefined && {
+        usage: { input_tokens: n, output_tokens: n * 2, total_tokens: n * 3 },
+      }),
+    },
+  });
+}
+
 /**
  * Mocks `globalThis.fetch` to resolve with a single streaming response built
  * from `steps`, each chunk enqueued only after its paired `delayMs` (default
@@ -2364,14 +2517,19 @@ describe("runToolLoop + real OpenRouterClient: heartbeat-less frames must not id
 
   test("reasoning-only 風フレームが idleMs より短い間隔で連続しても、合計時間が idleMs を超えて timeout しない", async () => {
     // 各フレームの間隔 (12ms) は idleMs (30ms) より短いが、5 回分の合計時間
-    // (60ms) は idleMs を超える。reasoning-only delta が heartbeat として
+    // (60ms) は idleMs を超える。reasoning の delta が heartbeat として
     // yield されていなければ、この合計時間だけで idle timeout が発火する。
     mockDelayedSseFetch([
       ...Array.from({ length: 5 }, () => ({
-        data: sseLine({ choices: [{ delta: { reasoning: "thinking..." } }] }),
+        data: sseLine({
+          type: "response.reasoning_summary_text.delta",
+          output_index: 0,
+          delta: "thinking...",
+        }),
         delayMs: 12,
       })),
-      { data: sseLine({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }) },
+      { data: textDeltaLine("hi") },
+      { data: completedLine() },
       { data: "data: [DONE]\n\n" },
     ]);
 
@@ -2383,20 +2541,14 @@ describe("runToolLoop + real OpenRouterClient: heartbeat-less frames must not id
     expect(result.text).toBe("hi");
   }, 2_000);
 
-  test("usage-only トレーラーの到着が遅れても、直前フレームからの単一ギャップが idleMs 未満なら timeout しない", async () => {
-    // 1フレーム目 (content+finish_reason) の直後に十分な間隔をおいてから
-    // usage トレーラーが届く。usage トレーラー自体が何も yield しなければ、
-    // 「1フレーム目 → [DONE]」の合計ギャップだけで idle timeout が発火する
-    // （usage トレーラー到着時点でタイマーがリセットされないため）。
+  test("response.completed の到着が遅れても、直前イベントからの単一ギャップが idleMs 未満なら timeout しない", async () => {
+    // text delta の直後に十分な間隔をおいてから response.completed が届く。
+    // response.completed 自体が何も yield しなければ、「text delta → [DONE]」の
+    // 合計ギャップだけで idle timeout が発火する（response.completed 到着時点で
+    // タイマーがリセットされないため）。
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }) },
-      {
-        data: sseLine({
-          choices: [],
-          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
-        }),
-        delayMs: 15,
-      },
+      { data: textDeltaLine("hi") },
+      { data: completedLine(1), delayMs: 15 },
       { data: "data: [DONE]\n\n", delayMs: 15 },
     ]);
 
@@ -2409,14 +2561,14 @@ describe("runToolLoop + real OpenRouterClient: heartbeat-less frames must not id
     expect(result.usage).toEqual({ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 });
   }, 2_000);
 
-  test("finish_reason だけの terminal フレーム後、[DONE] の到着が遅れても timeout しない", async () => {
-    // content フレームと finish_reason-only フレームを分離する: finish_reason
-    // だけのフレームは自身では何も yield しなければ、その後の [DONE] 遅延と
+  test("text delta 後の lifecycle イベント（output_text.done 等）も idle timer をリセットする", async () => {
+    // lifecycle イベントが自身では何も yield しなければ、その前後の遅延を
     // 合算した時間だけで idle timeout が発火してしまう。
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "hi" } }] }) },
-      { data: sseLine({ choices: [{ delta: {}, finish_reason: "stop" }] }), delayMs: 10 },
-      { data: "data: [DONE]\n\n", delayMs: 15 },
+      { data: textDeltaLine("hi") },
+      { data: sseLine({ type: "response.output_text.done", output_index: 0 }), delayMs: 15 },
+      { data: completedLine(), delayMs: 15 },
+      { data: "data: [DONE]\n\n" },
     ]);
 
     const client = new OpenRouterClient("test-api-key");
@@ -2441,7 +2593,7 @@ describe("runToolLoop + real OpenRouterClient: malformed frame vs. cancel", () =
 
   test("malformed フレームに到達し、cancel されない場合は status:error（StreamProtocolError 由来）", async () => {
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "partial" } }] }) },
+      { data: textDeltaLine("partial") },
       { data: "data: {not valid json\n\n", delayMs: 10 },
     ]);
 
@@ -2457,7 +2609,7 @@ describe("runToolLoop + real OpenRouterClient: malformed frame vs. cancel", () =
     // malformed フレームの到着 (30ms 後) より先に abort する (10ms 後)。cancel が
     // parser エラーより優先されることを実クライアント越しに確認する。
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "partial" } }] }) },
+      { data: textDeltaLine("partial") },
       { data: "data: {not valid json\n\n", delayMs: 30 },
     ]);
 
@@ -2484,7 +2636,7 @@ describe("runToolLoop + real OpenRouterClient: malformed frame vs. cancel", () =
     const controller = new AbortController();
     const readable = new ReadableStream<Uint8Array>({
       start(rc) {
-        rc.enqueue(encoder.encode(sseLine({ choices: [{ delta: { content: "partial" } }] })));
+        rc.enqueue(encoder.encode(textDeltaLine("partial")));
         setTimeout(() => {
           rc.enqueue(encoder.encode("data: {not valid json\n\n"));
           controller.abort();
@@ -2511,7 +2663,7 @@ describe("runToolLoop + real OpenRouterClient: malformed frame vs. cancel", () =
     const controller = new AbortController();
     const readable = new ReadableStream<Uint8Array>({
       start(rc) {
-        rc.enqueue(encoder.encode(sseLine({ choices: [{ delta: { content: "partial" } }] })));
+        rc.enqueue(encoder.encode(textDeltaLine("partial")));
         setTimeout(() => {
           controller.abort();
           rc.enqueue(encoder.encode("data: {not valid json\n\n"));
@@ -2535,12 +2687,12 @@ describe("runToolLoop + real OpenRouterClient: malformed frame vs. cancel", () =
 });
 
 describe("runToolLoop + real OpenRouterClient: usage survives a post-heartbeat, pre-[DONE] early exit", () => {
-  // OpenRouter sends the turn's usage on an empty-`choices` trailer chunk
-  // immediately before `[DONE]` (`openrouter.ts` yields it as a heartbeat
-  // carrying `usage`). These tests exercise the real wire-parsing generator
+  // The Responses API sends the turn's usage on `response.completed`, right
+  // before `[DONE]` (`openrouter.ts` yields it as a heartbeat carrying
+  // `usage`). These tests exercise the real wire-parsing generator
   // end to end to confirm that usage is not silently dropped when the turn
   // never reaches its terminal `StreamFinalResult` — a cancel or a malformed
-  // frame arriving after that trailer but before `[DONE]` — and that a
+  // frame arriving after that event but before `[DONE]` — and that a
   // normal completion still reports the usage exactly once (no double count
   // from also folding the heartbeat's `usage` into the `completed` path).
   let originalFetch: typeof globalThis.fetch;
@@ -2553,10 +2705,10 @@ describe("runToolLoop + real OpenRouterClient: usage survives a post-heartbeat, 
     globalThis.fetch = originalFetch;
   });
 
-  test("usage トレーラー受領後・[DONE] 前に abort されると、status:cancelled の usage にそのトレーラーの usage が反映される", async () => {
+  test("response.completed 受領後・[DONE] 前に abort されると、status:cancelled の usage にその usage が反映される", async () => {
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }) },
-      { data: sseLine({ choices: [], usage: usage1(5) }), delayMs: 10 },
+      { data: textDeltaLine("hi") },
+      { data: completedLine(5), delayMs: 10 },
       { data: "data: [DONE]\n\n", delayMs: 30 },
     ]);
 
@@ -2575,10 +2727,10 @@ describe("runToolLoop + real OpenRouterClient: usage survives a post-heartbeat, 
     expect(result.usage).toEqual(usage1(5));
   }, 2_000);
 
-  test("usage トレーラー受領後・[DONE] 前に malformed フレームが到達すると、status:error の usage にそのトレーラーの usage が反映される", async () => {
+  test("response.completed 受領後・[DONE] 前に malformed フレームが到達すると、status:error の usage にその usage が反映される", async () => {
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }) },
-      { data: sseLine({ choices: [], usage: usage1(5) }) },
+      { data: textDeltaLine("hi") },
+      { data: completedLine(5) },
       { data: "data: {not valid json\n\n" },
     ]);
 
@@ -2591,97 +2743,10 @@ describe("runToolLoop + real OpenRouterClient: usage survives a post-heartbeat, 
     expect(result.usage).toEqual(usage1(5));
   }, 2_000);
 
-  test("正常完了時は usage トレーラーの heartbeat usage と最終チャンクの usage が二重加算されない", async () => {
+  test("正常完了時は response.completed の heartbeat usage と最終チャンクの usage が二重加算されない", async () => {
     mockDelayedSseFetch([
-      { data: sseLine({ choices: [{ delta: { content: "hi" }, finish_reason: "stop" }] }) },
-      { data: sseLine({ choices: [], usage: usage1(5) }) },
-      { data: "data: [DONE]\n\n" },
-    ]);
-
-    const client = new OpenRouterClient("test-api-key");
-    const result = await runToolLoop(
-      baseParams({ llmClient: client, timeouts: { idleMs: 2_000, wallMs: 5_000 } }),
-    );
-    expectFinal(result);
-    // Doubled would be { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 }.
-    expect(result.usage).toEqual(usage1(5));
-  }, 2_000);
-});
-
-describe("runToolLoop + real OpenRouterClient: usage on a content-carrying frame survives an early exit", () => {
-  // Unlike the block above (usage on its own empty-`choices` trailer frame),
-  // these frames pair `content`/`usage` on the *same* frame — the shape
-  // OpenRouter actually sends for a single-chunk-completion turn. Before the
-  // fix, `processSseLine()` only attached `usage` to a heartbeat chunk when
-  // the frame yielded *no* content/tool_call payload; a frame that yielded
-  // both left its usage reachable only via `state.lastUsage`, which
-  // `toolLoop.ts`'s early-exit paths (cancel/malformed-frame-after) never
-  // read — so a cancel or malformed frame landing between this frame and
-  // `[DONE]` silently dropped the turn's usage.
-  let originalFetch: typeof globalThis.fetch;
-
-  beforeEach(() => {
-    originalFetch = globalThis.fetch;
-  });
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  test("content+usage 併載フレーム受領後・[DONE] 前に abort されると、status:cancelled の usage にそのフレームの usage が反映される", async () => {
-    mockDelayedSseFetch([
-      {
-        data: sseLine({
-          choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-          usage: usage1(5),
-        }),
-      },
-      { data: "data: [DONE]\n\n", delayMs: 30 },
-    ]);
-
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 10);
-
-    const client = new OpenRouterClient("test-api-key");
-    const result = await runToolLoop(
-      baseParams({
-        llmClient: client,
-        signal: controller.signal,
-        timeouts: { idleMs: 2_000, wallMs: 5_000 },
-      }),
-    );
-    expectCancelled(result);
-    expect(result.usage).toEqual(usage1(5));
-  }, 2_000);
-
-  test("content+usage 併載フレーム受領後・[DONE] 前に malformed フレームが到達すると、status:error の usage にそのフレームの usage が反映される", async () => {
-    mockDelayedSseFetch([
-      {
-        data: sseLine({
-          choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-          usage: usage1(5),
-        }),
-      },
-      { data: "data: {not valid json\n\n" },
-    ]);
-
-    const client = new OpenRouterClient("test-api-key");
-    const result = await runToolLoop(
-      baseParams({ llmClient: client, timeouts: { idleMs: 2_000, wallMs: 5_000 } }),
-    );
-    expectError(result);
-    expect(result.error).toBeInstanceOf(StreamProtocolError);
-    expect(result.usage).toEqual(usage1(5));
-  }, 2_000);
-
-  test("正常完了時は content+usage 併載フレームの heartbeat usage と最終チャンクの usage が二重加算されない", async () => {
-    mockDelayedSseFetch([
-      {
-        data: sseLine({
-          choices: [{ delta: { content: "hi" }, finish_reason: "stop" }],
-          usage: usage1(5),
-        }),
-      },
+      { data: textDeltaLine("hi") },
+      { data: completedLine(5) },
       { data: "data: [DONE]\n\n" },
     ]);
 
