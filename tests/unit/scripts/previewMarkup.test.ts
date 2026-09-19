@@ -53,13 +53,30 @@ describe("messagesToMarkup のマークダウン変換", () => {
     expect(markup).not.toContain(SENTINEL);
   });
 
-  test("入力に退避用の私用領域文字が含まれても終了し、プレースホルダを残さない", () => {
-    // 入力由来の SENTINEL をそのまま通すと、自分自身を指す退避ができて復元が終わらなくなる
-    const markup = renderTextDisplay(`\`${SENTINEL}0${SENTINEL}\` と ## 見出し`);
+  test("入力に退避用の私用領域文字が含まれても終了し、その文字を落とさない", () => {
+    // 入力由来の SENTINEL をそのまま通すと、自分自身を指す退避ができて復元が終わらなくなる。
+    // 一方で取り除いてしまうと入力が欠落し、`## X` のように残った文字だけで
+    // マークダウン構文が成立してしまうため、文字は保持したまま衝突だけを避ける必要がある。
+    const markup = renderTextDisplay(`\`${SENTINEL}0${SENTINEL}\``);
 
-    expect(markup).not.toContain(SENTINEL);
-    expect(markup).toContain("<discord-code embed>0</discord-code>");
+    expect(markup).toContain(`<discord-code embed>${SENTINEL}0${SENTINEL}</discord-code>`);
   }, 5000);
+
+  test("退避用の私用領域文字を落として見出し構文を成立させない", () => {
+    const markup = renderTextDisplay(`#${SENTINEL}# 見出しではない`);
+
+    expect(markup).not.toContain("<discord-header");
+    expect(markup).toContain(SENTINEL);
+  });
+
+  test("見出し以外の退避要素の直後の改行は <br> のまま残す", () => {
+    // 直後の <br> を落とすのはブロック要素（見出し）だけで、インライン要素には及ばない
+    const markup = renderTextDisplay("`code`\n次の行\n🎉\nさらに次\n<https://example.com/>\n最後");
+
+    expect(markup).toContain("</discord-code><br>次の行");
+    expect(markup).toContain('alt="🎉"><br>さらに次');
+    expect(markup).toContain("</discord-link><br>最後");
+  });
 });
 
 describe("messagesToMarkup の Components V2 変換", () => {

@@ -35,9 +35,9 @@ UI 関数を改修すれば fixture の出力が変わり、プレビューに�
 
 `tests/unit/scripts/previewMarkup.test.ts` と `tests/unit/scripts/previewFixtures.test.ts` が、ブラウザを起動せずに次を検証する。
 
-- マークダウン変換: 連続する見出し、見出し直後の箇条書き、見出し直後の余分な改行、見出し内の絵文字（退避の入れ子）、入力に退避用の私用領域文字が混ざった場合
+- マークダウン変換: 連続する見出し、見出し直後の箇条書き、見出し直後の余分な改行、見出し以外の退避要素の直後の改行、見出し内の絵文字（退避の入れ子）、入力に退避用の私用領域文字が混ざった場合
 - Components V2 変換: Container のアクセントカラー、Separator の `divider` 既定値、Section accessory の ActionRow ラッパ
-- fixture: すべての fixture が描画でき退避プレースホルダを残さないこと、`chat-final-long` が複数 message へ分割されページ番号フッターを持つこと
+- fixture: すべての fixture が message 数ぶん描画され退避プレースホルダを残さないこと、`chat-final-long` が複数 message へ分割されページ番号フッターを持つこと
 
 描画の見え方そのもの（余白・折り返し・フォント）は PNG の目視でしか確認できない。テストが見ているのは構造だけである。
 

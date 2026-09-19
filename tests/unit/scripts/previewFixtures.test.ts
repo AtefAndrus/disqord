@@ -28,10 +28,12 @@ function textsOf(fixture: IFixture, messageIndex: number): string[] {
 }
 
 describe("プレビュー fixture", () => {
-  test("すべての fixture が例外なく描画でき、退避プレースホルダを残さない", () => {
+  test("すべての fixture が message 数ぶん描画され、退避プレースホルダを残さない", () => {
     expect(fixtures.length).toBeGreaterThan(0);
     for (const fixture of fixtures) {
       const markup = messagesToMarkup(fixture.messages);
+      const rendered = markup.split("<discord-message ").length - 1;
+      expect(rendered).toBe(fixture.messages.length);
       expect(markup).not.toContain("");
     }
   });
@@ -52,6 +54,12 @@ describe("プレビュー fixture", () => {
     // LLM 詳細情報は末尾 message のフッターにだけ載る
     expect(lastTexts.at(-1)).toContain(`ページ ${total}/${total} | Tokens:`);
     expect(firstTexts.at(-1)).not.toContain("Tokens:");
+
+    // payload だけでなく、描画されたマークアップにも本文とフッターが出ていること
+    const markup = messagesToMarkup(fixture.messages);
+    expect(markup).toContain(`ページ 1/${total}`);
+    expect(markup).toContain(`ページ ${total}/${total}`);
+    expect(markup).toContain('<discord-header level="2">長文応答の分割プレビュー</discord-header>');
   });
 
   test("chat-streaming の末尾 message が Section の停止ボタンを持つ", () => {

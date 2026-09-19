@@ -43,10 +43,11 @@ const BUTTON_TYPE: Partial<Record<ButtonStyle, string>> = {
   [ButtonStyle.Danger]: "destructive",
 };
 
-// 退避の復元を繰り返す上限。実際の入れ子は見出し 1 段分しかないため、これは循環時の保険。
-const MAX_RESTORE_PASSES = 8;
+// 退避の入れ子を展開する深さの上限。実際の入れ子は「コードブロック → インラインコード → 見出し」の
+// 3 段程度で、これは想定外の循環でも描画が止まらないようにするための保険。
+const MAX_RESTORE_DEPTH = 8;
 
-// 退避プレースホルダ境界（私用領域文字。入力に含まれる同じ文字は markdownToHtml が除去する）
+// 退避プレースホルダ境界（私用領域文字。入力に同じ文字があっても衝突しないよう、入力側も退避する）
 const SENTINEL = "\uE000";
 
 // 絵文字: 国旗(Regional Indicator 2連) / キーキャップ / 肌色修飾子・ZWJ 連結を含む基本絵文字
@@ -149,9 +150,11 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     return hold(html);
   };
 
-  // SENTINEL は私用領域文字だが、入力に含められないわけではない。残すと入力由来の文字列が
-  // 退避プレースホルダとして復元され、自分自身を含む退避ができて復元が終わらなくなるため、先に落とす。
-  let text = input.replaceAll(SENTINEL, "");
+  // SENTINEL は私用領域文字だが、入力に含められないわけではない。そのまま残すと入力由来の文字列が
+  // 退避プレースホルダとして解釈され、自分自身を指す退避ができて復元が終わらなくなる。
+  // 入力中の SENTINEL もここで退避しておけば、以降の処理は本物の退避だけを見ればよく、
+  // 復元時にその文字がそのまま戻るので入力も欠落しない。
+  let text = input.replace(/\uE000/g, () => hold(SENTINEL));
 
   // 1. コードブロック / インラインコード → 退避
   text = text.replace(/```(?:[a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, code: string) =>
@@ -218,21 +221,21 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
 
   // 7.5. ブロック要素（見出し）の直後の <br> を落とす。<discord-header> は上下マージンを自前で
   // 持つため、行の改行をそのまま <br> にすると Discord より 1-2 行分間延びする。
-  text = text.replace(/(\d+)(?:<br>)+/g, (m, id: string) =>
+  text = text.replace(/\uE000(\d+)\uE000(?:<br>)+/g, (m, id: string) =>
     blockIds.has(Number(id)) ? `${SENTINEL}${id}${SENTINEL}` : m,
   );
 
   // 8. 退避を復元。見出しの退避内容はその行にある絵文字・コード等の退避を入れ子に持つため、
-  // 1 回の置換では内側のプレースホルダが文字として残る。入力から SENTINEL を落としてあるので
-  // 入れ子は必ず自分より若い番号を指し、変化が止まるまで繰り返せば終わる。上限は、入力の除去を
-  // 取りこぼしても描画がハングせず、未復元のプレースホルダとして目に見える形で失敗するための保険。
-  let previous: string;
-  let passes = 0;
-  do {
-    previous = text;
-    text = text.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => stash[Number(i)] ?? "");
-  } while (text !== previous && ++passes < MAX_RESTORE_PASSES);
-  return text;
+  // 展開した中身をさらに展開する。展開結果そのものは再走査しないので、入力由来の SENTINEL が
+  // 戻って偶然プレースホルダの形になっても、それが退避として解釈されることはない。
+  const restore = (value: string, depth: number): string => {
+    if (depth >= MAX_RESTORE_DEPTH) return value;
+    return value.replace(/\uE000(\d+)\uE000/g, (m, i: string) => {
+      const held = stash[Number(i)];
+      return held === undefined ? m : restore(held, depth + 1);
+    });
+  };
+  return restore(text, 0);
 }
 
 function embedToMarkup(embed: APIEmbed): string {
