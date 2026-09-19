@@ -50,15 +50,26 @@ export interface IToolLoopUpdater {
   endToolBlock(name: string, render?: ToolRenderPayload): void | Promise<void>;
 }
 
-/** Sum of `StreamFinalResult.usage` across every turn. Optional sub-fields are only added when present. */
-export interface AggregatedUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  cost?: number;
-  prompt_tokens_details?: { cached_tokens?: number };
-  completion_tokens_details?: { reasoning_tokens?: number };
-}
+type TurnUsage = NonNullable<ChatCompletionResponse["usage"]>;
+
+/**
+ * Sum of `StreamFinalResult.usage` across every turn. An optional field is
+ * present only if at least one turn reported it: a field no turn reported is
+ * "unknown", which a consumer must be able to tell apart from a reported 0.
+ * `is_byok` is left out because a per-request flag has no meaningful sum.
+ */
+export type AggregatedUsage = Omit<TurnUsage, "is_byok">;
+
+/** Request fields `runToolLoop()` builds itself; never taken from `requestFields`. */
+const LOOP_OWNED_REQUEST_FIELDS = ["model", "messages", "plugins", "tools", "tool_choice"] as const;
+type LoopOwnedRequestField = (typeof LOOP_OWNED_REQUEST_FIELDS)[number];
+
+/**
+ * Request fields `runToolLoop()` does not build itself. Whatever a caller
+ * puts here is sent on every turn's request (first request, re-request after
+ * tool dispatch, and the forced-final turn alike).
+ */
+export type ToolLoopRequestFields = Omit<ChatCompletionRequest, LoopOwnedRequestField>;
 
 export type ToolLoopResult =
   | {
@@ -79,6 +90,7 @@ export interface IToolLoopParams {
   /** Initial history. The caller's array is copied, never mutated. */
   messages: ChatMessage[];
   plugins?: ChatPlugin[];
+  requestFields?: ToolLoopRequestFields;
   registry: ToolRegistry;
   /** Defaults to `new ToolDispatcher(registry)`. */
   dispatcher?: ToolDispatcher;
@@ -313,6 +325,27 @@ function addFinite(
   return sum;
 }
 
+/**
+ * Adds every key of `turn` that the turn actually reported onto `acc`,
+ * leaving a key neither side has absent. Returns `undefined` when `turn` is
+ * itself absent and nothing was accumulated before.
+ */
+function addReported<K extends string>(
+  acc: Partial<Record<K, number>> | undefined,
+  turn: Partial<Record<K, number>> | undefined,
+  path: string,
+  requireSafeInteger: boolean,
+): Partial<Record<K, number>> | undefined {
+  if (!turn) return acc;
+  const base: Partial<Record<K, number>> = { ...acc };
+  for (const key of Object.keys(turn) as K[]) {
+    const value = turn[key];
+    if (value === undefined) continue;
+    base[key] = addFinite(base[key] ?? 0, value, `${path}.${key}`, requireSafeInteger);
+  }
+  return base;
+}
+
 function addUsage(
   acc: AggregatedUsage | undefined,
   turn: ChatCompletionResponse["usage"] | undefined,
@@ -330,25 +363,17 @@ function addUsage(
   if (turn.cost !== undefined) {
     base.cost = addFinite(base.cost ?? 0, turn.cost, "cost");
   }
-  if (turn.prompt_tokens_details?.cached_tokens !== undefined) {
-    base.prompt_tokens_details = {
-      cached_tokens: addFinite(
-        base.prompt_tokens_details?.cached_tokens ?? 0,
-        turn.prompt_tokens_details.cached_tokens,
-        "prompt_tokens_details.cached_tokens",
-        true,
-      ),
-    };
-  }
-  if (turn.completion_tokens_details?.reasoning_tokens !== undefined) {
-    base.completion_tokens_details = {
-      reasoning_tokens: addFinite(
-        base.completion_tokens_details?.reasoning_tokens ?? 0,
-        turn.completion_tokens_details.reasoning_tokens,
-        "completion_tokens_details.reasoning_tokens",
-        true,
-      ),
-    };
+  const details = [
+    ["prompt_tokens_details", true],
+    ["completion_tokens_details", true],
+    ["cost_details", false],
+    // `{}` (a server tool ran but reported no counters) still creates the
+    // key: its presence is what distinguishes "ran" from "never ran".
+    ["server_tool_use_details", true],
+  ] as const;
+  for (const [key, requireSafeInteger] of details) {
+    const summed = addReported<string>(base[key], turn[key], key, requireSafeInteger);
+    if (summed) base[key] = summed;
   }
   return base;
 }
@@ -363,10 +388,10 @@ interface AccumulatedCall {
 /**
  * `usage` on the non-`completed` variants is the last usage observed via a
  * heartbeat chunk during this turn (see `runTurn()`'s `lastHeartbeatUsage`).
- * OpenRouter sends the turn's usage on the empty-`choices` trailer chunk
- * immediately before `[DONE]`, which `openrouter.ts` yields as a heartbeat —
- * so a cancel/timeout/guard-violation/transport-error that lands after that
- * trailer but before the terminal `StreamFinalResult` would otherwise lose
+ * OpenRouter sends the turn's usage on `response.completed`, immediately
+ * before `[DONE]`, which `openrouter.ts` yields as a heartbeat — so a
+ * cancel/timeout/guard-violation/transport-error that lands after that
+ * event but before the terminal `StreamFinalResult` would otherwise lose
  * usage the turn already paid for. `completed` never needs this: its usage
  * comes from `final.usage`, the same underlying value.
  */
@@ -416,9 +441,9 @@ async function runTurn(params: RunTurnParams): Promise<TurnOutcome> {
   const calls = new Map<number, AccumulatedCall>();
   let accumBytes = 0;
   // Last usage observed via a heartbeat chunk this turn (see the
-  // `TurnOutcome` doc comment for why this exists): OpenRouter's
-  // empty-`choices` usage trailer arrives as a heartbeat, one or more
-  // frames before the terminal `StreamFinalResult` — a cancel/timeout/
+  // `TurnOutcome` doc comment for why this exists): the usage on
+  // `response.completed` arrives as a heartbeat, one or more frames
+  // before the terminal `StreamFinalResult` — a cancel/timeout/
   // guard-violation/transport-error landing in that gap must not lose it.
   let lastHeartbeatUsage: ChatCompletionResponse["usage"] | undefined;
 
@@ -881,6 +906,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
     llmClient,
     model,
     plugins,
+    requestFields,
     registry,
     ctx,
     updater,
@@ -935,6 +961,14 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   }
   const hasTools = tools.length > 0;
 
+  // The type already excludes the loop-owned fields, but an object with extra
+  // keys still satisfies it structurally. Spreading alone would not be enough:
+  // the loop *omits* `plugins`/`tools`/`tool_choice` in some requests, and an
+  // omitted key overwrites nothing — a smuggled `tools` would reach the API in
+  // a turn the loop treats as tool-less.
+  const passthroughFields: Record<string, unknown> = { ...requestFields };
+  for (const key of LOOP_OWNED_REQUEST_FIELDS) delete passthroughFields[key];
+
   let aggregatedUsage: AggregatedUsage | undefined;
   // Last non-`undefined` model/provider observed across every turn's final
   // chunk so far (not just the most recent turn's). A turn's `StreamFinalResult`
@@ -956,6 +990,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
 
     const toolChoice: ToolChoice = turn < MAX_TURNS ? "auto" : "none";
     const request: ChatCompletionRequest = {
+      ...passthroughFields,
       model,
       messages: [...history],
       ...(plugins && { plugins }),
