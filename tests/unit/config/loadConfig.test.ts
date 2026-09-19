@@ -40,6 +40,13 @@ describe("loadConfig: E2E_TESTER_BOT_ID", () => {
     expect(loadConfig().e2eTesterBotId).toBeUndefined();
   });
 
+  test("production では不正な値でも起動を止めない（無視する設定の検証で本番を落とさない）", () => {
+    process.env.NODE_ENV = "production";
+    process.env.E2E_TESTER_BOT_ID = "not-a-snowflake";
+
+    expect(loadConfig().e2eTesterBotId).toBeUndefined();
+  });
+
   test("未設定と空文字は undefined になる", () => {
     process.env.NODE_ENV = "development";
     delete process.env.E2E_TESTER_BOT_ID;

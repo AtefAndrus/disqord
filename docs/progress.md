@@ -16,7 +16,7 @@
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [マルチモーダル対応](changes/multimodal/design.md) | 高 | implemented | 画像・PDF 添付の LLM 入力対応 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
-| [Responses API への移行](changes/responses-api-migration/design.md) | 高 | in-progress | LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える |
+| [Responses API への移行](changes/responses-api-migration/design.md) | 高 | implemented | LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える |
 | [ツール呼び出し基盤](changes/tool-calling-foundation/design.md) | 高 | implemented | OpenRouter client tool calling のマルチターン実行基盤（tool registry + streaming ループ） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |

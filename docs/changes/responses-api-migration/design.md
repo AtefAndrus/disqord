@@ -1,6 +1,6 @@
 ---
 title: "Responses API への移行"
-status: in-progress
+status: implemented
 priority: high
 summary: "LLM 呼び出しを Chat Completions から Responses API へ振る舞いを変えずに載せ替える"
 ---
@@ -309,7 +309,7 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 - [x] 実 API で確認する（`OpenRouterClient` と `runToolLoop` を直接駆動）: 非ストリーミング、並行 tool call と server tool の混在、画像入力、PDF 入力、無効モデルの 400、stream 途中のキャンセル、`max_output_tokens` による打ち切り
 - [x] Discord 上で確認する（開発用 bot、`google/gemini-3.7-flash`）: 通常のチャットと長文の分割送信。footer の項目（Tokens / Cost / Model / Latency / Provider / Reasoning / TPS）とページ分割は、同じ発言に応答した Chat Completions 版の bot と一致した
 - [x] Discord 上で確認する: 画像添付と PDF 添付（`bun run e2e` の `image` / `pdf`。テスト bot が添付つきで発言し、開発用 bot の返信が画像の色と PDF 内の語を答えることを確認した。2026-09-20）
-- [ ] 手動確認: 停止ボタン（`bun run e2e stop` を実行し、返信の「停止」を押す。スクリプトが停止状態で終わったことを確認する）
+- [x] 手動確認: 停止ボタン（`bun run e2e stop` で長い生成を投稿し、実クライアントで「停止」を押した。返信は `🛑 Stopped | 4.9s | 360字` の footer で終わった。2026-09-20）
 - [x] `bun run preview` で表示の回帰を確認（preview を現行 UI に追従させる修正ブランチと本 change を重ねた tree で、チャット返信 5 種の fixture が生成する payload が、修正ブランチ単独のものと一致した）
 
 ### Phase 4: 後続への引き継ぎ

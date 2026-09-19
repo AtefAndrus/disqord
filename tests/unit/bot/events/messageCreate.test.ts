@@ -420,6 +420,34 @@ describe("createMessageCreateHandler", () => {
       expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     });
 
+    test("テスト bot の発言でも、メンションの無い自動応答チャンネルの発言には応答しない（開発用 bot 同士の相互応答ループの防止）", async () => {
+      mockMessage.author = { bot: true, id: "tester-bot" };
+      mockMessage.mentions = { has: mock(() => false) };
+      mockMessage.content = "";
+      mockSettingsService.getGuildSettings = mock(() =>
+        Promise.resolve({
+          guildId: "guild-123",
+          defaultModel: "test-model",
+          freeModelsOnly: false,
+          showLlmDetails: false,
+          autoReplyChannels: ["channel-123"],
+          createdAt: "",
+          updatedAt: "",
+        }),
+      );
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        { e2eTesterBotId: "tester-bot" },
+      );
+
+      await handler(mockMessage as never);
+
+      expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+      expect(mockReply).not.toHaveBeenCalled();
+    });
+
     test("e2eTesterBotId が自分自身の ID でも、自分の発言には応答しない（自己応答ループの防止）", async () => {
       mockMessage.author = { bot: true, id: "123456789" };
       const handler = createMessageCreateHandler(

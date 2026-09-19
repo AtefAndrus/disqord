@@ -84,14 +84,14 @@ export function loadConfig(): AppConfig {
     adminApiSecret: process.env.ADMIN_API_SECRET,
     logDir: process.env.LOG_DIR,
     logMaxBytes: process.env.LOG_MAX_BYTES,
-    e2eTesterBotId: process.env.E2E_TESTER_BOT_ID || undefined,
+    // Dropped before validation rather than checked by each reader: a
+    // production bot must never answer another bot, and a malformed value of
+    // a setting production ignores must not stop it from starting either.
+    e2eTesterBotId:
+      process.env.NODE_ENV === "production"
+        ? undefined
+        : process.env.E2E_TESTER_BOT_ID || undefined,
   });
-
-  // Dropped here rather than checked by each reader: a production bot must
-  // never answer another bot, even if this variable leaks into its environment.
-  if (parsed.nodeEnv === "production") {
-    return { ...parsed, e2eTesterBotId: undefined };
-  }
 
   return parsed;
 }

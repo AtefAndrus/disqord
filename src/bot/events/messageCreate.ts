@@ -115,6 +115,15 @@ export function createMessageCreateHandler(
       return;
     }
 
+    // The tester bot must mention this bot and say something. Without this,
+    // two development instances that name each other as tester in an
+    // auto-reply channel answer each other forever: their replies are
+    // Components V2 messages with empty `content`, which each side would
+    // take as a new (empty) request.
+    if (isE2eTester && (!isMention || message.content.trim().length === 0)) {
+      return;
+    }
+
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
 

@@ -13,44 +13,41 @@
  *   bun run e2e stop            post a long request and wait for someone to press 停止
  *   bun run e2e --no-spawn ...  use a bot that is already running instead of starting one
  *
+ * The channel must be used by nothing else while this runs. Reply pages
+ * carry no reference to the message that triggered them, so replies are
+ * attributed by author and position alone; after a scenario times out the
+ * rest are skipped, because its late pages would be read as theirs.
+ *
  * Not part of CI on purpose: it needs two bot tokens and an LLM key, costs
  * money per run, and its failures are as often the network or the model as
  * the code.
  */
 import { loadConfig } from "../../src/config";
-import { STREAMING_LABEL } from "../../src/utils/chatContainerBuilder";
-import { PDF_DATA, PNG_DATA } from "./fixtures";
+import {
+  type DiscordMessage,
+  isStreaming,
+  type Reply,
+  SCENARIOS,
+  type Scenario,
+  snapshotKey,
+  toReply,
+} from "./scenarios";
 
 const API = "https://discord.com/api/v10";
-const POLL_INTERVAL_MS = 2_000;
+const POLL_INTERVAL_MS = 2_500;
+/**
+ * Consecutive unchanged polls required before a reply counts as finished.
+ * The updater drops the streaming section from one message and only then
+ * sends the next page, so a single poll can land in between and see no
+ * streaming marker on an unfinished reply. Two unchanged polls mean five
+ * quiet seconds, more than twice the updater's two-second edit interval.
+ */
+const SETTLED_POLLS = 2;
 const REPLY_TIMEOUT_MS = 180_000;
-const MANUAL_STOP_TIMEOUT_MS = 600_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
+const BOT_EXIT_TIMEOUT_MS = 5_000;
 
-interface DiscordMessage {
-  id: string;
-  content: string;
-  author: { id: string; username: string };
-  components?: unknown[];
-  attachments?: { filename: string }[];
-}
-
-interface Reply {
-  messages: DiscordMessage[];
-  /** Every text and button label found in the reply's components, in order. */
-  text: string;
-}
-
-interface Scenario {
-  name: string;
-  /** Run only when named on the command line. */
-  manual?: boolean;
-  prompt: string;
-  files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
-  timeoutMs?: number;
-  /** Returns the reasons the reply is wrong; empty means it passed. */
-  check: (reply: Reply) => string[];
-}
+class DeadlineError extends Error {}
 
 const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
@@ -72,20 +69,36 @@ function requireEnv(): void {
   }
 }
 
-async function discord(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { Authorization: `Bot ${testerToken}`, ...init.headers },
-  });
-  if (response.status === 429) {
-    const body = (await response.json()) as { retry_after?: number };
-    await Bun.sleep(Math.ceil((body.retry_after ?? 1) * 1000));
-    return discord(path, init);
-  }
-  return response;
+function remaining(deadline: number): number {
+  const ms = deadline - Date.now();
+  if (ms <= 0) throw new DeadlineError("the scenario deadline passed");
+  return ms;
 }
 
-async function send(scenario: Scenario): Promise<string> {
+/** One Discord request. Rate-limit waits and the request itself count against `deadline`. */
+async function discord(path: string, deadline: number, init: RequestInit = {}): Promise<Response> {
+  while (true) {
+    const response = await fetch(`${API}${path}`, {
+      ...init,
+      headers: { Authorization: `Bot ${testerToken}`, ...init.headers },
+      signal: AbortSignal.timeout(remaining(deadline)),
+    }).catch((error: unknown) => {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new DeadlineError("the scenario deadline passed during a Discord request");
+      }
+      throw error;
+    });
+    if (response.status !== 429) return response;
+    const body = (await response.json().catch(() => ({}))) as { retry_after?: number };
+    const waitMs = Math.ceil((body.retry_after ?? 1) * 1000);
+    if (waitMs >= remaining(deadline)) {
+      throw new DeadlineError("rate limited past the scenario deadline");
+    }
+    await Bun.sleep(waitMs);
+  }
+}
+
+async function send(scenario: Scenario, deadline: number): Promise<string> {
   const payload = {
     content: `<@${botId}> ${scenario.prompt}`,
     allowed_mentions: { users: [botId] },
@@ -96,126 +109,105 @@ async function send(scenario: Scenario): Promise<string> {
   for (const [index, file] of (scenario.files ?? []).entries()) {
     form.set(`files[${index}]`, new Blob([file.data], { type: file.type }), file.name);
   }
-  const response = await discord(`/channels/${channelId}/messages`, { method: "POST", body: form });
+  const response = await discord(`/channels/${channelId}/messages`, deadline, {
+    method: "POST",
+    body: form,
+  });
   if (!response.ok) {
     throw new Error(`send failed: HTTP ${response.status} ${await response.text()}`);
   }
   return ((await response.json()) as DiscordMessage).id;
 }
 
-function collectText(node: unknown, out: string[]): void {
-  if (Array.isArray(node)) {
-    for (const child of node) collectText(child, out);
-    return;
-  }
-  if (typeof node !== "object" || node === null) return;
-  const record = node as Record<string, unknown>;
-  if (typeof record.content === "string") out.push(record.content);
-  if (typeof record.label === "string") out.push(`[button:${record.label}]`);
-  collectText(record.components, out);
-  collectText(record.accessory, out);
-}
-
-async function repliesAfter(messageId: string): Promise<Reply> {
-  const response = await discord(`/channels/${channelId}/messages?after=${messageId}&limit=50`);
+async function repliesAfter(messageId: string, deadline: number): Promise<Reply> {
+  const response = await discord(
+    `/channels/${channelId}/messages?after=${messageId}&limit=50`,
+    deadline,
+  );
   if (!response.ok) throw new Error(`read failed: HTTP ${response.status}`);
   const messages = ((await response.json()) as DiscordMessage[])
     .filter((message) => message.author.id === botId)
     .reverse();
-  const parts: string[] = [];
-  for (const message of messages) {
-    if (message.content) parts.push(message.content);
-    collectText(message.components, parts);
-  }
-  return { messages, text: parts.join("\n") };
+  return toReply(messages);
 }
 
-/** Waits until the bot has replied and no reply still shows the streaming state. */
-async function waitForReply(messageId: string, timeoutMs: number): Promise<Reply> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForReply(messageId: string, deadline: number): Promise<Reply> {
   let last: Reply = { messages: [], text: "" };
-  while (Date.now() < deadline) {
-    await Bun.sleep(POLL_INTERVAL_MS);
-    last = await repliesAfter(messageId);
-    if (last.messages.length > 0 && !last.text.includes(STREAMING_LABEL)) return last;
+  let lastKey = "";
+  let unchanged = 0;
+  try {
+    while (true) {
+      await Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline)));
+      last = await repliesAfter(messageId, deadline);
+      const key = snapshotKey(last);
+      unchanged = key === lastKey ? unchanged + 1 : 0;
+      lastKey = key;
+      if (last.messages.length > 0 && !isStreaming(last) && unchanged >= SETTLED_POLLS) {
+        return last;
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof DeadlineError)) throw error;
+    throw new DeadlineError(
+      last.messages.length === 0 ? "the bot never replied" : "the reply never settled in time",
+    );
   }
-  throw new Error(
-    last.messages.length === 0
-      ? "the bot never replied"
-      : `the reply was still streaming after ${timeoutMs / 1000}s`,
-  );
 }
 
-const hasFooter = (reply: Reply): string[] =>
-  /Tokens: \d+\+\d+=\d+/.test(reply.text) && /Provider: \S/.test(reply.text)
-    ? []
-    : ["no usage footer with Tokens and Provider (is llm-details on for this guild?)"];
+interface RunningBot {
+  stop: () => Promise<void>;
+}
 
-const SCENARIOS: Scenario[] = [
-  {
-    name: "chat",
-    prompt: "[e2e] 「接続確認OK」という語を含めて、1文で返事をして。",
-    check: (reply) => [
-      ...(reply.text.includes("接続確認OK") ? [] : ["the reply does not contain 接続確認OK"]),
-      ...hasFooter(reply),
-    ],
-  },
-  {
-    name: "long",
-    prompt:
-      "[e2e] 日本の四季それぞれについて各1500字以上、合計6000字以上の随筆を書いて。途中にPythonのコードブロックを1つ入れて。",
-    timeoutMs: 300_000,
-    check: (reply) => [
-      ...(reply.messages.length >= 2
-        ? []
-        : [`expected the reply to be split, got ${reply.messages.length} message`]),
-      ...(/ページ \d+\/\d+/.test(reply.text) ? [] : ["no page footer (ページ n/m)"]),
-      ...hasFooter(reply),
-    ],
-  },
-  {
-    name: "image",
-    prompt: "[e2e] この画像を塗りつぶしている色を、英語の小文字1語で答えて。",
-    files: [{ name: "square.png", type: "image/png", data: PNG_DATA }],
-    check: (reply) => (/red/i.test(reply.text) ? [] : ["the reply does not name the color red"]),
-  },
-  {
-    name: "pdf",
-    prompt: "[e2e] このPDFに書かれている secret word を1語で答えて。",
-    files: [{ name: "secret.pdf", type: "application/pdf", data: PDF_DATA }],
-    check: (reply) =>
-      /PINEAPPLE/i.test(reply.text) ? [] : ["the reply does not contain the word in the PDF"],
-  },
-  {
-    name: "stop",
-    manual: true,
-    prompt:
-      "[e2e: 手動確認] 世界の主要な河川20本をそれぞれ500字以上で解説して。（この返信の「停止」ボタンを押してください）",
-    timeoutMs: MANUAL_STOP_TIMEOUT_MS,
-    check: (reply) =>
-      reply.text.includes("Stopped")
-        ? []
-        : ["the reply finished without being stopped (nobody pressed 停止 in time)"],
-  },
-];
-
-async function startBot(): Promise<{ stop: () => void }> {
+async function startBot(): Promise<RunningBot> {
   const child = Bun.spawn(["bun", "run", "src/index.ts"], { stdout: "pipe", stderr: "inherit" });
+  let stopped = false;
+  const stop = async (): Promise<void> => {
+    if (stopped) return;
+    stopped = true;
+    child.kill();
+    const exited = await Promise.race([
+      child.exited.then(() => true),
+      Bun.sleep(BOT_EXIT_TIMEOUT_MS).then(() => false),
+    ]);
+    if (!exited) child.kill("SIGKILL");
+  };
+  // Registered before waiting for readiness: an interrupt during startup
+  // must not leave a bot connected to Discord for the next run to collide with.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      void stop().finally(() => process.exit(130));
+    });
+  }
+
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
-  const deadline = Date.now() + BOT_READY_TIMEOUT_MS;
   let output = "";
-  while (Date.now() < deadline) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    output += decoder.decode(value, { stream: true });
-    if (output.includes("logged in")) {
-      reader.releaseLock();
-      return { stop: () => child.kill() };
+  const loggedIn = (async (): Promise<boolean> => {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return false;
+      output += decoder.decode(value, { stream: true });
+      if (output.includes("logged in")) return true;
     }
+  })();
+  // Raced against a timer: a bot that stalls without printing anything would
+  // otherwise keep `reader.read()` pending forever, deadline or not.
+  const ready = await Promise.race([
+    loggedIn,
+    child.exited.then(() => false),
+    Bun.sleep(BOT_READY_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!ready) {
+    await stop();
+    throw new Error(`the bot did not log in within ${BOT_READY_TIMEOUT_MS / 1000}s:\n${output}`);
   }
-  child.kill();
-  throw new Error(`the bot did not log in within ${BOT_READY_TIMEOUT_MS / 1000}s:\n${output}`);
+  // Keep draining so the child never blocks on a full stdout pipe.
+  void loggedIn.then(async () => {
+    while (!(await reader.read()).done) {
+      // discard
+    }
+  });
+  return { stop };
 }
 
 async function main(): Promise<number> {
@@ -232,12 +224,13 @@ async function main(): Promise<number> {
   const bot = spawn ? await startBot() : undefined;
   let failures = 0;
   try {
-    for (const scenario of selected) {
+    for (const [index, scenario] of selected.entries()) {
       const startedAt = Date.now();
+      const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
-        const messageId = await send(scenario);
+        const messageId = await send(scenario, deadline);
         if (scenario.manual) console.log(`  ${scenario.name}: waiting for a manual action…`);
-        const reply = await waitForReply(messageId, scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
+        const reply = await waitForReply(messageId, deadline);
         const problems = scenario.check(reply);
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
         if (problems.length === 0) {
@@ -251,10 +244,18 @@ async function main(): Promise<number> {
       } catch (error) {
         failures++;
         console.log(`FAIL ${scenario.name}: ${error instanceof Error ? error.message : error}`);
+        const skipped = selected.slice(index + 1).map((s) => s.name);
+        if (error instanceof DeadlineError && skipped.length > 0) {
+          failures += skipped.length;
+          console.log(
+            `SKIP ${skipped.join(", ")}: late pages of "${scenario.name}" could be read as theirs`,
+          );
+          break;
+        }
       }
     }
   } finally {
-    bot?.stop();
+    await bot?.stop();
   }
   return failures === 0 ? 0 : 1;
 }
