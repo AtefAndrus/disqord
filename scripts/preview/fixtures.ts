@@ -18,6 +18,7 @@ import {
   estimateFinalFooterBudget,
   type FinalMetadata,
   measureTextBudget,
+  STREAMING_LABEL,
   splitTextIntoMessages,
 } from "../../src/utils/chatContainerBuilder";
 import {
@@ -86,8 +87,10 @@ const LONG_ANSWER = (() => {
   const code =
     '```ts\nconst res = await client.chat({\n  model: "provider/model-id",\n  messages,\n});\n```\n';
   let body = "## 長文応答の分割プレビュー\n\n";
-  // 34 段落で splitTextIntoMessages が 2 message に割れる（1 message の本文予算 3800 字を超える）。
-  // ページ番号フッターと「詳細は末尾 message のみ」の分岐を描画させるための下限。
+  // ページ番号フッターと「詳細は末尾 message のみ」の分岐を描画させるため、1 message の本文予算
+  // （MAX_TOTAL_CHARS_PER_MESSAGE からバッジと footer 見積りを引いた残り）を超える段落数にする。
+  // 予算が変われば必要な段落数も変わるので、実際に 2 message 以上へ割れることは
+  // tests/unit/scripts/previewFixtures.test.ts が検証する。
   for (let i = 0; i < 34; i++) {
     body += `${i + 1}. ${para}`;
     if (i === 6) body += code;
@@ -229,22 +232,30 @@ export function buildFixtures(): IFixture[] {
   });
 
   // 9. チャット返信・ストリーミング中（Components V2 / Section の停止ボタン）
+  // streamingUpdater.ts と同じく、バッジと STREAMING_LABEL の予算で分割してから構築する
   const streamingText =
     "これは生成途中の応答です。トークンが順次追記されていきます。現在モデルが考えている内容がここに表示され";
+  const streamingChunks = splitTextIntoMessages(
+    streamingText,
+    measureTextBudget(badgeText(DEMO_MODEL)),
+    measureTextBudget(STREAMING_LABEL),
+  );
   fixtures.push({
     id: "chat-streaming",
     title: "チャット返信: ストリーミング中",
     note: "buildStreamingContainer: Model バッジ + 本文 + Section（生成中... と 🛑 停止ボタン）",
-    messages: packContainers([
-      buildStreamingContainer({
-        text: streamingText,
-        modelName: DEMO_MODEL,
-        color: DEMO_COLOR,
-        isFirst: true,
-        isLast: true,
-        triggerMessageId: TRIGGER_MESSAGE_ID,
-      }),
-    ]),
+    messages: packContainers(
+      streamingChunks.map((chunk, i) =>
+        buildStreamingContainer({
+          text: chunk,
+          modelName: DEMO_MODEL,
+          color: DEMO_COLOR,
+          isFirst: i === 0,
+          isLast: i === streamingChunks.length - 1,
+          triggerMessageId: TRIGGER_MESSAGE_ID,
+        }),
+      ),
+    ),
   });
 
   // 10. チャット返信・短い確定応答（単一メッセージ + 詳細フッター + 本文絵文字）

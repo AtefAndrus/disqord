@@ -43,7 +43,10 @@ const BUTTON_TYPE: Partial<Record<ButtonStyle, string>> = {
   [ButtonStyle.Danger]: "destructive",
 };
 
-// 退避プレースホルダ境界（本文に出現しない私用領域文字。衝突安全）
+// 退避の復元を繰り返す上限。実際の入れ子は見出し 1 段分しかないため、これは循環時の保険。
+const MAX_RESTORE_PASSES = 8;
+
+// 退避プレースホルダ境界（私用領域文字。入力に含まれる同じ文字は markdownToHtml が除去する）
 const SENTINEL = "\uE000";
 
 // 絵文字: 国旗(Regional Indicator 2連) / キーキャップ / 肌色修飾子・ZWJ 連結を含む基本絵文字
@@ -139,8 +142,16 @@ function linkMarkup(escapedUrl: string): string {
 function markdownToHtml(input: string, opts: { headings?: boolean } = {}): string {
   const stash: string[] = [];
   const hold = (html: string): string => `${SENTINEL}${stash.push(html) - 1}${SENTINEL}`;
+  // ブロック要素として退避した ID。直後の <br> を落とす判定に使う（後述の 7.5）
+  const blockIds = new Set<number>();
+  const holdBlock = (html: string): string => {
+    blockIds.add(stash.length);
+    return hold(html);
+  };
 
-  let text = input;
+  // SENTINEL は私用領域文字だが、入力に含められないわけではない。残すと入力由来の文字列が
+  // 退避プレースホルダとして復元され、自分自身を含む退避ができて復元が終わらなくなるため、先に落とす。
+  let text = input.replaceAll(SENTINEL, "");
 
   // 1. コードブロック / インラインコード → 退避
   text = text.replace(/```(?:[a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g, (_m, code: string) =>
@@ -183,13 +194,13 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
   });
 
   // 5. 見出し（description / TextDisplay のみ。H1-H3）→ 退避。
-  // <discord-header> はブロック要素で上下マージンを自前で持つため、見出し行を終端する改行と
-  // それに続く空行まで飲み込む（残すと <br> になり、Discord より 1-2 行分間延びする）。
+  // 見出し行を終端する改行はここで消費しない。消費すると後続行が行頭でなくなり、連続する見出しや
+  // 見出し直後の箇条書きが検出されなくなる（改行そのものの処理は 7.5 で行う）。
   if (opts.headings) {
     text = text.replace(
-      /(^|\n)(#{1,3}) +([^\n]*)\n*/g,
+      /(^|\n)(#{1,3}) +([^\n]*)/g,
       (_m, br: string, hashes: string, body: string) =>
-        `${br}${hold(`<discord-header level="${hashes.length}">${body}</discord-header>`)}`,
+        `${br}${holdBlock(`<discord-header level="${hashes.length}">${body}</discord-header>`)}`,
     );
   }
 
@@ -205,14 +216,22 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
   text = text.replace(/(^|\n)- /g, "$1• ");
   text = text.replace(/\n/g, "<br>");
 
+  // 7.5. ブロック要素（見出し）の直後の <br> を落とす。<discord-header> は上下マージンを自前で
+  // 持つため、行の改行をそのまま <br> にすると Discord より 1-2 行分間延びする。
+  text = text.replace(/(\d+)(?:<br>)+/g, (m, id: string) =>
+    blockIds.has(Number(id)) ? `${SENTINEL}${id}${SENTINEL}` : m,
+  );
+
   // 8. 退避を復元。見出しの退避内容はその行にある絵文字・コード等の退避を入れ子に持つため、
-  // 1 回の置換では内側のプレースホルダが文字として残る。入れ子は必ず自分より若い番号を指すので、
-  // 変化が止まるまで繰り返せば必ず終わる。
+  // 1 回の置換では内側のプレースホルダが文字として残る。入力から SENTINEL を落としてあるので
+  // 入れ子は必ず自分より若い番号を指し、変化が止まるまで繰り返せば終わる。上限は、入力の除去を
+  // 取りこぼしても描画がハングせず、未復元のプレースホルダとして目に見える形で失敗するための保険。
   let previous: string;
+  let passes = 0;
   do {
     previous = text;
     text = text.replace(/\uE000(\d+)\uE000/g, (_m, i: string) => stash[Number(i)] ?? "");
-  } while (text !== previous);
+  } while (text !== previous && ++passes < MAX_RESTORE_PASSES);
   return text;
 }
 

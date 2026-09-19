@@ -31,6 +31,16 @@ CJK フォント（Noto Sans JP woff）は初回実行時に `scripts/preview/fo
 
 UI 関数を改修すれば fixture の出力が変わり、プレビューに即反映される。
 
+## 回帰テスト
+
+`tests/unit/scripts/previewMarkup.test.ts` と `tests/unit/scripts/previewFixtures.test.ts` が、ブラウザを起動せずに次を検証する。
+
+- マークダウン変換: 連続する見出し、見出し直後の箇条書き、見出し直後の余分な改行、見出し内の絵文字（退避の入れ子）、入力に退避用の私用領域文字が混ざった場合
+- Components V2 変換: Container のアクセントカラー、Separator の `divider` 既定値、Section accessory の ActionRow ラッパ
+- fixture: すべての fixture が描画でき退避プレースホルダを残さないこと、`chat-final-long` が複数 message へ分割されページ番号フッターを持つこと
+
+描画の見え方そのもの（余白・折り返し・フォント）は PNG の目視でしか確認できない。テストが見ているのは構造だけである。
+
 ## fixture の追加
 
 `fixtures.ts` の `buildFixtures()` に 1 件追加するだけ。実際の UI 関数を呼び、Embed なら `pack(embeds, components)`、Components V2 の Container なら `packContainers(containers)` で包む。Container は 1 個が message 1 通に対応する（`toComponentsV2Payload` と同じ構造）。
@@ -42,6 +52,7 @@ UI 関数を改修すれば fixture の出力が変わり、プレビューに�
 - inline フィールドは Discord 同様 3 列グリッドだが、1〜2 個時の引き伸ばしは未再現（常に 1/3 幅）
 - Components V2（Container / TextDisplay / Separator / Section）は @skyra/discord-components-core に該当要素が無く、`render.ts` の CSS で Embed と同系のボックスとして近似している。角丸・余白・アクセントバーの太さは実機と一致しない
 - Section の accessory は Button のみ対応（Thumbnail は Bot が未使用のため描画しない）
+- Premium(SKU) ボタンはラベルの無い secondary ボタンとして描画される（SKU 名や価格は再現しない）。Bot が未使用のため未対応のままにしている
 - フォントは Noto Sans JP 単一ウェイト。実機の gg sans とは字形が異なり、`@font-face` が `font-weight: 100 900` を宣言しているため Chromium は合成ボールドを作らず、**太字は太く描画されない**
 - 順序付きリスト（`1.`）は素のテキスト表示（`-` 箇条書きのみ中黒に変換）
 - カスタム絵文字（`<:name:id>`）・アニメーション絵文字は未対応（unicode 絵文字のみ Twemoji 化）
