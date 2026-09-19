@@ -90,6 +90,15 @@ function assertFrameSize(text: string): void {
   }
 }
 
+interface FunctionCallProgress {
+  // UTF-16 length of the `arguments` deltas yielded so far. Compared against
+  // the finished `arguments` on `output_item.done` so a dropped delta fails
+  // loudly instead of reaching a tool handler as truncated JSON that may
+  // still parse.
+  streamedLength: number;
+  done: boolean;
+}
+
 /** Mutable per-request state threaded through `processSseLine()` across calls. */
 interface SseStreamState {
   fullText: string;
@@ -100,18 +109,15 @@ interface SseStreamState {
   // observed yet. Once set, the stream is frozen: only [DONE]/comments are
   // legal until EOF.
   finishReasonSeen: string | undefined;
-  // `output_index` of every `function_call` item seen so far (through
-  // `output_item.added`, an arguments delta, or `output_item.done`).
-  startedFunctionCalls: Set<number>;
-  // The subset of `startedFunctionCalls` whose `output_item.done` arrived.
-  // Responses has no `finish_reason:"tool_calls"`; a completed turn that
-  // finished at least one function call is reported as `"tool_calls"`.
-  completedFunctionCalls: Set<number>;
-  // UTF-16 length of the `arguments` deltas yielded so far, per
-  // `output_index`. Compared against the finished `arguments` on
-  // `output_item.done` so a dropped delta fails loudly instead of reaching a
-  // tool handler as truncated JSON that may still parse.
-  argumentsLength: Map<number, number>;
+  // Every `function_call` item seen so far, keyed by `output_index`. This one
+  // table is the only place a call's lifecycle is tracked, and
+  // `openFunctionCall()` plus the `output_item.done` / terminal-event checks
+  // are the only places it is enforced: a call is opened by its first event,
+  // closed exactly once by an `output_item.done` whose `arguments` agree with
+  // what was streamed, and never touched again. `toolLoop.ts` dispatches
+  // whatever it accumulated, so every way of reaching a terminal "tool_calls"
+  // with a call that skipped part of that lifecycle has to fail here.
+  functionCalls: Map<number, FunctionCallProgress>;
 }
 
 /**
@@ -497,15 +503,34 @@ function readOutputIndex(value: unknown): number {
 }
 
 /**
+ * Looks up the progress of the function call at `index`, opening it if this
+ * is its first event. A call that already reached `output_item.done` is
+ * frozen: a later delta would change arguments that already passed their
+ * length check, and a second `added`/`done` would reopen it.
+ */
+function openFunctionCall(state: SseStreamState, index: number): FunctionCallProgress {
+  const call = state.functionCalls.get(index) ?? { streamedLength: 0, done: false };
+  if (call.done) {
+    throw new StreamProtocolError(
+      `received another event for the function call at output_index ${index} after it finished`,
+    );
+  }
+  return call;
+}
+
+/**
  * Maps `response.incomplete`'s reason onto the Chat Completions
- * `finish_reason` vocabulary `toolLoop.ts` branches on. A reason outside the
- * two documented ones is passed through verbatim so the loop rejects it as an
- * unknown finish_reason instead of treating it as a normal completion.
+ * `finish_reason` vocabulary `toolLoop.ts` branches on. Any reason outside
+ * the two documented ones becomes `"incomplete"`, which the loop rejects as
+ * an unknown finish_reason. The raw reason is never passed through: it is
+ * untyped wire text, and a value such as `"tool_calls"` or `"stop"` would
+ * otherwise select the loop's dispatch or normal-completion branch.
  */
 function readIncompleteFinishReason(details: unknown): string {
   const reason = isPlainObject(details) ? details.reason : undefined;
   if (reason === "max_output_tokens") return "length";
-  if (typeof reason === "string" && reason.length > 0) return reason;
+  if (reason === "content_filter") return "content_filter";
+  logger.warn("OpenRouter response.incomplete with an unrecognized reason", { reason });
   return "incomplete";
 }
 
@@ -660,9 +685,7 @@ export class OpenRouterClient implements ILLMClient {
         lastProvider: undefined,
         lastUsage: undefined,
         finishReasonSeen: undefined,
-        startedFunctionCalls: new Set(),
-        completedFunctionCalls: new Set(),
-        argumentsLength: new Map(),
+        functionCalls: new Map(),
       };
 
       try {
@@ -955,11 +978,11 @@ export class OpenRouterClient implements ILLMClient {
             `function_call arguments delta must be a string, got: ${JSON.stringify(event.delta)}`,
           );
         }
-        state.startedFunctionCalls.add(index);
-        state.argumentsLength.set(
-          index,
-          (state.argumentsLength.get(index) ?? 0) + event.delta.length,
-        );
+        const call = openFunctionCall(state, index);
+        state.functionCalls.set(index, {
+          ...call,
+          streamedLength: call.streamedLength + event.delta.length,
+        });
         yield { toolCall: { index, argumentsDelta: event.delta }, done: false };
         return false;
       }
@@ -995,23 +1018,30 @@ export class OpenRouterClient implements ILLMClient {
         // disagrees with the first value. `arguments` on `added` is ignored:
         // the deltas are the transport, and the finished string on `done` is
         // only checked against them.
+        const call = openFunctionCall(state, index);
         let argumentsDelta: string | undefined;
         if (event.type === "response.output_item.done") {
-          const streamedLength = state.argumentsLength.get(index) ?? 0;
-          if (finishedArguments !== undefined && finishedArguments.length !== streamedLength) {
-            if (streamedLength > 0) {
+          // Required, not merely checked when present: without it there is
+          // nothing to hold the streamed deltas against.
+          if (finishedArguments === undefined) {
+            throw new StreamProtocolError(
+              `function_call at output_index ${index} finished without \`arguments\``,
+            );
+          }
+          if (finishedArguments.length !== call.streamedLength) {
+            if (call.streamedLength > 0) {
               throw new StreamProtocolError(
-                `function_call arguments at output_index ${index} finished with ${finishedArguments.length} characters but ${streamedLength} were streamed`,
+                `function_call arguments at output_index ${index} finished with ${finishedArguments.length} characters but ${call.streamedLength} were streamed`,
               );
             }
             // No delta was ever streamed for this call, so the finished
             // string is the only copy of the arguments.
             argumentsDelta = finishedArguments;
-            state.argumentsLength.set(index, finishedArguments.length);
           }
-          state.completedFunctionCalls.add(index);
+          state.functionCalls.set(index, { streamedLength: finishedArguments.length, done: true });
+        } else {
+          state.functionCalls.set(index, call);
         }
-        state.startedFunctionCalls.add(index);
         yield {
           toolCall: {
             index,
@@ -1031,23 +1061,18 @@ export class OpenRouterClient implements ILLMClient {
             `${event.type} carries a malformed response: ${JSON.stringify(event.response)}`,
           );
         }
-        // `toolLoop.ts` dispatches every call it accumulated, so a call that
-        // never reached `output_item.done` would run next to the finished
-        // ones without its arguments ever having been length-checked.
+        const calls = [...state.functionCalls.values()];
         // `response.incomplete` is exempt: a truncated turn legitimately
-        // leaves a call unfinished, and the loop never dispatches on
-        // "length"/"content_filter".
-        if (
-          event.type === "response.completed" &&
-          state.startedFunctionCalls.size !== state.completedFunctionCalls.size
-        ) {
+        // leaves a call unfinished, and its finishReason never makes the loop
+        // dispatch (see `readIncompleteFinishReason()`).
+        if (event.type === "response.completed" && calls.some((call) => !call.done)) {
           throw new StreamProtocolError(
             "response.completed arrived while a function call was still unfinished",
           );
         }
         const finishReason =
           event.type === "response.completed"
-            ? state.completedFunctionCalls.size > 0
+            ? calls.length > 0
               ? "tool_calls"
               : "stop"
             : readIncompleteFinishReason(event.response.incomplete_details);

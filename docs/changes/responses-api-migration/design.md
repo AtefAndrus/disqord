@@ -85,6 +85,8 @@ API を二重に保守すると、会話履歴の表現、tool 呼び出しの�
 - `tool_choice: "none"` が効く。function tool を渡した状態で送っても `function_call` item は出ない
 - tool 実行後の再リクエストが通る。`{role:"assistant"}` の message、`function_call` item、`function_call_output` item を `input` に並べ、reasoning item を含めずに送って 200 が返る（`openai/gpt-5-nano` と `google/gemini-2.5-flash-lite` で確認）
 - `ChatCompletionRequest` に無いフィールド（`max_output_tokens`）を透過させて送ると効き、打ち切りが `response.incomplete` として返る
+- `OpenRouterClient` と `runToolLoop()` を通して、テキスト、並行 tool call 2 件の往復、画像入力、`file-parser` を使う PDF 入力が次のモデルで通る（2026-09-19）: `openai/gpt-6-astra`、`anthropic/claude-sonnet-5`、`google/gemini-3.8-flash`、`google/gemini-3.5-flash-lite`、`google/gemini-3.1-pro-preview`、`x-ai/grok-4.6`、`qwen/qwen3.8-max-0902`、`moonshotai/kimi-k3`、`mistralai/mistral-medium-3-5`。`deepseek/deepseek-v4-pro-0813` と `z-ai/glm-5.3` は画像入力に対応しないモデルで、画像だけ 404（`No endpoints found that support image input`）になり、ほかの 3 項目は通る
+- 無料モデル（`google/gemma-4-26b-a4b-it:free`、`qwen/qwen3.8-27b:free`）は同日、上流の共有プールの 429 が続き、`RateLimitError` に分類されることだけを確認した
 
 **書き換えが要るもの:**
 
@@ -161,12 +163,21 @@ HTTP エラーと同じ `{error:{code,message}}` の封筒が Responses のス�
 | `response.completed`、完成した function call が無い | `"stop"` |
 | `response.incomplete`、`incomplete_details.reason` が `max_output_tokens` | `"length"` |
 | `response.incomplete`、`reason` が `content_filter` | `"content_filter"` |
-| `response.incomplete`、それ以外の `reason` | `reason` の値をそのまま渡す（`toolLoop.ts` が未知の finish_reason として拒否し、暗黙の完了にしない） |
+| `response.incomplete`、それ以外の `reason` | `"incomplete"`（`toolLoop.ts` が未知の finish_reason として拒否し、暗黙の完了にしない）。元の `reason` はログに残す |
 
 Responses には `finish_reason: "tool_calls"` に当たる値が無く、打ち切りは `response.completed` の `status` ではなく別イベントの `response.incomplete` で通知される。
-function call は `response.output_item.done` が到達した時点で完成と見なす。
+`response.incomplete` の `reason` は wire の文字列をそのまま渡さない。
+`"tool_calls"` や `"stop"` という値が来ると、`toolLoop.ts` の dispatch 分岐や正常完了分岐を選べてしまうためである。
+
+function call のライフサイクルは、`output_index` をキーにした一つの表で追い、次の規則を client の一箇所で強制する。
+
+- call は、その `output_index` を持つ最初のイベント（`added` / arguments の delta / `done`）で開く
+- `response.output_item.done` は文字列の `arguments` を必ず持ち、その長さが蓄積済み delta の長さと一致する（delta が一度も流れていない場合は、完成形を唯一の `argumentsDelta` として渡す）
+- `done` に達した call は凍結し、以後その `output_index` に届く delta / `added` / `done` は protocol error にする
+
+`toolLoop.ts` は蓄積した call をそのまま dispatch するので、この規則のどれかを飛ばした call が `"tool_calls"` の終端に到達する経路は、すべてここで塞ぐ。
 `response.completed` の時点で `done` に至っていない function call が一つでも残っていれば protocol error にする。
-`toolLoop.ts` は蓄積した call をすべて dispatch するので、受理すると、`arguments` の長さ照合を経ていない call が完成済みの call と並んで実行されるためである。
+受理すると、`arguments` の長さ照合を経ていない call が完成済みの call と並んで実行されるためである。
 `response.incomplete` では未完成の call を許す。打ち切りでは起こりうる状態であり、`toolLoop.ts` は `"length"` / `"content_filter"` で tool call の断片が残っていれば dispatch せずエラーにする。
 `toolLoop.ts` は `finishReason === "tool_calls"` で分岐しているので、client 側で完成した call を数えて合成すれば dispatcher は無変更で動く。
 
@@ -296,7 +307,8 @@ Responses には `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `r
 - [x] キャンセル（停止ボタン）が `AbortSignal` で従来どおり効くことを確認
 - [x] エラー分類の回帰（401 / 400 invalid model / 429）を確認
 - [x] 実 API で確認する（`OpenRouterClient` と `runToolLoop` を直接駆動）: 非ストリーミング、並行 tool call と server tool の混在、画像入力、PDF 入力、無効モデルの 400、stream 途中のキャンセル、`max_output_tokens` による打ち切り
-- [ ] Discord 上で確認する: 通常のチャット、画像添付、PDF 添付、長文の分割送信、停止ボタン
+- [x] Discord 上で確認する（開発用 bot、`google/gemini-3.7-flash`）: 通常のチャットと長文の分割送信。footer の項目（Tokens / Cost / Model / Latency / Provider / Reasoning / TPS）とページ分割は、同じ発言に応答した Chat Completions 版の bot と一致した
+- [ ] Discord 上で確認する: 画像添付、PDF 添付、停止ボタン
 - [ ] `bun run preview` で表示の回帰を確認
 
 ### Phase 4: 後続への引き継ぎ

@@ -2838,3 +2838,56 @@ describe("runToolLoop + real OpenRouterClient: an unfinished function call is ne
     expect(handler).not.toHaveBeenCalled();
   }, 2_000);
 });
+
+describe("runToolLoop + real OpenRouterClient: response.incomplete never dispatches", () => {
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('incomplete_details.reason が "tool_calls" でも、未完成の call の handler は実行されない', async () => {
+    mockDelayedSseFetch([
+      {
+        data: sseLine({
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "function_call", call_id: "call_0", name: "t" },
+        }),
+      },
+      {
+        data: sseLine({
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          delta: "{}",
+        }),
+      },
+      {
+        data: sseLine({
+          type: "response.incomplete",
+          response: { status: "incomplete", incomplete_details: { reason: "tool_calls" } },
+        }),
+      },
+      { data: "data: [DONE]\n\n" },
+    ]);
+
+    const handler = mock(async () => ({ llmResult: "ran" }));
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t", handler }));
+
+    const result = await runToolLoop(
+      baseParams({
+        llmClient: new OpenRouterClient("test-api-key"),
+        registry,
+        timeouts: { idleMs: 2_000, wallMs: 5_000 },
+      }),
+    );
+
+    expectError(result);
+    expect(handler).not.toHaveBeenCalled();
+  }, 2_000);
+});

@@ -898,25 +898,76 @@ describe("OpenRouterClient", () => {
         ]);
       });
 
-      test("並行 tool call は output_index を index として区別される", async () => {
+      test("並行する tool call の断片が入り混じって届いても、call ごとに長さ照合される", async () => {
         // 実 wire では reasoning item が output_index 0 を占め、function_call は 1, 2 に並ぶ。
+        // call ごとに長さを持たず単一の累積値で照合する実装は、この列で done の照合に失敗する。
         respondWithEvents([
           { type: "response.output_item.added", output_index: 0, item: { type: "reasoning" } },
           functionCallItem("added", 1, { call_id: "call_a", name: "a" }),
-          argumentsDelta(1, "1"),
-          functionCallItem("done", 1, { call_id: "call_a", name: "a", arguments: "1" }),
           functionCallItem("added", 2, { call_id: "call_b", name: "b" }),
-          argumentsDelta(2, "2"),
-          functionCallItem("done", 2, { call_id: "call_b", name: "b", arguments: "2" }),
+          argumentsDelta(1, '{"city":'),
+          argumentsDelta(2, '{"n":'),
+          argumentsDelta(2, "12345}"),
+          argumentsDelta(1, '"Tokyo"}'),
+          functionCallItem("done", 2, { call_id: "call_b", name: "b", arguments: '{"n":12345}' }),
+          functionCallItem("done", 1, {
+            call_id: "call_a",
+            name: "a",
+            arguments: '{"city":"Tokyo"}',
+          }),
           completed(),
         ]);
 
         const results = await drain(client.chatStream(REQUEST));
 
-        expect(results.filter(isToolCallChunk).map((c) => c.toolCall.index)).toEqual([
-          1, 1, 1, 2, 2, 2,
-        ]);
+        const argumentsByIndex = new Map<number, string>();
+        for (const { toolCall } of results.filter(isToolCallChunk)) {
+          argumentsByIndex.set(
+            toolCall.index,
+            (argumentsByIndex.get(toolCall.index) ?? "") + (toolCall.argumentsDelta ?? ""),
+          );
+        }
+        expect(Object.fromEntries(argumentsByIndex)).toEqual({
+          1: '{"city":"Tokyo"}',
+          2: '{"n":12345}',
+        });
+        expect((results.find(isFinalResult) as StreamFinalResult).finishReason).toBe("tool_calls");
       });
+
+      test("done が arguments を欠く function call は protocol error になる（長さ照合を素通りさせない）", async () => {
+        respondWithEvents([
+          functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+          argumentsDelta(0, '{"x":1}'),
+          functionCallItem("done", 0, { call_id: "call_1", name: "ping" }),
+          completed(),
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test.each([
+        ["arguments delta", argumentsDelta(0, "}")],
+        ["output_item.added", functionCallItem("added", 0, { call_id: "call_1", name: "ping" })],
+        [
+          "2 度目の output_item.done",
+          functionCallItem("done", 0, { call_id: "call_1", name: "ping", arguments: '{"x":1' }),
+        ],
+      ])(
+        "done 済みの function call に %s が届くと protocol error になる（照合済みの arguments を後から変えさせない）",
+        async (_label, lateEvent) => {
+          respondWithEvents([
+            functionCallItem("added", 0, { call_id: "call_1", name: "ping" }),
+            argumentsDelta(0, '{"x":1'),
+            functionCallItem("done", 0, { call_id: "call_1", name: "ping", arguments: '{"x":1' }),
+            lateEvent,
+            completed(),
+          ]);
+
+          await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+            StreamProtocolError,
+          );
+        },
+      );
 
       test("delta が一度も流れなかった call は done の完成形 arguments を argumentsDelta として受け取る", async () => {
         respondWithEvents([
@@ -1114,7 +1165,10 @@ describe("OpenRouterClient", () => {
       test.each([
         ["max_output_tokens", { reason: "max_output_tokens" }, "length"],
         ["content_filter", { reason: "content_filter" }, "content_filter"],
-        ["未知の reason はそのまま渡す（暗黙の完了にしない）", { reason: "quota" }, "quota"],
+        ["未知の reason", { reason: "quota" }, "incomplete"],
+        // wire の文字列をそのまま渡すと、loop の dispatch 分岐や正常完了分岐を選べてしまう。
+        ['reason が "tool_calls"', { reason: "tool_calls" }, "incomplete"],
+        ['reason が "stop"', { reason: "stop" }, "incomplete"],
         ["incomplete_details が null", null, "incomplete"],
       ])("response.incomplete（%s）", async (_label, incompleteDetails, expected) => {
         respondWithEvents([
