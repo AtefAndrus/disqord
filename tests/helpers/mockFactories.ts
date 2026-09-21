@@ -81,6 +81,9 @@ export function createMockSettingsService(): ISettingsService {
     setTwitterExpandEnabled: mock((guildId: string, twitterExpandEnabled: boolean) =>
       Promise.resolve(settings(guildId, { twitterExpandEnabled })),
     ),
+    setHistoryEnabled: mock((guildId: string, historyEnabled: boolean) =>
+      Promise.resolve(settings(guildId, { historyEnabled })),
+    ),
   };
 }
 
@@ -102,6 +105,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     autoReplyChannels: [],
     webSearchEnabled: false,
     twitterExpandEnabled: true,
+    historyEnabled: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

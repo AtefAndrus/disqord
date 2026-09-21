@@ -11,6 +11,7 @@ export type GuildSettingsChanges = Partial<
     | "autoReplyChannels"
     | "webSearchEnabled"
     | "twitterExpandEnabled"
+    | "historyEnabled"
   >
 >;
 
@@ -27,6 +28,7 @@ export interface IGuildSettingsRepository {
     mutate: (current: GuildSettings) => GuildSettingsChanges,
   ): Promise<GuildSettings>;
   delete(guildId: GuildId): Promise<boolean>;
+  setHistoryEnabled(guildId: GuildId, enabled: boolean): Promise<GuildSettings>;
 }
 
 interface RawGuildSettings {
@@ -37,6 +39,7 @@ interface RawGuildSettings {
   autoReplyChannels: string | null;
   webSearchEnabled: number;
   twitterExpandEnabled: number;
+  historyEnabled: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,6 +63,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
     autoReplyChannels: parseAutoReplyChannels(raw.autoReplyChannels),
     webSearchEnabled: Boolean(raw.webSearchEnabled),
     twitterExpandEnabled: Boolean(raw.twitterExpandEnabled ?? 1),
+    historyEnabled: Boolean(raw.historyEnabled),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -68,6 +72,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
 const SELECT_ROW = `SELECT guild_id as guildId, default_model as defaultModel, free_models_only as freeModelsOnly,
   show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
   web_search_enabled as webSearchEnabled, twitter_expand_enabled as twitterExpandEnabled,
+  history_enabled as historyEnabled,
   created_at as createdAt, updated_at as updatedAt
   FROM guild_settings WHERE guild_id = ?`;
 
@@ -124,6 +129,15 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     return result.changes > 0;
   }
 
+  async setHistoryEnabled(guildId: GuildId, enabled: boolean): Promise<GuildSettings> {
+    return this.updateInTransaction.immediate(guildId, () => {
+      if (!enabled) {
+        this.db.query("DELETE FROM sessions WHERE guild_id = ?").run(guildId);
+      }
+      return { historyEnabled: enabled };
+    });
+  }
+
   private readRow(guildId: GuildId): GuildSettings | null {
     const row = this.db.query<RawGuildSettings, [string]>(SELECT_ROW).get(guildId);
     return row ? rawToGuildSettings(row) : null;
@@ -134,8 +148,8 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     const now = new Date().toISOString();
     this.db
       .query(
-        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, show_llm_details, auto_reply_channels, web_search_enabled, twitter_expand_enabled, created_at, updated_at)
-         VALUES (?, ?, 0, 1, NULL, 0, 1, ?, ?)
+        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, show_llm_details, auto_reply_channels, web_search_enabled, twitter_expand_enabled, history_enabled, created_at, updated_at)
+         VALUES (?, ?, 0, 1, NULL, 0, 1, 0, ?, ?)
          ON CONFLICT(guild_id) DO NOTHING`,
       )
       .run(guildId, this.defaultModel, now, now);
@@ -148,7 +162,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
       .query(
         `UPDATE guild_settings
          SET default_model = ?, free_models_only = ?, show_llm_details = ?,
-             auto_reply_channels = ?, web_search_enabled = ?, twitter_expand_enabled = ?, updated_at = ?
+             auto_reply_channels = ?, web_search_enabled = ?, twitter_expand_enabled = ?, history_enabled = ?, updated_at = ?
          WHERE guild_id = ?`,
       )
       .run(
@@ -158,6 +172,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         autoReplyChannelsJson,
         settings.webSearchEnabled ? 1 : 0,
         settings.twitterExpandEnabled ? 1 : 0,
+        settings.historyEnabled ? 1 : 0,
         settings.updatedAt,
         settings.guildId,
       );

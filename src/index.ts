@@ -5,9 +5,11 @@ import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
 import { createInteractionCreateHandler } from "./bot/events/interactionCreate";
 import { createMessageCreateHandler } from "./bot/events/messageCreate";
+import { createRawEventHandler } from "./bot/events/raw";
 import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
+import { ConversationRepository, DeletedBeforeSaveRecord } from "./db/repositories/conversation";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
@@ -40,6 +42,10 @@ async function bootstrap(): Promise<void> {
   logger.info("Database initialized");
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
+  const deletedBeforeSave = new DeletedBeforeSaveRecord();
+  const conversationRepository = new ConversationRepository(db, deletedBeforeSave);
+  await conversationRepository.failPendingTurns();
+  await conversationRepository.sweepExpired();
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
@@ -70,7 +76,11 @@ async function bootstrap(): Promise<void> {
     chatService,
     settingsService,
     modelService,
-    { e2eTesterBotId: config.e2eTesterBotId, webSearchEngine: config.webSearchEngine },
+    {
+      e2eTesterBotId: config.e2eTesterBotId,
+      webSearchEngine: config.webSearchEngine,
+      conversationRepository,
+    },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
     commandHandlers,
@@ -83,9 +93,19 @@ async function bootstrap(): Promise<void> {
   );
 
   const client = await createBotClient();
+  const rawEventHandler = createRawEventHandler(conversationRepository, deletedBeforeSave);
+  const ttlTimer = setInterval(
+    () => {
+      void conversationRepository.sweepExpired();
+    },
+    24 * 60 * 60 * 1000,
+  );
   client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
+  client.on(Events.Raw, (packet) => {
+    void rawEventHandler(packet);
+  });
 
   metrics.attach({ client });
 
@@ -104,6 +124,7 @@ async function bootstrap(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+    clearInterval(ttlTimer);
     httpServer.stop();
     client.destroy();
     db.close();

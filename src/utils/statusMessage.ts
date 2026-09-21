@@ -57,6 +57,11 @@ export function buildStatusMessage(data: StatusMessageData): {
         value: data.settings.twitterExpandEnabled ? `有効（${data.fxtwitterHostname}）` : "無効",
         inline: true,
       },
+      {
+        name: "会話履歴",
+        value: data.settings.historyEnabled ? "有効" : "無効",
+        inline: true,
+      },
     );
   }
 

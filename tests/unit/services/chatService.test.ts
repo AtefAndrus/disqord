@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
+import type { ConversationContext } from "../../../src/db/repositories/conversation";
 import { BadRequestError } from "../../../src/errors";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
@@ -278,6 +279,205 @@ describe("ChatService", () => {
   });
 
   describe("generateChatResponse", () => {
+    function conversationContext(
+      overrides: Partial<ConversationContext> = {},
+    ): ConversationContext {
+      return {
+        current: {
+          id: 3,
+          sessionId: 1,
+          role: "user",
+          authorId: "current-id",
+          authorLabel: "Current",
+          status: "completed",
+          active: true,
+          discordCreatedAt: 3,
+          finalizedAt: null,
+          discordMessageId: "3",
+          content: [{ type: "text", text: "now" }],
+        },
+        exchanges: [
+          {
+            user: {
+              id: 1,
+              sessionId: 1,
+              role: "user",
+              authorId: "prior-id",
+              authorLabel: "Prior",
+              status: "completed",
+              active: true,
+              discordCreatedAt: 1,
+              finalizedAt: null,
+              discordMessageId: "1",
+              content: [{ type: "text", text: "before" }],
+            },
+            assistant: {
+              id: 2,
+              sessionId: 1,
+              role: "assistant",
+              authorId: null,
+              authorLabel: null,
+              status: "completed",
+              active: true,
+              discordCreatedAt: 2,
+              finalizedAt: 2,
+              discordMessageId: "2",
+              content: [{ type: "text", text: "answer" }],
+            },
+          },
+        ],
+        openrouterSessionId: "opaque-session-id",
+        ...overrides,
+      };
+    }
+
+    test("history places static systems first, hydrates prior media, prefixes authors, and sends session_id", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ historyEnabled: true, webSearchEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "file"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const originalFetch = globalThis.fetch;
+      const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50, 0x44, 0x46]))));
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+      const defaultExchange = conversationContext().exchanges[0];
+      if (!defaultExchange) throw new Error("default exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            user: {
+              ...defaultExchange.user,
+              content: [
+                { type: "text", text: "before" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/history.pdf",
+                  filename: "history.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+            assistant: defaultExchange.assistant,
+          },
+        ],
+      });
+
+      try {
+        const { updater } = createSpyUpdater();
+        await chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context },
+          "req-history",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.session_id).toBe("opaque-session-id");
+      expect(request.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
+      expect(request.messages.map((message) => message.role)).toEqual([
+        "system",
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ]);
+      expect(request.messages[0]?.content).toContain("非信頼データ");
+      expect(request.messages[0]?.content).not.toContain("現在日時");
+      expect(request.messages[1]?.content).toEqual([
+        { type: "text", text: "[Prior]: before" },
+        {
+          type: "file",
+          file: { filename: "history.pdf", file_data: "data:application/pdf;base64,UERG" },
+        },
+      ]);
+      expect(request.messages[3]?.content).toContain("現在日時");
+      expect(request.messages[4]?.content).toBe("[Current]: now");
+      expect(fetcher).toHaveBeenCalledWith("https://cdn.test/history.pdf");
+    });
+
+    test("history selects newest complete exchanges as units under the remaining budget", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange?.assistant) throw new Error("base exchange was not created");
+      const newest = {
+        ...baseExchange,
+        user: {
+          ...baseExchange.user,
+          id: 5,
+          content: [{ type: "text" as const, text: "new" }],
+        },
+        assistant: {
+          ...baseExchange.assistant,
+          id: 6,
+          content: [{ type: "text" as const, text: "reply" }],
+        },
+      };
+      const tooOld = {
+        ...baseExchange,
+        user: {
+          ...baseExchange.user,
+          id: 7,
+          content: [{ type: "text" as const, text: "o".repeat(30_000) }],
+        },
+        assistant: {
+          ...baseExchange.assistant,
+          id: 8,
+          content: [{ type: "text" as const, text: "r".repeat(30_000) }],
+        },
+      };
+      const { updater } = createSpyUpdater();
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "now", conversation: { ...base, exchanges: [tooOld, newest] } },
+        "req-budget",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+      ];
+      expect(request.messages).toContainEqual({
+        role: "user",
+        content: [{ type: "text", text: "[Prior]: new" }],
+      });
+      expect(JSON.stringify(request.messages)).not.toContain("o".repeat(100));
+    });
+
     test("multimodal request (content 配列 + plugins) を chatStream に渡す", async () => {
       const { updater } = createSpyUpdater();
 
@@ -380,12 +580,13 @@ describe("ChatService", () => {
           },
         ]);
         expect(request.tool_choice).toBe("auto");
-        expect(request.messages).toHaveLength(2);
-        expect(request.messages[1]).toEqual({ role: "user", content: "Hello" });
-        const system = request.messages[0];
-        expect(system?.role).toBe("system");
-        expect(system?.content).toContain("2026/09/22(火) 14:00 (JST)");
-        expect(system?.content).toContain("非信頼データ");
+        expect(request.messages).toHaveLength(3);
+        expect(request.messages[2]).toEqual({ role: "user", content: "Hello" });
+        const staticSystem = request.messages[0];
+        expect(staticSystem?.role).toBe("system");
+        expect(staticSystem?.content).toContain("非信頼データ");
+        expect(staticSystem?.content).not.toContain("2026/09/22(火) 14:00 (JST)");
+        expect(request.messages[1]?.content).toContain("2026/09/22(火) 14:00 (JST)");
       } finally {
         setSystemTime();
       }
@@ -423,9 +624,16 @@ describe("ChatService", () => {
         ChatCompletionRequest,
         AbortSignal,
       ];
-      expect(request.messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
-      expect(request.messages[1]?.content).toContain("非信頼データ");
-      expect(request.messages[2]?.content).toEqual([
+      expect(request.messages.map((message) => message.role)).toEqual([
+        "system",
+        "system",
+        "system",
+        "user",
+      ]);
+      expect(request.messages[0]?.content).toContain("非信頼データ");
+      expect(request.messages[1]?.content).toContain("untrusted-tweet");
+      expect(request.messages[2]?.content).toContain("現在日時");
+      expect(request.messages[3]?.content).toEqual([
         { type: "text", text: "read this" },
         { type: "text", text: "<untrusted-tweet>tweet</untrusted-tweet>" },
       ]);

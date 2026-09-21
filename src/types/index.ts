@@ -11,6 +11,7 @@ export interface GuildSettings {
   autoReplyChannels: ChannelId[];
   webSearchEnabled: boolean;
   twitterExpandEnabled: boolean;
+  historyEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -126,6 +127,7 @@ export interface ChatCompletionRequest {
   tools?: Tool[];
   tool_choice?: ToolChoice;
   parallel_tool_calls?: boolean;
+  session_id?: string;
 }
 
 export interface ChatCompletionResponse {

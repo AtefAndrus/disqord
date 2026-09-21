@@ -279,6 +279,28 @@ describe("runToolLoop: requestFields", () => {
     expect(requests.map((request) => request.parallel_tool_calls)).toEqual([false, false]);
   });
 
+  test("session_id is carried onto every request in a tool loop", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "t" }));
+    const { client, requests } = twoTurnClient();
+
+    expectFinal(
+      await runToolLoop(
+        baseParams({
+          llmClient: client,
+          registry,
+          requestFields: { session_id: "opaque-session-id" },
+        }),
+      ),
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(requests.map((request) => request.session_id)).toEqual([
+      "opaque-session-id",
+      "opaque-session-id",
+    ]);
+  });
+
   test('requestFields also reach the forced-final request (tool_choice:"none")', async () => {
     const registry = new ToolRegistry();
     registry.register(makeEchoTool({ name: "t" }));

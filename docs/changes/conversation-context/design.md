@@ -1,6 +1,6 @@
 ---
 title: "対話UX改善（会話履歴ストア）"
-status: planned
+status: in-progress
 priority: high
 summary: "DB 永続の会話履歴、無活動ギャップとトークン予算による文脈構築、OpenRouter session routing、削除への追従"
 ---
@@ -230,21 +230,21 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 
 ## Tasks
 
-- [ ] `PRAGMA foreign_keys = ON` を `src/db/index.ts` に追加し、テストが独自に開く `:memory:` の接続にも同じ PRAGMA を掛けてから、既存テストが通ることを確かめる
-- [ ] `sessions` / `turns` / `turn_messages` と `guild_settings.history_enabled` のマイグレーション
-- [ ] `ConversationRepository`: session の割り当て、user turn と pending assistant turn の作成（冪等）、写像の追加、確定、写像の削除、purge（メッセージ・チャンネル・スレッド・guild）、TTL sweep、起動時の pending の失敗化
-- [ ] `PersistedContentPart` 型と、入力からの変換・hydration
-- [ ] 文脈の構築（cutoff、exchange 単位の予算、並び）と `stripHistoricalMedia()`
-- [ ] トークン予算の推定
-- [ ] `author_label` の正規化と接頭辞の描画
-- [ ] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
-- [ ] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
-- [ ] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
-- [ ] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す
-- [ ] `file-parser` plugin の付与条件を履歴全体へ広げる
-- [ ] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
-- [ ] `/config history` と `/status`、README
-- [ ] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
+- [x] `PRAGMA foreign_keys = ON` を `src/db/index.ts` に追加し、テストが独自に開く `:memory:` の接続にも同じ PRAGMA を掛けてから、既存テストが通ることを確かめる
+- [x] `sessions` / `turns` / `turn_messages` と `guild_settings.history_enabled` のマイグレーション
+- [x] `ConversationRepository`: session の割り当て、user turn と pending assistant turn の作成（冪等）、写像の追加、確定、写像の削除、purge（メッセージ・チャンネル・スレッド・guild）、TTL sweep、起動時の pending の失敗化
+- [x] `PersistedContentPart` 型と、入力からの変換・hydration
+- [x] 文脈の構築（cutoff、exchange 単位の予算、並び）と `stripHistoricalMedia()`
+- [x] トークン予算の推定
+- [x] `author_label` の正規化と接頭辞の描画
+- [x] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
+- [x] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
+- [x] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
+- [x] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す
+- [x] `file-parser` plugin の付与条件を履歴全体へ広げる
+- [x] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
+- [x] `/config history` と `/status`、README
+- [x] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
 - [ ] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加
 - [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録。top-level `cache_control` を付けるかをこの結果で決める
 - [ ] 手動確認: 実クライアントで `/config history on` にして 2 往復会話し、bot の返答メッセージを削除すると次の返答がその exchange を覚えていないこと、`/config history off` の後は前の会話を覚えていないことを確かめる

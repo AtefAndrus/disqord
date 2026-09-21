@@ -1,4 +1,10 @@
 import { type Message, MessageType, type ThreadChannel } from "discord.js";
+import type {
+  ConversationContext,
+  CreateConversationTurnInput,
+  IConversationRepository,
+} from "../../db/repositories/conversation";
+import { buildPersistedContent, normalizeAuthorLabel } from "../../db/repositories/conversation";
 import { AppError } from "../../errors";
 import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
@@ -23,7 +29,7 @@ import {
 } from "../../utils/chatContainerBuilder";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
-import { DiscordStreamingUpdater } from "./streamingUpdater";
+import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
 
 function shouldRespond(
   message: Message,
@@ -75,13 +81,67 @@ function buildFinishReasonNote(
   }
 }
 
+function messageCreatedAt(message: Message): number {
+  return Number.isFinite(message.createdTimestamp) ? message.createdTimestamp : Date.now();
+}
+
+function parentChannelId(message: Message): string | null {
+  if (!message.channel.isThread()) return null;
+  return (message.channel as ThreadChannel).parentId;
+}
+
+function authorLabel(message: Message): string {
+  const memberLabel = message.member?.displayName;
+  if (memberLabel) return memberLabel;
+  return message.author.username ?? message.author.id;
+}
+
+export function createDeleteOwnMessage(
+  conversationRepository: IConversationRepository | undefined,
+  modelName: string,
+  color: number,
+): DeleteOwnMessage {
+  return async (botMessage: Message): Promise<void> => {
+    await conversationRepository?.deleteMessageMapping(botMessage.id);
+    try {
+      await botMessage.delete();
+    } catch (deleteError) {
+      logger.warn("Failed to delete bot message, attempting to neutralize instead", {
+        deleteError,
+        messageId: botMessage.id,
+      });
+      try {
+        const neutralContainer = buildFinalContainer({
+          text: "（このメッセージは不要になりました）",
+          modelName,
+          color,
+          isFirst: false,
+          isLast: false,
+          metadata: { showDetails: false },
+        });
+        await botMessage.edit(toComponentsV2EditPayload(neutralContainer));
+      } catch (neutralizeError) {
+        logger.warn("Failed to neutralize bot message", {
+          neutralizeError,
+          messageId: botMessage.id,
+        });
+      }
+    }
+  };
+}
+
 export function createMessageCreateHandler(
   chatService: IChatService,
   settingsService: ISettingsService,
   modelService: IModelService,
-  options: { e2eTesterBotId?: string; webSearchEngine?: string } = {},
+  options: {
+    e2eTesterBotId?: string;
+    webSearchEngine?: string;
+    conversationRepository?: IConversationRepository;
+  } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
+    const handlingStartedAt = Date.now();
     // Bots are ignored, with one exception: the e2e tester bot, so that
     // `bun run e2e` can drive the real message path. This bot's own messages
     // stay ignored even if the tester id is misconfigured to its own id,
@@ -187,6 +247,41 @@ export function createMessageCreateHandler(
     // （初期メッセージ送信前に例外が起きた場合は undefined のまま — cleanupBotMessagesOnFatalError は
     // 空配列を渡されると何もしない）
     let updater: DiscordStreamingUpdater | undefined;
+    const conversationRepository = options.conversationRepository;
+    let assistantTurnId: number | undefined;
+    let historyContext: ConversationContext | undefined;
+    const deleteMessage = createDeleteOwnMessage(conversationRepository, modelName, color);
+    const botMessageCreated = async (botMessage: Message): Promise<void> => {
+      if (!conversationRepository || assistantTurnId === undefined) return;
+      await conversationRepository.onBotMessageSent(
+        assistantTurnId,
+        botMessage.id,
+        messageCreatedAt(botMessage),
+      );
+    };
+
+    const createInput: CreateConversationTurnInput = {
+      guildId: message.guild.id,
+      channelId: message.channel.id,
+      parentChannelId: parentChannelId(message),
+      discordMessageId: message.id,
+      authorId: message.author.id,
+      authorLabel: normalizeAuthorLabel(authorLabel(message), message.author.id),
+      content: buildPersistedContent(content, attachmentResult.storageRefs),
+      replyToDiscordMessageId: message.reference?.messageId ?? null,
+      discordCreatedAt: messageCreatedAt(message),
+      handlingStartedAt,
+    };
+    if (conversationRepository) {
+      const turnResult = await conversationRepository.createUserAndAssistantTurn(createInput);
+      if (turnResult.duplicate) return;
+      if (turnResult.skipResponse) return;
+      assistantTurnId = turnResult.assistantTurnId;
+      if (turnResult.created && turnResult.userTurnId !== undefined) {
+        historyContext =
+          (await conversationRepository.getContext(turnResult.userTurnId)) ?? undefined;
+      }
+    }
 
     try {
       // 初期メッセージ送信（Components V2、停止ボタン付き Section）
@@ -199,12 +294,24 @@ export function createMessageCreateHandler(
         triggerMessageId: message.id,
       });
       const initialBotMessage = await message.channel.send(toComponentsV2Payload(initialContainer));
-      updater = new DiscordStreamingUpdater(message, initialBotMessage, modelName, color);
+      await botMessageCreated(initialBotMessage);
+      updater = new DiscordStreamingUpdater(
+        message,
+        initialBotMessage,
+        modelName,
+        color,
+        deleteMessage,
+        botMessageCreated,
+      );
 
       const startTime = Date.now();
       const result = await chatService.generateChatResponse(
         message.guild.id,
-        { text: content, parts: attachmentResult.parts },
+        {
+          text: content,
+          parts: attachmentResult.parts,
+          ...(historyContext && { conversation: historyContext }),
+        },
         message.id,
         updater,
         { channelId: message.channel.id, userId: message.author.id },
@@ -227,7 +334,15 @@ export function createMessageCreateHandler(
           elapsedSeconds,
           receivedChars,
           message,
+          botMessageCreated,
         );
+        if (assistantTurnId !== undefined) {
+          await conversationRepository?.finalizeAssistantTurn(
+            assistantTurnId,
+            "stopped",
+            updater.text,
+          );
+        }
         return;
       }
 
@@ -303,12 +418,20 @@ export function createMessageCreateHandler(
           // 同様にbotMessagesへ追跡する（追跡しないと後続chunkのsend失敗時に既送信分が重複送信されうる）
           const newMessage = await message.channel.send(toComponentsV2Payload(container));
           botMessages.push(newMessage);
+          await botMessageCreated(newMessage);
         }
       }
 
       // 余分なメッセージを削除（生成途中で複数メッセージになったが、最終的に少なくなった場合）
       for (let i = chunks.length; i < botMessages.length; i++) {
-        await deleteOrNeutralize(botMessages[i], modelName, color);
+        await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
+      }
+      if (assistantTurnId !== undefined) {
+        await conversationRepository?.finalizeAssistantTurn(
+          assistantTurnId,
+          "completed",
+          updater.text,
+        );
       }
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
@@ -326,7 +449,16 @@ export function createMessageCreateHandler(
         modelName,
         color,
         message,
+        botMessageCreated,
+        deleteMessage,
       );
+      if (assistantTurnId !== undefined) {
+        await conversationRepository?.finalizeAssistantTurn(
+          assistantTurnId,
+          "failed",
+          updater?.text ?? "",
+        );
+      }
 
       const userMessage =
         error instanceof AppError
@@ -354,33 +486,11 @@ export function createMessageCreateHandler(
  */
 async function deleteOrNeutralize(
   botMessage: Message,
-  modelName: string,
-  color: number,
+  _modelName: string,
+  _color: number,
+  deleteMessage: DeleteOwnMessage,
 ): Promise<void> {
-  try {
-    await botMessage.delete();
-  } catch (deleteError) {
-    logger.warn("Failed to delete bot message, attempting to neutralize instead", {
-      deleteError,
-      messageId: botMessage.id,
-    });
-    try {
-      const neutralContainer = buildFinalContainer({
-        text: "（このメッセージは不要になりました）",
-        modelName,
-        color,
-        isFirst: false,
-        isLast: false,
-        metadata: { showDetails: false },
-      });
-      await botMessage.edit(toComponentsV2EditPayload(neutralContainer));
-    } catch (neutralizeError) {
-      logger.warn("Failed to neutralize bot message", {
-        neutralizeError,
-        messageId: botMessage.id,
-      });
-    }
-  }
+  await deleteMessage(botMessage);
 }
 
 /**
@@ -397,6 +507,8 @@ async function cleanupBotMessagesOnFatalError(
   modelName: string,
   color: number,
   originalMessage: Message,
+  botMessageCreated: (message: Message) => Promise<void>,
+  deleteMessage: DeleteOwnMessage,
 ): Promise<void> {
   if (botMessages.length === 0) {
     return;
@@ -404,7 +516,7 @@ async function cleanupBotMessagesOnFatalError(
 
   if (!fullText) {
     for (const botMessage of botMessages) {
-      await deleteOrNeutralize(botMessage, modelName, color);
+      await deleteOrNeutralize(botMessage, modelName, color, deleteMessage);
     }
     return;
   }
@@ -433,13 +545,15 @@ async function cleanupBotMessagesOnFatalError(
         if (i < botMessages.length) {
           await botMessages[i].edit(toComponentsV2EditPayload(container));
         } else if ("send" in originalMessage.channel) {
-          await originalMessage.channel.send(toComponentsV2Payload(container));
+          const newMessage = await originalMessage.channel.send(toComponentsV2Payload(container));
+          botMessages.push(newMessage);
+          await botMessageCreated(newMessage);
         }
       } catch (error) {
         logger.warn("Failed to clean up bot message after fatal error", { error, index: i });
       }
     } else {
-      await deleteOrNeutralize(botMessages[i], modelName, color);
+      await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
     }
   }
 }
@@ -456,6 +570,7 @@ async function updateStoppedMessages(
   elapsedSeconds: number,
   receivedChars: number,
   originalMessage: Message,
+  botMessageCreated: (message: Message) => Promise<void>,
 ): Promise<void> {
   const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
   const chunks = splitTextIntoMessages(
@@ -482,6 +597,7 @@ async function updateStoppedMessages(
     } else if ("send" in originalMessage.channel) {
       const newMessage = await originalMessage.channel.send(toComponentsV2Payload(container));
       botMessages.push(newMessage);
+      await botMessageCreated(newMessage);
     }
   }
 }

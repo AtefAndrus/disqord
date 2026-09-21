@@ -9,7 +9,11 @@ import {
   test,
 } from "bun:test";
 import { type Attachment, Collection, MessageFlags, MessageType } from "discord.js";
-import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
+import {
+  createDeleteOwnMessage,
+  createMessageCreateHandler,
+} from "../../../../src/bot/events/messageCreate";
+import type { IConversationRepository } from "../../../../src/db/repositories/conversation";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
 import type {
@@ -130,6 +134,39 @@ type ChatResponseFn = (
   updater: IToolLoopUpdater,
   ctx: ChatRequestContext,
 ) => Promise<ToolLoopResult>;
+
+function createMockConversationRepository(
+  result: Awaited<ReturnType<IConversationRepository["createUserAndAssistantTurn"]>> = {
+    historyEnabled: true,
+    created: true,
+    duplicate: false,
+    sessionId: 1,
+    openrouterSessionId: "opaque-session",
+    userTurnId: 1,
+    assistantTurnId: 2,
+  },
+): IConversationRepository & {
+  onBotMessageSent: ReturnType<typeof mock>;
+  deleteMessageMapping: ReturnType<typeof mock>;
+} {
+  const onBotMessageSent = mock(() => Promise.resolve(true));
+  const deleteMessageMapping = mock(() => Promise.resolve(true));
+  return {
+    createUserAndAssistantTurn: mock(() => Promise.resolve(result)),
+    getContext: mock(() => Promise.resolve(null)),
+    createAssistantTurn: mock(() => Promise.resolve(null)),
+    onBotMessageSent,
+    deleteMessageMapping,
+    finalizeAssistantTurn: mock(() => Promise.resolve(true)),
+    failPendingTurns: mock(() => Promise.resolve(0)),
+    purgeMessage: mock(() => Promise.resolve(false)),
+    purgeMessages: mock(() => Promise.resolve(false)),
+    purgeChannel: mock(() => Promise.resolve(false)),
+    purgeThread: mock(() => Promise.resolve(false)),
+    purgeGuild: mock(() => Promise.resolve(false)),
+    sweepExpired: mock(() => Promise.resolve(0)),
+  };
+}
 
 /**
  * chatService.generateChatResponse() のフェイク実装。runToolLoop() 自体は経由せず、
@@ -297,6 +334,7 @@ describe("createMessageCreateHandler", () => {
       autoReplyChannels: [] as string[],
       webSearchEnabled: false,
       twitterExpandEnabled: true,
+      historyEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -312,6 +350,7 @@ describe("createMessageCreateHandler", () => {
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
       setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -443,6 +482,7 @@ describe("createMessageCreateHandler", () => {
             autoReplyChannels: ["channel-123"],
             webSearchEnabled: false,
             twitterExpandEnabled: true,
+            historyEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),
@@ -592,6 +632,119 @@ describe("createMessageCreateHandler", () => {
     const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
     expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
     expect(hasSection(toContainerJSON(lastEditArg))).toBe(false);
+  });
+
+  test("保存前に削除されたメッセージは応答しない", async () => {
+    const conversationRepository = createMockConversationRepository({
+      historyEnabled: true,
+      created: false,
+      duplicate: false,
+      skippedReason: "deleted",
+      skipResponse: true,
+    });
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+  });
+
+  test("初期送信と最終描画の追加送信を同じ写像関数へ渡す", async () => {
+    const conversationRepository = createMockConversationRepository();
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn("x".repeat(10_000)),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+    expect(conversationRepository.onBotMessageSent.mock.calls[0]?.[1]).toBe("bot-msg-123");
+  });
+
+  test("停止表示の追加送信を写像する", async () => {
+    const conversationRepository = createMockConversationRepository();
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createCancelledChatResponseFn("x".repeat(10_000)),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  test("致命的エラー時の部分文追加送信を写像する", async () => {
+    const conversationRepository = createMockConversationRepository();
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("x".repeat(10_000), new Error("fatal")),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  test("ストリーミング中の追加送信を写像する", async () => {
+    const conversationRepository = createMockConversationRepository();
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createTimedChatResponseFn(
+        [{ content: "x".repeat(4_000), advanceMs: 2_100 }],
+        "x".repeat(4_000),
+      ),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  test("内部削除は写像を消してからDiscordのdeleteを呼ぶ", async () => {
+    const events: string[] = [];
+    const conversationRepository = createMockConversationRepository();
+    conversationRepository.deleteMessageMapping.mockImplementation(async () => {
+      events.push("mapping");
+      return true;
+    });
+    const botMessage = {
+      id: "internal-bot",
+      delete: mock(async () => {
+        events.push("discord-delete");
+      }),
+    } as never;
+    const deleteOwnMessage = createDeleteOwnMessage(conversationRepository, "Model", 0);
+
+    await deleteOwnMessage(botMessage);
+
+    expect(events).toEqual(["mapping", "discord-delete"]);
   });
 
   test("AppErrorの場合は赤色ContainerでuserMessageを表示する", async () => {

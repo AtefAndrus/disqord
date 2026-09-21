@@ -18,6 +18,7 @@ describe("buildStatusMessage - 言語統一", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
         twitterExpandEnabled: true,
+        historyEnabled: true,
       } as GuildSettings,
       webSearchEngine: "perplexity",
       fxtwitterHostname: "api.fxtwitter.com",
@@ -31,6 +32,8 @@ describe("buildStatusMessage - 言語統一", () => {
     expect(llmDetailsField?.value).toBe("有効");
     const tweetField = embed.toJSON().fields?.find((f) => f.name === "ツイート展開");
     expect(tweetField?.value).toBe("有効（api.fxtwitter.com）");
+    const historyField = embed.toJSON().fields?.find((f) => f.name === "会話履歴");
+    expect(historyField?.value).toBe("有効");
   });
 
   it("Web検索の有効/無効が表示される", () => {
@@ -64,6 +67,7 @@ describe("buildStatusMessage - 言語統一", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
         twitterExpandEnabled: false,
+        historyEnabled: false,
       } as GuildSettings,
       webSearchEngine: "perplexity",
       fxtwitterHostname: "api.fxtwitter.com",
@@ -77,6 +81,8 @@ describe("buildStatusMessage - 言語統一", () => {
     expect(llmDetailsField?.value).toBe("無効");
     const tweetField = embed.toJSON().fields?.find((f) => f.name === "ツイート展開");
     expect(tweetField?.value).toBe("無効");
+    const historyField = embed.toJSON().fields?.find((f) => f.name === "会話履歴");
+    expect(historyField?.value).toBe("無効");
   });
 });
 

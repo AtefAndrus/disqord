@@ -8,6 +8,7 @@ export function getDatabase(): Database {
     const databasePath = process.env.DATABASE_PATH ?? "data/disqord.db";
     dbInstance = new Database(databasePath, { create: true });
     dbInstance.run("PRAGMA journal_mode = WAL");
+    dbInstance.run("PRAGMA foreign_keys = ON");
     applyMigrations(dbInstance);
   }
 

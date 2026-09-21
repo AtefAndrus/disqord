@@ -64,6 +64,7 @@ const settings: GuildSettings = {
   autoReplyChannels: ["300000000000000000"],
   webSearchEnabled: true,
   twitterExpandEnabled: true,
+  historyEnabled: false,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
