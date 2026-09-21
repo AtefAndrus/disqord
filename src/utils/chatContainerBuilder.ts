@@ -290,7 +290,15 @@ export function splitMarkdownByCharsAndBytes(
     }
 
     let chosen = lastFit;
-    if (lastFit && lastNewlineFit && lastNewlineFit.rawChars > lastFit.rawChars * 0.8) {
+    // Backing up to a newline only helps when text is left over: once the
+    // rest fits, the last line would otherwise become a page of its own.
+    const textRemains = lastFit !== null && lastFit.end < text.length;
+    if (
+      textRemains &&
+      lastFit &&
+      lastNewlineFit &&
+      lastNewlineFit.rawChars > lastFit.rawChars * 0.8
+    ) {
       chosen = lastNewlineFit;
     }
 
