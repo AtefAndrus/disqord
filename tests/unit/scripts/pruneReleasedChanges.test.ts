@@ -145,6 +145,17 @@ describe("findLeftoverReferences", () => {
     ).toEqual([1, 2]);
   });
 
+  test("複数行にまたがるリンク先とドット区切りのパスを検出し、地の文の括弧では止まらない", () => {
+    const text = [
+      "[cron]: ",
+      "  old-feature/design.md",
+      "[a](.././old-feature/design.md (Design))",
+      "定期実行 (old-feature) は別途設定する。",
+    ].join("\n");
+
+    expect(findLeftoverReferences(text, ["old-feature"])).toEqual([2, 3]);
+  });
+
   test("rewriteLinks が書き換えた結果には残りが無い", () => {
     const text = "[a](../old-feature/design.md#x)\n[b]: ../old-feature/design.md";
 

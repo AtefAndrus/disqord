@@ -137,23 +137,31 @@ function decodeLoosely(line: string): string {
 
 /**
  * Line numbers (1-based) of `text` that may still point into one of the
- * folders to delete: a folder name right after `../`, `changes/`, or the
- * start of a link destination (`(`, `<`, `: `), followed by `/` or the end of
- * the path. URLs are ignored, so the permalinks `rewriteLinks` wrote do not
- * count. It errs towards stopping: a false stop costs a manual look, a miss
- * costs a broken link.
+ * folders to delete: a folder name right after `../` or `changes/`, or at the
+ * start of a link destination (after `](` or a reference definition's `]:`,
+ * across line breaks), with any run of `./` and `../` in front, followed by
+ * `/` or the end of the path. URLs are ignored, so the permalinks
+ * `rewriteLinks` wrote do not count. It errs towards stopping: a false stop
+ * costs a manual look, a miss costs a broken link.
  */
 export function findLeftoverReferences(text: string, prunedNames: readonly string[]): number[] {
   const escaped = prunedNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const dots = "(?:\\.{1,2}/)*";
   const reference = new RegExp(
-    `(?:(?:^|[^\\w-])(?:\\.\\./|changes/)|[(<]\\s*(?:\\./)?|\\]:\\s*(?:\\./)?)(?:${escaped.join("|")})(?:[/)#?\\s>"']|$)`,
+    `(?:(?:^|[^\\w-])${dots}(?:\\.\\./|changes/)|\\]\\(\\s*<?${dots}|\\]:\\s*<?${dots})(?:${escaped.join("|")})(?=[/)#?\\s>"']|$)`,
+    "gm",
   );
-  const lines: number[] = [];
-  text.split("\n").forEach((line, index) => {
-    const withoutUrls = line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)>\]]+/gi, "");
-    if (reference.test(decodeLoosely(withoutUrls))) lines.push(index + 1);
-  });
-  return lines;
+  // Per line, so a replacement never moves text onto another line.
+  const cleaned = text
+    .split("\n")
+    .map((line) => decodeLoosely(line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)>\]]+/gi, "")))
+    .join("\n");
+  const lines = new Set<number>();
+  for (const match of cleaned.matchAll(reference)) {
+    const end = match.index + match[0].length;
+    lines.add(cleaned.slice(0, end).split("\n").length);
+  }
+  return [...lines].sort((a, b) => a - b);
 }
 
 /** `https://github.com/<owner>/<repo>` from an HTTPS or SSH (including host-alias) remote URL. */
