@@ -57,6 +57,12 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     default: "perplexity",
   },
   {
+    name: "FXTWITTER_API_BASE",
+    required: false,
+    description: "ツイート展開に使う fxtwitter API のベース URL",
+    default: "https://api.fxtwitter.com",
+  },
+  {
     name: "E2E_TESTER_BOT_ID",
     required: false,
     description:

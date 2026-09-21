@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, type mock, setSystemTime, test } from "bun:test";
+import { beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { BadRequestError } from "../../../src/errors";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { ChatService } from "../../../src/services/chatService";
+import { ModelService } from "../../../src/services/modelService";
 import type { ISettingsService } from "../../../src/services/settingsService";
 import type {
   ChatCompletionRequest,
@@ -13,6 +15,7 @@ import {
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
+  createMockTweetService,
 } from "../../helpers/mockFactories";
 
 /** Records every IToolLoopUpdater callback invocation for assertions, without touching Discord. */
@@ -49,13 +52,22 @@ describe("ChatService", () => {
   let chatService: ChatService;
   let mockLLMClient: ILLMClient;
   let mockSettingsService: ISettingsService;
+  let mockTweetService: ReturnType<typeof createMockTweetService>;
   let toolRegistry: ToolRegistry;
 
   beforeEach(() => {
     mockLLMClient = createMockLLMClient();
     mockSettingsService = createMockSettingsService();
+    mockTweetService = createMockTweetService();
     toolRegistry = new ToolRegistry();
-    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "perplexity");
+    chatService = new ChatService(
+      mockLLMClient,
+      mockSettingsService,
+      toolRegistry,
+      "perplexity",
+      mockTweetService,
+      new ModelService(mockLLMClient),
+    );
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {
@@ -340,7 +352,14 @@ describe("ChatService", () => {
         );
         const { updater } = createSpyUpdater();
         // A non-default engine shows the configured one reaches the request.
-        const exaChat = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "exa");
+        const exaChat = new ChatService(
+          mockLLMClient,
+          mockSettingsService,
+          toolRegistry,
+          "exa",
+          mockTweetService,
+          new ModelService(mockLLMClient),
+        );
 
         await exaChat.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
           channelId: "channel-1",
@@ -368,6 +387,224 @@ describe("ChatService", () => {
       } finally {
         setSystemTime();
       }
+    });
+
+    test("ツイートURLを展開し、Web検索のsystemより後ろに非信頼データのsystemを置く", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "<untrusted-tweet>tweet</untrusted-tweet>" }],
+          textParts: [{ type: "text" as const, text: "<untrusted-tweet>tweet</untrusted-tweet>" }],
+          imageParts: [],
+        }),
+      );
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ webSearchEnabled: true, twitterExpandEnabled: true }),
+      );
+      const { updater } = createSpyUpdater();
+      const exaChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "exa",
+        mockTweetService,
+        new ModelService(mockLLMClient),
+      );
+
+      await exaChat.generateChatResponse("guild-123", { text: "read this" }, "req-tweet", updater, {
+        channelId: "channel-1",
+        userId: "user-1",
+      });
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
+      expect(request.messages[1]?.content).toContain("非信頼データ");
+      expect(request.messages[2]?.content).toEqual([
+        { type: "text", text: "read this" },
+        { type: "text", text: "<untrusted-tweet>tweet</untrusted-tweet>" },
+      ]);
+    });
+
+    test("ツイート展開がOFFならサービスもネットワークも呼ばず、リクエストを変えない", async () => {
+      mockTweetService.extractTweetIds = mock(() => {
+        throw new Error("must not extract when disabled");
+      });
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: false }),
+      );
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "https://x.com/a/status/20" },
+        "req-off",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(mockTweetService.extractTweetIds).not.toHaveBeenCalled();
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages).toEqual([{ role: "user", content: "https://x.com/a/status/20" }]);
+    });
+
+    test("ツイートURLが無ければ展開せず、system messageもpartsも足さない", async () => {
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "通常の質問" },
+        "req-no-tweet",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(mockTweetService.extractTweetIds).toHaveBeenCalledWith("通常の質問");
+      expect(mockTweetService.expandTweets).not.toHaveBeenCalled();
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages).toEqual([{ role: "user", content: "通常の質問" }]);
+    });
+
+    test("画像付きリクエストのBadRequestErrorは本文未表示時だけ画像を外して一度再試行する", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      const imageModelService = new ModelService(mockLLMClient);
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
+        async function* () {
+          yield* [];
+          throw new BadRequestError("image rejected");
+        },
+      );
+      const { updater } = createSpyUpdater();
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        imageModelService,
+      );
+
+      const result = await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read" },
+        "req-retry",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(result.status).toBe("final");
+      expect(mockLLMClient.chatStream).toHaveBeenCalledTimes(2);
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls[0]?.[0].messages[1]?.content).toEqual([
+        { type: "text", text: "read" },
+        { type: "text", text: "tweet" },
+        imagePart,
+      ]);
+      expect(calls[1]?.[0].messages[1]?.content).toEqual([
+        { type: "text", text: "read" },
+        { type: "text", text: "tweet" },
+      ]);
+    });
+
+    test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      const imageModelService = new ModelService(mockLLMClient);
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
+        async function* () {
+          yield { content: "partial", done: false as const };
+          throw new BadRequestError("after text");
+        },
+      );
+      const { updater } = createSpyUpdater();
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        imageModelService,
+      );
+
+      const result = await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read" },
+        "req-no-retry",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(result.status).toBe("error");
+      expect(mockLLMClient.chatStream).toHaveBeenCalledTimes(1);
     });
 
     test("streaming 中の content は累積で updater.stageContent に渡る", async () => {

@@ -10,6 +10,29 @@ function envDefault(name: string): string {
   return def;
 }
 
+export function normalizeFxtwitterApiBase(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("FXTWITTER_API_BASE must be a valid URL");
+  }
+
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username.length > 0 ||
+    url.password.length > 0 ||
+    url.search.length > 0 ||
+    url.hash.length > 0 ||
+    /[?#]/u.test(value)
+  ) {
+    throw new Error("FXTWITTER_API_BASE must use http(s) without query, fragment, or userinfo");
+  }
+
+  const pathname = url.pathname.replace(/\/+$/u, "");
+  return `${url.origin}${pathname}`;
+}
+
 /**
  * Load .env file manually.
  * Bun's automatic .env loading doesn't work reliably with `bun run` commands.
@@ -70,6 +93,17 @@ const configSchema = z.object({
   // The values of OpenRouter's WebSearchEngineEnum. A typo fails at startup
   // instead of as an HTTP 400 on every search-enabled reply.
   webSearchEngine: z.enum(["perplexity", "exa", "parallel", "native", "auto", "firecrawl"]),
+  fxtwitterApiBase: z.string().transform((value, ctx) => {
+    try {
+      return normalizeFxtwitterApiBase(value);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Invalid FXTWITTER_API_BASE",
+      });
+      return z.NEVER;
+    }
+  }),
   e2eTesterBotId: z.string().regex(/^\d+$/).optional(),
 });
 
@@ -88,6 +122,7 @@ export function loadConfig(): AppConfig {
     logDir: process.env.LOG_DIR,
     logMaxBytes: process.env.LOG_MAX_BYTES,
     webSearchEngine: process.env.WEB_SEARCH_ENGINE || envDefault("WEB_SEARCH_ENGINE"),
+    fxtwitterApiBase: process.env.FXTWITTER_API_BASE || envDefault("FXTWITTER_API_BASE"),
     // Dropped before validation rather than checked by each reader: a
     // production bot must never answer another bot, and a malformed value of
     // a setting production ignores must not stop it from starting either.

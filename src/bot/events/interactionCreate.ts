@@ -40,6 +40,7 @@ export interface CommandHandlers {
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configWebSearch: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configTwitterExpand: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -52,6 +53,7 @@ export function createInteractionCreateHandler(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
+  fxtwitterApiBase = "https://api.fxtwitter.com",
 ) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -67,6 +69,7 @@ export function createInteractionCreateHandler(
         llmClient,
         chatService,
         webSearchEngine,
+        fxtwitterApiBase,
       );
       return;
     }
@@ -134,6 +137,9 @@ export function createInteractionCreateHandler(
               case "web-search":
                 await handlers.configWebSearch(interaction);
                 break;
+              case "twitter-expand":
+                await handlers.configTwitterExpand(interaction);
+                break;
             }
           }
           break;
@@ -168,6 +174,7 @@ async function handleButtonInteraction(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
+  fxtwitterApiBase: string,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({
@@ -251,6 +258,7 @@ async function handleButtonInteraction(
       cacheStatus,
       settings: updatedSettings,
       webSearchEngine,
+      fxtwitterHostname: new URL(fxtwitterApiBase).hostname,
       version: packageJson.version,
     });
 

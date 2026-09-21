@@ -205,6 +205,14 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "tweet",
+    prompt: "[e2e] https://x.com/jack/status/20 の本文を答えて。",
+    check: (reply) => [
+      ...(reply.isError ? ["the tweet reply ended in an error"] : []),
+      ...(reply.body.includes("twttr") ? [] : ["the reply does not contain twttr"]),
+    ],
+  },
+  {
     name: "long",
     prompt:
       "[e2e] 日本の四季それぞれについて各1500字以上、合計6000字以上の随筆を書いて。途中にPythonのコードブロックを1つ入れて。",

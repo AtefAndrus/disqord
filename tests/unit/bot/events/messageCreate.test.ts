@@ -296,6 +296,7 @@ describe("createMessageCreateHandler", () => {
       showLlmDetails: true,
       autoReplyChannels: [] as string[],
       webSearchEnabled: false,
+      twitterExpandEnabled: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -310,6 +311,7 @@ describe("createMessageCreateHandler", () => {
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
       setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -440,6 +442,7 @@ describe("createMessageCreateHandler", () => {
             showLlmDetails: false,
             autoReplyChannels: ["channel-123"],
             webSearchEnabled: false,
+            twitterExpandEnabled: true,
             createdAt: "",
             updatedAt: "",
           }),
@@ -704,6 +707,7 @@ describe("createMessageCreateHandler", () => {
       showLlmDetails: true,
       autoReplyChannels: ["auto-reply-channel-id"],
       webSearchEnabled: false,
+      twitterExpandEnabled: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

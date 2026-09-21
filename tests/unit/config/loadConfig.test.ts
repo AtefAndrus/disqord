@@ -8,6 +8,7 @@ const KEYS = [
   "NODE_ENV",
   "E2E_TESTER_BOT_ID",
   "WEB_SEARCH_ENGINE",
+  "FXTWITTER_API_BASE",
 ] as const;
 
 describe("loadConfig: E2E_TESTER_BOT_ID", () => {
@@ -99,6 +100,45 @@ describe("loadConfig: WEB_SEARCH_ENGINE", () => {
 
   test("エンジン名の誤記は起動時に拒否する", () => {
     process.env.WEB_SEARCH_ENGINE = "perplexcity";
+    expect(() => loadConfig()).toThrow();
+  });
+});
+
+describe("loadConfig: FXTWITTER_API_BASE", () => {
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+    process.env.DISCORD_TOKEN = "token";
+    process.env.DISCORD_APPLICATION_ID = "1";
+    process.env.OPENROUTER_API_KEY = "key";
+    process.env.NODE_ENV = "development";
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  test("未設定なら既定値を使う", () => {
+    delete process.env.FXTWITTER_API_BASE;
+    expect(loadConfig().fxtwitterApiBase).toBe("https://api.fxtwitter.com");
+  });
+
+  test("サブパスと末尾スラッシュを正規化する", () => {
+    process.env.FXTWITTER_API_BASE = "https://tweets.example.test/fxtwitter///";
+    expect(loadConfig().fxtwitterApiBase).toBe("https://tweets.example.test/fxtwitter");
+  });
+
+  test.each([
+    "https://tweets.example.test/api?tenant=one",
+    "https://tweets.example.test/api#status",
+    "https://user:password@tweets.example.test/api",
+    "ftp://tweets.example.test/api",
+  ])("クエリ、フラグメント、userinfo、非http(s)を拒否する: %s", (value) => {
+    process.env.FXTWITTER_API_BASE = value;
     expect(() => loadConfig()).toThrow();
   });
 });

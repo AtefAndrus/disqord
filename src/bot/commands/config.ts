@@ -39,6 +39,18 @@ export const configCommand = new SlashCommandBuilder()
           .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
       ),
   )
+  .addSubcommand((sub) =>
+    sub
+      .setName("twitter-expand")
+      .setDescription("ツイート展開の切り替え（投稿内容を外部ホストへ送信）")
+      .addStringOption((option) =>
+        option
+          .setName("enabled")
+          .setDescription("有効/無効")
+          .setRequired(true)
+          .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+      ),
+  )
   .addSubcommandGroup((group) =>
     group
       .setName("auto-reply")

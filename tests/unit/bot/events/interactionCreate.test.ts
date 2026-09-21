@@ -206,6 +206,28 @@ describe("interactionCreate: 無料モデル限定ボタン", () => {
 });
 
 describe("interactionCreate: コマンドのエラー表示", () => {
+  test("config twitter-expandを専用ハンドラへ振り分ける", async () => {
+    const configTwitterExpand = mock(() => Promise.resolve());
+    const handler = createInteractionCreateHandler(
+      { configTwitterExpand } as unknown as CommandHandlers,
+      {} as ISettingsService,
+      {} as IModelService,
+      {} as ILLMClient,
+      {} as IChatService,
+      "perplexity",
+    );
+
+    await handler({
+      commandName: "config",
+      isAutocomplete: () => false,
+      isButton: () => false,
+      isChatInputCommand: () => true,
+      options: { getSubcommandGroup: () => null, getSubcommand: () => "twitter-expand" },
+    } as never);
+
+    expect(configTwitterExpand).toHaveBeenCalledTimes(1);
+  });
+
   async function run(error: Error): Promise<unknown> {
     spyOn(console, "error").mockImplementation(() => {});
     const handlers = {

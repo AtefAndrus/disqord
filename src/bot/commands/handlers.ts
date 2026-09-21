@@ -20,7 +20,9 @@ export function createCommandHandlers(
   settingsService: ISettingsService,
   modelService: IModelService,
   webSearchEngine: WebSearchEngine,
+  fxtwitterApiBase = "https://api.fxtwitter.com",
 ): CommandHandlers {
+  const fxtwitterHostname = new URL(fxtwitterApiBase).hostname;
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
       const helpText = `**使い方:**
@@ -37,6 +39,7 @@ export function createCommandHandlers(
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
+- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;
@@ -165,6 +168,7 @@ export function createCommandHandlers(
         cacheStatus,
         settings,
         webSearchEngine,
+        fxtwitterHostname,
         version: packageJson.version,
       });
 
@@ -245,6 +249,34 @@ export function createCommandHandlers(
           ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
           : "Web検索を **無効** にしました。",
         "Web検索設定",
+      );
+      await interaction.reply({ embeds: [embed] });
+    },
+
+    async configTwitterExpand(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        const embed = createErrorEmbed(
+          "ツイート展開の設定には「サーバーの管理」権限が必要です。",
+          "ツイート展開設定",
+        );
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const enabled = interaction.options.getString("enabled", true) === "on";
+      await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
+
+      const embed = createSuccessEmbed(
+        enabled
+          ? "ツイート展開を **有効** にしました。投稿内のツイート ID を外部ホストへ送信します。"
+          : "ツイート展開を **無効** にしました。",
+        "ツイート展開設定",
       );
       await interaction.reply({ embeds: [embed] });
     },

@@ -1,4 +1,5 @@
 import { Events } from "discord.js";
+import packageJson from "../package.json";
 import { createBotClient } from "./bot/client";
 import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
@@ -14,6 +15,7 @@ import { ToolRegistry } from "./llm/tools/registry";
 import { ChatService } from "./services/chatService";
 import { ModelService } from "./services/modelService";
 import { SettingsService } from "./services/settingsService";
+import { TweetService } from "./services/tweetService";
 import { createLogFileWriter } from "./utils/logFile";
 import { logger, setLogFileWriter } from "./utils/logger";
 import { metrics } from "./utils/metrics";
@@ -42,6 +44,7 @@ async function bootstrap(): Promise<void> {
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
   const modelService = new ModelService(llmClient);
+  const tweetService = new TweetService(config.fxtwitterApiBase, packageJson.version);
   // Empty for now — tool-calling-foundation Phase 4 wires the registry into
   // ChatService/runToolLoop; future changes (code-execution, discord-tool,
   // web-search, ...) register their tools here.
@@ -51,6 +54,8 @@ async function bootstrap(): Promise<void> {
     settingsService,
     toolRegistry,
     config.webSearchEngine,
+    tweetService,
+    modelService,
   );
 
   const commandHandlers = createCommandHandlers(
@@ -58,6 +63,7 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     config.webSearchEngine,
+    config.fxtwitterApiBase,
   );
 
   const messageCreateHandler = createMessageCreateHandler(
@@ -73,6 +79,7 @@ async function bootstrap(): Promise<void> {
     llmClient,
     chatService,
     config.webSearchEngine,
+    config.fxtwitterApiBase,
   );
 
   const client = await createBotClient();

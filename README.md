@@ -49,10 +49,15 @@ docker run -d \
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
 | WEB_SEARCH_ENGINE | No | Web検索のエンジン（perplexity / exa / parallel / native / auto / firecrawl）。料金はエンジンごとに異なる（デフォルト: `perplexity`） |
+| FXTWITTER_API_BASE | No | ツイート展開に使う fxtwitter API のベース URL（デフォルト: `https://api.fxtwitter.com`） |
 | E2E_TESTER_BOT_ID | No | e2e 用テスト bot のユーザ ID。この bot からの発言にだけ応答する（NODE_ENV=production では無視） |
 | E2E_TESTER_BOT_TOKEN | No | e2e 用テスト bot のトークン（`bun run e2e` だけが使う） |
 | E2E_CHANNEL_ID | No | e2e の発言を送るチャンネル ID（`bun run e2e` だけが使う） |
 <!-- AUTO:ENV_VARS:END -->
+
+ツイート展開は、投稿内で検出したツイート ID を `FXTWITTER_API_BASE` のホストへ送信して本文を取得する。
+ギルド単位で `/config twitter-expand off` を実行すると無効にできる。
+`FXTWITTER_API_BASE` を変更すれば、自ホストした fxtwitter インスタンスを取得先に指定できる。
 
 ## コマンド一覧
 
@@ -68,6 +73,7 @@ docker run -d \
 | `/config free-only <enabled>` | 無料モデル限定の切り替え |
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
 | `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
+| `/config twitter-expand <enabled>` | ツイート展開の切り替え（投稿内容を外部ホストへ送信） |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
 | `/config auto-reply list` | 自動応答チャンネル一覧を表示 |
