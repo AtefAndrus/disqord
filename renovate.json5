@@ -23,15 +23,15 @@
   ],
   schedule: ["* 0-8 * * 1"], // 月曜 0-8 時台 (JST)
   lockFileMaintenance: { enabled: false },
-  // 範囲指定の依存 (discord.js / zod) も、範囲内の新版が出たら範囲ごと上げる。既定の rangeStrategy は
-  // 範囲を満たす新版を更新対象にせず、lockFileMaintenance も無効なので、lock が永久に動かなかった。
-  // lockFileMaintenance ではなくこちらを選ぶのは、依存ごとの版が PR に出て、クールダウンも効くため
-  // (lockFileMaintenance は推移的な依存までまとめて動かし、minimumReleaseAge も掛からない)。
-  // 範囲を上げる更新も updateType は minor / patch のままで isBump が付くだけなので、下の catch-all の
-  // クールダウンが効く。config:best-practices 由来の security:minimumReleaseAgeNpm は bump に
-  // minimumReleaseAge: null と「クールダウン非対応」の PR 本文注記を付けるが、後に並ぶ本リポジトリの
-  // packageRules が 3 日を掛け直す (注記は残る)。
-  rangeStrategy: "bump",
+  // 実行時の依存も devDependencies と同じく exact に固定し、版の更新 PR で動かす。
+  // bun マネージャは lock の解決版 (lockedVersion) を持たないため、範囲指定のままだと範囲内の新版が
+  // 提案されず、lockFileMaintenance も無効なので lock が動かない。
+  // rangeStrategy: "bump" は採らない。更新候補にはクールダウンが効くが、範囲を書き換えた後の
+  // bun install が範囲内のさらに新しい (待機中の) 版を lock に入れうる。exact なら解決版は候補そのもの。
+  // lockFileMaintenance も採らない。推移的な依存までまとめて動かし、minimumReleaseAge も掛からない。
+  // pin 更新自体はクールダウンの対象外で、lockedVersion が無いと最新版へ固定するので、
+  // 範囲指定の依存を足したときは package.json 側で lock の版に exact 固定してから入れる。
+  rangeStrategy: "pin",
   // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
   vulnerabilityAlerts: { minimumGroupSize: 1 },
   semanticCommits: "enabled",

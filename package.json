@@ -23,8 +23,8 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "discord.js": "^14.26.5",
-    "zod": "^4.4.3"
+    "discord.js": "14.26.5",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
