@@ -65,12 +65,14 @@ describe("SettingsService", () => {
       await service.setGuildModel("g-model", PAID);
       await service.addAutoReplyChannel("g-ch", "c1");
       expect(await service.toggleShowLlmDetails("g-toggle")).toBe(false);
+      await service.setFreeModelsOnly("g-free", true, { model: DEFAULT_MODEL, isFree: true });
 
       expect((await repo.findByGuildId("g-llm"))?.showLlmDetails).toBe(false);
       expect((await repo.findByGuildId("g-ws"))?.webSearchEnabled).toBe(true);
       expect((await repo.findByGuildId("g-model"))?.defaultModel).toBe(PAID.model);
       expect((await repo.findByGuildId("g-ch"))?.autoReplyChannels).toEqual(["c1"]);
       expect((await repo.findByGuildId("g-toggle"))?.showLlmDetails).toBe(false);
+      expect((await repo.findByGuildId("g-free"))?.freeModelsOnly).toBe(true);
     });
   });
 
