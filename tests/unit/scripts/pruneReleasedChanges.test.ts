@@ -69,6 +69,26 @@ describe("rewriteLinks", () => {
     ]);
   });
 
+  test("長い fence の中の短い fence では閉じず、中身を書き換えない", () => {
+    const text = [
+      "````md",
+      "```",
+      "[x](../old-feature/design.md)",
+      "```",
+      "````",
+      "[y](../old-feature/design.md)",
+    ].join("\n");
+
+    expect(rewriteLinks(text, FILE, PRUNED, ROOT, BASE).split("\n")).toEqual([
+      "````md",
+      "```",
+      "[x](../old-feature/design.md)",
+      "```",
+      "````",
+      `[y](${BASE}/docs/changes/old-feature/design.md)`,
+    ]);
+  });
+
   test("先頭が / のリポジトリ相対パス、パーセントエンコード、クエリと複数の # を扱う", () => {
     const text = [
       "[root](/docs/changes/old-feature/design.md)",
@@ -154,6 +174,15 @@ describe("findLeftoverReferences", () => {
     ].join("\n");
 
     expect(findLeftoverReferences(text, ["old-feature"])).toEqual([2, 3]);
+  });
+
+  test("エスケープした記号と changes/ の後のドット区切りも検出する", () => {
+    const text = [
+      "[a](../old\\-feature/design.md)",
+      "[b](/docs/changes/./old-feature/design.md (Design))",
+    ].join("\n");
+
+    expect(findLeftoverReferences(text, ["old-feature"])).toEqual([1, 2]);
   });
 
   test("rewriteLinks が書き換えた結果には残りが無い", () => {

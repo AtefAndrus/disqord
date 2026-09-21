@@ -20,6 +20,10 @@
  * writing and deleting nothing, so a missed form surfaces as a line to fix
  * by hand instead of a broken link. `CHANGELOG.md` is skipped because
  * git-cliff regenerates it from commit messages.
+ *
+ * Known gap, deliberately not handled: a link whose destination wraps onto
+ * a blockquote continuation line (`> `) passes both the rewriter and the
+ * check. Nothing in the repository's design docs is written that way.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -28,7 +32,7 @@ import { parseFrontmatter } from "./generate-readme";
 
 const INLINE_LINK = /(\]\(\s*)(<[^>\n]*>|[^\s)]+)((?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\))/g;
 const REFERENCE_DEFINITION = /^(\s{0,3}\[[^\]\n]+\]:\s*)(<[^>\n]*>|\S+)(.*)$/;
-const FENCE = /^\s{0,3}(```|~~~)/;
+const FENCE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 
 /** Rewrites one link destination, or returns it unchanged when it is not a relative link into a pruned folder. */
 function rewriteDestination(
@@ -97,10 +101,17 @@ export function rewriteLinks(
   return text
     .split("\n")
     .map((line) => {
-      const marker = line.match(FENCE)?.[1];
-      if (marker !== undefined && (fence === undefined || fence === marker)) {
-        fence = fence === undefined ? marker : undefined;
-        return line;
+      const [, marker, rest = ""] = line.match(FENCE) ?? [];
+      if (marker !== undefined) {
+        if (fence === undefined) {
+          fence = marker;
+          return line;
+        }
+        // Only a run of the same character, at least as long, with nothing after it closes the block.
+        if (marker[0] === fence[0] && marker.length >= fence.length && rest.trim() === "") {
+          fence = undefined;
+          return line;
+        }
       }
       if (fence !== undefined) return line;
       const definition = line.match(REFERENCE_DEFINITION);
@@ -119,9 +130,10 @@ export function rewriteLinks(
     .join("\n");
 }
 
-/** Undoes percent-encoding and numeric character references, where they decode cleanly. */
+/** Undoes backslash escapes, percent-encoding, and numeric character references, where they decode cleanly. */
 function decodeLoosely(line: string): string {
   const references = line
+    .replace(/\\([!-/:-@[-`{-~])/g, "$1")
     .replace(/&#(\d+);/g, (_m, code: string) => String.fromCodePoint(Number(code)))
     .replace(/&#x([0-9a-f]+);/gi, (_m, code: string) =>
       String.fromCodePoint(Number.parseInt(code, 16)),
@@ -148,7 +160,7 @@ export function findLeftoverReferences(text: string, prunedNames: readonly strin
   const escaped = prunedNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const dots = "(?:\\.{1,2}/)*";
   const reference = new RegExp(
-    `(?:(?:^|[^\\w-])${dots}(?:\\.\\./|changes/)|\\]\\(\\s*<?${dots}|\\]:\\s*<?${dots})(?:${escaped.join("|")})(?=[/)#?\\s>"']|$)`,
+    `(?:(?:^|[^\\w-])${dots}(?:\\.\\./|changes/)${dots}|\\]\\(\\s*<?${dots}|\\]:\\s*<?${dots})(?:${escaped.join("|")})(?=[/)#?\\s>"']|$)`,
     "gm",
   );
   // Per line, so a replacement never moves text onto another line.
