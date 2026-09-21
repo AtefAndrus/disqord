@@ -7,13 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
-## [Unreleased]
+## [1.5.0] - 2026-09-21
 
 
 ### Added
 
 - Auto-generate README commands and requirements via pre-commit hook
 - Auto-generate README env vars table and switch setup to mise
+- Add CHANGELOG.md with git-cliff and /release skill
+- Add HMAC-authenticated admin endpoints
+- Add multimodal type extensions and model metadata
+- Show input/output modalities in /model set embed
+- Pass-through plugins in OpenRouter chat completion requests
+- Add attachmentParser and extend ChatService with multimodal input
+- Wire multimodal attachments into messageCreate handler
+- Add YAML frontmatter SSOT for design docs and auto-generate progress.md
+- Add OpenRouter app attribution headers
+- Migrate LLM chat responses to Components V2
+- Add client tool calling foundation
+- Improve model command details
 
 
 ### Dependencies
@@ -21,6 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump dependencies
 - Bump @biomejs/biome from 2.4.6 to 2.4.7
 - Update biome.json schema to 2.4.7
+- Bump bun-types, markdownlint-cli2, and @biomejs/biome
+- Bump typescript from 5.9.3 to 6.0.2
+- Bump discord.js, biome, bun-types, @types/node, and lefthook
+- Bump @biomejs/biome from 2.4.10 to 2.4.11
+- Bump the all-dependencies group with 8 updates
+- Bump @types/node in the all-dependencies group (#59)
+- Bump the all-dependencies group with 3 updates
+- Bump the all-dependencies group across 1 directory with 3 updates
+- Bump the all-dependencies group across 1 directory with 3 updates
+- Bump the all-dependencies group with 6 updates
+- Update all non-major dependencies
+- Update zizmor
+- Update all non-major dependencies
+- Pin dependencies
+- Update all non-major dependencies
+- Update bun toolchain to v1.4.0
+- Update all non-major dependencies
+- Update zizmor
+- Update all non-major dependencies
+- Update bun toolchain to v1.4.2
 
 
 ### Documentation
@@ -29,6 +61,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrate to backlog-based roadmap and add markdownlint-cli2
 - Adopt change-driven design workflow inspired by OpenSpec
 - Remove design.md and move references to CLAUDE.md
+- Add OAuth BYOK design for per-user/guild OpenRouter key connection
+- Add admin-endpoints design and backlog entries
+- Add code-execution design and backlog entry
+- Refine code-execution design with Components V2 and dev-only /run
+- Add default-model-ssot design and backlog entry
+- Add chat-response-v2 design and backlog entry
+- Rework code-execution design around per-call sandbox lifecycle
+- Tighten chat-response-v2 around Section / allowedMentions rules
+- Add persistent-sandbox notes to conversation-context, tighten default-model-ssot
+- Add .env.example to default-model-ssot scope
+- Unwrap mid-sentence line breaks in ui-preview docs
+- Add CI pipeline + Actions supply-chain hardening design
+- Revise web-search design: server tools + fxtwitter
+- Refresh change designs for latest library specs
+- Align change designs with revised plan template
+- Record ci-pipeline rollout results and add CI maintenance notes
+- Move CI maintenance notes from ci.yml to CLAUDE.md
+- Confirm bun ecosystem joins multi-ecosystem group (PR #53)
+- Add release-polling change design and backlog entry
+- Generalize admin-endpoints inbound wording to be product-agnostic
+- Add admin API specification (docs/admin-api.md)
+- Refresh default-model-ssot design.md with survey findings
+- Refresh multimodal change design.md
+- Unify CLAUDE.md to English and add investigating status
+- Add tool-calling foundation and agentic feature design docs
+- Refine agentic feature design docs toward convergence
+- Apply final review fixes to remaining agentic design docs
+- Update dependabot-pr skill with grouped-PR workflow and best practices
+- Add renovate-migration design doc
+- Mark chat-response-v2 as implemented after manual regression
+- Correct the drift and alert rationales
+- Retire the Dependabot-era operational notes
+- Record what the onboarding preview confirmed
+- Record the dashboard warning and the abandoned dependency
+- Check off the phase 1 gates the real PRs settled
+- Make AGENTS.md the shared agent source
+- Plan OpenRouter conversation and response improvements
+- Align backlog and output design boundaries
+- Align agent instruction files with the repository state
+- Rewrite AGENTS.md around what the code cannot say (#99)
+- Mark release changes as implemented (#104)
+- Add Responses API migration design and restructure backlog (#108)
+- Record OpenRouter schema and docs index as sources of truth (#109)
+- Record the two weekly Renovate cycles and timestamp lookup (#112)
+- コード実行の design を OpenRouter shell server tool 前提へ書き直す (#114)
+- Record the shutdown and streaming split follow-ups (#116)
+- メッセージの解説（コンテキストメニュー）の design を追加する (#121)
+
+
+### Fixed
+
+- Move open-pull-requests-limit to multi-ecosystem group level
+- Satisfy markdownlint MD029 in admin-endpoints design.md
+- Harden multimodal PDF handling and add default prompt fallback
+- Replace discontinued default model with gemma-4-26b
+- Mention handling, page footers, stop/error info improvements
+- Split chat responses by UTF-8 bytes as well as chars
+- Update status of tool calling foundation to implemented
+- Keep bun-types on the bun toolchain group
+- Keep pin updates out of the bun toolchain group
+- Stop Renovate pinning a digest into the zizmor version input
+- Close the gaps the accumulated review found
+- Pin bun-types so it moves with the runtime
+- Close the two gaps the hook review found
+- Complete Renovate migration safeguards
+- Preserve code fences across split messages
+- Accept OpenRouter final usage frames
+- Coolify の Deploy Webhook を POST で呼び、手動起動もできるようにする (#95)
+- Keep the version status across gateway reconnects (#98)
+- Bun run preview を Components V2 の現行 UI に追従させる (#111)
+
+
+### Refactoring
+
+- Address biome 2.4.11 useOptionalChain warnings
+- Extract HMAC-SHA256 helper into src/http/hmac.ts
+- Default model ID を envVars.ts に SSOT 化
+- Remove GitHub release notifications (#102)
+- LLM 呼び出しを Chat Completions から Responses API へ載せ替える (#110)
+
+
+### Testing
+
+- Avoid cross-file console spy interference
+- Protect stop button component contract
+- Assert the stop button through toJSON
+- テスト bot による e2e と、手動確認をリリースの条件にする運用を追加する (#115)
+- E2e の最後にその回の費用を出す (#122)
 
 
 ## [1.4.0] - 2026-01-14
@@ -247,7 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Testing
 
 - Add unit and integration tests (54 tests, 98% coverage)
-[unreleased]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...HEAD
+[1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AtefAndrus/disqord/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/AtefAndrus/disqord/compare/v1.3.3...v1.3.4
 [1.3.3]: https://github.com/AtefAndrus/disqord/compare/v1.3.2...v1.3.3
