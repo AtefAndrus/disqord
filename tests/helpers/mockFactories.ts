@@ -1,6 +1,7 @@
 import { mock } from "bun:test";
 import type { ILLMClient } from "../../src/llm/openrouter";
 import type { ISettingsService, ModelCheck } from "../../src/services/settingsService";
+import type { ITweetService } from "../../src/services/tweetService";
 import type { ChatCompletionResponse, GuildSettings } from "../../src/types";
 
 export function createMockLLMClient(): ILLMClient {
@@ -77,6 +78,18 @@ export function createMockSettingsService(): ISettingsService {
     setWebSearchEnabled: mock((guildId: string, webSearchEnabled: boolean) =>
       Promise.resolve(settings(guildId, { webSearchEnabled })),
     ),
+    setTwitterExpandEnabled: mock((guildId: string, twitterExpandEnabled: boolean) =>
+      Promise.resolve(settings(guildId, { twitterExpandEnabled })),
+    ),
+  };
+}
+
+export function createMockTweetService(): ITweetService {
+  return {
+    extractTweetIds: mock(() => []),
+    expandTweets: mock(() =>
+      Promise.resolve({ status: "none" as const, parts: [], textParts: [], imageParts: [] }),
+    ),
   };
 }
 
@@ -88,6 +101,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     showLlmDetails: true,
     autoReplyChannels: [],
     webSearchEnabled: false,
+    twitterExpandEnabled: true,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

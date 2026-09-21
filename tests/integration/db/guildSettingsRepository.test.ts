@@ -62,6 +62,7 @@ describe("GuildSettingsRepository", () => {
         showLlmDetails: true,
         autoReplyChannels: [],
         webSearchEnabled: false,
+        twitterExpandEnabled: true,
       });
       expect(await repo.findByGuildId("new-guild")).toEqual(result);
     });
@@ -75,6 +76,7 @@ describe("GuildSettingsRepository", () => {
     test("返さなかった列は保存された値のまま残す", async () => {
       await repo.update("guild-keep", () => ({
         webSearchEnabled: true,
+        twitterExpandEnabled: false,
         autoReplyChannels: ["c1"],
         showLlmDetails: false,
       }));
@@ -84,6 +86,7 @@ describe("GuildSettingsRepository", () => {
       expect(await repo.findByGuildId("guild-keep")).toMatchObject({
         defaultModel: "other",
         webSearchEnabled: true,
+        twitterExpandEnabled: false,
         autoReplyChannels: ["c1"],
         showLlmDetails: false,
       });
@@ -99,6 +102,15 @@ describe("GuildSettingsRepository", () => {
       });
 
       expect(seen).toBe(true);
+    });
+
+    test("ツイート展開の設定を読み書きできる", async () => {
+      await repo.update("guild-twitter", () => ({ twitterExpandEnabled: false }));
+
+      expect((await repo.findByGuildId("guild-twitter"))?.twitterExpandEnabled).toBe(false);
+
+      await repo.update("guild-twitter", () => ({ twitterExpandEnabled: true }));
+      expect((await repo.findByGuildId("guild-twitter"))?.twitterExpandEnabled).toBe(true);
     });
 
     test("createdAt は変えず、書いたときだけ updatedAt を進める", async () => {
@@ -170,6 +182,7 @@ describe("GuildSettingsRepository", () => {
         expect(before).not.toHaveProperty("releaseChannelId");
         // Existing guilds must not start paying for searches because of a migration.
         expect(before?.webSearchEnabled).toBe(false);
+        expect(before?.twitterExpandEnabled).toBe(true);
 
         await legacyRepo.update("legacy-guild", () => ({
           defaultModel: "updated-model",

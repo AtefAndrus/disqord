@@ -1,6 +1,7 @@
+import { BadRequestError } from "../errors";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
-import { runToolLoop } from "../llm/toolLoop";
+import { addUsage, runToolLoop } from "../llm/toolLoop";
 import type { ToolRegistry } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
@@ -16,7 +17,13 @@ import type {
   MessageId,
 } from "../types";
 import { PDF_PARSER_PLUGIN } from "./attachmentParser";
+import type { IModelService } from "./modelService";
 import type { ISettingsService } from "./settingsService";
+import {
+  buildTweetSystemMessage,
+  type ITweetService,
+  type TweetExpansionResult,
+} from "./tweetService";
 
 export interface ChatUserInput {
   text: string;
@@ -129,8 +136,11 @@ function raceWithAbort<T>(
  * 不整合" — dropping the user's own input purely based on cancel timing is a
  * bug, not a feature of "not yet started").
  */
-function buildChatMessages(input: ChatUserInput): ChatMessage[] {
-  const parts = input.parts ?? [];
+function buildChatMessages(
+  input: ChatUserInput,
+  tweetParts: ChatMessageContent[] = [],
+): ChatMessage[] {
+  const parts = [...(input.parts ?? []), ...tweetParts];
 
   let content: ChatMessage["content"];
   if (parts.length === 0) {
@@ -145,13 +155,17 @@ function buildChatMessages(input: ChatUserInput): ChatMessage[] {
   return [{ role: "user", content }];
 }
 
-function buildChatRequest(model: string, input: ChatUserInput): ChatCompletionRequest {
-  const parts = input.parts ?? [];
+function buildChatRequest(
+  model: string,
+  input: ChatUserInput,
+  tweetParts: ChatMessageContent[] = [],
+): ChatCompletionRequest {
+  const parts = [...(input.parts ?? []), ...tweetParts];
   const hasFile = parts.some((p) => p.type === "file");
 
   return {
     model,
-    messages: buildChatMessages(input),
+    messages: buildChatMessages(input, tweetParts),
     ...(hasFile && { plugins: [PDF_PARSER_PLUGIN] }),
   };
 }
@@ -164,6 +178,8 @@ export class ChatService implements IChatService {
     private readonly settingsService: ISettingsService,
     private readonly toolRegistry: ToolRegistry,
     private readonly webSearchEngine: WebSearchEngine,
+    private readonly tweetService: ITweetService,
+    private readonly modelService: IModelService,
   ) {}
 
   async generateResponse(
@@ -220,26 +236,114 @@ export class ChatService implements IChatService {
         return { status: "cancelled", history: initialMessages };
       }
       const settings = settingsResult.value;
-      const request = buildChatRequest(settings.defaultModel, input);
-      return await runToolLoop({
-        llmClient: this.llmClient,
-        model: request.model,
-        messages: settings.webSearchEnabled
-          ? [buildWebSearchSystemMessage(new Date()), ...request.messages]
-          : request.messages,
-        ...(request.plugins && { plugins: request.plugins }),
-        registry: this.toolRegistry,
-        ...(settings.webSearchEnabled && {
-          serverTools: [buildWebSearchServerTool(this.webSearchEngine)],
-        }),
-        ctx: { guildId, channelId: ctx.channelId, userId: ctx.userId },
-        updater,
-        signal: controller.signal,
+      let expansion: TweetExpansionResult | undefined;
+      if (
+        settings.twitterExpandEnabled &&
+        this.tweetService.extractTweetIds(input.text).length > 0
+      ) {
+        try {
+          const expansionResult = await raceWithAbort(
+            this.tweetService.expandTweets(input.text, controller.signal, (signal) =>
+              raceWithAbort(
+                this.modelService.isMultimodalCapable(settings.defaultModel, "image"),
+                signal,
+              ).then((result) => (result.ok ? result.value : null)),
+            ),
+            controller.signal,
+          );
+          if (!expansionResult.ok || expansionResult.value.status === "cancelled") {
+            return { status: "cancelled", history: initialMessages };
+          }
+          expansion = expansionResult.value;
+        } catch {
+          // Tweet expansion is an external best-effort dependency. A failed
+          // expansion must not prevent the original user message from being sent.
+          if (controller.signal.aborted) {
+            return { status: "cancelled", history: initialMessages };
+          }
+        }
+      }
+
+      if (controller.signal.aborted) {
+        return { status: "cancelled", history: initialMessages };
+      }
+
+      const tweetParts = expansion?.parts ?? [];
+      const request = buildChatRequest(settings.defaultModel, input, tweetParts);
+      const systemMessages = [
+        ...(settings.webSearchEnabled ? [buildWebSearchSystemMessage(new Date())] : []),
+        ...(expansion && expansion.textParts.length > 0 ? [buildTweetSystemMessage()] : []),
+      ];
+      const tracked = createTrackingUpdater(updater);
+      const result = await this.runChatLoop(
+        request,
+        systemMessages,
+        settings.webSearchEnabled,
+        guildId,
+        ctx,
+        tracked.updater,
+        controller.signal,
         requestId,
-      });
+      );
+
+      if (
+        result.status === "error" &&
+        result.error instanceof BadRequestError &&
+        (expansion?.imageParts.length ?? 0) > 0 &&
+        !tracked.stagedNonEmpty
+      ) {
+        console.warn("[chatService] retrying after removing tweet images");
+        const retryRequest = buildChatRequest(
+          settings.defaultModel,
+          input,
+          expansion?.textParts ?? [],
+        );
+        const retryTracked = createTrackingUpdater(updater);
+        const retryResult = await this.runChatLoop(
+          retryRequest,
+          systemMessages,
+          settings.webSearchEnabled,
+          guildId,
+          ctx,
+          retryTracked.updater,
+          controller.signal,
+          requestId,
+        );
+        // The rejected attempt can still have been billed (a heartbeat may
+        // carry usage before the error), so the footer must count both.
+        const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
+        return usage ? { ...retryResult, usage } : retryResult;
+      }
+      return result;
     } finally {
       this.activeRequests.delete(requestId);
     }
+  }
+
+  private runChatLoop(
+    request: ChatCompletionRequest,
+    systemMessages: ChatMessage[],
+    webSearchEnabled: boolean,
+    guildId: GuildId,
+    ctx: ChatRequestContext,
+    updater: IToolLoopUpdater,
+    signal: AbortSignal,
+    requestId: MessageId,
+  ): Promise<ToolLoopResult> {
+    return runToolLoop({
+      llmClient: this.llmClient,
+      model: request.model,
+      messages: [...systemMessages, ...request.messages],
+      ...(request.plugins && { plugins: request.plugins }),
+      registry: this.toolRegistry,
+      ...(webSearchEnabled && {
+        serverTools: [buildWebSearchServerTool(this.webSearchEngine)],
+      }),
+      ctx: { guildId, channelId: ctx.channelId, userId: ctx.userId },
+      updater,
+      signal,
+      requestId,
+    });
   }
 
   cancelRequest(requestId: MessageId): boolean {
@@ -251,4 +355,27 @@ export class ChatService implements IChatService {
     }
     return false;
   }
+}
+
+function createTrackingUpdater(updater: IToolLoopUpdater): {
+  updater: IToolLoopUpdater;
+  stagedNonEmpty: boolean;
+} {
+  const state = { stagedNonEmpty: false };
+  return {
+    get stagedNonEmpty(): boolean {
+      return state.stagedNonEmpty;
+    },
+    updater: {
+      beginTurn: () => updater.beginTurn(),
+      stageContent: (text: string) => {
+        if (text.length > 0) state.stagedNonEmpty = true;
+        return updater.stageContent(text);
+      },
+      commitTurn: (kind) => updater.commitTurn(kind),
+      abortTurn: (reason) => updater.abortTurn(reason),
+      beginToolBlock: (name) => updater.beginToolBlock(name),
+      endToolBlock: (name, render) => updater.endToolBlock(name, render),
+    },
+  };
 }

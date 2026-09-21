@@ -175,6 +175,81 @@ describe("config web-search handler", () => {
   });
 });
 
+describe("config twitter-expand handler", () => {
+  function createTwitterExpandInteraction(
+    value: "on" | "off",
+    hasManageGuild: boolean,
+  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
+    const { interaction, reply } = createInteraction(value);
+    Object.assign(interaction, {
+      memberPermissions: {
+        has: mock((permission: bigint) =>
+          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
+        ),
+      },
+    });
+    return { interaction, reply };
+  }
+
+  function createHandlers(): {
+    handlers: ReturnType<typeof createCommandHandlers>;
+    settingsService: ReturnType<typeof createMockSettingsService>;
+  } {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+      "https://tweets.example.test/fxtwitter",
+    );
+    return { handlers, settingsService };
+  }
+
+  test("サーバーの管理権限があれば有効化し、外部送信を伝える", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createTwitterExpandInteraction("on", true);
+
+    await handlers.configTwitterExpand(interaction);
+
+    expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", true);
+    expect(repliedEmbed(reply).description).toContain("外部ホスト");
+  });
+
+  test("サーバーの管理権限があれば無効化する", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction } = createTwitterExpandInteraction("off", true);
+
+    await handlers.configTwitterExpand(interaction);
+
+    expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", false);
+  });
+
+  test("サーバーの管理権限がなければ設定を変えず、本人にだけ断る", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createTwitterExpandInteraction("on", false);
+
+    await handlers.configTwitterExpand(interaction);
+
+    expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
+    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
+    expect(payload.flags).toBe(MessageFlags.Ephemeral);
+    expect(repliedEmbed(reply).description).toContain("サーバーの管理");
+  });
+
+  test("DMでは設定を変えず、サーバー内限定のエラーを返す", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createTwitterExpandInteraction("on", true);
+    Object.assign(interaction, { guildId: null });
+
+    await handlers.configTwitterExpand(interaction);
+
+    expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
+    expect(repliedEmbed(reply).description).toContain("サーバー内でのみ");
+  });
+});
+
 describe("model set と無料モデル限定の競合", () => {
   test("有料モデルの確認中に限定が ON になったら、モデルは保存されず規則違反になる", async () => {
     const db = new Database(":memory:");

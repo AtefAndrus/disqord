@@ -55,4 +55,18 @@ export function applyMigrations(db: Database) {
       ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAULT 0
     `);
   }
+
+  // Migration: Add twitter_expand_enabled column (on by default: tweet expansion is free)
+  const columnsAfterWebSearch = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasTwitterExpandEnabled = columnsAfterWebSearch.some(
+    (c) => c.name === "twitter_expand_enabled",
+  );
+  if (!hasTwitterExpandEnabled) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DEFAULT 1
+    `);
+  }
 }

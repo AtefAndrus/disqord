@@ -9,6 +9,7 @@ interface StatusMessageData {
   cacheStatus: { lastUpdatedAt: Date | null; modelCount: number };
   settings?: GuildSettings;
   webSearchEngine: string;
+  fxtwitterHostname: string;
   version: string;
 }
 
@@ -49,6 +50,11 @@ export function buildStatusMessage(data: StatusMessageData): {
       {
         name: "Web検索",
         value: data.settings.webSearchEnabled ? `有効（${data.webSearchEngine}）` : "無効",
+        inline: true,
+      },
+      {
+        name: "ツイート展開",
+        value: data.settings.twitterExpandEnabled ? `有効（${data.fxtwitterHostname}）` : "無効",
         inline: true,
       },
     );

@@ -10,6 +10,7 @@ export interface GuildSettings {
   showLlmDetails: boolean;
   autoReplyChannels: ChannelId[];
   webSearchEnabled: boolean;
+  twitterExpandEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

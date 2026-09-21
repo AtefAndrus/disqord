@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, type mock, setSystemTime, test } from "bun:test";
+import { beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { getEventListeners } from "node:events";
+import { BadRequestError } from "../../../src/errors";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { ChatService } from "../../../src/services/chatService";
+import { ModelService } from "../../../src/services/modelService";
 import type { ISettingsService } from "../../../src/services/settingsService";
+import { TWEET_FETCH_DEADLINE_MS, TweetService } from "../../../src/services/tweetService";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -13,6 +17,7 @@ import {
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
+  createMockTweetService,
 } from "../../helpers/mockFactories";
 
 /** Records every IToolLoopUpdater callback invocation for assertions, without touching Discord. */
@@ -49,13 +54,22 @@ describe("ChatService", () => {
   let chatService: ChatService;
   let mockLLMClient: ILLMClient;
   let mockSettingsService: ISettingsService;
+  let mockTweetService: ReturnType<typeof createMockTweetService>;
   let toolRegistry: ToolRegistry;
 
   beforeEach(() => {
     mockLLMClient = createMockLLMClient();
     mockSettingsService = createMockSettingsService();
+    mockTweetService = createMockTweetService();
     toolRegistry = new ToolRegistry();
-    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "perplexity");
+    chatService = new ChatService(
+      mockLLMClient,
+      mockSettingsService,
+      toolRegistry,
+      "perplexity",
+      mockTweetService,
+      new ModelService(mockLLMClient),
+    );
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {
@@ -340,7 +354,14 @@ describe("ChatService", () => {
         );
         const { updater } = createSpyUpdater();
         // A non-default engine shows the configured one reaches the request.
-        const exaChat = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "exa");
+        const exaChat = new ChatService(
+          mockLLMClient,
+          mockSettingsService,
+          toolRegistry,
+          "exa",
+          mockTweetService,
+          new ModelService(mockLLMClient),
+        );
 
         await exaChat.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
           channelId: "channel-1",
@@ -368,6 +389,394 @@ describe("ChatService", () => {
       } finally {
         setSystemTime();
       }
+    });
+
+    test("ツイートURLを展開し、Web検索のsystemより後ろに非信頼データのsystemを置く", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "<untrusted-tweet>tweet</untrusted-tweet>" }],
+          textParts: [{ type: "text" as const, text: "<untrusted-tweet>tweet</untrusted-tweet>" }],
+          imageParts: [],
+        }),
+      );
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ webSearchEnabled: true, twitterExpandEnabled: true }),
+      );
+      const { updater } = createSpyUpdater();
+      const exaChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "exa",
+        mockTweetService,
+        new ModelService(mockLLMClient),
+      );
+
+      await exaChat.generateChatResponse("guild-123", { text: "read this" }, "req-tweet", updater, {
+        channelId: "channel-1",
+        userId: "user-1",
+      });
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
+      expect(request.messages[1]?.content).toContain("非信頼データ");
+      expect(request.messages[2]?.content).toEqual([
+        { type: "text", text: "read this" },
+        { type: "text", text: "<untrusted-tweet>tweet</untrusted-tweet>" },
+      ]);
+    });
+
+    test("実TweetServiceの画像対応判定に期限signalを渡し、生成signalのlistenerを残さない", async () => {
+      const originalFetch = globalThis.fetch;
+      const originalSetTimeout = globalThis.setTimeout;
+      const originalAbortController = globalThis.AbortController;
+      const createdControllers: AbortController[] = [];
+      class TrackingAbortController extends originalAbortController {
+        constructor() {
+          super();
+          createdControllers.push(this);
+        }
+      }
+      const mockFetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: 200,
+              status: {
+                type: "status",
+                text: "tweet",
+                created_timestamp: 0,
+                likes: 1,
+                reposts: 2,
+                replies: 3,
+                author: { name: "Alice", screen_name: "alice" },
+                media: { photos: [{ url: "https://pbs.twimg.com/photo.jpg" }], videos: [] },
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
+      globalThis.AbortController = TrackingAbortController;
+      globalThis.setTimeout = ((...args: Parameters<typeof originalSetTimeout>) => {
+        const [handler, delay, ...rest] = args;
+        return originalSetTimeout(handler, delay === TWEET_FETCH_DEADLINE_MS ? 0 : delay, ...rest);
+      }) as typeof globalThis.setTimeout;
+      mockLLMClient.listModelsWithPricing = mock(() => new Promise<never>(() => {}));
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: true }),
+      );
+      const realTweetService = new TweetService("https://api.fxtwitter.test", "1.5.0");
+      const realChatService = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        realTweetService,
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      try {
+        const result = await realChatService.generateChatResponse(
+          "guild-123",
+          { text: "https://x.com/a/status/20" },
+          "req-real-tweet",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+
+        expect(result.status).toBe("final");
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockLLMClient.listModelsWithPricing).toHaveBeenCalledTimes(1);
+        const generationController = createdControllers[0];
+        if (!generationController) throw new Error("generation controller was not created");
+        expect(generationController.signal.aborted).toBe(false);
+        expect(getEventListeners(generationController.signal, "abort")).toHaveLength(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.AbortController = originalAbortController;
+      }
+    });
+
+    test("実TweetService経由で、取得したポストの本文と画像がモデルへのリクエストに入る", async () => {
+      const originalFetch = globalThis.fetch;
+      const mockFetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: 200,
+              status: {
+                type: "status",
+                text: "just setting up my twttr",
+                created_timestamp: 0,
+                likes: 1,
+                reposts: 2,
+                replies: 3,
+                author: { name: "jack", screen_name: "jack" },
+                media: { photos: [{ url: "https://pbs.twimg.com/photo.jpg" }], videos: [] },
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 1640000000,
+            contextLength: 4096,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "image"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: true }),
+      );
+      const realChatService = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        new TweetService("https://api.fxtwitter.test", "1.5.0"),
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      try {
+        const result = await realChatService.generateChatResponse(
+          "guild-123",
+          { text: "これ何? https://x.com/jack/status/20" },
+          "req-real-tweet-content",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+
+        expect(result.status).toBe("final");
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+        ];
+        const system = request.messages.find((m) => m.role === "system");
+        expect(JSON.stringify(system?.content)).toContain("untrusted-tweet");
+        const user = request.messages.find((m) => m.role === "user");
+        if (!user || !Array.isArray(user.content)) throw new Error("user content must be parts");
+        const texts = user.content.flatMap((p) => (p.type === "text" ? [p.text] : []));
+        expect(texts[0]).toBe("これ何? https://x.com/jack/status/20");
+        expect(texts[1]).toContain('<untrusted-tweet url="https://x.com/i/status/20">');
+        expect(texts[1]).toContain("just setting up my twttr");
+        expect(user.content).toContainEqual({
+          type: "image_url",
+          image_url: { url: "https://pbs.twimg.com/photo.jpg" },
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    test("ツイート展開がOFFならサービスもネットワークも呼ばず、リクエストを変えない", async () => {
+      mockTweetService.extractTweetIds = mock(() => {
+        throw new Error("must not extract when disabled");
+      });
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: false }),
+      );
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "https://x.com/a/status/20" },
+        "req-off",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(mockTweetService.extractTweetIds).not.toHaveBeenCalled();
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages).toEqual([{ role: "user", content: "https://x.com/a/status/20" }]);
+    });
+
+    test("ツイートURLが無ければ展開せず、system messageもpartsも足さない", async () => {
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "通常の質問" },
+        "req-no-tweet",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(mockTweetService.extractTweetIds).toHaveBeenCalledWith("通常の質問");
+      expect(mockTweetService.expandTweets).not.toHaveBeenCalled();
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.messages).toEqual([{ role: "user", content: "通常の質問" }]);
+    });
+
+    test("画像付きリクエストのBadRequestErrorは本文未表示時だけ画像を外して一度再試行する", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      const imageModelService = new ModelService(mockLLMClient);
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>)
+        .mockImplementationOnce(async function* () {
+          yield {
+            heartbeat: true as const,
+            done: false as const,
+            usage: { prompt_tokens: 11, completion_tokens: 0, total_tokens: 11, cost: 0.01 },
+          };
+          throw new BadRequestError("image rejected");
+        })
+        .mockImplementationOnce(async function* () {
+          yield { content: "ok", done: false as const };
+          yield {
+            done: true as const,
+            fullText: "ok",
+            usage: { prompt_tokens: 22, completion_tokens: 3, total_tokens: 25, cost: 0.02 },
+            finishReason: "stop" as const,
+          };
+        });
+      const { updater } = createSpyUpdater();
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        imageModelService,
+      );
+
+      const result = await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read" },
+        "req-retry",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(result.status).toBe("final");
+      expect(mockLLMClient.chatStream).toHaveBeenCalledTimes(2);
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls[0]?.[0].messages[1]?.content).toEqual([
+        { type: "text", text: "read" },
+        { type: "text", text: "tweet" },
+        imagePart,
+      ]);
+      expect(calls[1]?.[0].messages[1]?.content).toEqual([
+        { type: "text", text: "read" },
+        { type: "text", text: "tweet" },
+      ]);
+      // The rejected attempt's usage is kept alongside the retry's.
+      expect(result.usage?.prompt_tokens).toBe(33);
+      expect(result.usage?.total_tokens).toBe(36);
+      expect(result.usage?.cost).toBeCloseTo(0.03);
+    });
+
+    test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      const imageModelService = new ModelService(mockLLMClient);
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValueOnce([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
+        async function* () {
+          yield { content: "partial", done: false as const };
+          throw new BadRequestError("after text");
+        },
+      );
+      const { updater } = createSpyUpdater();
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        imageModelService,
+      );
+
+      const result = await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read" },
+        "req-no-retry",
+        updater,
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+        },
+      );
+
+      expect(result.status).toBe("error");
+      expect(mockLLMClient.chatStream).toHaveBeenCalledTimes(1);
     });
 
     test("streaming 中の content は累積で updater.stageContent に渡る", async () => {
