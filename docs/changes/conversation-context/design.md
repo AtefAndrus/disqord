@@ -10,39 +10,42 @@ summary: "DB 永続の会話履歴、OpenRouter session routing、prompt cache �
 ## Why
 
 現状、Bot への各メッセージは独立処理され会話の文脈が保持されない。ユーザは毎回文脈を説明し直す必要がある。
+`ChatService` の `buildChatMessages()`（`src/services/chatService.ts`）は、いま届いたメッセージ 1 件だけを `[{ role: "user", content }]` として送り、Discord から過去のメッセージを取得する処理も持たない。
 
 本 change で**多ターンの会話文脈の DB 永続基盤**を入れる。DB 逐次永続化は、(1) `/fork` 等の将来機能や圧縮要約の置き場、(2) 履歴 fetch のレート制限回避（bot は既に `messageCreate` で対象メッセージを受信）、(3) 後続の再生成/編集/undo の土台、を提供する（身内利用前提でプライバシー許容）。
 
 固定 N 件で切る方式は会話途中でも一律に切れて筋が悪いため、**無活動ギャップ + トークン予算**でセッション境界を決め、古い画像は剥がして文脈コストを抑える。
 
-OpenRouter の Responses API は会話状態をサーバ側へ保存せず、`previous_response_id` による継続も提供しないため、会話履歴の source of truth は本 change の DB とする。
-一方、Chat Completions の `session_id` は同じ会話を同一プロバイダへ寄せる sticky routing と観測に使え、プロバイダ側 prompt caching の再利用率を高められるため、ローカル session ごとの不透明な識別子として併用する。
+Bot は OpenRouter の Responses API（`POST /responses`）で生成する。
+Responses API は会話状態をサーバ側へ保存せず（`store` は `false` 固定）、`previous_response_id` に値を入れたリクエストは HTTP 400 で拒否される（OpenAPI 定義の `ResponsesRequest`）。
+そのため会話履歴の source of truth は本 change の DB とし、毎回の `input` に履歴全体を載せる。
+一方、`ResponsesRequest` の top-level `session_id` は同じ会話を同一プロバイダへ寄せる sticky routing と観測に使え、プロバイダ側 prompt caching の再利用率を高められるため、ローカル session ごとの不透明な識別子として併用する。
 
 > **スコープ分離**: **回答再生成・編集/undo・compaction**は、本基盤（turn/session モデル）の上の独立機能として [conversation-regeneration](../conversation-regeneration/design.md) が扱う。本 change は**履歴ストア + 境界 + 構造化メディア + 保持**に集中する。
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `session_id` を通常生成・tool 後の再リクエスト・retry へ渡す配管は同 change が用意する。`runToolLoop()` は毎ターンのリクエストを名前付きフィールドで組み直しており、フィールドを足すだけでは伝搬しない。本 change は値を載せる側
+- 前提（リリース済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `runToolLoop()` は `requestFields`（`ToolLoopRequestFields`、`src/llm/toolLoop.ts`）に渡したフィールドを、初回・tool 実行後の再リクエスト・最終ターンのすべてのリクエストへ載せる。`OpenRouterClient` の `toResponsesBody()` は、自分が変換しないフィールドをそのまま body へ展開する。本 change は `ChatCompletionRequest` に `session_id` を足し、`ChatService` から `requestFields: { session_id }` を渡すだけでよい。生成の再試行（retry）の経路はコードに存在しない
 - 後続: [conversation-regeneration](../conversation-regeneration/design.md) — 本基盤を前提とする回答再生成・編集/undo・compaction
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — **優先順位で解決した単一 system prompt**（override precedence、合成ではない）を前置
 - 連携: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) / [discord-tool](../discord-tool/design.md) — モデル駆動の文脈取得（`fetch_more_context`）は両者成立後の発展
 - 連携: [view-image-rehydration](../view-image-rehydration/design.md) — 本 change の構造化メディア参照を使い剥がした画像をベストエフォート再取得
 - 連携: [使用統計](../usage-stats/design.md) — usage/トークンの**コスト計上**（message 本文は保存しない。履歴本体は本 change）
-- 連携: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `cached_tokens` / `cache_write_tokens` を含む usage 型と parser を共有
-- 将来: [code-execution](../code-execution/design.md) の persistent sandbox は本 change の **session_id** をキーにできる（**sandbox の所有・ライフサイクルは code-execution 側**）
+- 連携: [Web 検索](../web-search/design.md) — Web 検索 ON 時に `input` の先頭へ置く system メッセージが分単位の現在日時を含み、prompt cache の prefix を毎分変える（「8. OpenRouter session routing と prompt caching」で配置を変える）
+- 連携: [code-execution](../code-execution/design.md) — コンテナは応答ごとの ID（`run_<messageId>_<hex>`）で作り、本 change の session をキーにしない。`container_auto` は `session_id` があると `sess_<session_id>` の共有コンテナになるため同 change は使わない。本 change が `session_id` を送り始めても code-execution の挙動は変わらない
 
 ## Goals / Non-Goals
 
 **Goals（v1）:**
 
-- **addressed turn**（メンション/リプライ/autoReply で bot に向けられた発話）+ **bot 応答**を**論理ターン**として DB 永続化（1 ターン ↔ 0..N Discord メッセージ）
+- **addressed turn**（メンションまたは autoReply チャンネルで bot に向けられた発話。範囲は Decisions の「addressing の範囲」）+ **bot 応答**を**論理ターン**として DB 永続化（1 ターン ↔ 0..N Discord メッセージ）
 - gap で区切る **session** + 依存閉じた **exchange 単位**のトークン予算で文脈を構築
 - ChatMessage parts（text/image-ref/file-ref・順序）を**再構築可能な versioned JSON**で保存（base64 は保存しない）
 - メディア剥がし（保存不変・リクエスト配列のみ）
 - 共有チャンネルの発話者識別（ラベルのスナップショット）
 - 保持/プライバシー（オプトイン・TTL・Discord 削除/bulk削除/チャンネル削除同期・guild 退出 purge）
-- ローカル session ごとに外部へ漏らしても Discord の guild/channel/user を推測できない `openrouter_session_id` を発行し、同じ session の全 Chat Completions request へ付与
-- provider prompt caching の読み取り・書き込み token を usage として記録し、cache が利用できないモデルや request でも応答を継続
+- ローカル session ごとに外部へ漏らしても Discord の guild/channel/user を推測できない `openrouter_session_id` を発行し、同じ session の全 OpenRouter リクエストへ `session_id` として付与
+- 共通 prompt prefix を安定させ、provider prompt caching が効く形で履歴を送る。cache が利用できないモデルや request でも応答を継続
 
 **Non-Goals（v1）:** 固定 N 件切り出し（廃止） / **回答再生成・編集/undo・compaction**（→ [conversation-regeneration](../conversation-regeneration/design.md)） / OpenRouter 上の会話履歴保存・`previous_response_id` 継続 / `X-OpenRouter-Cache` による完成回答の response caching / provider ごとの明示的 `cache_control` 最適化 / 受動参加（全メッセージ保存）→ Phase 2 / 意図的沈黙 `[SILENT]` → Phase 2 / DM → 将来（`DirectMessages` intent 未設定・設定が guild 前提） / 意味的境界検出 → 将来 / `/search` → 見送り / `/fork` → 別 change
 
@@ -55,9 +58,11 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず、`pr
 | reply チェーン | user turn に `reply_to_turn_id`（`ON DELETE SET NULL`）+ `reply_to_discord_msg_id`（purge 後識別用スナップショット） | assistant→parent だけでは過去 user の reply 先を辿れない |
 | セッション同一性 | `sessions`（gap 区切り）。turn は `session_id` 保持、guild/channel は session 由来（重複保持しない） | 安定 ID（fork/sandbox）+ 重複カラム不整合の排除 |
 | OpenRouter session routing | session 作成時に `crypto.randomUUID()` で `openrouter_session_id` を発行し、同じ local session の request と tool loop 内の再 request へ一貫して付与する | OpenRouter の `session_id` は会話保存 ID ではなく sticky routing / 観測用である。Discord ID や連番 DB ID の外部送信を避ける |
-| prompt caching | v1 は provider の implicit caching を利用し、共通 prompt prefix を安定させる。provider 固有の `cache_control` は一律付与しない | 最小 prefix 長・cache write 料金・対応形式が provider ごとに異なるため、全モデル共通の明示 cache 方針は誤課金や miss を招く |
-| cache usage | `prompt_tokens_details.cached_tokens` と `prompt_tokens_details.cache_write_tokens` を optional な usage として記録し、未返却は 0 と同一視せず「不明」とする | 未対応 provider と cache miss を区別し、後から実測で方針を調整できる |
-| OpenRouter Responses API | 会話状態の保存先として採用しない | 現行 Responses API は stateless であり、`store` / `previous_response_id` を会話継続に利用できない |
+| prompt caching | v1 は provider の implicit caching を利用し、共通 prompt prefix を安定させる。`ResponsesRequest` の top-level `cache_control`（最後の cacheable block に自動で breakpoint を置く）、`prompt_cache_key`、`prompt_cache_options` は送らない | 最小 prefix 長・cache write 料金・対応形式が provider ごとに異なり、Anthropic の cache write は通常入力より高い。全モデル共通の明示 cache 方針は、同じ session が続かない会話で write 料金だけを払う結果になりうる。付けるかは実測（Tasks）の後で決める |
+| cache usage | 既存の `mapResponsesUsage()`（`src/llm/openrouter.ts`）が `usage.input_tokens_details.{cached_tokens,cache_write_tokens}` を内部の `prompt_tokens_details.*` へ写し、`runToolLoop()` がターンをまたいで合算し、LLM 詳細フッターが `Cached: N` を出す。本 change は新たな parser を持たず、値の永続化は [使用統計](../usage-stats/design.md) に任せる。未返却は 0 と同一視せず「不明」とする（既存の型の方針） | 未対応 provider と cache miss を区別し、後から実測で方針を調整できる |
+| OpenRouter Responses API | 会話状態の保存先として採用しない | Responses API は stateless であり、`store` は `false` 固定、`previous_response_id` は 400 で拒否される |
+| addressing の範囲 | メンションと autoReply チャンネル（およびその配下のスレッド）の発言を addressed turn とする。bot のメッセージへのリプライは、メンションを含まない限り addressed turn にしない | 現在の `shouldRespond()`（`src/bot/events/messageCreate.ts`）がこの範囲で応答しており、本 change は応答する条件を変えない。リプライだけで応答させるかは Open Questions |
+| 変動する system 情報の位置 | 現在日時のように毎回変わる system 情報は、履歴の後ろ、今回の user turn の直前に置く。先頭の system メッセージには変わらない内容だけを置く | prompt cache は先頭からの一致でしか効かない。Web 検索 ON 時の system メッセージは分単位の現在日時を含み、先頭に置くと毎分 prefix が変わって履歴全体が cache miss になる |
 | FK 強制 | 接続時 `PRAGMA foreign_keys = ON`（現状 WAL のみ）+ 子に `ON DELETE CASCADE` | SQLite は FK 既定 off |
 | 処理順序 | **(1) `discord_msg_id` 照合 → (2) 既存なら完全 no-op → (3) 無ければ session 解決 + turn + 写像を同一 `BEGIN IMMEDIATE` txn で作成** | duplicate event で先に session を作ると空 session/`last_activity_at` 延長が起きる |
 | parent 整合 | CHECK はサブクエリ不可のため **repository txn で検証**（`parent.role='user'` かつ `parent.session_id=child.session_id`） | FK だけでは assistant 親や別 session 親を防げない |
@@ -147,7 +152,8 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 3. user turn: turn(role=user, status=completed) + 写像を同一 txn で作成。`reply_to_turn_id`/`reply_to_discord_msg_id` を解決して記録。
 4. bot turn: **LLM 生成/送信の前に** turn(role=assistant, status=pending, parent_user_turn_id) を挿入してスロットを原子的 claim（`idx_turns_one_assistant`。重複/並行ハンドラはここで弾かれ生成・送信しない）。生成 → **分割を送信成功ごとに逐次 create-or-attach**（`discord_msg_id` キーで再試行安全。既存が別 turn/非互換 seq なら整合エラー）。確定は **CAS**: `UPDATE turns SET status=?,content_json=?,active=? WHERE id=? AND status='pending'`。`completed`=全文/履歴可、`stopped`=部分文/履歴可、`failed`=`active=0`/履歴除外、`pending`=reconcile まで除外。
 
-- `MessageContent` 有効済み。**`Partials.Message` を client に追加**し、partial delete/update も `discord_msg_id` で写像照合。
+- `MessageContent` 有効済み。**`Partials.Message` を client（`src/bot/client.ts`）に追加**し、partial delete/update も `discord_msg_id` で写像照合。現在 `src/index.ts` が購読するのは `ClientReady` / `messageCreate` / `interactionCreate` だけで、削除系イベントの handler は本 change で新設する。
+- bot の応答は Discord のリプライではなく `channel.send()` で送る初期メッセージ（停止ボタン付き）から始まり、`DiscordStreamingUpdater`（`src/utils/streamingUpdater.ts`）が編集と追加送信で伸ばし、最終描画で余ったメッセージを `deleteOrNeutralize` で消す。致命的エラー時は `cleanupBotMessagesOnFatalError` が送信済みメッセージを消す。写像の create-or-attach は、この追加送信ごとに行い、この 2 つの削除は下記の内部削除（lease）として扱う。
 
 #### 2.1 状態機械・失敗回復・内部削除の抑制
 
@@ -167,7 +173,8 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 
 - 永続型 `PersistedContentPart`: `{type:'text', text}` / `{type:'image-ref', url, mime, ...}` / `{type:'file-ref', url, filename, mime}`（**base64 を保存しない**）。`content_json` は versioned 配列。
 - hydration: request 構築時に `PersistedContentPart[]` → `ChatMessageContent[]` へ変換（画像は URL 直渡し or 再 fetch、PDF は再 fetch + file-parser で base64 化）。失効/削除は取得不可を許容。
-- ライブ送信時の PDF base64 化は現行どおり（保存形だけ参照化）。
+- ライブ送信時の PDF base64 化は現行どおり（保存形だけ参照化）。画像は現行でも Discord CDN の URL を `image_url` としてそのまま渡している（`src/services/attachmentParser.ts`）。
+- `file-parser` plugin（`PDF_PARSER_PLUGIN`）は現在、今回の入力に file part があるときだけ付く（`buildChatRequest()`）。履歴の hydration 後は、送る `input` のどこかに file part が残っていれば付ける。
 
 ### 4. セッション境界
 
@@ -184,7 +191,7 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 
 ### 6. トークン予算
 
-保守的推定（日本語は係数厚め）+ system prompt/tool schema/応答/メディアトークンの予約を BUDGET から差し引く。超過は最古 exchange から落とす。`usage.prompt_tokens`（native）は事後ログ用。
+保守的推定（日本語は係数厚め）+ system prompt/tool schema/応答/メディアトークンの予約を BUDGET から差し引く。超過は最古 exchange から落とす。`usage.prompt_tokens`（Responses の `input_tokens` を写した内部名、native）は事後ログ用。
 
 ### 7. 共有チャンネルの発話者識別
 
@@ -192,11 +199,13 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 
 ### 8. OpenRouter session routing と prompt caching
 
-- 同じ local `sessions.id` に属する通常生成・tool call 後の再生成・retry は、すべて同じ `openrouter_session_id` を top-level `session_id` として Chat Completions request へ渡す。
+- 同じ local `sessions.id` に属する生成は、tool 実行後の再リクエストと最終ターンを含め、すべて同じ `openrouter_session_id` を Responses API の top-level `session_id`（最大 256 文字）として送る。`ChatService.generateChatResponse()` が `runToolLoop()` の `requestFields` に渡せば、全ターンに載る。
 - fork と gap 越えで新しい local session を作る場合は、新しい `openrouter_session_id` を発行して provider routing を親 session と分離する。
 - cache hit は request の prefix 一致に依存するため、system prompt、tool schema、履歴 message の順序と serialization を決定的に保ち、新しい user turn だけを末尾へ追加する。
+- `input` の並びは「不変の system メッセージ → 履歴（古い順）→ 変動する system 情報 → 今回の user turn」とする。Web 検索 ON 時の system メッセージ（`buildWebSearchSystemMessage()`）は、検索の指示と非信頼データの注意を先頭に、現在日時を今回の user turn の直前に分けて置く。
+- Web 検索の ON/OFF を切り替えると `tools` と先頭の system メッセージが変わり、その次の 1 回は cache miss になる。これは許容する。
 - v1 は OpenRouter / provider が自動適用する prompt caching だけを利用し、特定 provider 向けの cache breakpoint や `cache_control` は設定しない。
-- final usage から `prompt_tokens_details.cached_tokens` と `prompt_tokens_details.cache_write_tokens` を取得し、provider が返した場合だけ統計へ保存する。
+- cache の読み取り・書き込み token は既存の usage 経路（Decisions の「cache usage」）で取れる。
 - cache metadata が無い、cache miss になる、または routing 先が変わる場合も通常応答は失敗させない。
 
 ### 9. プライバシー / 保持
@@ -222,11 +231,11 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 - [ ] `stripHistoricalMedia()`（配列のみ・保存不変）
 - [ ] トークン予算推定（保守係数 + 予約 + 超過フォールバック）
 - [ ] 共有チャンネル `author_label` + 適用設定解決
-- [ ] `openrouter_session_id` の発行・永続化と Chat Completions / tool loop / retry への引き回し
-- [ ] 共通 prompt prefix の決定的 serialization と `cached_tokens` / `cache_write_tokens` の計測・統計連携
-- [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録
+- [ ] `openrouter_session_id` の発行・永続化、`ChatCompletionRequest.session_id` の追加、`requestFields` 経由での全ターンへの付与
+- [ ] 共通 prompt prefix の決定的 serialization（Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す）
+- [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録。top-level `cache_control` を付けるかをこの結果で決める
 - [ ] 保持/プライバシー（オプトイン・exchange 単位 TTL・削除/bulk/channel 同期・user/guild purge）+ `/config`
-- [ ] 旧 Discord-fetch コードの置換
+- [ ] `buildChatMessages()` の単一ターン構築を、履歴の境界構築 + hydration に置き換える（`file-parser` plugin の付与条件を履歴全体へ広げる）
 - [ ] テスト（冪等順序・session 直列解決・parent 検証・exchange 境界・PersistedContentPart 往復・剥がし・予算・発話者・削除/bulk/channel 同期と purge・partial イベント・pending reconcile）
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
 
@@ -239,13 +248,14 @@ user turn の OpenRouter 表現では `author_label` を**メッセージ本文�
 - **pending turn の reconcile / 孤児メッセージ**（crash 残置 pending の起動時掃除。送信後・写像作成前 crash の孤児 Discord メッセージは best-effort 照合 + log。厳密化が要れば **durable outbox**〔送信前に outbox 行 → 送信 → 写像確定〕を将来導入）
 - **1 user に複数 assistant の制約**（v1 は 1:1 だが、誤って二重生成しない保証を repository で持つか）
 - **DM**（将来、`DirectMessages` intent・設定 fallback・privacy）
+- **リプライだけでの応答（要決定）**: bot のメッセージへのリプライを、メンションなしでも addressed turn にするか。会話の続きを自然に書けるようになる一方、応答する条件が広がり、autoReply でないチャンネルでも bot が話し始める。本 change の範囲に入れるなら `shouldRespond()` の変更と e2e シナリオの追加が要る
 
 ## 参照
 
-- [OpenRouter Chat Completions](https://openrouter.ai/docs/api/reference/chat) — `messages` 配列。`usage.prompt_tokens`（native）は事後計測
-- [OpenRouter Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) — `session_id` による sticky routing、provider 別の implicit / explicit caching、cache usage
-- [OpenRouter Responses API](https://openrouter.ai/docs/api/reference/responses/overview) — stateless API であり `store` / `previous_response_id` は未対応
+- [OpenRouter OpenAPI 定義](https://openrouter.ai/openapi.json) — `ResponsesRequest` の `session_id`（sticky routing と観測、最大 256 文字）、`store`（`false` 固定）、`previous_response_id`（400 で拒否）、top-level `cache_control` / `prompt_cache_key` / `prompt_cache_options`
+- [OpenRouter Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) — provider 別の implicit / explicit caching、cache usage
+- [OpenRouter Responses API](https://openrouter.ai/docs/api/reference/responses/overview) — stateless API
 - [SQLite CHECK / foreign keys](https://www.sqlite.org/foreignkeys.html) — CHECK は式が NULL なら成功扱い、FK は既定 off
 - [discord.js Partials](https://discordjs.guide/popular-topics/partials.html) — partial delete/update に `Partials.Message`
-- [discord.js Client events](https://discord.js.org/docs/packages/discord.js/14.26.2/Client:Class) — `messageDelete`/`messageDeleteBulk`/`channelDelete`/`guildDelete`、`MessageContent` 特権 intent（有効済み）
+- [discord.js Client events](https://discord.js.org/docs/packages/discord.js/14.26.5/Client:Class) — `messageDelete`/`messageDeleteBulk`/`channelDelete`/`guildDelete`、`MessageContent` 特権 intent（有効済み）
 - 着想元: hermes-agent のメディア剥がし、構造化履歴
