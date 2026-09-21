@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   addedPackages,
+  annotations,
   classify,
   lockPackages,
-  splitPackage,
+  parseResolution,
   summarize,
 } from "../../../scripts/check-lock-age";
 
@@ -17,12 +18,34 @@ const BASE = lock([
 ]);
 
 describe("lockPackages", () => {
-  test("ネストしたキーや scoped の名前も name@version で拾う", () => {
+  test("ネストしたキーや scoped の名前も、解決された name@version で拾う", () => {
     expect([...lockPackages(BASE)].sort()).toEqual([
       "@discordjs/rest@2.6.1",
       "@sapphire/snowflake@3.5.5",
       "zod@4.4.3",
     ]);
+  });
+
+  test("書式の違い（1 行の JSON、配列の改行）でも同じ結果になる", () => {
+    const compact = '{"lockfileVersion":1,"packages":{"zod":["zod@4.4.3","",{},"sha512-a"]}}';
+    const multiline =
+      '{\n  "packages": {\n    "zod": [\n      "zod@4.4.3",\n      "",\n      {},\n      "sha512-a"\n    ],\n  },\n}';
+
+    expect([...lockPackages(compact)]).toEqual(["zod@4.4.3"]);
+    expect([...lockPackages(multiline)]).toEqual(["zod@4.4.3"]);
+  });
+
+  test("コメントの中の記述は数えず、alias は解決先の名前で拾う", () => {
+    const text =
+      '{\n  "packages": {\n    /* "x": ["zod@9.9.9", "", {}, ""], */\n    "my-zod": ["zod@4.4.3", "", {}, "sha512-a"],\n  },\n}';
+
+    expect([...lockPackages(text)]).toEqual(["zod@4.4.3"]);
+  });
+
+  test("lock として読めなければ、空ではなく例外にする", () => {
+    expect(() => lockPackages("not json")).toThrow();
+    expect(() => lockPackages('{"lockfileVersion": 1}')).toThrow("no `packages` object");
+    expect(() => lockPackages('{"packages": {"zod": {}}}')).toThrow('entry "zod" is malformed');
   });
 });
 
@@ -34,21 +57,27 @@ describe("addedPackages", () => {
       '"@discordjs/rest/@sapphire/snowflake": ["@sapphire/snowflake@3.5.6", "", {}, "sha512-c"]',
     ]);
 
-    expect(addedPackages(BASE, head)).toEqual(["@sapphire/snowflake@3.5.6", "zod@4.6.5"]);
-  });
-
-  test("lock が同じなら何も返さない", () => {
-    expect(addedPackages(BASE, BASE)).toEqual([]);
+    expect(addedPackages(lockPackages(BASE), lockPackages(head))).toEqual([
+      "@sapphire/snowflake@3.5.6",
+      "zod@4.6.5",
+    ]);
   });
 });
 
-describe("splitPackage", () => {
-  test("最後の @ で分け、scoped の名前の先頭の @ を残す", () => {
-    expect(splitPackage("@sapphire/snowflake@3.5.6")).toEqual({
+describe("parseResolution", () => {
+  test("npm の版、ローカル、それ以外の外部を分け、名前を正しく切り出す", () => {
+    expect(parseResolution("@sapphire/snowflake@3.5.6")).toEqual({
+      kind: "npm",
       name: "@sapphire/snowflake",
       version: "3.5.6",
     });
-    expect(splitPackage("zod@4.6.5-beta.1")).toEqual({ name: "zod", version: "4.6.5-beta.1" });
+    expect(parseResolution("zod@4.6.5-beta.1").kind).toBe("npm");
+    expect(parseResolution("local@workspace:packages/local").kind).toBe("local");
+    expect(parseResolution("real@git+ssh://git@github.com/org/repo#abc")).toEqual({
+      kind: "external",
+      name: "real",
+      resolution: "git+ssh://git@github.com/org/repo#abc",
+    });
   });
 });
 
@@ -69,20 +98,50 @@ describe("classify", () => {
   });
 });
 
-describe("summarize", () => {
-  test("young と unknown を結果の列で区別する", () => {
-    const text = summarize([
-      { pkg: "a@1", status: "old", publishedAt: "2026-09-01T00:00:00Z" },
-      { pkg: "b@1", status: "young", publishedAt: "2026-09-21T00:00:00Z", ageHours: 12.5 },
-      { pkg: "c@1", status: "unknown", reason: "the registry lookup failed: HTTP 404" },
-    ]);
+describe("summarize と annotations", () => {
+  const results = [
+    { pkg: "a@1", status: "old", publishedAt: "2026-09-01T00:00:00Z" },
+    { pkg: "c@1", status: "unknown", reason: "the registry lookup failed: HTTP 404" },
+    { pkg: "b@1", status: "young", publishedAt: "2026-09-21T00:00:00Z", ageHours: 12.5 },
+  ] as const;
 
-    expect(text).toContain("| `a@1` | 2026-09-01T00:00:00Z | ok |");
-    expect(text).toContain("**12h old**, under 3 days");
-    expect(text).toContain("could not check: the registry lookup failed: HTTP 404");
+  test("要確認のものを先に並べ、ローカルの解決は確認対象外として載せる", () => {
+    const rows = summarize([...results], ["local@workspace:x"])
+      .split("\n")
+      .filter((l) => l.startsWith("| `"));
+
+    expect(rows).toEqual([
+      "| `b@1` | 2026-09-21T00:00:00Z | **12h old**, under 3 days |",
+      "| `c@1` | ? | could not check: the registry lookup failed: HTTP 404 |",
+      "| `a@1` | 2026-09-01T00:00:00Z | ok |",
+      "| `local@workspace:x` | - | local, not checked |",
+    ]);
   });
 
-  test("追加が無ければ None と書く", () => {
+  test("注釈は件数の 1 行を先頭に、young を unknown より先に出す", () => {
+    const lines = annotations([...results]);
+
+    expect(lines[0]).toContain(
+      "1 added version(s) are under the 3-day cooldown and 1 could not be checked",
+    );
+    expect(lines[1]).toContain("b@1 was published 12h ago");
+    expect(lines[2]).toContain("could not check the age of c@1");
+    expect(lines).toHaveLength(3);
+  });
+
+  test("注釈は GitHub の上限に収まるよう、件数の行を含めて 10 行までにする", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      pkg: `p${i}@1`,
+      status: "young" as const,
+      publishedAt: "2026-09-21T00:00:00Z",
+      ageHours: 1,
+    }));
+
+    expect(annotations(many)).toHaveLength(10);
+  });
+
+  test("問題が無ければ注釈を出さない", () => {
+    expect(annotations([results[0]])).toEqual([]);
     expect(summarize([])).toContain("None.");
   });
 });

@@ -5,12 +5,13 @@
  * Renovate holds direct dependencies for the same three days
  * (`renovate.json5`), but the `bun install` that regenerates the lock can
  * resolve transitive dependencies to versions published minutes earlier, and
- * nothing else looks at them. This covers every version the lock gains,
+ * nothing else looks at them. This covers every npm version the lock gains,
  * direct or transitive.
  *
- * It warns rather than fails: a fresh version is sometimes the security fix
- * that has to go in now, which is the same reason `bunfig.toml` carries no
- * install-time age gate. A person reads the warning and decides.
+ * It warns rather than fails, and never fails on its own errors: a fresh
+ * version is sometimes the security fix that has to go in now, which is the
+ * same reason `bunfig.toml` carries no install-time age gate. A person reads
+ * the warning and decides. Ages are measured when the check runs.
  *
  * Usage: bun scripts/check-lock-age.ts <base-ref>
  * Compares `git show <base-ref>:bun.lock` with the working tree's `bun.lock`.
@@ -20,31 +21,57 @@ import { appendFileSync, readFileSync } from "node:fs";
 
 export const MIN_AGE_DAYS = 3;
 const REGISTRY = "https://registry.npmjs.org";
-const FETCH_TIMEOUT_MS = 15_000;
-const CONCURRENCY = 8;
+const FETCH_TIMEOUT_MS = 30_000;
+const CONCURRENCY = 6;
+const MAX_ATTEMPTS = 3;
+const MAX_RETRY_WAIT_MS = 30_000;
+/** GitHub shows at most 10 warning annotations per step; one goes to the overall count. */
+const MAX_ANNOTATIONS = 9;
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
-/** A package entry's first element is `"<name>@<version>"`; the name may be scoped. */
-const ENTRY = /^\s*"[^"]+": \["((?:@[^/"]+\/)?[^@"]+)@([^"]+)"/gm;
-
-/** Every `name@version` the lock resolves, one per resolved copy. */
+/**
+ * Every resolved `name@resolution` in the lock's `packages`, parsed as JSONC
+ * so formatting and comments cannot hide an entry. Throws when the text is
+ * not a Bun lockfile, so a malformed lock never reads as "nothing added".
+ */
 export function lockPackages(lock: string): Set<string> {
-  const packages = new Set<string>();
-  for (const [, name, version] of lock.matchAll(ENTRY)) {
-    packages.add(`${name}@${version}`);
+  const parsed = Bun.JSONC.parse(lock) as { packages?: unknown } | null;
+  const packages = parsed?.packages;
+  if (typeof packages !== "object" || packages === null || Array.isArray(packages)) {
+    throw new Error("bun.lock has no `packages` object");
   }
-  return packages;
+  const resolved = new Set<string>();
+  for (const [key, entry] of Object.entries(packages)) {
+    const first = Array.isArray(entry) ? entry[0] : undefined;
+    if (typeof first !== "string") throw new Error(`bun.lock entry "${key}" is malformed`);
+    resolved.add(first);
+  }
+  return resolved;
 }
 
-/** The `name@version` entries of `head` that `base` does not have, sorted. */
-export function addedPackages(base: string, head: string): string[] {
-  const before = lockPackages(base);
-  return [...lockPackages(head)].filter((pkg) => !before.has(pkg)).sort();
+/** The `name@resolution` entries of `head` that `base` does not have, sorted. */
+export function addedPackages(base: Set<string>, head: Set<string>): string[] {
+  return [...head].filter((pkg) => !base.has(pkg)).sort();
 }
 
-/** Splits `name@version` at the last `@`, so a scoped name keeps its leading one. */
-export function splitPackage(pkg: string): { name: string; version: string } {
-  const at = pkg.lastIndexOf("@");
-  return { name: pkg.slice(0, at), version: pkg.slice(at + 1) };
+export type Resolution =
+  | { kind: "npm"; name: string; version: string }
+  | { kind: "local"; name: string; resolution: string }
+  | { kind: "external"; name: string; resolution: string };
+
+/**
+ * Splits at the first `@` after a scope's leading one; a resolution such as
+ * `git+ssh://git@host/...` can contain more. A registry version starts with a
+ * digit; `workspace:` / `file:` / `link:` are local; anything else (git,
+ * GitHub, tarball URLs) has no npm publish time.
+ */
+export function parseResolution(pkg: string): Resolution {
+  const at = pkg.indexOf("@", 1);
+  const name = pkg.slice(0, at);
+  const resolution = pkg.slice(at + 1);
+  if (/^\d+\.\d+\.\d+/.test(resolution)) return { kind: "npm", name, version: resolution };
+  if (/^(?:workspace|file|link):/.test(resolution)) return { kind: "local", name, resolution };
+  return { kind: "external", name, resolution };
 }
 
 export type AgeResult =
@@ -68,48 +95,69 @@ export function classify(
     : { pkg, status: "old", publishedAt };
 }
 
-async function publishTime(name: string, version: string): Promise<string | undefined> {
+/** Publish times of one package, fetched once however many of its versions were added. */
+async function publishTimes(name: string): Promise<Record<string, string>> {
   // `@scope/name` must keep its `@` and encode the `/`.
   const path = name.startsWith("@")
     ? `@${encodeURIComponent(name.slice(1))}`
     : encodeURIComponent(name);
-  const response = await fetch(`${REGISTRY}/${path}`, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const body = (await response.json()) as { time?: Record<string, string> };
-  return body.time?.[version];
+  for (let attempt = 1; ; attempt++) {
+    const response = await fetch(`${REGISTRY}/${path}`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (response.ok) {
+      const body = (await response.json()) as { time?: Record<string, string> };
+      return body.time ?? {};
+    }
+    const transient = response.status === 429 || response.status >= 500;
+    if (!transient || attempt >= MAX_ATTEMPTS) throw new Error(`HTTP ${response.status}`);
+    const retryAfter = Number(response.headers.get("retry-after"));
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * attempt;
+    await Bun.sleep(Math.min(waitMs, MAX_RETRY_WAIT_MS));
+  }
 }
 
-async function checkAll(packages: string[], now: number): Promise<AgeResult[]> {
+async function checkNpm(
+  packages: { pkg: string; name: string; version: string }[],
+  now: number,
+): Promise<AgeResult[]> {
+  const byName = Map.groupBy(packages, (p) => p.name);
+  const names = [...byName.keys()];
   const results: AgeResult[] = [];
   let next = 0;
   const worker = async (): Promise<void> => {
-    while (next < packages.length) {
-      const pkg = packages[next++] as string;
-      const { name, version } = splitPackage(pkg);
+    while (next < names.length) {
+      const name = names[next++] as string;
+      const versions = byName.get(name) ?? [];
       try {
-        results.push(classify(pkg, await publishTime(name, version), now));
+        const times = await publishTimes(name);
+        for (const { pkg, version } of versions) results.push(classify(pkg, times[version], now));
       } catch (error) {
-        results.push({
-          pkg,
-          status: "unknown",
-          reason: `the registry lookup failed: ${error instanceof Error ? error.message : error}`,
-        });
+        const reason = `the registry lookup failed: ${error instanceof Error ? error.message : error}`;
+        for (const { pkg } of versions) results.push({ pkg, status: "unknown", reason });
       }
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  return results.sort((a, b) => a.pkg.localeCompare(b.pkg));
+  return results;
 }
 
-/** Markdown for the job summary. */
-export function summarize(results: AgeResult[]): string {
-  const lines = [`## Packages bun.lock adds (${results.length})`, ""];
-  if (results.length === 0) return [...lines, "None."].join("\n");
+/** Young first, then unknown, then old, so what needs a look leads the summary and the annotations. */
+const ORDER = { young: 0, unknown: 1, old: 2 } as const;
+export function sortResults(results: AgeResult[]): AgeResult[] {
+  return [...results].sort(
+    (a, b) => ORDER[a.status] - ORDER[b.status] || a.pkg.localeCompare(b.pkg),
+  );
+}
+
+/** Markdown for the job summary. `skipped` lists local resolutions, which have no publish time to check. */
+export function summarize(results: AgeResult[], skipped: string[] = []): string {
+  const lines = [`## Packages bun.lock adds (${results.length + skipped.length})`, ""];
+  if (results.length === 0 && skipped.length === 0) return [...lines, "None."].join("\n");
   lines.push("| Package | Published | Result |", "| ------- | --------- | ------ |");
-  for (const result of results) {
+  for (const result of sortResults(results)) {
     const published = result.status === "unknown" ? "?" : result.publishedAt;
     const verdict =
       result.status === "old"
@@ -119,31 +167,86 @@ export function summarize(results: AgeResult[]): string {
           : `could not check: ${result.reason}`;
     lines.push(`| \`${result.pkg}\` | ${published} | ${verdict} |`);
   }
+  for (const pkg of skipped) lines.push(`| \`${pkg}\` | - | local, not checked |`);
   return lines.join("\n");
+}
+
+/** Workflow commands for the step: one overall count, then the most important results up to the limit. */
+export function annotations(results: AgeResult[]): string[] {
+  const flagged = sortResults(results).filter((r) => r.status !== "old");
+  if (flagged.length === 0) return [];
+  const young = flagged.filter((r) => r.status === "young").length;
+  const lines = [
+    `::warning file=bun.lock::${young} added version(s) are under the ${MIN_AGE_DAYS}-day cooldown and ${flagged.length - young} could not be checked; see the job summary for the full list`,
+  ];
+  for (const result of flagged.slice(0, MAX_ANNOTATIONS)) {
+    lines.push(
+      result.status === "young"
+        ? `::warning file=bun.lock::${result.pkg} was published ${Math.floor(result.ageHours)}h ago (${result.publishedAt})`
+        : `::warning file=bun.lock::could not check the age of ${result.pkg}: ${result.reason}`,
+    );
+  }
+  return lines;
+}
+
+function report(lines: string[], summary: string): void {
+  for (const line of lines) console.log(line);
+  console.log(summary);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  }
+}
+
+function readLocks(baseRef: string): { base: Set<string>; head: Set<string> } {
+  let baseText: string | undefined;
+  try {
+    baseText = execFileSync("git", ["show", `${baseRef}:bun.lock`], {
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    // A base without bun.lock means everything in the head lock is new.
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    if (!/does not exist|exists on disk, but not in/.test(stderr)) throw error;
+  }
+  return {
+    base: baseText === undefined ? new Set() : lockPackages(baseText),
+    head: lockPackages(readFileSync("bun.lock", "utf8")),
+  };
 }
 
 async function main(): Promise<void> {
   const baseRef = process.argv[2];
   if (!baseRef) throw new Error("usage: bun scripts/check-lock-age.ts <base-ref>");
-  const base = execFileSync("git", ["show", `${baseRef}:bun.lock`], { encoding: "utf8" });
-  const head = readFileSync("bun.lock", "utf8");
-  const results = await checkAll(addedPackages(base, head), Date.now());
-
-  for (const result of results) {
-    if (result.status === "young") {
-      console.log(
-        `::warning file=bun.lock::${result.pkg} was published ${Math.floor(result.ageHours)}h ago (${result.publishedAt}), under the ${MIN_AGE_DAYS}-day cooldown`,
-      );
-    } else if (result.status === "unknown") {
-      console.log(
-        `::warning file=bun.lock::could not check the age of ${result.pkg}: ${result.reason}`,
-      );
-    }
+  let locks: { base: Set<string>; head: Set<string> };
+  try {
+    locks = readLocks(baseRef);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    report(
+      [`::warning file=bun.lock::the lock age check did not run: ${message}`],
+      `## Packages bun.lock adds\n\nNot checked: ${message}`,
+    );
+    return;
   }
-  const summary = summarize(results);
-  console.log(summary);
-  if (process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+
+  const npm: { pkg: string; name: string; version: string }[] = [];
+  const skipped: string[] = [];
+  const results: AgeResult[] = [];
+  for (const pkg of addedPackages(locks.base, locks.head)) {
+    const resolution = parseResolution(pkg);
+    if (resolution.kind === "npm") npm.push({ pkg, ...resolution });
+    else if (resolution.kind === "local") skipped.push(pkg);
+    else
+      results.push({
+        pkg,
+        status: "unknown",
+        reason: "not from the npm registry, no publish time",
+      });
+  }
+  results.push(...(await checkNpm(npm, Date.now())));
+  report(annotations(results), summarize(results, skipped));
 }
 
 if (import.meta.main) await main();
