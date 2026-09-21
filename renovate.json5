@@ -23,6 +23,15 @@
   ],
   schedule: ["* 0-8 * * 1"], // 月曜 0-8 時台 (JST)
   lockFileMaintenance: { enabled: false },
+  // 実行時の依存も devDependencies と同じく exact に固定し、版の更新 PR で動かす。
+  // bun マネージャは lock の解決版 (lockedVersion) を持たないため、範囲指定のままだと範囲内の新版が
+  // 提案されず、lockFileMaintenance も無効なので lock が動かない。
+  // rangeStrategy: "bump" は採らない。更新候補にはクールダウンが効くが、範囲を書き換えた後の
+  // bun install が範囲内のさらに新しい (待機中の) 版を lock に入れうる。exact なら解決版は候補そのもの。
+  // lockFileMaintenance も採らない。推移的な依存までまとめて動かし、minimumReleaseAge も掛からない。
+  // pin 更新自体はクールダウンの対象外で、lockedVersion が無いと最新版へ固定するので、
+  // 範囲指定の依存を足したときは package.json 側で lock の版に exact 固定してから入れる。
+  rangeStrategy: "pin",
   // 脆弱性 PR が zizmor グループの minimumGroupSize: 2 に引っかかって出なくなるのを防ぐ（Decisions 参照）
   vulnerabilityAlerts: { minimumGroupSize: 1 },
   semanticCommits: "enabled",
@@ -58,8 +67,8 @@
     // 専用グループに入れ separateMajorMinor: false を置いて、更新タイプによらず 1 本に載せる。
     // bun-types も同じグループに入れる。tsconfig.json の types が ["bun-types"] なので
     // これが typecheck における Bun API 型の唯一の供給源で、ランタイムから独立して先行すると
-    // 「型は通るが実行時に存在しない API」を受け入れてしまう。drift-check は mise/Dockerfile しか
-    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする。
+    // 「型は通るが実行時に存在しない API」を受け入れてしまう。CI の drift-check は bun.lock の bun-types も
+    // 含めて patch の一致を要求するので、別 PR に割れると片側の PR が必ず落ちる。同じ PR に載せる。
     //
     {
       groupName: "bun toolchain",
@@ -68,7 +77,8 @@
       separateMajorMinor: false,
     },
     // bun-types の pin だけは既定の "Pin Dependencies" へ戻す。
-    // :pinDevDependencies による range -> exact の一度きりの変換で、版を動かす更新ではない。
+    // :pinDevDependencies による range -> exact の一度きりの変換。bun マネージャは lockedVersion を
+    // 持たないので範囲内の最新へ固定し、版が動きうる (pin はクールダウンの対象外)。
     // 上のグループに残すと pin と minor が同じ groupName から同じ branchName に解決されて衝突し、
     // pin 側が勝ってランタイム (mise / Dockerfile) の更新がブランチごと消える（実際に発生した）。
     // なお matchUpdateTypes は separateMajorMinor と同一ルール内で併用できないため、

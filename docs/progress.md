@@ -23,7 +23,7 @@
 | [出力マルチモーダル対応](changes/multimodal-output/design.md) | 中 | investigating | 検証済みの生成画像と生成ファイルを Discord の MediaGallery / File で表示 |
 | [権限管理](changes/permissions/design.md) | 中 | planned | チャンネル制限と、設定変更の共通認可契約（admin_role_id） |
 | [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | OpenRouter の reasoning / reasoning_details を安全に受け取り、設定に応じて Discord へ表示 |
-| [Renovate 移行](changes/renovate-migration/design.md) | 中 | in-progress | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
+| [Renovate 移行](changes/renovate-migration/design.md) | 中 | implemented | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
