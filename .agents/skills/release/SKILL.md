@@ -1,6 +1,6 @@
 ---
 name: release
-description: Run the DisQord release process. Use when cutting a new version (e.g. `/release 1.5.0`) — bumps the version, generates a versioned CHANGELOG.md, prunes released change docs, commits, tags, pushes, and publishes a GitHub release with automatically generated notes.
+description: Run the DisQord release process. Use when cutting a new version (e.g. `/release 1.5.0`) — bumps the version, generates a versioned CHANGELOG.md, prunes released change docs, commits, tags, pushes, and publishes a GitHub release whose notes are that version's CHANGELOG section.
 ---
 
 # Release Workflow
@@ -75,10 +75,13 @@ git push && git push --tags
 
 ## Step 6: Create GitHub Release
 
-Create the GitHub Release from the pushed tag and let GitHub generate its notes:
+Create the GitHub Release from the pushed tag, using this version's CHANGELOG section as its notes.
+`--strip header` keeps the footer, whose link definition makes the version heading link to the compare view.
 
 ```bash
-gh release create v<version> --title "v<version>" --generate-notes --verify-tag
+notes=$(mktemp)
+mise exec -- git-cliff --latest --strip header --output "$notes"
+gh release create v<version> --title "v<version>" --notes-file "$notes" --verify-tag
 ```
 
 `--verify-tag` must remain enabled so the command fails instead of creating a tag from another revision.
