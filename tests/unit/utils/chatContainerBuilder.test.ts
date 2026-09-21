@@ -365,7 +365,7 @@ describe("chatContainerBuilder", () => {
       expect(buildUsageDetailsText(metadata)).toBeUndefined();
     });
 
-    test("Tokens/Cost/Model/Latency/Provider/TPSを ` | ` 区切りで含む", () => {
+    test("Tokens/Cost/Model/Time/Provider/TPSを ` | ` 区切りで含む", () => {
       const metadata: FinalMetadata = {
         showDetails: true,
         model: "gpt-5-mini",
@@ -375,7 +375,7 @@ describe("chatContainerBuilder", () => {
       };
       const text = buildUsageDetailsText(metadata);
       expect(text).toBe(
-        "Tokens: 100+200=300 | Cost: $0.001234 | Model: gpt-5-mini | Latency: 2000ms | Provider: OpenAI | TPS: 100.00",
+        "Tokens: 100+200=300 | Cost: $0.001234 | Model: gpt-5-mini | Time: 2.0s | Provider: OpenAI | TPS: 100.00",
       );
     });
 
