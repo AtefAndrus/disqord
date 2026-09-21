@@ -368,15 +368,15 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 
 ### ツイート展開（fxtwitter）
 
-- [ ] `tweetService`: URL 抽出（対象ホストとパス、山括弧、重複排除、最大 3 件）、`/2/status` の取得（User-Agent、5 秒、AbortSignal、429/5xx/ネットワークエラーの 1 回再試行）、レスポンス分類（`code`、tombstone、404）、同時実行 4 本の制御（中断時の枠の解放）、5 秒の総期限
-- [ ] 注入テキストの整形（引用 1 段、リンクカード、コミュニティノート、投票、メディアの行）と無害化・長さ上限
-- [ ] `chatService` での注入（不変の system メッセージ、text part の追加）と、画像対応モデルでの画像 part の追加（4 枚まで、https の `pbs.twimg.com` と `video.twimg.com` のみ）と、400 のときに画像を外した 1 回のやり直し
-- [ ] `FXTWITTER_API_BASE` を `envVars.ts` と `config/index.ts`（configSchema / loadConfig）に追加
-- [ ] `guild_settings.twitter_expand_enabled`（既定 1）と `settingsService.setTwitterExpandEnabled`
-- [ ] `/config twitter-expand` サブコマンドとハンドラ（暫定 `ManageGuild`）
-- [ ] `/status` にツイート展開の状態と送信先ホストを表示し、README に外部送信を明記
-- [ ] テスト（URL 抽出、レスポンス分類、再試行、無害化、整形、注入、画像の選別、設定の読み書き、コマンド）
-- [ ] e2e に既定で走る `tweet` シナリオを追加
+- [x] `tweetService`: URL 抽出（対象ホストとパス、山括弧、重複排除、最大 3 件）、`/2/status` の取得（User-Agent、5 秒、AbortSignal、429/5xx/ネットワークエラーの 1 回再試行）、レスポンス分類（`code`、tombstone、404）、同時実行 4 本の制御（中断時の枠の解放）、5 秒の総期限
+- [x] 注入テキストの整形（引用 1 段、リンクカード、コミュニティノート、投票、メディアの行）と無害化・長さ上限
+- [x] `chatService` での注入（不変の system メッセージ、text part の追加）と、画像対応モデルでの画像 part の追加（4 枚まで、https の `pbs.twimg.com` と `video.twimg.com` のみ）と、400 のときに画像を外した 1 回のやり直し
+- [x] `FXTWITTER_API_BASE` を `envVars.ts` と `config/index.ts`（configSchema / loadConfig）に追加
+- [x] `guild_settings.twitter_expand_enabled`（既定 1）と `settingsService.setTwitterExpandEnabled`
+- [x] `/config twitter-expand` サブコマンドとハンドラ（暫定 `ManageGuild`）
+- [x] `/status` にツイート展開の状態と送信先ホストを表示し、README に外部送信を明記
+- [x] テスト（URL 抽出、レスポンス分類、再試行、無害化、整形、注入、画像の選別、設定の読み書き、コマンド）
+- [x] e2e に既定で走る `tweet` シナリオを追加
 - [ ] 手動確認: 実クライアントで `/config twitter-expand off` と `on` を実行し、`/status` の表示が切り替わること、OFF の間はツイート URL を貼っても本文が展開されないことを確かめる
 
 ### 共通
