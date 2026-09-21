@@ -31,13 +31,24 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
 }
 
 /**
- * Whether `max_uses` caps the searches. OpenRouter forwards it to a
- * provider's native search only for Anthropic and other native providers
- * ignore it (WebSearchServerToolConfig in openapi.json), so `native` and
- * `auto` (native when the provider has it) give no cap for most models.
+ * How searches are capped and billed, for the `/config web-search on` reply.
+ * OpenRouter forwards `max_uses` to a provider's native search only for
+ * Anthropic, and other native providers ignore it (WebSearchServerToolConfig
+ * in openapi.json). `auto` uses native search when the model's provider has
+ * it and Exa otherwise. Firecrawl bills the operator's own Firecrawl key
+ * rather than the OpenRouter balance.
  */
-export function isSearchCountCapped(engine: WebSearchEngine): boolean {
-  return engine !== "native" && engine !== "auto";
+export function describeSearchBilling(engine: WebSearchEngine): string {
+  switch (engine) {
+    case "native":
+      return "検索の費用は OpenRouter の残高から引かれます。1応答あたり最大2回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。";
+    case "auto":
+      return "検索の費用は OpenRouter の残高から引かれます。1応答あたり最大2回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。";
+    case "firecrawl":
+      return "検索の費用は OpenRouter ではなく、OpenRouter に登録した Firecrawl のキーに課金されます（1応答あたり最大2回）。";
+    default:
+      return "検索の費用は OpenRouter の残高から引かれます（1応答あたり最大2回）。";
+  }
 }
 
 const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
@@ -87,12 +98,33 @@ function stripSchemeSeparators(text: string): string {
 }
 
 /**
+ * Characters a title may keep: letters, digits, spaces, and punctuation that
+ * can neither form Discord markdown (links, emphasis, code, mentions,
+ * headings) nor change how the text around it is displayed. An allowlist
+ * rather than a list of dangerous characters, because a page title can hold
+ * anything: bidi overrides and zero-width characters are dropped here along
+ * with every other control, format, and combining character.
+ */
+const TITLE_CHAR = /[\p{L}\p{N} .,:;!?'"/&+=%$\-–—、。，．・：；！？「」『』【】（）〈〉《》〜ー]/u;
+
+/**
+ * NFKC first so full-width look-alikes are checked as their plain forms.
+ * `://` is removed last and repeatedly, because removing it once can join a
+ * new one (`:/://` becomes `://`).
+ */
+function sanitizeTitle(raw: string): string {
+  const kept = Array.from(raw.normalize("NFKC"))
+    .map((char) => (TITLE_CHAR.test(char) ? char : " "))
+    .join("");
+  return stripSchemeSeparators(kept).replace(/ +/g, " ").trim();
+}
+
+/**
  * The markdown list appended to a reply, or undefined when there is nothing
- * to show. The titles and URLs come from web pages, so anything that could
- * break out of the link syntax (brackets, newlines, `<`/`>`) or turn a
- * title into a mention is removed, and only http(s) URLs are kept. Every
- * label ends with the link's real host, so a title that names another site
- * cannot pass for a link to it.
+ * to show. The titles and URLs come from web pages: titles keep only
+ * `TITLE_CHAR`, and only http(s) URLs are kept. Every label ends with the
+ * link's host as `URL` serializes it (ASCII, punycode for IDNs), so a title
+ * that names another site cannot pass for a link to it.
  */
 export function formatSearchResultLinks(results: WebSearchResultLink[]): string | undefined {
   const lines: string[] = [];
@@ -109,11 +141,7 @@ export function formatSearchResultLinks(results: WebSearchResultLink[]): string 
     const href = url.href;
     if (href.length > MAX_URL_CHARS || /[\s<>]/.test(href) || seen.has(href)) continue;
     seen.add(href);
-    // Characters are removed before `://`, because removing one of them
-    // (a backslash in `https:/\/`) can itself produce a `://`.
-    const title = stripSchemeSeparators(
-      (result.title ?? "").replace(/[[\]()<>`*_~|\\@#]/g, "").replace(/\s+/g, " "),
-    ).trim();
+    const title = sanitizeTitle(result.title ?? "");
     const host = url.hostname;
     const label = title.length > 0 ? `${title.slice(0, MAX_TITLE_CHARS)} (${host})` : host;
     lines.push(`- [${label}](<${href}>)`);

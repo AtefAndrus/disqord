@@ -244,10 +244,13 @@ export const SCENARIOS: Scenario[] = [
     // UTC keeps the model from answering a patch release or an announcement
     // date. `Searches: N` in the footer counts search calls the model made,
     // including ones refused past `max_uses`, so it alone does not show that
-    // a search returned anything; the result links the bot appends are built
-    // only from results OpenRouter handed to the model. A model that already
-    // knows the date still passes, so this does not show that the answer
-    // came from the search.
+    // a search returned anything, and the result-link check is a text match
+    // on the body, which a model writing the same heading and list itself
+    // would also pass. Together they catch the common failures (search off,
+    // links not appended) without proving where the links came from; the
+    // unit tests of openrouter.ts and messageCreate.ts pin that. A model
+    // that already knows the date still passes, so this does not show that
+    // the answer came from the search.
     name: "search",
     manual: true,
     prompt:

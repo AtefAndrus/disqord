@@ -116,7 +116,7 @@ server tool はモデルが tool calling に対応しているかに関係なく
 **検索回数と費用の上限:**
 
 - `max_uses`（このツール自身の実行回数上限）が 1 リクエストで課金される検索の回数を抑える。上限を超えた呼び出しもモデルは出すが、OpenRouter はそれを実行せずエラーの結果を返し、課金しない。一方でその呼び出しは `usage.server_tool_use_details.web_search_requests` に数えられる。`max_uses: 1` で 2 回呼んだ応答の `cost` から `upstream_inference_cost` を引くと、検索 1 回分（Parallel fast で $0.001）だけが残った。
-- `max_uses` が効くのは Exa、Parallel、Perplexity、Firecrawl のエンジンである。provider の native 検索では Anthropic にだけ渡され、他の provider は無視する（OpenAPI 定義の `WebSearchServerToolConfig.max_uses`）。そのため `WEB_SEARCH_ENGINE` が `native` か `auto` のときは、Anthropic 以外のモデルで検索回数の上限が無い。`/config web-search on` の応答はこの場合に上限が効かないことを示す。
+- `max_uses` が効くのは Exa、Parallel、Perplexity、Firecrawl のエンジンである。provider の native 検索では Anthropic にだけ渡され、他の provider は無視する（OpenAPI 定義の `WebSearchServerToolConfig.max_uses`）。そのため `WEB_SEARCH_ENGINE` が `native` のときは、Anthropic 以外のモデルで検索回数の上限が無い。`auto` はモデルの provider が native 検索を持てばそれを使い、持たなければ Exa を使うので、上限が無いのは native 検索が選ばれた場合に限られる。Firecrawl は OpenRouter の残高ではなく、OpenRouter に登録した Firecrawl のキーに課金される。`/config web-search on` の応答は、エンジンごとにこれらの違いを示す。
 - `max_results`（1 検索あたりの件数、既定 5）と `max_total_results`（リクエスト全体の累計上限）で、入力に入る検索結果の量を抑える。
 - これらが効く範囲は HTTP リクエスト 1 回である。client tool を併用する応答では、`runToolLoop()` が最大 5 ターン（`MAX_TURNS`）のすべてのリクエストに同じ `tools` を送る。最終ターンは `tool_choice: "none"` で client tool の呼び出しを止めるが、それが server tool の実行も止めるかは確かめていない。検索料金の上限は、1 リクエストの上限の最大 5 倍と見積もる。
 - client tool が登録されていない現状では、1 応答は 1 リクエストで終わる。server tool だけを渡したリクエストにモデルが function call を返しても、`runToolLoop()` は tool を 1 つも渡していない場合と同じく幻覚としてエラーにし、次のリクエストを出さない。次のリクエストを出すと server tool を再送することになり、`max_uses` の上限がリクエストの数だけ増えるためである。Perplexity の検索料金は 1 応答あたり最大 $0.01 になる。
@@ -154,7 +154,9 @@ server tool はモデルが tool calling に対応しているかに関係なく
 - どちらも表示とログのためだけに読むので、形の崩れた item や注釈は読み飛ばし、ターンを失敗させない。function call の item は応答の流れを左右するため崩れを失敗として扱うが、検索の記録はそうではない。
 - 回答の後ろに `-# 検索結果` の小見出しと、検索結果のページを最大 5 件、`[タイトル (ホスト名)](<URL>)` の形で並べる。回答が code block の途中で終わっている（出力長の上限で打ち切られた）場合は、fence を閉じてから付ける。
 - リンクは本文に足してから本文と同じ分割にかけるので、長い回答では最後の 2 ページにまたがることがある。分割は行の途中で切る前に、そのページの直前 20% の範囲にある改行まで戻る。日本語主体の回答でもこの範囲は 600 字前後あり、リンクの行（タイトル 80 字、URL 300 字まで）はホスト名が極端に長くない限りそれより短いので、1 つのリンクの行が 2 ページに割れることはまず無い。
-- タイトルと URL は外部のページ由来なので、http(s) 以外の URL、空白や `<>` を含む URL、300 字を超える URL は捨てる。タイトルからはリンク記法やメンションを作りうる文字を除き、その後で `://` を残らなくなるまで除く（文字を除いた結果として `://` ができることがあるため）。タイトルに別のサイト名が書かれていてもリンク先を取り違えないよう、ラベルの末尾には実際のリンク先のホスト名を必ず付ける。URL を `<>` で囲み、Discord の埋め込みプレビューを出さない。
+- タイトルと URL は外部のページ由来なので、URL は `URL` で解析して正規化した形で扱い、http(s) 以外、正規化後に空白や `<>` を含むもの、正規化後に 300 字を超えるものを捨てる。空白や `<>` は正規化でパーセントエンコードされるので、実際に捨てられるのはほぼ scheme と長さによる。
+- タイトルは NFKC で正規化したうえで、文字、数字、空白と、Markdown やメンションを作れず表示の向きも変えない記号（`.,:;!?'"/&+=%$-` と日本語の句読点や鉤括弧など）だけを残し、他は空白に置き換える。危険な文字を列挙するのではなく残す文字を決めるので、bidi 制御文字、ゼロ幅文字、結合文字も落ちる。その後で `://` を残らなくなるまで除く（除いた結果として新しい `://` ができることがあるため）。
+- タイトルに別のサイト名が書かれていてもリンク先を取り違えないよう、ラベルの末尾には `URL` が正規化したリンク先のホスト名（国際化ドメイン名は punycode の ASCII）を必ず付ける。URL を `<>` で囲み、Discord の埋め込みプレビューを出さない。
 - 検索語と結果 URL は、検索した応答ごとに `Web search` のログとして出す（ギルド ID、メッセージ ID、エンジン名付き）。
 - `usage.server_tool_use_details.web_search_requests` を LLM 詳細フッターに `Searches: N (エンジン名)` として表示する。上記のとおり課金されなかった呼び出しも含むため、課金額は同じフッターの `Cost` で見る。server tool が一度も起動しなかったリクエストでは `server_tool_use_details` 自体が usage から省かれ、フッターにも出ない。
 - 停止した応答とエラーになった応答には、検索結果のリンクを付けない。
