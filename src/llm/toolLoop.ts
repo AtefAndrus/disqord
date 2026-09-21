@@ -348,7 +348,7 @@ function addReported<K extends string>(
   return base;
 }
 
-function addUsage(
+export function addUsage(
   acc: AggregatedUsage | undefined,
   turn: ChatCompletionResponse["usage"] | undefined,
 ): AggregatedUsage | undefined {

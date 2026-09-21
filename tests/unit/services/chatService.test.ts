@@ -662,12 +662,24 @@ describe("ChatService", () => {
           outputModalities: ["text"],
         },
       ]);
-      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
-        async function* () {
-          yield* [];
+      (mockLLMClient.chatStream as ReturnType<typeof mock>)
+        .mockImplementationOnce(async function* () {
+          yield {
+            heartbeat: true as const,
+            done: false as const,
+            usage: { prompt_tokens: 11, completion_tokens: 0, total_tokens: 11, cost: 0.01 },
+          };
           throw new BadRequestError("image rejected");
-        },
-      );
+        })
+        .mockImplementationOnce(async function* () {
+          yield { content: "ok", done: false as const };
+          yield {
+            done: true as const,
+            fullText: "ok",
+            usage: { prompt_tokens: 22, completion_tokens: 3, total_tokens: 25, cost: 0.02 },
+            finishReason: "stop" as const,
+          };
+        });
       const { updater } = createSpyUpdater();
       const imageChat = new ChatService(
         mockLLMClient,
@@ -704,6 +716,10 @@ describe("ChatService", () => {
         { type: "text", text: "read" },
         { type: "text", text: "tweet" },
       ]);
+      // The rejected attempt's usage is kept alongside the retry's.
+      expect(result.usage?.prompt_tokens).toBe(33);
+      expect(result.usage?.total_tokens).toBe(36);
+      expect(result.usage?.cost).toBeCloseTo(0.03);
     });
 
     test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {

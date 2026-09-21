@@ -87,6 +87,7 @@ describe("tweetService", () => {
     "[投稿](https://x.com/a/status/20)",
     "https://x.com/a/status/20。",
     "https://x.com/a/status/20、",
+    "https://x.com/a/status/20.",
   ])("markdown link と URL 末尾の句読点から ID を抽出する: %s", (text) => {
     expect(extractTweetIds(text)).toEqual(["20"]);
   });
@@ -95,8 +96,11 @@ describe("tweetService", () => {
     "https://x.com/a/status/20abc",
     "https://x.com/a/status/20_1",
     "https://x.com/a/status/20%22evil",
+    "https://x.com/a/status/20-evil",
+    "https://x.com/a/status/20~x",
+    "https://x.com/a/status/20.json",
   ])(
-    "ID の直後に英数字、アンダースコア、パーセント記号が続く URL は先頭の数字に切り詰めず除外する: %s",
+    "ID の直後に英数字、アンダースコア、パーセント記号、チルダ、ハイフン、英数字の前のピリオドが続く URL は先頭の数字に切り詰めず除外する: %s",
     (text) => {
       expect(extractTweetIds(text)).toEqual([]);
     },
@@ -427,6 +431,15 @@ describe("tweetService", () => {
     expect(sanitizeTweetField("<close>\nnext", 100)).toBe("＜close＞\nnext");
     expect(sanitizeTweetField("x".repeat(2_001), 2_000)).toBe(`${"x".repeat(1_993)}…（以下省略）`);
     expect(sanitizeTweetField("x".repeat(101), 100, true)).toBe(`${"x".repeat(99)}…`);
+  });
+
+  test("長さの上限は UTF-16 コードユニットではなくコードポイントで数える", () => {
+    // Each "𠮷" is one code point but two UTF-16 code units.
+    const withinLimit = "𠮷".repeat(1_001);
+    expect(sanitizeTweetField(withinLimit, 2_000)).toBe(withinLimit);
+    expect(sanitizeTweetField("𠮷".repeat(2_001), 2_000)).toBe(
+      `${"𠮷".repeat(1_993)}…（以下省略）`,
+    );
   });
 
   test("画像はhttpsかつ許可ホストだけを、写真、動画、引用の順で最大4枚選ぶ", () => {

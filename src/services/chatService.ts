@@ -1,7 +1,7 @@
 import { BadRequestError } from "../errors";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
-import { runToolLoop } from "../llm/toolLoop";
+import { addUsage, runToolLoop } from "../llm/toolLoop";
 import type { ToolRegistry } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
@@ -299,7 +299,7 @@ export class ChatService implements IChatService {
           expansion?.textParts ?? [],
         );
         const retryTracked = createTrackingUpdater(updater);
-        return await this.runChatLoop(
+        const retryResult = await this.runChatLoop(
           retryRequest,
           systemMessages,
           settings.webSearchEnabled,
@@ -309,6 +309,10 @@ export class ChatService implements IChatService {
           controller.signal,
           requestId,
         );
+        // The rejected attempt can still have been billed (a heartbeat may
+        // carry usage before the error), so the footer must count both.
+        const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
+        return usage ? { ...retryResult, usage } : retryResult;
       }
       return result;
     } finally {
