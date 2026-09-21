@@ -43,6 +43,10 @@ function rewriteDestination(
   if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("#") || href.startsWith("//")) {
     return destination;
   }
+  // Parentheses, backslash escapes, and character references change what the
+  // destination means in ways this rewriter does not parse; leave them for
+  // `findLeftoverReferences` to stop on.
+  if (/[()\\&]/.test(href)) return destination;
   const suffixAt = href.search(/[?#]/);
   const rawPath = suffixAt === -1 ? href : href.slice(0, suffixAt);
   const suffix = suffixAt === -1 ? "" : href.slice(suffixAt);
@@ -115,20 +119,39 @@ export function rewriteLinks(
     .join("\n");
 }
 
+/** Undoes percent-encoding and numeric character references, where they decode cleanly. */
+function decodeLoosely(line: string): string {
+  const references = line
+    .replace(/&#(\d+);/g, (_m, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, code: string) =>
+      String.fromCodePoint(Number.parseInt(code, 16)),
+    );
+  return references.replace(/(?:%[0-9a-f]{2})+/gi, (encoded) => {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      return encoded;
+    }
+  });
+}
+
 /**
- * Line numbers (1-based) of `text` that still name one of the folders to
- * delete by a relative or repository-root path. URLs are ignored, so the
- * permalinks `rewriteLinks` wrote do not count.
+ * Line numbers (1-based) of `text` that may still point into one of the
+ * folders to delete: a folder name right after `../`, `changes/`, or the
+ * start of a link destination (`(`, `<`, `: `), followed by `/` or the end of
+ * the path. URLs are ignored, so the permalinks `rewriteLinks` wrote do not
+ * count. It errs towards stopping: a false stop costs a manual look, a miss
+ * costs a broken link.
  */
 export function findLeftoverReferences(text: string, prunedNames: readonly string[]): number[] {
   const escaped = prunedNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const reference = new RegExp(
-    `(?:^|[^\\w-])(?:\\.\\./|changes/)(?:${escaped.join("|")})(?:[/)#?\\s>"']|$)`,
+    `(?:(?:^|[^\\w-])(?:\\.\\./|changes/)|[(<]\\s*(?:\\./)?|\\]:\\s*(?:\\./)?)(?:${escaped.join("|")})(?:[/)#?\\s>"']|$)`,
   );
   const lines: number[] = [];
   text.split("\n").forEach((line, index) => {
     const withoutUrls = line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)>\]]+/gi, "");
-    if (reference.test(withoutUrls)) lines.push(index + 1);
+    if (reference.test(decodeLoosely(withoutUrls))) lines.push(index + 1);
   });
   return lines;
 }

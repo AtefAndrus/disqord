@@ -123,6 +123,28 @@ describe("findLeftoverReferences", () => {
     expect(findLeftoverReferences(text, ["old-feature"])).toEqual([2, 3, 4]);
   });
 
+  test("括弧、エスケープ、文字参照を含むリンク先は書き換えず、検出で止める", () => {
+    const text = [
+      "[a](../old-feature/spec(v2).md)",
+      "[b](../old-feature/spec\\!.md)",
+      "[c](../old&#45;feature/design.md)",
+      "[d](../%6Fld-feature/design.md (title))",
+    ].join("\n");
+
+    const rewritten = rewriteLinks(text, FILE, PRUNED, ROOT, BASE);
+
+    expect(rewritten).toBe(text);
+    expect(findLeftoverReferences(rewritten, ["old-feature"])).toEqual([1, 2, 3, 4]);
+  });
+
+  test("同じ階層からの直下のパスも検出する", () => {
+    expect(
+      findLeftoverReferences("[x](old-feature/design.md (title))\n[y]: ./old-feature/", [
+        "old-feature",
+      ]),
+    ).toEqual([1, 2]);
+  });
+
   test("rewriteLinks が書き換えた結果には残りが無い", () => {
     const text = "[a](../old-feature/design.md#x)\n[b]: ../old-feature/design.md";
 
