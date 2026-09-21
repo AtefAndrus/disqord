@@ -3,8 +3,10 @@ import {
   addedPackages,
   annotations,
   classify,
+  escapeData,
   lockPackages,
   parseResolution,
+  retryAfterMs,
   summarize,
 } from "../../../scripts/check-lock-age";
 
@@ -143,5 +145,31 @@ describe("summarize と annotations", () => {
   test("問題が無ければ注釈を出さない", () => {
     expect(annotations([results[0]])).toEqual([]);
     expect(summarize([])).toContain("None.");
+  });
+});
+
+describe("retryAfterMs", () => {
+  const now = Date.parse("2026-09-21T12:00:00Z");
+
+  test("秒数と HTTP 日付の両方を読み、読めなければ undefined", () => {
+    expect(retryAfterMs("120", now)).toBe(120_000);
+    expect(retryAfterMs("Mon, 21 Sep 2026 12:00:30 GMT", now)).toBe(30_000);
+    expect(retryAfterMs(null, now)).toBeUndefined();
+    expect(retryAfterMs("soon", now)).toBeUndefined();
+  });
+});
+
+describe("escapeData", () => {
+  test("改行と % をエスケープし、値が別のワークフローコマンドを始められないようにする", () => {
+    expect(escapeData("a\n::stop-commands::x\r100%")).toBe("a%0A::stop-commands::x%0D100%25");
+  });
+
+  test("注釈に入る依存名もエスケープされる", () => {
+    const [, line] = annotations([
+      { pkg: "evil@1\n::error::forged", status: "unknown", reason: "r" },
+    ]);
+
+    expect(line).not.toContain("\n");
+    expect(line).toContain("evil@1%0A::error::forged");
   });
 });

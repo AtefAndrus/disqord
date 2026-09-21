@@ -28,6 +28,8 @@ const MAX_RETRY_WAIT_MS = 30_000;
 /** GitHub shows at most 10 warning annotations per step; one goes to the overall count. */
 const MAX_ANNOTATIONS = 9;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
+/** Full packuments of long-lived packages run to tens of MB; beyond this the age is reported unknown. */
+const MAX_PACKUMENT_BYTES = 64 * 1024 * 1024;
 
 /**
  * Every resolved `name@resolution` in the lock's `packages`, parsed as JSONC
@@ -107,16 +109,31 @@ async function publishTimes(name: string): Promise<Record<string, string>> {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
     if (response.ok) {
-      const body = (await response.json()) as { time?: Record<string, string> };
+      const length = Number(response.headers.get("content-length"));
+      if (length > MAX_PACKUMENT_BYTES)
+        throw new Error(`metadata is ${length} bytes, over the limit`);
+      const text = await response.text();
+      if (text.length > MAX_PACKUMENT_BYTES) throw new Error("metadata is over the size limit");
+      const body = JSON.parse(text) as { time?: Record<string, string> };
       return body.time ?? {};
     }
     const transient = response.status === 429 || response.status >= 500;
     if (!transient || attempt >= MAX_ATTEMPTS) throw new Error(`HTTP ${response.status}`);
-    const retryAfter = Number(response.headers.get("retry-after"));
-    const waitMs =
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 2000 * attempt;
-    await Bun.sleep(Math.min(waitMs, MAX_RETRY_WAIT_MS));
+    const waitMs = retryAfterMs(response.headers.get("retry-after"), Date.now()) ?? 2000 * attempt;
+    // Retrying before the registry asked would only spend the remaining attempts while still throttled.
+    if (waitMs > MAX_RETRY_WAIT_MS)
+      throw new Error(`HTTP ${response.status}, retry after ${waitMs} ms`);
+    await Bun.sleep(waitMs);
   }
+}
+
+/** Milliseconds a `Retry-After` header asks for, in either its seconds or HTTP-date form. */
+export function retryAfterMs(header: string | null, now: number): number | undefined {
+  if (!header) return undefined;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(header);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - now);
 }
 
 async function checkNpm(
@@ -171,6 +188,11 @@ export function summarize(results: AgeResult[], skipped: string[] = []): string 
   return lines.join("\n");
 }
 
+/** Escapes a workflow command's message the way @actions/core does, so a value cannot end the command or start another. */
+export function escapeData(text: string): string {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
 /** Workflow commands for the step: one overall count, then the most important results up to the limit. */
 export function annotations(results: AgeResult[]): string[] {
   const flagged = sortResults(results).filter((r) => r.status !== "old");
@@ -182,18 +204,30 @@ export function annotations(results: AgeResult[]): string[] {
   for (const result of flagged.slice(0, MAX_ANNOTATIONS)) {
     lines.push(
       result.status === "young"
-        ? `::warning file=bun.lock::${result.pkg} was published ${Math.floor(result.ageHours)}h ago (${result.publishedAt})`
-        : `::warning file=bun.lock::could not check the age of ${result.pkg}: ${result.reason}`,
+        ? `::warning file=bun.lock::${escapeData(`${result.pkg} was published ${Math.floor(result.ageHours)}h ago (${result.publishedAt})`)}`
+        : `::warning file=bun.lock::${escapeData(`could not check the age of ${result.pkg}: ${result.reason}`)}`,
     );
   }
   return lines;
 }
 
+/**
+ * In Actions the summary goes only to the summary file: printed to the log,
+ * a package name could be read as a workflow command. Locally it is printed.
+ */
 function report(lines: string[], summary: string): void {
   for (const line of lines) console.log(line);
-  console.log(summary);
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file) {
+    console.log(summary);
+    return;
+  }
+  try {
+    appendFileSync(file, `${summary}\n`);
+  } catch (error) {
+    console.log(
+      `::warning::${escapeData(`could not write the lock age summary: ${error instanceof Error ? error.message : error}`)}`,
+    );
   }
 }
 
@@ -225,7 +259,7 @@ async function main(): Promise<void> {
   } catch (error) {
     const message = error instanceof Error ? error.message.split("\n")[0] : String(error);
     report(
-      [`::warning file=bun.lock::the lock age check did not run: ${message}`],
+      [`::warning file=bun.lock::${escapeData(`the lock age check did not run: ${message}`)}`],
       `## Packages bun.lock adds\n\nNot checked: ${message}`,
     );
     return;
@@ -249,4 +283,11 @@ async function main(): Promise<void> {
   report(annotations(results), summarize(results, skipped));
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) {
+  // Advisory only: an error in the checker itself is a warning, never a failed step.
+  await main().catch((error: unknown) => {
+    console.log(
+      `::warning::${escapeData(`the lock age check stopped: ${error instanceof Error ? error.message : error}`)}`,
+    );
+  });
+}
