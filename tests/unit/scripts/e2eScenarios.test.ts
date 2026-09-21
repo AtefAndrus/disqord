@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  costOf,
   type DiscordMessage,
   isFinished,
   isStreaming,
@@ -226,5 +227,39 @@ describe("e2e scenarios: check", () => {
     expect(check("pdf", [page("1", ["PINEAPPLE"])])).not.toEqual([]);
     expect(check("chat", [page("1", ["接続確認OK"])])).not.toEqual([]);
     expect(check("pdf", [page("1", ["PINEAPPLE"], USAGE)])).toEqual([]);
+  });
+});
+
+describe("costOf", () => {
+  test("実際の footer から、全ターン合算の Cost を最終ページで読む", () => {
+    const container = buildFinalContainer({
+      color: 0x123456,
+      isFirst: true,
+      isLast: true,
+      modelName: "Model X",
+      text: "答え",
+      metadata: {
+        showDetails: true,
+        model: "vendor/model-x",
+        provider: "P",
+        usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, cost: 0.0123456 },
+      },
+    });
+    const reply = toReply([
+      page("1", ["前半"], "ページ 1/2"),
+      {
+        id: "2",
+        content: "",
+        author: { id: "bot", username: "bot" },
+        components: [container.toJSON()],
+      },
+    ]);
+
+    expect(costOf(reply)).toBe(0.012346);
+  });
+
+  test("Cost の無い footer（停止、usage に cost が無い応答）では undefined を返す", () => {
+    expect(costOf(toReply([page("1", ["途中"], STOPPED)]))).toBeUndefined();
+    expect(costOf(toReply([page("1", ["答え"], "Tokens: 1+2=3 | Provider: P")]))).toBeUndefined();
   });
 });

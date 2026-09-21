@@ -166,6 +166,12 @@ export function modelOf(reply: Reply): string | undefined {
   return lastPageFooter(reply)?.match(/Model: (\S+)/)?.[1];
 }
 
+/** The cost in USD the bot reports in its usage footer (summed over every turn of the request), for the run log. */
+export function costOf(reply: Reply): number | undefined {
+  const match = lastPageFooter(reply)?.match(/Cost: \$(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : undefined;
+}
+
 function hasUsageFooter(reply: Reply): string[] {
   const footer = lastPageFooter(reply) ?? "";
   return USAGE_FOOTER.test(footer) && /Provider: \S/.test(footer)

@@ -20,11 +20,19 @@
  *
  * Not part of CI on purpose: it needs two bot tokens and an LLM key, costs
  * money per run, and its failures are as often the network or the model as
- * the code.
+ * the code. The run ends by printing what it cost (see `cost.ts`).
  */
 import { loadConfig } from "../../src/config";
+import {
+  formatCostSummary,
+  observeUsage,
+  readKeyUsage,
+  type ScenarioCost,
+  type UsageState,
+} from "./cost";
 import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
+  costOf,
   type DiscordMessage,
   modelOf,
   type Reply,
@@ -38,6 +46,7 @@ const POLL_INTERVAL_MS = 2_500;
 const REPLY_TIMEOUT_MS = 180_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
 const BOT_EXIT_TIMEOUT_MS = 5_000;
+const USAGE_POLL_INTERVAL_MS = 3_000;
 
 const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
@@ -178,6 +187,13 @@ async function main(): Promise<number> {
     names.length > 0 ? names.includes(scenario.name) : !scenario.manual,
   );
 
+  const usageBefore = await readKeyUsage(config.openRouterApiKey).catch((error: unknown) => {
+    console.log(
+      `  cost: could not read the OpenRouter key's usage: ${error instanceof Error ? error.message : error}`,
+    );
+    return undefined;
+  });
+  const costs: ScenarioCost[] = [];
   const bot = spawn ? await startBot() : undefined;
   let failures = 0;
   try {
@@ -194,9 +210,11 @@ async function main(): Promise<number> {
         });
         const problems = scenario.check(reply);
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+        const cost = costOf(reply);
+        costs.push({ name: scenario.name, cost });
         if (problems.length === 0) {
           console.log(
-            `PASS ${scenario.name} (${seconds}s, ${reply.messages.length} message(s), model ${modelOf(reply) ?? "unknown"})`,
+            `PASS ${scenario.name} (${seconds}s, ${reply.messages.length} message(s), model ${modelOf(reply) ?? "unknown"}, cost ${cost === undefined ? "unknown" : `$${cost.toFixed(6)}`})`,
           );
         } else {
           failures++;
@@ -207,6 +225,7 @@ async function main(): Promise<number> {
         }
       } catch (error) {
         failures++;
+        costs.push({ name: scenario.name, cost: undefined });
         console.log(`FAIL ${scenario.name}: ${error instanceof Error ? error.message : error}`);
         // Whatever went wrong, the state of this scenario's reply is unknown
         // (even a failed POST may have been accepted), so nothing after it
@@ -224,7 +243,35 @@ async function main(): Promise<number> {
   } finally {
     await bot?.stop();
   }
+  for (const line of formatCostSummary(costs, await usageDelta(usageBefore, costs))) {
+    console.log(line);
+  }
   return failures === 0 ? 0 : 1;
+}
+
+/** The change in the key's usage since `before`, as observed when polling stopped. Never fails the run. */
+async function usageDelta(
+  before: number | undefined,
+  costs: ScenarioCost[],
+): Promise<{ amount: number; state: UsageState } | undefined> {
+  if (before === undefined) return undefined;
+  const reported = costs.reduce((sum, { cost }) => sum + (cost ?? 0), 0);
+  try {
+    const { usage, state } = await observeUsage(
+      {
+        read: () => readKeyUsage(config.openRouterApiKey),
+        pause: () => Bun.sleep(USAGE_POLL_INTERVAL_MS),
+      },
+      before + reported,
+      costs.filter(({ cost }) => cost !== undefined).length,
+    );
+    return { amount: usage - before, state };
+  } catch (error) {
+    console.log(
+      `  cost: could not read the OpenRouter key's usage: ${error instanceof Error ? error.message : error}`,
+    );
+    return undefined;
+  }
 }
 
 process.exit(await main());
