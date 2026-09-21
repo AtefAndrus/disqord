@@ -40,7 +40,7 @@ async function bootstrap(): Promise<void> {
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
 
   const llmClient = OpenRouterClient.fromConfig(config);
-  const settingsService = new SettingsService(guildSettingsRepo, config.defaultModel);
+  const settingsService = new SettingsService(guildSettingsRepo);
   const modelService = new ModelService(llmClient);
   // Empty for now — tool-calling-foundation Phase 4 wires the registry into
   // ChatService/runToolLoop; future changes (code-execution, discord-tool,

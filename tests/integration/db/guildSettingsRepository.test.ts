@@ -26,7 +26,7 @@ describe("GuildSettingsRepository", () => {
     });
 
     test("存在するギルドの設定を返す", async () => {
-      await repo.upsert("guild-123", { defaultModel: "test-model" });
+      await repo.update("guild-123", () => ({ defaultModel: "test-model" }));
 
       const result = await repo.findByGuildId("guild-123");
 
@@ -36,7 +36,7 @@ describe("GuildSettingsRepository", () => {
     });
 
     test("カラムマッピングが正しい（snake_case → camelCase）", async () => {
-      await repo.upsert("guild-456", { defaultModel: "model-x" });
+      await repo.update("guild-456", () => ({ defaultModel: "model-x" }));
 
       const result = await repo.findByGuildId("guild-456");
 
@@ -51,62 +51,84 @@ describe("GuildSettingsRepository", () => {
     });
   });
 
-  describe("upsert", () => {
-    test("新規レコードを挿入する", async () => {
-      const result = await repo.upsert("new-guild", { defaultModel: "new-model" });
+  describe("update", () => {
+    test("行が無ければ既定値で作ってから、返した列を書く", async () => {
+      const result = await repo.update("new-guild", () => ({ defaultModel: "new-model" }));
 
-      expect(result.guildId).toBe("new-guild");
-      expect(result.defaultModel).toBe("new-model");
-
-      const found = await repo.findByGuildId("new-guild");
-      expect(found).not.toBeNull();
+      expect(result).toMatchObject({
+        guildId: "new-guild",
+        defaultModel: "new-model",
+        freeModelsOnly: false,
+        showLlmDetails: true,
+        autoReplyChannels: [],
+        webSearchEnabled: false,
+      });
+      expect(await repo.findByGuildId("new-guild")).toEqual(result);
     });
 
-    test("既存レコードを更新する", async () => {
-      await repo.upsert("guild-update", { defaultModel: "old-model" });
-      await repo.upsert("guild-update", { defaultModel: "updated-model" });
-
-      const result = await repo.findByGuildId("guild-update");
-
-      expect(result?.defaultModel).toBe("updated-model");
-    });
-
-    test("webSearchEnabledを保存して読み戻せる", async () => {
-      await repo.upsert("guild-ws", { defaultModel: "m", webSearchEnabled: true });
-      expect((await repo.findByGuildId("guild-ws"))?.webSearchEnabled).toBe(true);
-
-      await repo.upsert("guild-ws", { defaultModel: "m", webSearchEnabled: false });
-      expect((await repo.findByGuildId("guild-ws"))?.webSearchEnabled).toBe(false);
-    });
-
-    test("defaultModelが未指定の場合はデフォルト値を使用", async () => {
-      const result = await repo.upsert("guild-default", {});
+    test("何も返さなければ既定値の行を作るだけで、既定のモデルが入る", async () => {
+      const result = await repo.update("guild-default", () => ({}));
 
       expect(result.defaultModel).toBe(TEST_DEFAULT_MODEL);
     });
 
-    test("createdAtとupdatedAtが設定される", async () => {
-      const result = await repo.upsert("guild-timestamps", { defaultModel: "test" });
+    test("返さなかった列は保存された値のまま残す", async () => {
+      await repo.update("guild-keep", () => ({
+        webSearchEnabled: true,
+        autoReplyChannels: ["c1"],
+        showLlmDetails: false,
+      }));
 
-      expect(result.createdAt).toBeDefined();
-      expect(result.updatedAt).toBeDefined();
-      expect(typeof result.createdAt).toBe("string");
-      expect(typeof result.updatedAt).toBe("string");
+      await repo.update("guild-keep", () => ({ defaultModel: "other" }));
+
+      expect(await repo.findByGuildId("guild-keep")).toMatchObject({
+        defaultModel: "other",
+        webSearchEnabled: true,
+        autoReplyChannels: ["c1"],
+        showLlmDetails: false,
+      });
     });
 
-    test("更新時にupdatedAtのみ変更される", async () => {
-      const original = await repo.upsert("guild-partial", { defaultModel: "v1" });
-      const originalCreatedAt = original.createdAt;
+    test("mutate には保存されている行が渡る", async () => {
+      await repo.update("guild-seen", () => ({ webSearchEnabled: true }));
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      await repo.upsert("guild-partial", {
-        defaultModel: "v2",
-        updatedAt: new Date().toISOString(),
+      let seen: boolean | undefined;
+      await repo.update("guild-seen", (current) => {
+        seen = current.webSearchEnabled;
+        return {};
       });
 
-      const found = await repo.findByGuildId("guild-partial");
-      expect(found?.createdAt).toBe(originalCreatedAt);
+      expect(seen).toBe(true);
+    });
+
+    test("createdAt は変えず、書いたときだけ updatedAt を進める", async () => {
+      const original = await repo.update("guild-time", () => ({ defaultModel: "v1" }));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      const unchanged = await repo.update("guild-time", () => ({}));
+      expect(unchanged.updatedAt).toBe(original.updatedAt);
+
+      const changed = await repo.update("guild-time", () => ({ defaultModel: "v2" }));
+      expect(changed.createdAt).toBe(original.createdAt);
+      expect(changed.updatedAt > original.updatedAt).toBe(true);
+    });
+
+    test("mutate が例外を投げたら、既存の行は変わらず、作りかけの行は残らない", async () => {
+      await repo.update("guild-rollback", () => ({ defaultModel: "kept" }));
+
+      await expect(
+        repo.update("guild-rollback", () => {
+          throw new Error("rejected");
+        }),
+      ).rejects.toThrow("rejected");
+      await expect(
+        repo.update("guild-never", () => {
+          throw new Error("rejected");
+        }),
+      ).rejects.toThrow("rejected");
+
+      expect((await repo.findByGuildId("guild-rollback"))?.defaultModel).toBe("kept");
+      expect(await repo.findByGuildId("guild-never")).toBeNull();
     });
   });
 
@@ -149,12 +171,12 @@ describe("GuildSettingsRepository", () => {
         // Existing guilds must not start paying for searches because of a migration.
         expect(before?.webSearchEnabled).toBe(false);
 
-        await legacyRepo.upsert("legacy-guild", {
+        await legacyRepo.update("legacy-guild", () => ({
           defaultModel: "updated-model",
           freeModelsOnly: true,
           showLlmDetails: false,
           autoReplyChannels: ["channel-1"],
-        });
+        }));
 
         const after = await legacyRepo.findByGuildId("legacy-guild");
         const legacyColumn = legacyDb
@@ -178,7 +200,7 @@ describe("GuildSettingsRepository", () => {
 
   describe("delete", () => {
     test("存在するレコードを削除してtrueを返す", async () => {
-      await repo.upsert("guild-to-delete", { defaultModel: "test" });
+      await repo.update("guild-to-delete", () => ({ defaultModel: "test" }));
 
       const result = await repo.delete("guild-to-delete");
 
@@ -198,9 +220,9 @@ describe("GuildSettingsRepository", () => {
   describe("並行操作", () => {
     test("複数の異なるギルドを同時に操作できる", async () => {
       const promises = [
-        repo.upsert("guild-a", { defaultModel: "model-a" }),
-        repo.upsert("guild-b", { defaultModel: "model-b" }),
-        repo.upsert("guild-c", { defaultModel: "model-c" }),
+        repo.update("guild-a", () => ({ defaultModel: "model-a" })),
+        repo.update("guild-b", () => ({ defaultModel: "model-b" })),
+        repo.update("guild-c", () => ({ defaultModel: "model-c" })),
       ];
 
       await Promise.all(promises);

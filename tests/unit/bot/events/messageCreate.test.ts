@@ -304,6 +304,7 @@ describe("createMessageCreateHandler", () => {
       getGuildSettings: mock(() => Promise.resolve(mockGuildSettings)),
       setGuildModel: mock(() => Promise.resolve(mockGuildSettings)),
       setFreeModelsOnly: mock(() => Promise.resolve(mockGuildSettings)),
+      toggleFreeModelsOnly: mock(() => Promise.resolve(true)),
       setShowLlmDetails: mock(() => Promise.resolve()),
       toggleShowLlmDetails: mock(() => Promise.resolve(true)),
       addAutoReplyChannel: mock(() => Promise.resolve()),

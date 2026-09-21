@@ -1,313 +1,246 @@
-import { beforeEach, describe, expect, type mock, test } from "bun:test";
-import type { IGuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
+import { applyMigrations } from "../../../src/db/schema";
+import { SettingsConflictError, SettingsRuleError } from "../../../src/errors";
 import { SettingsService } from "../../../src/services/settingsService";
-import {
-  createMockGuildSettings,
-  createMockGuildSettingsRepository,
-} from "../../helpers/mockFactories";
 
-const TEST_DEFAULT_MODEL = "test/default-model";
+const DEFAULT_MODEL = "test/default-model";
+const G = "guild-1";
+const FREE = { model: "free/model:free", isFree: true };
+const PAID = { model: "paid/model", isFree: false };
 
+// A real SQLite database: the behaviour under test is what ends up stored
+// when writes overlap, which a mocked repository cannot show.
 describe("SettingsService", () => {
-  let settingsService: SettingsService;
-  let mockRepo: IGuildSettingsRepository;
+  let db: Database;
+  let repo: GuildSettingsRepository;
+  let service: SettingsService;
 
   beforeEach(() => {
-    mockRepo = createMockGuildSettingsRepository();
-    settingsService = new SettingsService(mockRepo, TEST_DEFAULT_MODEL);
+    db = new Database(":memory:");
+    applyMigrations(db);
+    repo = new GuildSettingsRepository(db, DEFAULT_MODEL);
+    service = new SettingsService(repo);
+  });
+
+  afterEach(() => {
+    db.close();
   });
 
   describe("getGuildSettings", () => {
-    test("既存の設定がある場合はそれを返す", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        defaultModel: "existing-model",
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+    test("行が無ければ既定値の行を作り、保存された行を返す", async () => {
+      const settings = await service.getGuildSettings(G);
 
-      const result = await settingsService.getGuildSettings("guild-123");
-
-      expect(result).toEqual(existingSettings);
-      expect(mockRepo.upsert).not.toHaveBeenCalled();
-    });
-
-    test("設定が存在しない場合はデフォルト設定を作成", async () => {
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-
-      await settingsService.getGuildSettings("guild-456");
-
-      expect(mockRepo.upsert).toHaveBeenCalled();
-    });
-
-    test("デフォルトモデルが正しい値", async () => {
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-
-      const result = await settingsService.getGuildSettings("guild-789");
-
-      expect(result.defaultModel).toBe(TEST_DEFAULT_MODEL);
-    });
-  });
-
-  describe("setGuildModel", () => {
-    test("指定したモデルでupsertを呼び出す", async () => {
-      await settingsService.setGuildModel("guild-123", "new-model");
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          guildId: "guild-123",
-          defaultModel: "new-model",
-        }),
-      );
-    });
-
-    test("更新後の設定を返す", async () => {
-      const updatedSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        defaultModel: "updated-model",
-      });
-      (mockRepo.upsert as ReturnType<typeof mock>).mockResolvedValueOnce(updatedSettings);
-
-      const result = await settingsService.setGuildModel("guild-123", "updated-model");
-
-      expect(result.defaultModel).toBe("updated-model");
-    });
-
-    test("updatedAtが含まれる", async () => {
-      await settingsService.setGuildModel("guild-123", "some-model");
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          updatedAt: expect.any(String),
-        }),
-      );
-    });
-
-    test("既存設定を維持しつつモデルを更新", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        defaultModel: "old-model",
-        freeModelsOnly: true,
-        showLlmDetails: false,
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.setGuildModel("guild-123", "new-model");
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          defaultModel: "new-model",
-          freeModelsOnly: true,
-          showLlmDetails: false,
-        }),
-      );
-    });
-  });
-
-  describe("setWebSearchEnabled", () => {
-    test("他の設定を保ったままwebSearchEnabledだけを変える", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        defaultModel: "kept-model",
-        autoReplyChannels: ["channel-1"],
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.setWebSearchEnabled("guild-123", true);
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          defaultModel: "kept-model",
-          autoReplyChannels: ["channel-1"],
-          webSearchEnabled: true,
-        }),
-      );
-    });
-  });
-
-  describe("setFreeModelsOnly", () => {
-    test("freeModelsOnlyを有効化する", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
+      expect(settings).toMatchObject({
+        guildId: G,
+        defaultModel: DEFAULT_MODEL,
         freeModelsOnly: false,
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.setFreeModelsOnly("guild-123", true);
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          freeModelsOnly: true,
-        }),
-      );
-    });
-
-    test("freeModelsOnlyを無効化する", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        freeModelsOnly: true,
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.setFreeModelsOnly("guild-123", false);
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          freeModelsOnly: false,
-        }),
-      );
-    });
-
-    test("既存設定を維持しつつfreeModelsOnlyを更新", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        defaultModel: "specific-model",
-        freeModelsOnly: false,
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.setFreeModelsOnly("guild-123", true);
-
-      expect(mockRepo.upsert).toHaveBeenCalledWith(
-        "guild-123",
-        expect.objectContaining({
-          defaultModel: "specific-model",
-          freeModelsOnly: true,
-        }),
-      );
-    });
-  });
-
-  describe("setShowLlmDetails", () => {
-    test("showLlmDetailsを有効化する", async () => {
-      await settingsService.setShowLlmDetails("guild-123", true);
-
-      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", true);
-    });
-
-    test("showLlmDetailsを無効化する", async () => {
-      await settingsService.setShowLlmDetails("guild-123", false);
-
-      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", false);
-    });
-  });
-
-  describe("toggleShowLlmDetails", () => {
-    test("showLlmDetailsがtrueの場合はfalseに切り替える", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
         showLlmDetails: true,
+        autoReplyChannels: [],
+        webSearchEnabled: false,
       });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      const result = await settingsService.toggleShowLlmDetails("guild-123");
-
-      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", false);
-      expect(result).toBe(false);
+      expect(await repo.findByGuildId(G)).toEqual(settings);
     });
 
-    test("showLlmDetailsがfalseの場合はtrueに切り替える", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        showLlmDetails: false,
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+    test("行の作成と同時に書き込みがあっても、書き込みを消さない", async () => {
+      const [, afterWrite] = await Promise.all([
+        service.getGuildSettings(G),
+        service.setWebSearchEnabled(G, true),
+      ]);
 
-      const result = await settingsService.toggleShowLlmDetails("guild-123");
-
-      expect(mockRepo.updateShowLlmDetails).toHaveBeenCalledWith("guild-123", true);
-      expect(result).toBe(true);
+      expect(afterWrite.webSearchEnabled).toBe(true);
+      expect((await service.getGuildSettings(G)).webSearchEnabled).toBe(true);
     });
   });
 
-  describe("addAutoReplyChannel", () => {
-    test("空の自動応答チャンネルリストに追加する", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: [],
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+  describe("行が無いギルドへの各 setter", () => {
+    test("setter ごとに、その値を持つ行を作る", async () => {
+      await service.setShowLlmDetails("g-llm", false);
+      await service.setWebSearchEnabled("g-ws", true);
+      await service.setGuildModel("g-model", PAID);
+      await service.addAutoReplyChannel("g-ch", "c1");
+      expect(await service.toggleShowLlmDetails("g-toggle")).toBe(false);
 
-      await settingsService.addAutoReplyChannel("guild-123", "channel-456");
-
-      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", ["channel-456"]);
-    });
-
-    test("既存の自動応答チャンネルリストに追加する", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: ["channel-111", "channel-222"],
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.addAutoReplyChannel("guild-123", "channel-333");
-
-      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", [
-        "channel-111",
-        "channel-222",
-        "channel-333",
-      ]);
-    });
-
-    test("既に存在するチャンネルは重複追加しない", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: ["channel-456"],
-      });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      await settingsService.addAutoReplyChannel("guild-123", "channel-456");
-
-      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
+      expect((await repo.findByGuildId("g-llm"))?.showLlmDetails).toBe(false);
+      expect((await repo.findByGuildId("g-ws"))?.webSearchEnabled).toBe(true);
+      expect((await repo.findByGuildId("g-model"))?.defaultModel).toBe(PAID.model);
+      expect((await repo.findByGuildId("g-ch"))?.autoReplyChannels).toEqual(["c1"]);
+      expect((await repo.findByGuildId("g-toggle"))?.showLlmDetails).toBe(false);
     });
   });
 
-  describe("removeAutoReplyChannel", () => {
-    test("自動応答チャンネルを削除する", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: ["channel-111", "channel-222", "channel-333"],
+  describe("別の列を変える操作は、互いの変更を消さない", () => {
+    test("逐次でも", async () => {
+      await service.setWebSearchEnabled(G, true);
+      await service.addAutoReplyChannel(G, "c1");
+      await service.setGuildModel(G, PAID);
+
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        webSearchEnabled: true,
+        autoReplyChannels: ["c1"],
+        defaultModel: PAID.model,
       });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+    });
 
-      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-222");
+    test("同時でも（Web 検索の OFF がモデル変更で ON に戻らない）", async () => {
+      await service.setWebSearchEnabled(G, true);
 
-      expect(mockRepo.updateAutoReplyChannels).toHaveBeenCalledWith("guild-123", [
-        "channel-111",
-        "channel-333",
+      await Promise.all([service.setWebSearchEnabled(G, false), service.setGuildModel(G, PAID)]);
+
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        webSearchEnabled: false,
+        defaultModel: PAID.model,
+      });
+    });
+  });
+
+  describe("トグルは保存された値を反転する", () => {
+    test.each([true, false])("LLM 詳細表示を %p から 2 回同時に押すと元に戻る", async (initial) => {
+      await service.setShowLlmDetails(G, initial);
+
+      const results = await Promise.all([
+        service.toggleShowLlmDetails(G),
+        service.toggleShowLlmDetails(G),
       ]);
-      expect(result).toBe(true);
+
+      expect(results).toEqual([!initial, initial]);
+      expect((await repo.findByGuildId(G))?.showLlmDetails).toBe(initial);
     });
 
-    test("存在しないチャンネルを削除しようとするとfalseを返す", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: ["channel-111"],
+    test.each([true, false])(
+      "無料モデル限定を %p から 2 回同時に押すと元に戻る",
+      async (initial) => {
+        await service.setGuildModel(G, FREE);
+        await service.setFreeModelsOnly(G, initial, FREE);
+
+        await Promise.all([
+          service.toggleFreeModelsOnly(G, FREE),
+          service.toggleFreeModelsOnly(G, FREE),
+        ]);
+
+        expect((await repo.findByGuildId(G))?.freeModelsOnly).toBe(initial);
+      },
+    );
+  });
+
+  describe("自動応答チャンネル", () => {
+    test("異なるチャンネルの同時追加は両方残る", async () => {
+      await Promise.all([
+        service.addAutoReplyChannel(G, "c1"),
+        service.addAutoReplyChannel(G, "c2"),
+      ]);
+
+      expect((await repo.findByGuildId(G))?.autoReplyChannels.sort()).toEqual(["c1", "c2"]);
+    });
+
+    test("同じチャンネルの二重追加は 1 つにまとまる", async () => {
+      await Promise.all([
+        service.addAutoReplyChannel(G, "c1"),
+        service.addAutoReplyChannel(G, "c1"),
+      ]);
+
+      expect((await repo.findByGuildId(G))?.autoReplyChannels).toEqual(["c1"]);
+    });
+
+    test("異なるチャンネルの同時削除は両方消える", async () => {
+      await service.addAutoReplyChannel(G, "c1");
+      await service.addAutoReplyChannel(G, "c2");
+      await service.addAutoReplyChannel(G, "c3");
+
+      await Promise.all([
+        service.removeAutoReplyChannel(G, "c1"),
+        service.removeAutoReplyChannel(G, "c2"),
+      ]);
+
+      expect((await repo.findByGuildId(G))?.autoReplyChannels).toEqual(["c3"]);
+    });
+
+    test("同じチャンネルの二重削除は、一方だけが削除したと返す", async () => {
+      await service.addAutoReplyChannel(G, "c1");
+
+      const results = await Promise.all([
+        service.removeAutoReplyChannel(G, "c1"),
+        service.removeAutoReplyChannel(G, "c1"),
+      ]);
+
+      expect(results.sort()).toEqual([false, true]);
+      expect((await repo.findByGuildId(G))?.autoReplyChannels).toEqual([]);
+    });
+  });
+
+  describe("無料モデル限定とモデルの組み合わせは、保存された設定に対して確かめる", () => {
+    test("限定が ON のとき、有料モデルへの変更は規則違反で、モデルは変わらない", async () => {
+      await service.setGuildModel(G, FREE);
+      await service.setFreeModelsOnly(G, true, FREE);
+
+      await expect(service.setGuildModel(G, PAID)).rejects.toBeInstanceOf(SettingsRuleError);
+      expect((await repo.findByGuildId(G))?.defaultModel).toBe(FREE.model);
+    });
+
+    test("有料モデルのまま限定を ON にするのは規則違反", async () => {
+      await service.setGuildModel(G, PAID);
+
+      await expect(service.setFreeModelsOnly(G, true, PAID)).rejects.toBeInstanceOf(
+        SettingsRuleError,
+      );
+      expect((await repo.findByGuildId(G))?.freeModelsOnly).toBe(false);
+    });
+
+    test("限定を ON にする確認の後に有料モデルへ変わったら、限定の保存は競合になる", async () => {
+      await service.setGuildModel(G, FREE);
+      // 限定の有効化が FREE を確認した後、保存する前にモデルが変わった
+      await service.setGuildModel(G, PAID);
+
+      await expect(service.setFreeModelsOnly(G, true, FREE)).rejects.toBeInstanceOf(
+        SettingsConflictError,
+      );
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        defaultModel: PAID.model,
+        freeModelsOnly: false,
       });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-999");
-
-      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
-      expect(result).toBe(false);
     });
 
-    test("空のリストから削除しようとするとfalseを返す", async () => {
-      const existingSettings = createMockGuildSettings({
-        guildId: "guild-123",
-        autoReplyChannels: [],
+    test("有料モデルを確認した後に限定が ON になったら、モデルの保存は規則違反になる", async () => {
+      await service.setGuildModel(G, FREE);
+      // モデル変更が PAID を確認した後、保存する前に限定が ON になった
+      await service.setFreeModelsOnly(G, true, FREE);
+
+      await expect(service.setGuildModel(G, PAID)).rejects.toBeInstanceOf(SettingsRuleError);
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        defaultModel: FREE.model,
+        freeModelsOnly: true,
       });
-      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
-
-      const result = await settingsService.removeAutoReplyChannel("guild-123", "channel-456");
-
-      expect(mockRepo.updateAutoReplyChannels).not.toHaveBeenCalled();
-      expect(result).toBe(false);
     });
+
+    test("無料モデルへの変更と限定の有効化は、どちらが先でも両方成功する", async () => {
+      const OTHER_FREE = { model: "other/model:free", isFree: true };
+      await service.setGuildModel(G, FREE);
+
+      await service.setGuildModel(G, OTHER_FREE);
+      await service.setFreeModelsOnly(G, true, OTHER_FREE);
+
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        defaultModel: OTHER_FREE.model,
+        freeModelsOnly: true,
+      });
+    });
+
+    test("限定を OFF にするのにモデルの確認は要らない", async () => {
+      await service.setGuildModel(G, FREE);
+      await service.setFreeModelsOnly(G, true, FREE);
+
+      await service.setFreeModelsOnly(G, false);
+
+      expect((await repo.findByGuildId(G))?.freeModelsOnly).toBe(false);
+    });
+  });
+
+  test("失敗した変更は、その変更で作った行ごと取り消される", async () => {
+    await expect(service.setFreeModelsOnly("new-guild", true, PAID)).rejects.toBeInstanceOf(
+      SettingsConflictError,
+    );
+
+    expect(await repo.findByGuildId("new-guild")).toBeNull();
   });
 });

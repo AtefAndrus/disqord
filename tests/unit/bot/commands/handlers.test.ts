@@ -63,7 +63,10 @@ describe("model command handlers", () => {
     expect(setEmbed.url).toBe(currentEmbed.url);
     expect(current.deferReply).toHaveBeenCalledTimes(1);
     expect(current.reply).not.toHaveBeenCalled();
-    expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", "model-1");
+    expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", {
+      model: "model-1",
+      isFree: true,
+    });
   });
 
   test("詳細取得不能でもcurrentのモデルページURLを表示する", async () => {
