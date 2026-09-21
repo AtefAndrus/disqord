@@ -106,6 +106,28 @@ describe("SettingsService", () => {
     });
   });
 
+  describe("setWebSearchEnabled", () => {
+    test("他の設定を保ったままwebSearchEnabledだけを変える", async () => {
+      const existingSettings = createMockGuildSettings({
+        guildId: "guild-123",
+        defaultModel: "kept-model",
+        autoReplyChannels: ["channel-1"],
+      });
+      (mockRepo.findByGuildId as ReturnType<typeof mock>).mockResolvedValueOnce(existingSettings);
+
+      await settingsService.setWebSearchEnabled("guild-123", true);
+
+      expect(mockRepo.upsert).toHaveBeenCalledWith(
+        "guild-123",
+        expect.objectContaining({
+          defaultModel: "kept-model",
+          autoReplyChannels: ["channel-1"],
+          webSearchEnabled: true,
+        }),
+      );
+    });
+  });
+
   describe("setFreeModelsOnly", () => {
     test("freeModelsOnlyを有効化する", async () => {
       const existingSettings = createMockGuildSettings({

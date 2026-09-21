@@ -13,6 +13,7 @@ import type {
   StreamToolCallChunk,
   Tool,
   ToolChoice,
+  WebSearchTrace,
 } from "../types";
 import type { ILLMClient } from "./openrouter";
 import { MAX_TOOL_CALL_INDEX } from "./openrouter";
@@ -80,6 +81,7 @@ export type ToolLoopResult =
       usage?: AggregatedUsage;
       model?: string;
       provider?: string;
+      webSearch?: WebSearchTrace;
     }
   | { status: "cancelled"; history: ChatMessage[]; usage?: AggregatedUsage }
   | { status: "error"; error: unknown; history: ChatMessage[]; usage?: AggregatedUsage };
@@ -979,6 +981,9 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   // happened to finish last.
   let lastObservedModel: string | undefined;
   let lastObservedProvider: string | undefined;
+  // Every turn's server-side searches, in order, for the final result only:
+  // a cancelled or failed reply shows no search results.
+  let webSearch: WebSearchTrace | undefined;
 
   for (let turn = 1; turn <= MAX_TURNS; turn++) {
     // Covers both "before the first request" and "before the next model
@@ -1103,6 +1108,12 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
 
     const { final, content, calls } = turnResult;
     aggregatedUsage = addUsage(aggregatedUsage, final.usage);
+    if (final.webSearch) {
+      webSearch = {
+        calls: [...(webSearch?.calls ?? []), ...final.webSearch.calls],
+        results: [...(webSearch?.results ?? []), ...final.webSearch.results],
+      };
+    }
     if (final.model !== undefined) lastObservedModel = final.model;
     if (final.provider !== undefined) lastObservedProvider = final.provider;
     const hasToolFragments = calls.size > 0;
@@ -1117,7 +1128,14 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
     // documented single-request equivalence for an empty registry) or, once
     // Fix 3 above is trusted, be silently absorbed. Fail the turn outright
     // instead, with no further model request.
-    if (!hasTools && (hasToolFragments || finishReason === "tool_calls")) {
+    //
+    // Server tools do not count as "offered" here: they run inside OpenRouter
+    // and never come back as a function call, so a call against a
+    // server-tool-only request is the same hallucination. Letting it through
+    // would dispatch a "not offered" result and resend the server tools,
+    // multiplying their per-request `max_uses` budget (web search is billed
+    // per search).
+    if (frozenToolNames.size === 0 && (hasToolFragments || finishReason === "tool_calls")) {
       return await abortToErrorOrCancelled(
         updater,
         "tool_calls received but no tools were offered",
@@ -1245,6 +1263,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           usage: aggregatedUsage,
           model: lastObservedModel,
           provider: lastObservedProvider,
+          ...(webSearch && { webSearch }),
         },
       );
     }
@@ -1291,6 +1310,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           usage: aggregatedUsage,
           model: lastObservedModel,
           provider: lastObservedProvider,
+          ...(webSearch && { webSearch }),
         },
       );
     }

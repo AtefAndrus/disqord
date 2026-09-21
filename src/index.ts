@@ -46,15 +46,25 @@ async function bootstrap(): Promise<void> {
   // ChatService/runToolLoop; future changes (code-execution, discord-tool,
   // web-search, ...) register their tools here.
   const toolRegistry = new ToolRegistry();
-  const chatService = new ChatService(llmClient, settingsService, toolRegistry);
+  const chatService = new ChatService(
+    llmClient,
+    settingsService,
+    toolRegistry,
+    config.webSearchEngine,
+  );
 
-  const commandHandlers = createCommandHandlers(llmClient, settingsService, modelService);
+  const commandHandlers = createCommandHandlers(
+    llmClient,
+    settingsService,
+    modelService,
+    config.webSearchEngine,
+  );
 
   const messageCreateHandler = createMessageCreateHandler(
     chatService,
     settingsService,
     modelService,
-    { e2eTesterBotId: config.e2eTesterBotId },
+    { e2eTesterBotId: config.e2eTesterBotId, webSearchEngine: config.webSearchEngine },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
     commandHandlers,
@@ -62,6 +72,7 @@ async function bootstrap(): Promise<void> {
     modelService,
     llmClient,
     chatService,
+    config.webSearchEngine,
   );
 
   const client = await createBotClient();

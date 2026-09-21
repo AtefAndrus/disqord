@@ -48,6 +48,7 @@ docker run -d \
 | ADMIN_API_SECRET | No | 管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503） |
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
+| WEB_SEARCH_ENGINE | No | Web検索のエンジン（perplexity / exa / parallel / native / auto / firecrawl）。料金はエンジンごとに異なる（デフォルト: `perplexity`） |
 | E2E_TESTER_BOT_ID | No | e2e 用テスト bot のユーザ ID。この bot からの発言にだけ応答する（NODE_ENV=production では無視） |
 | E2E_TESTER_BOT_TOKEN | No | e2e 用テスト bot のトークン（`bun run e2e` だけが使う） |
 | E2E_CHANNEL_ID | No | e2e の発言を送るチャンネル ID（`bun run e2e` だけが使う） |
@@ -66,6 +67,7 @@ docker run -d \
 | `/model refresh` | モデルキャッシュを更新 |
 | `/config free-only <enabled>` | 無料モデル限定の切り替え |
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
+| `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
 | `/config auto-reply list` | 自動応答チャンネル一覧を表示 |

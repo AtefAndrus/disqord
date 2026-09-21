@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, type mock, test } from "bun:test";
+import { beforeEach, describe, expect, type mock, setSystemTime, test } from "bun:test";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { ChatService } from "../../../src/services/chatService";
 import type { ISettingsService } from "../../../src/services/settingsService";
-import type { ChatCompletionResponse, GuildSettings } from "../../../src/types";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  GuildSettings,
+} from "../../../src/types";
 import {
   createMockGuildSettings,
   createMockLLMClient,
@@ -51,7 +55,7 @@ describe("ChatService", () => {
     mockLLMClient = createMockLLMClient();
     mockSettingsService = createMockSettingsService();
     toolRegistry = new ToolRegistry();
-    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry);
+    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "perplexity");
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {
@@ -326,6 +330,44 @@ describe("ChatService", () => {
         messages: [{ role: "user", content: "Hello" }],
       });
       expect(result.status).toBe("final");
+    });
+
+    test("Web検索が有効なギルドでは web_search server tool と日時・非信頼データの system を付けて送る", async () => {
+      setSystemTime(new Date("2026-09-22T05:00:00Z"));
+      try {
+        (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+          createMockGuildSettings({ webSearchEnabled: true }),
+        );
+        const { updater } = createSpyUpdater();
+        // A non-default engine shows the configured one reaches the request.
+        const exaChat = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "exa");
+
+        await exaChat.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
+          channelId: "channel-1",
+          userId: "user-1",
+        });
+
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+          AbortSignal,
+        ];
+        // Literal values: the per-request cap is what bounds the bill.
+        expect(request.tools).toEqual([
+          {
+            type: "openrouter:web_search",
+            parameters: { engine: "exa", max_results: 5, max_total_results: 10, max_uses: 2 },
+          },
+        ]);
+        expect(request.tool_choice).toBe("auto");
+        expect(request.messages).toHaveLength(2);
+        expect(request.messages[1]).toEqual({ role: "user", content: "Hello" });
+        const system = request.messages[0];
+        expect(system?.role).toBe("system");
+        expect(system?.content).toContain("2026/09/22(火) 14:00 (JST)");
+        expect(system?.content).toContain("非信頼データ");
+      } finally {
+        setSystemTime();
+      }
     });
 
     test("streaming 中の content は累積で updater.stageContent に渡る", async () => {

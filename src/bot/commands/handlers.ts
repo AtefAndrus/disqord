@@ -1,6 +1,12 @@
-import type { AutocompleteInteraction, ChatInputCommandInteraction } from "discord.js";
+import {
+  type AutocompleteInteraction,
+  type ChatInputCommandInteraction,
+  MessageFlags,
+  PermissionFlagsBits,
+} from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
+import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
@@ -13,6 +19,7 @@ export function createCommandHandlers(
   llmClient: ILLMClient,
   settingsService: ISettingsService,
   modelService: IModelService,
+  webSearchEngine: WebSearchEngine,
 ): CommandHandlers {
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -29,6 +36,7 @@ export function createCommandHandlers(
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
+- \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;
@@ -153,6 +161,7 @@ export function createCommandHandlers(
         rateLimited,
         cacheStatus,
         settings,
+        webSearchEngine,
         version: packageJson.version,
       });
 
@@ -204,6 +213,37 @@ export function createCommandHandlers(
       const embed = createSuccessEmbed(
         `LLM詳細情報表示を **${enabled ? "有効" : "無効"}** にしました。`,
         "LLM詳細設定",
+      );
+      await interaction.reply({ embeds: [embed] });
+    },
+
+    async configWebSearch(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      // Checked here rather than with setDefaultMemberPermissions, which would
+      // gate every /config subcommand. The permissions change replaces this
+      // with its admin_role_id check.
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        const embed = createErrorEmbed(
+          "Web検索の設定には「サーバーの管理」権限が必要です。",
+          "Web検索設定",
+        );
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const enabled = interaction.options.getString("enabled", true) === "on";
+      await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
+
+      const embed = createSuccessEmbed(
+        enabled
+          ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
+          : "Web検索を **無効** にしました。",
+        "Web検索設定",
       );
       await interaction.reply({ embeds: [embed] });
     },

@@ -1,5 +1,6 @@
 import { type Message, MessageType, type ThreadChannel } from "discord.js";
 import { AppError } from "../../errors";
+import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
@@ -78,7 +79,7 @@ export function createMessageCreateHandler(
   chatService: IChatService,
   settingsService: ISettingsService,
   modelService: IModelService,
-  options: { e2eTesterBotId?: string } = {},
+  options: { e2eTesterBotId?: string; webSearchEngine?: string } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
     // Bots are ignored, with one exception: the e2e tester bot, so that
@@ -242,14 +243,32 @@ export function createMessageCreateHandler(
         provider: result.provider,
         latency,
         usage: result.usage,
+        webSearchEngine: options.webSearchEngine,
         note: buildFinishReasonNote(result.finishReason),
       };
+      if (result.webSearch) {
+        logger.info("Web search", {
+          guildId: message.guild.id,
+          messageId: message.id,
+          engine: options.webSearchEngine,
+          searches: result.webSearch.calls,
+        });
+      }
+      const resultLinks = result.webSearch
+        ? formatSearchResultLinks(result.webSearch.results)
+        : undefined;
       // 表示には updater が保持する全表示テキスト（commit 済み過去ターンの preamble + 最終ターンの
       // content）を使う。result.text は最終ターンの content のみのため、tool_calls を挟んだ場合に
       // 使うと commit 済み preamble が最終描画から消えてしまう（tool 未登録時は preamble が無く
       // updater.text === result.text になるため挙動は変わらない）。
       // OpenRouter が空文字列で完了した場合、setContent("") の同期 throw を避けるためフォールバックする
-      const finalText = updater.text || "（応答なし）";
+      // 検索結果のリンクは本文の後ろに足してから分割し、長い回答では最終ページに載るようにする
+      const answerText = updater.text || "（応答なし）";
+      // 出力長の上限で code block の途中で終わった回答は、閉じてから付けないとリンクまでコードになる
+      const openFence = (answerText.match(/```/g)?.length ?? 0) % 2 === 1;
+      const finalText = resultLinks
+        ? `${answerText}${openFence ? "\n```" : ""}\n\n${resultLinks}`
+        : answerText;
       const footerBudget = estimateFinalFooterBudget(metadata);
       const chunks = splitTextIntoMessages(
         finalText,

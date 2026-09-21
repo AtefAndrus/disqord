@@ -14,6 +14,7 @@ export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
         freeModelsOnly: settings.freeModelsOnly ?? false,
         showLlmDetails: settings.showLlmDetails ?? true,
         autoReplyChannels: settings.autoReplyChannels ?? [],
+        webSearchEnabled: settings.webSearchEnabled ?? false,
         createdAt: settings.createdAt ?? new Date().toISOString(),
         updatedAt: settings.updatedAt ?? new Date().toISOString(),
       }),
@@ -88,6 +89,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly: false,
         showLlmDetails: true,
         autoReplyChannels: [],
+        webSearchEnabled: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -99,6 +101,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly: false,
         showLlmDetails: true,
         autoReplyChannels: [],
+        webSearchEnabled: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -110,6 +113,7 @@ export function createMockSettingsService(): ISettingsService {
         freeModelsOnly,
         showLlmDetails: true,
         autoReplyChannels: [],
+        webSearchEnabled: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       }),
@@ -118,6 +122,18 @@ export function createMockSettingsService(): ISettingsService {
     toggleShowLlmDetails: mock((_guildId: string) => Promise.resolve(true)),
     addAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve()),
     removeAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve(true)),
+    setWebSearchEnabled: mock((guildId: string, webSearchEnabled: boolean) =>
+      Promise.resolve({
+        guildId,
+        defaultModel: "test-model:fixture",
+        freeModelsOnly: false,
+        showLlmDetails: true,
+        autoReplyChannels: [],
+        webSearchEnabled,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    ),
   };
 }
 
@@ -128,6 +144,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     freeModelsOnly: false,
     showLlmDetails: true,
     autoReplyChannels: [],
+    webSearchEnabled: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

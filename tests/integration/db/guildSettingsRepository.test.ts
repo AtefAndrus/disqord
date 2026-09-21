@@ -71,6 +71,14 @@ describe("GuildSettingsRepository", () => {
       expect(result?.defaultModel).toBe("updated-model");
     });
 
+    test("webSearchEnabledを保存して読み戻せる", async () => {
+      await repo.upsert("guild-ws", { defaultModel: "m", webSearchEnabled: true });
+      expect((await repo.findByGuildId("guild-ws"))?.webSearchEnabled).toBe(true);
+
+      await repo.upsert("guild-ws", { defaultModel: "m", webSearchEnabled: false });
+      expect((await repo.findByGuildId("guild-ws"))?.webSearchEnabled).toBe(false);
+    });
+
     test("defaultModelが未指定の場合はデフォルト値を使用", async () => {
       const result = await repo.upsert("guild-default", {});
 
@@ -138,6 +146,8 @@ describe("GuildSettingsRepository", () => {
         const before = await legacyRepo.findByGuildId("legacy-guild");
         expect(before?.defaultModel).toBe("legacy-model");
         expect(before).not.toHaveProperty("releaseChannelId");
+        // Existing guilds must not start paying for searches because of a migration.
+        expect(before?.webSearchEnabled).toBe(false);
 
         await legacyRepo.upsert("legacy-guild", {
           defaultModel: "updated-model",

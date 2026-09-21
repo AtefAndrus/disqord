@@ -67,6 +67,9 @@ const configSchema = z.object({
   adminApiSecret: z.string().optional(),
   logDir: z.string().optional(),
   logMaxBytes: z.coerce.number().int().min(1024).default(10_485_760),
+  // The values of OpenRouter's WebSearchEngineEnum. A typo fails at startup
+  // instead of as an HTTP 400 on every search-enabled reply.
+  webSearchEngine: z.enum(["perplexity", "exa", "parallel", "native", "auto", "firecrawl"]),
   e2eTesterBotId: z.string().regex(/^\d+$/).optional(),
 });
 
@@ -84,6 +87,7 @@ export function loadConfig(): AppConfig {
     adminApiSecret: process.env.ADMIN_API_SECRET,
     logDir: process.env.LOG_DIR,
     logMaxBytes: process.env.LOG_MAX_BYTES,
+    webSearchEngine: process.env.WEB_SEARCH_ENGINE || envDefault("WEB_SEARCH_ENGINE"),
     // Dropped before validation rather than checked by each reader: a
     // production bot must never answer another bot, and a malformed value of
     // a setting production ignores must not stop it from starting either.

@@ -9,6 +9,7 @@ export interface ISettingsService {
   toggleShowLlmDetails(guildId: string): Promise<boolean>;
   addAutoReplyChannel(guildId: string, channelId: string): Promise<void>;
   removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
+  setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings>;
 }
 
 export class SettingsService implements ISettingsService {
@@ -29,6 +30,7 @@ export class SettingsService implements ISettingsService {
       freeModelsOnly: false,
       showLlmDetails: true,
       autoReplyChannels: [],
+      webSearchEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -51,6 +53,15 @@ export class SettingsService implements ISettingsService {
     return this.repo.upsert(guildId, {
       ...existing,
       freeModelsOnly,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  async setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings> {
+    const existing = await this.getGuildSettings(guildId);
+    return this.repo.upsert(guildId, {
+      ...existing,
+      webSearchEnabled,
       updatedAt: new Date().toISOString(),
     });
   }

@@ -201,6 +201,31 @@ describe("e2e scenarios: check", () => {
     expect(check("image", [page("1", ["COLOR-RED"], USAGE)])).toEqual([]);
   });
 
+  test("search: footer に検索回数、本文に検索結果のリンクと「公開日: 2026-08-20」の行があるときだけ通る", () => {
+    const searched = `${USAGE} | Searches: 1`;
+    const links = "-# 検索結果\n- [Bun 1.4 (bun.com)](<https://bun.com/blog/bun-v1.4>)";
+    const body = (answer: string): string[] => [`${answer}\n\n${links}`];
+    expect(check("search", [page("1", body("公開日: 2026-08-20"), searched)])).toEqual([]);
+    // 検索エンジン名つきのフッター（実際の表示）
+    expect(
+      check("search", [
+        page("1", body("公開日: 2026-08-20"), `${USAGE} | Searches: 3 (perplexity) | TPS: 1.00`),
+      ]),
+    ).toEqual([]);
+    // 太字や全角コロンで書かれても同じ行として読む
+    expect(check("search", [page("1", body("**公開日：2026-08-20**"), searched)])).toEqual([]);
+    // 検索していない、または本文だけが検索回数を名乗っている
+    expect(check("search", [page("1", body("公開日: 2026-08-20"), USAGE)])).not.toEqual([]);
+    expect(
+      check("search", [page("1", body("公開日: 2026-08-20\nSearches: 1"), USAGE)]),
+    ).not.toEqual([]);
+    // 検索は要求されたが結果が返らなかった（リンクが無い）
+    expect(check("search", [page("1", ["公開日: 2026-08-20"], searched)])).not.toEqual([]);
+    // 日付違いと、指定の形になっていない回答
+    expect(check("search", [page("1", body("公開日: 2026-08-21"), searched)])).not.toEqual([]);
+    expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
+  });
+
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {
     expect(check("stop", [page("1", [`川の話。${STOPPED}`], USAGE)])).not.toEqual([]);
     expect(check("stop", [page("1", ["ナイル川は"], STOPPED)])).toEqual([]);

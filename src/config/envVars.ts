@@ -50,6 +50,13 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     default: "10485760",
   },
   {
+    name: "WEB_SEARCH_ENGINE",
+    required: false,
+    description:
+      "Web検索のエンジン（perplexity / exa / parallel / native / auto / firecrawl）。料金はエンジンごとに異なる",
+    default: "perplexity",
+  },
+  {
     name: "E2E_TESTER_BOT_ID",
     required: false,
     description:

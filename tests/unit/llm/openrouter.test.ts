@@ -811,6 +811,93 @@ describe("OpenRouterClient", () => {
       );
     });
 
+    describe("Web 検索の記録", () => {
+      // Shapes from a capture of the live API (2026-09-22, engine perplexity).
+      function webSearchItem(phase: "added" | "done", action?: unknown): Record<string, unknown> {
+        return {
+          type: `response.output_item.${phase}`,
+          output_index: 0,
+          item: {
+            id: "st_tmp_1",
+            type: "openrouter:web_search",
+            status: phase === "done" ? "completed" : "in_progress",
+            ...(action !== undefined && { action }),
+          },
+        };
+      }
+      function citation(annotation: unknown): Record<string, unknown> {
+        return {
+          type: "response.output_text.annotation.added",
+          output_index: 1,
+          content_index: 0,
+          annotation_index: 0,
+          annotation,
+        };
+      }
+
+      test("検索語・参照 URL・引用リンクを最終結果に載せる", async () => {
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([
+            sseData(webSearchItem("added")),
+            sseData(
+              webSearchItem("done", {
+                type: "search",
+                query: "Bun v1.4.0 release date",
+                sources: [
+                  { type: "url", url: "https://bun.com/blog/bun-v1.4" },
+                  { type: "url", url: 42 },
+                ],
+              }),
+            ),
+            // max_uses を超えた呼び出しは sources を持たない
+            sseData(webSearchItem("done", { type: "search", query: "second" })),
+            sseData(textDelta("2026年8月20日")),
+            sseData(
+              citation({
+                type: "url_citation",
+                url: "https://bun.com/blog/bun-v1.4",
+                title: "Bun 1.4 | Bun Blog",
+                start_index: 0,
+                end_index: 0,
+                content: "# Bun 1.4",
+              }),
+            ),
+            sseData(citation({ type: "file_citation", file_id: "f" })),
+            sseData(completed()),
+            "data: [DONE]\n\n",
+          ]),
+        );
+
+        const chunks = await drain(client.chatStream(REQUEST));
+        const final = chunks.find(isFinalResult);
+
+        expect(final?.webSearch).toEqual({
+          calls: [
+            { query: "Bun v1.4.0 release date", sources: ["https://bun.com/blog/bun-v1.4"] },
+            { query: "second", sources: [] },
+          ],
+          results: [{ url: "https://bun.com/blog/bun-v1.4", title: "Bun 1.4 | Bun Blog" }],
+        });
+        expect(final?.fullText).toBe("2026年8月20日");
+      });
+
+      test("action の壊れた検索 item は読み飛ばし、ターンは失敗させない", async () => {
+        mockFetch.mockResolvedValueOnce(
+          sseResponse([
+            sseData(webSearchItem("done", "not an object")),
+            sseData(textDelta("ok")),
+            sseData(completed()),
+            "data: [DONE]\n\n",
+          ]),
+        );
+
+        const final = (await drain(client.chatStream(REQUEST))).find(isFinalResult);
+
+        expect(final?.fullText).toBe("ok");
+        expect(final && "webSearch" in final).toBe(false);
+      });
+    });
+
     describe("tools body 組み立て", () => {
       test("tools が未指定の場合は body に tools/tool_choice/parallel_tool_calls が含まれない", async () => {
         mockFetch.mockResolvedValueOnce(sseResponse(["data: [DONE]\n\n"]));

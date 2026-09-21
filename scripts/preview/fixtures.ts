@@ -62,6 +62,7 @@ const settings: GuildSettings = {
   freeModelsOnly: true,
   showLlmDetails: false,
   autoReplyChannels: ["300000000000000000"],
+  webSearchEnabled: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -127,6 +128,7 @@ export function buildFixtures(): IFixture[] {
     rateLimited: false,
     cacheStatus: { lastUpdatedAt: new Date(Date.now() - 42 * 60 * 1000), modelCount: 327 },
     settings,
+    webSearchEngine: "perplexity",
     version: "1.4.0",
   });
   fixtures.push({
@@ -141,6 +143,7 @@ export function buildFixtures(): IFixture[] {
     credits: { remaining: Number.POSITIVE_INFINITY },
     rateLimited: true,
     cacheStatus: { lastUpdatedAt: null, modelCount: 0 },
+    webSearchEngine: "perplexity",
     version: "1.4.0",
   });
   fixtures.push({

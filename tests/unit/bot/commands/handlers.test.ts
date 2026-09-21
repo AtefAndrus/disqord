@@ -1,5 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
-import type { ChatInputCommandInteraction, EmbedBuilder } from "discord.js";
+import {
+  type ChatInputCommandInteraction,
+  type EmbedBuilder,
+  MessageFlags,
+  PermissionFlagsBits,
+} from "discord.js";
 import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
 import { ModelService } from "../../../../src/services/modelService";
 import {
@@ -44,7 +49,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ guildId: "guild-1", defaultModel: "model-1" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
     const set = createInteraction("model-1");
 
@@ -68,7 +73,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "missing/model:free" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -86,7 +91,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "fallback/model" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -94,5 +99,70 @@ describe("model command handlers", () => {
     expect(repliedEmbed(current.editReply).description).toContain(
       "<https://openrouter.ai/fallback/model>",
     );
+  });
+});
+
+describe("config web-search handler", () => {
+  function createWebSearchInteraction(
+    value: "on" | "off",
+    hasManageGuild: boolean,
+  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
+    const { interaction, reply } = createInteraction(value);
+    Object.assign(interaction, {
+      memberPermissions: {
+        has: mock((permission: bigint) =>
+          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
+        ),
+      },
+    });
+    return { interaction, reply };
+  }
+
+  function createHandlers(): {
+    handlers: ReturnType<typeof createCommandHandlers>;
+    settingsService: ReturnType<typeof createMockSettingsService>;
+  } {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    return { handlers, settingsService };
+  }
+
+  test("サーバーの管理権限があれば有効化し、エンジンと料金の確認先を伝える", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createWebSearchInteraction("on", true);
+
+    await handlers.configWebSearch(interaction);
+
+    expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", true);
+    const description = repliedEmbed(reply).description ?? "";
+    expect(description).toContain("perplexity");
+    expect(description).toContain("server-tools/web-search");
+  });
+
+  test("サーバーの管理権限があれば無効化する", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction } = createWebSearchInteraction("off", true);
+
+    await handlers.configWebSearch(interaction);
+
+    expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", false);
+  });
+
+  test("サーバーの管理権限がなければ設定を変えず、本人にだけ断る", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createWebSearchInteraction("on", false);
+
+    await handlers.configWebSearch(interaction);
+
+    expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
+    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
+    expect(payload.flags).toBe(MessageFlags.Ephemeral);
+    expect(repliedEmbed(reply).description).toContain("サーバーの管理");
   });
 });

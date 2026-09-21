@@ -29,6 +29,9 @@ import type {
   StreamFinalResult,
   StreamHeartbeatChunk,
   StreamToolCallChunk,
+  WebSearchCall,
+  WebSearchResultLink,
+  WebSearchTrace,
 } from "../types";
 import { logger } from "../utils/logger";
 import { metrics } from "../utils/metrics";
@@ -118,6 +121,44 @@ interface SseStreamState {
   // whatever it accumulated, so every way of reaching a terminal "tool_calls"
   // with a call that skipped part of that lifecycle has to fail here.
   functionCalls: Map<number, FunctionCallProgress>;
+  webSearch: WebSearchTrace;
+}
+
+/**
+ * Reads the query and result URLs of a finished `openrouter:web_search`
+ * item. Unlike function calls, nothing here drives the protocol: the trace
+ * is only logged and displayed, so a malformed item is skipped rather than
+ * failing a turn whose answer is otherwise fine.
+ */
+function readWebSearchCall(item: Record<string, unknown>): WebSearchCall | undefined {
+  const action = item.action;
+  if (!isPlainObject(action) || typeof action.query !== "string") return undefined;
+  const sources = Array.isArray(action.sources)
+    ? action.sources.flatMap((source) =>
+        isPlainObject(source) && typeof source.url === "string" ? [source.url] : [],
+      )
+    : [];
+  return { query: action.query, sources };
+}
+
+/** Same leniency as `readWebSearchCall()`. */
+function readUrlCitation(annotation: unknown): WebSearchResultLink | undefined {
+  if (
+    !isPlainObject(annotation) ||
+    annotation.type !== "url_citation" ||
+    typeof annotation.url !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    url: annotation.url,
+    ...(typeof annotation.title === "string" && { title: annotation.title }),
+  };
+}
+
+function finishedWebSearch(state: SseStreamState): WebSearchTrace | undefined {
+  const { calls, results } = state.webSearch;
+  return calls.length > 0 || results.length > 0 ? { calls, results } : undefined;
 }
 
 /**
@@ -686,6 +727,7 @@ export class OpenRouterClient implements ILLMClient {
         lastUsage: undefined,
         finishReasonSeen: undefined,
         functionCalls: new Map(),
+        webSearch: { calls: [], results: [] },
       };
 
       try {
@@ -779,6 +821,7 @@ export class OpenRouterClient implements ILLMClient {
 
         // Handle case where stream ends without [DONE]. A clean EOF after a
         // terminal event was observed is a normal completion.
+        const webSearch = finishedWebSearch(state);
         yield {
           done: true,
           fullText: state.fullText,
@@ -786,6 +829,7 @@ export class OpenRouterClient implements ILLMClient {
           model: state.lastModel,
           provider: state.lastProvider,
           finishReason: state.finishReasonSeen,
+          ...(webSearch && { webSearch }),
         };
       } finally {
         // Fire-and-forget, not awaited: `cancel()` is still always called —
@@ -877,6 +921,7 @@ export class OpenRouterClient implements ILLMClient {
       data = data.slice(1);
     }
     if (data === "[DONE]") {
+      const webSearch = finishedWebSearch(state);
       yield {
         done: true,
         fullText: state.fullText,
@@ -884,6 +929,7 @@ export class OpenRouterClient implements ILLMClient {
         model: state.lastModel,
         provider: state.lastProvider,
         finishReason: state.finishReasonSeen,
+        ...(webSearch && { webSearch }),
       };
       return true;
     }
@@ -995,6 +1041,11 @@ export class OpenRouterClient implements ILLMClient {
             `${event.type} carries a malformed item: ${JSON.stringify(item)}`,
           );
         }
+        if (item.type === "openrouter:web_search" && event.type === "response.output_item.done") {
+          const call = readWebSearchCall(item);
+          if (call) state.webSearch.calls.push(call);
+          break;
+        }
         // Every other item type (`message`, `reasoning`, a server tool run
         // such as `openrouter:datetime`, ...) has nothing for the caller.
         if (item.type !== "function_call") break;
@@ -1052,6 +1103,12 @@ export class OpenRouterClient implements ILLMClient {
           done: false,
         };
         return false;
+      }
+
+      case "response.output_text.annotation.added": {
+        const link = readUrlCitation(event.annotation);
+        if (link) state.webSearch.results.push(link);
+        break;
       }
 
       case "response.completed":

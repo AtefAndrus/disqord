@@ -2,6 +2,11 @@ import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { runToolLoop } from "../llm/toolLoop";
 import type { ToolRegistry } from "../llm/tools/registry";
+import {
+  buildWebSearchServerTool,
+  buildWebSearchSystemMessage,
+  type WebSearchEngine,
+} from "../llm/tools/webSearch";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -158,6 +163,7 @@ export class ChatService implements IChatService {
     private readonly llmClient: ILLMClient,
     private readonly settingsService: ISettingsService,
     private readonly toolRegistry: ToolRegistry,
+    private readonly webSearchEngine: WebSearchEngine,
   ) {}
 
   async generateResponse(
@@ -218,11 +224,14 @@ export class ChatService implements IChatService {
       return await runToolLoop({
         llmClient: this.llmClient,
         model: request.model,
-        messages: request.messages,
+        messages: settings.webSearchEnabled
+          ? [buildWebSearchSystemMessage(new Date()), ...request.messages]
+          : request.messages,
         ...(request.plugins && { plugins: request.plugins }),
         registry: this.toolRegistry,
-        // serverTools: not wired yet (Phase 4). Future tool changes (e.g.
-        // web-search) will pass them through here.
+        ...(settings.webSearchEnabled && {
+          serverTools: [buildWebSearchServerTool(this.webSearchEngine)],
+        }),
         ctx: { guildId, channelId: ctx.channelId, userId: ctx.userId },
         updater,
         signal: controller.signal,

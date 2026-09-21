@@ -295,6 +295,7 @@ describe("createMessageCreateHandler", () => {
       freeModelsOnly: false,
       showLlmDetails: true,
       autoReplyChannels: [] as string[],
+      webSearchEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -307,6 +308,7 @@ describe("createMessageCreateHandler", () => {
       toggleShowLlmDetails: mock(() => Promise.resolve(true)),
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
+      setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -436,6 +438,7 @@ describe("createMessageCreateHandler", () => {
             freeModelsOnly: false,
             showLlmDetails: false,
             autoReplyChannels: ["channel-123"],
+            webSearchEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),
@@ -699,6 +702,7 @@ describe("createMessageCreateHandler", () => {
       freeModelsOnly: false,
       showLlmDetails: true,
       autoReplyChannels: ["auto-reply-channel-id"],
+      webSearchEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1106,6 +1110,68 @@ describe("createMessageCreateHandler", () => {
     const container = toContainerJSON(lastEditArg);
     expect(hasSection(container)).toBe(false);
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
+  });
+
+  test("Web 検索した応答は本文の後ろに検索結果のリンクを付け、検索語と参照 URL をログに出す", async () => {
+    const infoSpy = spyOn(console, "info").mockImplementation(() => {});
+    const answer = createMockChatResponseFn("2026年8月20日です。");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 2,
+          total_tokens: 3,
+          server_tool_use_details: { web_search_requests: 1 },
+        },
+        webSearch: {
+          calls: [{ query: "Bun v1.4.0", sources: ["https://bun.com/blog/bun-v1.4"] }],
+          results: [{ url: "https://bun.com/blog/bun-v1.4", title: "Bun 1.4" }],
+        },
+      }),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { webSearchEngine: "perplexity" },
+    );
+
+    await handler(mockMessage as never);
+
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+    expect(text).toContain(
+      "2026年8月20日です。\n\n-# 検索結果\n- [Bun 1.4 (bun.com)](<https://bun.com/blog/bun-v1.4>)",
+    );
+    expect(text).toContain("Searches: 1 (perplexity)");
+    const logged = infoSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(logged).toContain("Web search");
+    expect(logged).toContain("Bun v1.4.0");
+    expect(logged).toContain("https://bun.com/blog/bun-v1.4");
+  });
+
+  test("code block の途中で打ち切られた回答は、閉じてから検索結果を付ける", async () => {
+    const answer = createMockChatResponseFn("```ts\nconst a = 1;", "length");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        webSearch: { calls: [], results: [{ url: "https://a.test/", title: "A" }] },
+      }),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+
+    await handler(mockMessage as never);
+
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+    expect(text).toContain(
+      "```ts\nconst a = 1;\n```\n\n-# 検索結果\n- [A (a.test)](<https://a.test/>)",
+    );
   });
 
   test("停止（cancelled）時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
