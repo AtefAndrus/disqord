@@ -25,6 +25,7 @@
 | [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | OpenRouter の reasoning / reasoning_details を安全に受け取り、設定に応じて Discord へ表示 |
 | [Renovate 移行](changes/renovate-migration/design.md) | 中 | implemented | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
+| [ギルド設定の同時変更で変更が消えないようにする](changes/settings-concurrent-writes/design.md) | 中 | in-progress | 同時に走った設定変更が互いを消さないよう、書き込みを 1 つのトランザクションにまとめる（実装済み、実クライアントでの確認待ち） |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
 | [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | in-progress | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
