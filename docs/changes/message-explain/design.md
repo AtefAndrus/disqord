@@ -85,23 +85,46 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 - 添付の画像と PDF。対象メッセージと snapshot の添付を合わせて `parseAttachments()` に通す。
 
 転送メッセージ（`message_reference.type` が Forward）は `messageSnapshots` の内容を使い、転送元を取りに行かない。
-返信先は `message_reference.type` が Default で、かつ `MessageType.Reply` のときだけ取得する。
+返信先は、メッセージが `MessageType.Reply` で、`message_reference.type` が Default のときだけ取得する。
+Discord は `type` の省略を Default と定めているが、discord.js は省略時に `undefined` のまま渡す（`node_modules/discord.js/src/structures/Message.js:376`）ので、`type ?? MessageReferenceType.Default` で比べる。
 取得は上限時間つきの 1 回だけにし、失敗（削除済み、`VIEW_CHANNEL` や `READ_MESSAGE_HISTORY` の不足、タイムアウト）したら返信先なしで続け、解説の末尾にその旨を注記する。
 返信先から使うのはテキストだけで、添付は含めない。
 
 ### 締め切りとエラー処理
 
-締め切りは `interaction.createdTimestamp` から 13 分とし、次の順に確かめる。
+締め切りは `interaction.createdTimestamp` から 13 分とする。
+締め切りの状態は `chatService` の `activeRequests` とは別に、解説 1 件ごとの締め切りオブジェクトが持つ。
+`activeRequests` は生成が終わると外れる（`src/services/chatService.ts:231-233`）ので、生成後の描画中に来た締め切りを `cancelRequest()` では止められないためである。
 
+- 準備の待ち（返信先の取得、添付の取得）は、固定の上限と締め切りまでの残り時間の短い方で打ち切る。
 - 生成を始める前に締め切りを過ぎていたら、生成せずに期限切れを返して終える。
 - 生成中に締め切りが来たら `cancelRequest(interaction.id)` を呼び、停止表示にする。
-- 描画とエラー表示の Discord への書き込みはどれも best effort とし、token の失効による書き込みの失敗はログだけ残して諦める。1 通ずつの書き込みは待ち行列に入りうるので、2 分の余裕でも完了は保証できない。
+- 描画中に締め切りが来たら、interaction 版の送信先が以後の通常の描画（ストリーミングの更新と最終描画の続き）を受け付けなくなる。その時点で描画を止め、表示中の最後のメッセージを停止表示に置き換える書き込みだけを 1 回行う。締め切りの後に通常の描画が再開することはない。
+- 締め切り後の停止表示とエラー表示の書き込みは best effort とし、token の失効による失敗はログだけ残して諦める。1 通ずつの書き込みは待ち行列に入りうるので、2 分の余裕でも完了は保証できない。
 - タイマーは `finally` で必ず解除する。
 
-エラー表示は常に ephemeral である。
-生成前の失敗（材料の準備、添付の拒否、モデル非対応）は deferred の元応答を `editReply()` でエラー表示に置き換える。
-生成後の失敗は、受信済みのテキストがあれば既存の後始末と同じく部分テキストを残して `followUp()` でエラーを足し、テキストが無ければ元応答をエラー表示に置き換える。
+締め切りの判定を送信先に置くのは、描画の書き込みがすべてそこを通るからである。
+描画の各所に締め切りの確認を足すと、確認の漏れた書き込みが期限後に走りうる。
+
+エラー表示は常に ephemeral で、Components V2 の `buildErrorContainer()` を V2 の編集または送信として出す。
+元応答はストリーミングの表示を出した時点で V2 になっており、`IS_COMPONENTS_V2` は外せないので、通常の `content` や embed には戻せない。
+
+- 生成前の失敗（材料の準備、添付の拒否、モデル非対応）は、deferred の元応答を `editReply()` でエラー表示に置き換える。
+- 生成後の失敗で受信済みのテキストがあれば、既存の後始末と同じく部分テキストを残して停止ボタンを外し、`followUp()` でエラーを足す。
+- 生成後の失敗でテキストが無ければ、元応答をエラー表示に置き換える。
+- エラー表示の書き込み自体が失敗したら、ログだけ残して終える。
+
 元応答は削除しない。ephemeral の元応答を消すと、以後の表示を `editReply()` で出せなくなるためである。
+
+### ログに interaction token を残さない
+
+interaction の返信は URL に token を含む webhook 経路で書き込むので、その経路の情報をそのままログに出すと token が残る。
+discord.js の `DiscordAPIError` は `url` を持ち、REST の rate limit 情報は `url` に加えて `majorParameter` にも `<application id>/<token>` を入れる（`node_modules/@discordjs/rest/dist/index.js:1464-1467`）。
+既存の描画は Discord のエラーをそのまま logger へ渡している（`src/bot/events/streamingUpdater.ts:147` など）。
+
+interaction 版の送信先は、webhook 経路のエラーを捕まえて `url` を落とした形に直してから投げ直す。
+描画側の既存のログ出力を変えずに済み、token を含む値が送信先の外へ出ない。
+rate limit の確認で出す項目は、正規化済みの `route`（token は `:token` に置き換わっている）、`method`、`limit`、`retryAfter`、`global` に限る。
 
 ### 送信先の差し替え口
 
@@ -137,8 +160,11 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 ### テスト
 
 - e2e（`bun run e2e`）では検証できない。テスト bot は REST でメッセージを投稿して返信を読む仕組みで、message command の実行はクライアント上の人の操作から始まるためである。
-- 材料の組み立ては、本文、入れ子の V2、embed の field、転送の snapshot（V2 と添付を含む）、返信先の成功と失敗、添付の組み合わせで確かめる。
-- 解説経路は、空入力、添付の拒否、モデル非対応、defer の失敗、生成前の締め切り超過、生成中の締め切りによる停止、token 失効時の書き込み失敗で確かめる。
+- 材料の組み立ては、本文、入れ子の V2、embed の field、転送の snapshot（V2 と添付を含む）、返信先の成功と失敗、添付の組み合わせで確かめる。返信先の判定は、reference の `type` が Default、省略、Forward の 3 通りで確かめる。
+- 解説経路は、空入力、添付の拒否、モデル非対応、defer の失敗、token 失効時の書き込み失敗で確かめる。
+- 締め切りは、準備中、元応答の編集中、生成中、複数通の最終描画の途中のそれぞれで来た場合に、以後の通常の描画が行われず、停止表示の書き込みが 1 回だけ行われることを確かめる。
+- 生成後のエラーは、プレースホルダーだけでテキストが無い場合、複数通の部分テキストがある場合、エラー表示の書き込み自体が失敗する場合で確かめ、停止ボタンが外れること、部分テキストが残ること、エラーの followup が ephemeral で V2 であることを確かめる。
+- 偽の token を使い、webhook 経路のエラーと rate limit の確認用ログの出力に token が含まれないことを確かめる。
 - interaction 版の送信先は、ストリーミング中の追加送信、停止、最終描画、余剰の削除要求、中立化、finalize 後の送信の後始末のそれぞれで、webhook の操作だけが呼ばれ（チャンネル API が呼ばれない）、followup に `Ephemeral` と `IsComponentsV2` が付き、正しいメッセージ ID を編集することを確かめる。
 - `systemPrompt` が `system` メッセージとして先頭に入ることを確かめる。
 - チャンネル版の送信先に置き換えた後も、既存の `messageCreate` と `streamingUpdater` のテストがそのまま通ることを確かめる。
@@ -151,13 +177,14 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 - [ ] 材料の取り出し（V2、embed、snapshot、返信先）を実装する
 - [ ] `src/bot/commands/explain.ts` と `src/bot/events/explainCommand.ts` を実装し、`interactionCreate.ts` から分岐させる
 - [ ] 締め切りとエラー処理を実装する
+- [ ] interaction 版の送信先で webhook 経路のエラーから `url` を落とす
 - [ ] `generate-readme.ts` で chat input 以外を除き、README と `/help` に解説コマンドを足す
 - [ ] 単体テストを追加する
 - [ ] `bun run e2e` で既存のチャット経路が壊れていないことを確かめる
 - [ ] 手動確認: 開発サーバーでメッセージを右クリック → アプリ → 解説する を実行し、本人にだけ見える解説がストリーミング表示され、長文なら分割され、`/config llm-details` が有効なら footer が出ることを確かめる
 - [ ] 手動確認: 2 通以上に分かれる解説の生成中に、2 通目以降に付いた停止ボタンを押し、停止表示に切り替わることを確かめる
 - [ ] 手動確認: 画像付き、PDF 付き、bot 自身の返信（Components V2）、返信の付いたメッセージ、転送メッセージに対して実行し、それぞれの内容が解説に反映されることを確かめる
-- [ ] 手動確認: 上の確認の間、Discord の REST の `rateLimited` イベントを一時的にログへ出し（URL は token を含むので出さない）、ストリーミングの表示の遅れが通常のチャット返信と同程度であることを確かめる
+- [ ] 手動確認: 上の確認の間、Discord の REST の `rateLimited` イベントを「ログに interaction token を残さない」の項目だけ一時的にログへ出し、ストリーミングの表示の遅れが通常のチャット返信と同程度であることを確かめる
 - [ ] `docs/changes/message-explain/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
