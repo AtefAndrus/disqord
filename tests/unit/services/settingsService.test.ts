@@ -53,8 +53,8 @@ describe("SettingsService", () => {
       const stored = await repo.findByGuildId(G);
       if (!stored) throw new Error("row missing");
       expect(stored.webSearchEnabled).toBe(true);
-      // 返したのは保存された行（書き込みの前か後）で、手元で作った既定値ではない
-      expect({ ...read, webSearchEnabled: true, updatedAt: stored.updatedAt }).toEqual(stored);
+      // 書き込みが先に確定するので、返すのはその後の保存された行で、手元で作った既定値ではない
+      expect(read).toEqual(stored);
     });
   });
 
@@ -235,6 +235,21 @@ describe("SettingsService", () => {
       expect(await repo.findByGuildId(G)).toMatchObject({
         defaultModel: OTHER_FREE.model,
         freeModelsOnly: true,
+      });
+    });
+
+    test("無料モデルを確認した後に別の無料モデルへ変わったら、古い確認での有効化は競合になる", async () => {
+      const OTHER_FREE = { model: "other/model:free", isFree: true };
+      await service.setGuildModel(G, FREE);
+      // 限定の有効化が FREE を確認した後、保存する前に別の操作が OTHER_FREE を保存した
+      await service.setGuildModel(G, OTHER_FREE);
+
+      await expect(service.setFreeModelsOnly(G, true, FREE)).rejects.toBeInstanceOf(
+        SettingsConflictError,
+      );
+      expect(await repo.findByGuildId(G)).toMatchObject({
+        defaultModel: OTHER_FREE.model,
+        freeModelsOnly: false,
       });
     });
 
