@@ -1112,6 +1112,45 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
 
+  test("Web 検索した応答は本文の後ろに検索結果のリンクを付け、検索語と参照 URL をログに出す", async () => {
+    const infoSpy = spyOn(console, "info").mockImplementation(() => {});
+    const answer = createMockChatResponseFn("2026年8月20日です。");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 2,
+          total_tokens: 3,
+          server_tool_use_details: { web_search_requests: 1 },
+        },
+        webSearch: {
+          calls: [{ query: "Bun v1.4.0", sources: ["https://bun.com/blog/bun-v1.4"] }],
+          results: [{ url: "https://bun.com/blog/bun-v1.4", title: "Bun 1.4" }],
+        },
+      }),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { webSearchEngine: "perplexity" },
+    );
+
+    await handler(mockMessage as never);
+
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+    expect(text).toContain(
+      "2026年8月20日です。\n\n-# 検索結果\n- [Bun 1.4](<https://bun.com/blog/bun-v1.4>)",
+    );
+    expect(text).toContain("Searches: 1 (perplexity)");
+    const logged = infoSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(logged).toContain("Web search");
+    expect(logged).toContain("Bun v1.4.0");
+    expect(logged).toContain("https://bun.com/blog/bun-v1.4");
+  });
+
   test("停止（cancelled）時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
     const partialText = "partial😀"; // コードポイント数 8（UTF-16 コードユニット数だと 9）
     (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(

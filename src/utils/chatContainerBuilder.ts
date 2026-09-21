@@ -70,6 +70,8 @@ export interface FinalMetadata {
   provider?: string;
   latency?: number;
   usage?: UsageMetadata;
+  /** Shown next to the search count; only replies that searched show it. */
+  webSearchEngine?: string;
   /**
    * Short user-facing annotation for a non-`stop` completion (e.g.
    * finishReason "length"/"content_filter"). Shown regardless of
@@ -377,7 +379,8 @@ export function buildUsageDetailsText(metadata: FinalMetadata): string | undefin
   // Calls the model made, including those refused past `max_uses`, so this
   // can exceed the number of searches billed in Cost.
   if (usage.server_tool_use_details?.web_search_requests) {
-    details.push(`Searches: ${usage.server_tool_use_details.web_search_requests}`);
+    const engine = metadata.webSearchEngine ? ` (${metadata.webSearchEngine})` : "";
+    details.push(`Searches: ${usage.server_tool_use_details.web_search_requests}${engine}`);
   }
   if (usage.completion_tokens && metadata.latency) {
     const tokensPerSecond = usage.completion_tokens / (metadata.latency / 1000);

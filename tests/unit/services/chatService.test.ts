@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, type mock, setSystemTime, test } from "bu
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
-import { WEB_SEARCH_SERVER_TOOL } from "../../../src/llm/tools/webSearch";
 import { ChatService } from "../../../src/services/chatService";
 import type { ISettingsService } from "../../../src/services/settingsService";
 import type {
@@ -56,7 +55,7 @@ describe("ChatService", () => {
     mockLLMClient = createMockLLMClient();
     mockSettingsService = createMockSettingsService();
     toolRegistry = new ToolRegistry();
-    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry);
+    chatService = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "perplexity");
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {
@@ -340,8 +339,10 @@ describe("ChatService", () => {
           createMockGuildSettings({ webSearchEnabled: true }),
         );
         const { updater } = createSpyUpdater();
+        // A non-default engine shows the configured one reaches the request.
+        const exaChat = new ChatService(mockLLMClient, mockSettingsService, toolRegistry, "exa");
 
-        await chatService.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
+        await exaChat.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
           channelId: "channel-1",
           userId: "user-1",
         });
@@ -350,7 +351,13 @@ describe("ChatService", () => {
           ChatCompletionRequest,
           AbortSignal,
         ];
-        expect(request.tools).toEqual([WEB_SEARCH_SERVER_TOOL]);
+        // Literal values: the per-request cap is what bounds the bill.
+        expect(request.tools).toEqual([
+          {
+            type: "openrouter:web_search",
+            parameters: { engine: "exa", max_results: 5, max_total_results: 10, max_uses: 2 },
+          },
+        ]);
         expect(request.tool_choice).toBe("auto");
         expect(request.messages).toHaveLength(2);
         expect(request.messages[1]).toEqual({ role: "user", content: "Hello" });

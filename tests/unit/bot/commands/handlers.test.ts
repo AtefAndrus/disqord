@@ -49,7 +49,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ guildId: "guild-1", defaultModel: "model-1" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
     const set = createInteraction("model-1");
 
@@ -73,7 +73,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "missing/model:free" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -91,7 +91,7 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "fallback/model" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService);
+    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -124,18 +124,25 @@ describe("config web-search handler", () => {
   } {
     const llmClient = createMockLLMClient();
     const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(llmClient, settingsService, new ModelService(llmClient));
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
     return { handlers, settingsService };
   }
 
-  test("サーバーの管理権限があれば有効化し、費用を伝える", async () => {
+  test("サーバーの管理権限があれば有効化し、エンジンと料金の確認先を伝える", async () => {
     const { handlers, settingsService } = createHandlers();
     const { interaction, reply } = createWebSearchInteraction("on", true);
 
     await handlers.configWebSearch(interaction);
 
     expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", true);
-    expect(repliedEmbed(reply).description).toContain("$0.005");
+    const description = repliedEmbed(reply).description ?? "";
+    expect(description).toContain("perplexity");
+    expect(description).toContain("server-tools/web-search");
   });
 
   test("サーバーの管理権限があれば無効化する", async () => {

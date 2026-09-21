@@ -273,4 +273,29 @@ export interface StreamFinalResult {
   model?: string;
   provider?: string;
   finishReason?: string | null;
+  /** Absent when no web search ran in the turn. */
+  webSearch?: WebSearchTrace;
+}
+
+/** One `openrouter:web_search` call as the stream reported it. */
+export interface WebSearchCall {
+  query: string;
+  /** Result URLs; OpenRouter omits them for a call refused past `max_uses`. */
+  sources: string[];
+}
+
+/**
+ * A `url_citation` annotation. OpenRouter attaches one per search result
+ * handed to the model (all with `start_index`/`end_index` 0 as of
+ * 2026-09-22), so it lists the pages the model was given, not the spans of
+ * the answer that quote them.
+ */
+export interface WebSearchResultLink {
+  url: string;
+  title?: string;
+}
+
+export interface WebSearchTrace {
+  calls: WebSearchCall[];
+  results: WebSearchResultLink[];
 }

@@ -2,6 +2,7 @@ import type { ButtonInteraction, ChatInputCommandInteraction, Interaction } from
 import { MessageFlags } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
+import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
@@ -32,6 +33,7 @@ export function createInteractionCreateHandler(
   modelService: IModelService,
   llmClient: ILLMClient,
   chatService: IChatService,
+  webSearchEngine: WebSearchEngine,
 ) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -46,6 +48,7 @@ export function createInteractionCreateHandler(
         modelService,
         llmClient,
         chatService,
+        webSearchEngine,
       );
       return;
     }
@@ -143,6 +146,7 @@ async function handleButtonInteraction(
   modelService: IModelService,
   llmClient: ILLMClient,
   chatService: IChatService,
+  webSearchEngine: WebSearchEngine,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({
@@ -236,6 +240,7 @@ async function handleButtonInteraction(
       rateLimited,
       cacheStatus,
       settings: updatedSettings,
+      webSearchEngine,
       version: packageJson.version,
     });
 

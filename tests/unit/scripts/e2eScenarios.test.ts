@@ -204,6 +204,12 @@ describe("e2e scenarios: check", () => {
   test("search: footer に検索回数があり、本文に「公開日: 2026-08-20」の行があるときだけ通る", () => {
     const searched = `${USAGE} | Searches: 1`;
     expect(check("search", [page("1", ["公開日: 2026-08-20"], searched)])).toEqual([]);
+    // 検索エンジン名つきのフッター（実際の表示）
+    expect(
+      check("search", [
+        page("1", ["公開日: 2026-08-20"], `${USAGE} | Searches: 3 (perplexity) | TPS: 1.00`),
+      ]),
+    ).toEqual([]);
     // 太字や全角コロンで書かれても同じ行として読む
     expect(check("search", [page("1", ["**公開日：2026-08-20**"], searched)])).toEqual([]);
     // 検索していない、または本文だけが検索回数を名乗っている

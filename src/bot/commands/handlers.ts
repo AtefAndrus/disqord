@@ -6,6 +6,7 @@ import {
 } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
+import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
@@ -18,6 +19,7 @@ export function createCommandHandlers(
   llmClient: ILLMClient,
   settingsService: ISettingsService,
   modelService: IModelService,
+  webSearchEngine: WebSearchEngine,
 ): CommandHandlers {
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -159,6 +161,7 @@ export function createCommandHandlers(
         rateLimited,
         cacheStatus,
         settings,
+        webSearchEngine,
         version: packageJson.version,
       });
 
@@ -238,7 +241,7 @@ export function createCommandHandlers(
 
       const embed = createSuccessEmbed(
         enabled
-          ? "Web検索を **有効** にしました。\n\nモデルが検索するたびに OpenRouter の残高から費用が引かれます（1回 $0.005、1応答あたり最大2回）。"
+          ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\nモデルが検索するたびに OpenRouter の残高から費用が引かれます（1応答あたり最大2回）。1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
           : "Web検索を **無効** にしました。",
         "Web検索設定",
       );

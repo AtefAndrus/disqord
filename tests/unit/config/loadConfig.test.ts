@@ -7,6 +7,7 @@ const KEYS = [
   "OPENROUTER_API_KEY",
   "NODE_ENV",
   "E2E_TESTER_BOT_ID",
+  "WEB_SEARCH_ENGINE",
 ] as const;
 
 describe("loadConfig: E2E_TESTER_BOT_ID", () => {
@@ -60,6 +61,42 @@ describe("loadConfig: E2E_TESTER_BOT_ID", () => {
     process.env.NODE_ENV = "development";
     process.env.E2E_TESTER_BOT_ID = "not-a-snowflake";
 
+    expect(() => loadConfig()).toThrow();
+  });
+});
+
+describe("loadConfig: WEB_SEARCH_ENGINE", () => {
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+    process.env.DISCORD_TOKEN = "token";
+    process.env.DISCORD_APPLICATION_ID = "1";
+    process.env.OPENROUTER_API_KEY = "key";
+  });
+
+  afterEach(() => {
+    for (const key of KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  });
+
+  test("未設定と空文字は perplexity になる", () => {
+    delete process.env.WEB_SEARCH_ENGINE;
+    expect(loadConfig().webSearchEngine).toBe("perplexity");
+
+    process.env.WEB_SEARCH_ENGINE = "";
+    expect(loadConfig().webSearchEngine).toBe("perplexity");
+  });
+
+  test("OpenRouter のエンジン名はそのまま使う", () => {
+    process.env.WEB_SEARCH_ENGINE = "exa";
+    expect(loadConfig().webSearchEngine).toBe("exa");
+  });
+
+  test("エンジン名の誤記は起動時に拒否する", () => {
+    process.env.WEB_SEARCH_ENGINE = "perplexcity";
     expect(() => loadConfig()).toThrow();
   });
 });

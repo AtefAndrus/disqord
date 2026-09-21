@@ -44,6 +44,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as IModelService,
       {} as ILLMClient,
       { cancelRequest } as unknown as IChatService,
+      "perplexity",
     );
     spyOn(console, "error").mockImplementation(() => {});
   });

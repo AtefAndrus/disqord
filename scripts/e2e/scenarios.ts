@@ -250,7 +250,9 @@ export const SCENARIOS: Scenario[] = [
     prompt:
       "[e2e] Web 検索で、oven-sh/bun の GitHub Release のうちタグ bun-v1.4.0 の公開日を UTC で調べて、「公開日: YYYY-MM-DD」の形の1行で答えて。",
     check: (reply) => [
-      ...(/(?:^|\|)\s*Searches:\s*[1-9]\d*\s*(?=\||$)/.test(lastPageFooter(reply) ?? "")
+      ...(/(?:^|\|)\s*Searches:\s*[1-9]\d*(?:\s*\([^)|]*\))?\s*(?=\||$)/.test(
+        lastPageFooter(reply) ?? "",
+      )
         ? []
         : ["the usage footer reports no web search (is /config web-search on?)"]),
       ...(/^公開日:\s*2026-08-20\s*$/m.test(reply.body.normalize("NFKC").replace(/[*`]/g, ""))

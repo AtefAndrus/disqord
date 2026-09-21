@@ -534,6 +534,75 @@ describe("runToolLoop: server tool only", () => {
     expect(requests[0]?.tools).toEqual([{ type: "openrouter:web_search" }]);
     expect(requests[0]?.tool_choice).toBe("auto");
   });
+
+  test("web search traces from every turn reach the final result in order; none means no field", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+    const { client } = makeClient([
+      scripted(
+        toolCall({ index: 0, id: "call_1", name: "echo_tool", argumentsDelta: "{}" }),
+        final({
+          finishReason: "tool_calls",
+          webSearch: { calls: [{ query: "q1", sources: ["https://a.test/"] }], results: [] },
+        }),
+      ),
+      scripted(
+        content("done"),
+        final({
+          fullText: "done",
+          finishReason: "stop",
+          webSearch: {
+            calls: [{ query: "q2", sources: [] }],
+            results: [{ url: "https://a.test/", title: "A" }],
+          },
+        }),
+      ),
+    ]);
+    const result = await runToolLoop(
+      baseParams({
+        llmClient: client,
+        registry,
+        serverTools: [{ type: "openrouter:web_search" }],
+      }),
+    );
+
+    expectFinal(result);
+    expect(result.webSearch).toEqual({
+      calls: [
+        { query: "q1", sources: ["https://a.test/"] },
+        { query: "q2", sources: [] },
+      ],
+      results: [{ url: "https://a.test/", title: "A" }],
+    });
+
+    const { client: plain } = makeClient([
+      scripted(content("hi"), final({ fullText: "hi", finishReason: "stop" })),
+    ]);
+    const plainResult = await runToolLoop(baseParams({ llmClient: plain }));
+    expectFinal(plainResult);
+    expect("webSearch" in plainResult).toBe(false);
+  });
+
+  test("server-tool-only request: a function call is a hallucination and ends the loop without resending the server tool", async () => {
+    const { client, callCount } = makeClient([
+      scripted(
+        toolCall({ index: 0, id: "call_1", name: "made_up_tool", argumentsDelta: "{}" }),
+        final({ fullText: "", finishReason: "tool_calls" }),
+      ),
+      scripted(content("second"), final({ fullText: "second", finishReason: "stop" })),
+    ]);
+    const result = await runToolLoop(
+      baseParams({
+        llmClient: client,
+        registry: new ToolRegistry(),
+        serverTools: [{ type: "openrouter:web_search" }],
+      }),
+    );
+
+    expectError(result);
+    expect((result.error as Error).message).toContain("no tools were offered");
+    expect(callCount()).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

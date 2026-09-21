@@ -2,7 +2,11 @@ import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { runToolLoop } from "../llm/toolLoop";
 import type { ToolRegistry } from "../llm/tools/registry";
-import { buildWebSearchSystemMessage, WEB_SEARCH_SERVER_TOOL } from "../llm/tools/webSearch";
+import {
+  buildWebSearchServerTool,
+  buildWebSearchSystemMessage,
+  type WebSearchEngine,
+} from "../llm/tools/webSearch";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -159,6 +163,7 @@ export class ChatService implements IChatService {
     private readonly llmClient: ILLMClient,
     private readonly settingsService: ISettingsService,
     private readonly toolRegistry: ToolRegistry,
+    private readonly webSearchEngine: WebSearchEngine,
   ) {}
 
   async generateResponse(
@@ -224,7 +229,9 @@ export class ChatService implements IChatService {
           : request.messages,
         ...(request.plugins && { plugins: request.plugins }),
         registry: this.toolRegistry,
-        ...(settings.webSearchEnabled && { serverTools: [WEB_SEARCH_SERVER_TOOL] }),
+        ...(settings.webSearchEnabled && {
+          serverTools: [buildWebSearchServerTool(this.webSearchEngine)],
+        }),
         ctx: { guildId, channelId: ctx.channelId, userId: ctx.userId },
         updater,
         signal: controller.signal,

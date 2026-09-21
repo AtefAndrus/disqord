@@ -399,7 +399,12 @@ describe("chatContainerBuilder", () => {
         usage: { ...usage, server_tool_use_details: { web_search_requests: 2 } },
       };
       expect(buildUsageDetailsText(searched)).toContain("Searches: 2");
-      expect(buildUsageDetailsText({ showDetails: true, usage })).not.toContain("Searches");
+      expect(buildUsageDetailsText({ ...searched, webSearchEngine: "perplexity" })).toContain(
+        "Searches: 2 (perplexity)",
+      );
+      expect(
+        buildUsageDetailsText({ showDetails: true, usage, webSearchEngine: "perplexity" }),
+      ).not.toContain("Searches");
     });
 
     test("pageInfo.total>1のときページ番号をprefixする", () => {

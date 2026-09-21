@@ -18,6 +18,7 @@ describe("buildStatusMessage - 言語統一", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
@@ -35,12 +36,13 @@ describe("buildStatusMessage - 言語統一", () => {
         rateLimited: false,
         cacheStatus: { lastUpdatedAt: new Date(), modelCount: 10 },
         settings: createMockGuildSettings({ webSearchEnabled }),
+        webSearchEngine: "perplexity",
         version: "1.3.2",
       })
         .embeds[0]?.toJSON()
         .fields?.find((f) => f.name === "Web検索")?.value;
 
-    expect(build(true)).toBe("有効");
+    expect(build(true)).toBe("有効（perplexity）");
     expect(build(false)).toBe("無効");
   });
 
@@ -57,6 +59,7 @@ describe("buildStatusMessage - 言語統一", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
@@ -82,6 +85,7 @@ describe("buildStatusMessage - ボタンUX", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
@@ -105,6 +109,7 @@ describe("buildStatusMessage - ボタンUX", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
@@ -128,6 +133,7 @@ describe("buildStatusMessage - ボタンUX", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
@@ -151,6 +157,7 @@ describe("buildStatusMessage - ボタンUX", () => {
         createdAt: "2025-01-01",
         updatedAt: "2025-01-01",
       } as GuildSettings,
+      webSearchEngine: "perplexity",
       version: "1.3.2",
     };
 
