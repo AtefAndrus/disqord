@@ -67,8 +67,8 @@
     // 専用グループに入れ separateMajorMinor: false を置いて、更新タイプによらず 1 本に載せる。
     // bun-types も同じグループに入れる。tsconfig.json の types が ["bun-types"] なので
     // これが typecheck における Bun API 型の唯一の供給源で、ランタイムから独立して先行すると
-    // 「型は通るが実行時に存在しない API」を受け入れてしまう。drift-check は mise/Dockerfile しか
-    // 見ないためこの skew を捕まえられない。同じ PR に載せて版がずれないようにする。
+    // 「型は通るが実行時に存在しない API」を受け入れてしまう。CI の drift-check は bun.lock の bun-types も
+    // 含めて patch の一致を要求するので、別 PR に割れると片側の PR が必ず落ちる。同じ PR に載せる。
     //
     {
       groupName: "bun toolchain",
@@ -77,7 +77,8 @@
       separateMajorMinor: false,
     },
     // bun-types の pin だけは既定の "Pin Dependencies" へ戻す。
-    // :pinDevDependencies による range -> exact の一度きりの変換で、版を動かす更新ではない。
+    // :pinDevDependencies による range -> exact の一度きりの変換。bun マネージャは lockedVersion を
+    // 持たないので範囲内の最新へ固定し、版が動きうる (pin はクールダウンの対象外)。
     // 上のグループに残すと pin と minor が同じ groupName から同じ branchName に解決されて衝突し、
     // pin 側が勝ってランタイム (mise / Dockerfile) の更新がブランチごと消える（実際に発生した）。
     // なお matchUpdateTypes は separateMajorMinor と同一ルール内で併用できないため、
