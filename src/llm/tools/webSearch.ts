@@ -5,10 +5,11 @@ export type WebSearchEngine = AppConfig["webSearchEngine"];
 
 /**
  * Searches per request. Questions about several things at once (three
- * packages' versions, three runtimes) issued three to five searches, and in
- * a one-sample check on 2026-09-22 answered more of their facts correctly
- * with four or five allowed than with two. At Perplexity's $0.005 per search
- * this caps search charges at $0.02 per reply.
+ * packages' versions, three runtimes) asked for three to five searches. On
+ * 2026-09-22, one run each with caps of 2, 3, and 5 got every fact right
+ * only with 5 on the package question and with 3 and 5 on the runtime
+ * question. Four is a choice between those caps, not a measured optimum. At
+ * Perplexity's $0.005 per search it caps search charges at $0.02 per reply.
  */
 export const MAX_SEARCHES = 4;
 const RESULTS_PER_SEARCH = 5;
