@@ -9,14 +9,17 @@
  *
  * Usage: bun scripts/prune-released-changes.ts
  * The permalinks point at HEAD, so every file in a folder to delete must be
- * tracked; an edit not yet committed (a ticked manual check) is fine, the
+ * in HEAD; an edit not yet committed (a ticked manual check) is fine, the
  * link then shows the committed version.
  *
- * This is not a full CommonMark parser. It handles inline links (with an
- * optional title, `<...>` destinations, and surrounding spaces), reference
- * definitions, and repository-root paths, and it leaves fenced code blocks
- * and code spans alone. `CHANGELOG.md` is skipped because git-cliff
- * regenerates it from commit messages.
+ * The rewriter is not a CommonMark parser: it handles inline links (with a
+ * quoted title, `<...>` destinations, and surrounding spaces), reference
+ * definitions, and repository-root paths, and skips fenced code and code
+ * spans. Rather than chasing every other link form, the script searches the
+ * rewritten text for any path still naming a folder to delete and stops,
+ * writing and deleting nothing, so a missed form surfaces as a line to fix
+ * by hand instead of a broken link. `CHANGELOG.md` is skipped because
+ * git-cliff regenerates it from commit messages.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -55,7 +58,11 @@ function rewriteDestination(
   if (!prunedDirs.some((dir) => target === dir || target.startsWith(dir + sep))) {
     return destination;
   }
-  const repoPath = relative(repoRoot, target).split(sep).map(encodeURIComponent).join("/");
+  // Parentheses too: `encodeURIComponent` keeps them, and a bare `)` would end the Markdown link.
+  const repoPath = relative(repoRoot, target)
+    .split(sep)
+    .map((segment) => encodeURIComponent(segment).replace(/\(/g, "%28").replace(/\)/g, "%29"))
+    .join("/");
   const rewritten = `${blobBase}/${repoPath}${suffix}`;
   return angled ? `<${rewritten}>` : rewritten;
 }
@@ -108,6 +115,24 @@ export function rewriteLinks(
     .join("\n");
 }
 
+/**
+ * Line numbers (1-based) of `text` that still name one of the folders to
+ * delete by a relative or repository-root path. URLs are ignored, so the
+ * permalinks `rewriteLinks` wrote do not count.
+ */
+export function findLeftoverReferences(text: string, prunedNames: readonly string[]): number[] {
+  const escaped = prunedNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const reference = new RegExp(
+    `(?:^|[^\\w-])(?:\\.\\./|changes/)(?:${escaped.join("|")})(?:[/)#?\\s>"']|$)`,
+  );
+  const lines: number[] = [];
+  text.split("\n").forEach((line, index) => {
+    const withoutUrls = line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s)>\]]+/gi, "");
+    if (reference.test(withoutUrls)) lines.push(index + 1);
+  });
+  return lines;
+}
+
 /** `https://github.com/<owner>/<repo>` from an HTTPS or SSH (including host-alias) remote URL. */
 export function githubUrlFromRemote(remote: string): string {
   const match = remote.trim().match(/[:/]([^/:]+)\/([^/]+?)(?:\.git)?$/);
@@ -147,12 +172,17 @@ function main(): void {
     return;
   }
 
-  // A file HEAD does not have would get a permalink that 404s, and deleting
-  // it would lose it for good.
+  // A file HEAD does not have (untracked, ignored, or only staged) would get a
+  // permalink that 404s, and deleting it would lose it for good.
   const prunedPaths = pruned.map((dir) => relative(repoRoot, dir));
-  const untracked = git("ls-files", "--others", "--", ...prunedPaths);
-  if (untracked) {
-    throw new Error(`files in the folders to delete are not committed:\n${untracked}`);
+  const inHead = new Set(
+    git("ls-tree", "-r", "--name-only", "HEAD", "--", ...prunedPaths).split("\n"),
+  );
+  const notInHead = git("ls-files", "--cached", "--others", "--", ...prunedPaths)
+    .split("\n")
+    .filter((path) => path && !inHead.has(path));
+  if (notInHead.length > 0) {
+    throw new Error(`files in the folders to delete are not in HEAD:\n${notInHead.join("\n")}`);
   }
   const blobBase = `${githubUrlFromRemote(git("remote", "get-url", "origin"))}/blob/${git("rev-parse", "HEAD")}`;
 
@@ -162,13 +192,26 @@ function main(): void {
     resolve(repoRoot, "CHANGELOG.md"),
     ...pruned,
   ];
+  const prunedNames = pruned.map((dir) => relative(changesDir, dir));
+  const rewrites: { file: string; before: string; after: string }[] = [];
+  const leftovers: string[] = [];
   for (const file of markdownFiles(repoRoot, skip)) {
     const before = readFileSync(file, "utf8");
     const after = rewriteLinks(before, file, pruned, repoRoot, blobBase);
-    if (after !== before) {
-      writeFileSync(file, after);
-      console.log(`rewrote links in ${relative(repoRoot, file)}`);
+    rewrites.push({ file, before, after });
+    for (const line of findLeftoverReferences(after, prunedNames)) {
+      leftovers.push(`${relative(repoRoot, file)}:${line}`);
     }
+  }
+  if (leftovers.length > 0) {
+    throw new Error(
+      `these lines still name a folder to delete in a form this script does not rewrite; fix them by hand (a permalink at ${blobBase}) and rerun. Nothing was changed.\n${leftovers.join("\n")}`,
+    );
+  }
+  for (const { file, before, after } of rewrites) {
+    if (after === before) continue;
+    writeFileSync(file, after);
+    console.log(`rewrote links in ${relative(repoRoot, file)}`);
   }
   for (const dir of pruned) {
     rmSync(dir, { recursive: true });

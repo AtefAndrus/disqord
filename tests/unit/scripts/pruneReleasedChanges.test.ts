@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { githubUrlFromRemote, rewriteLinks } from "../../../scripts/prune-released-changes";
+import {
+  findLeftoverReferences,
+  githubUrlFromRemote,
+  rewriteLinks,
+} from "../../../scripts/prune-released-changes";
 
 const ROOT = "/repo";
 const BASE = "https://github.com/o/r/blob/abc123";
@@ -95,5 +99,35 @@ describe("githubUrlFromRemote", () => {
     expect(githubUrlFromRemote("https://github.com/o/r.git")).toBe("https://github.com/o/r");
     expect(githubUrlFromRemote("git@github.com:o/r.git")).toBe("https://github.com/o/r");
     expect(githubUrlFromRemote("git@github-AtefAndrus:o/r.git\n")).toBe("https://github.com/o/r");
+  });
+});
+
+describe("rewriteLinks の出力", () => {
+  test("パス中の括弧をエンコードし、Markdown のリンクを途中で閉じさせない", () => {
+    expect(rewriteLinks("[x](../old-feature/spec%29.md)", FILE, PRUNED, ROOT, BASE)).toBe(
+      `[x](${BASE}/docs/changes/old-feature/spec%29.md)`,
+    );
+  });
+});
+
+describe("findLeftoverReferences", () => {
+  test("書き換えられなかった書式の参照を行番号で返し、permalink は数えない", () => {
+    const text = [
+      `[ok](${BASE}/docs/changes/old-feature/design.md)`,
+      "[paren](../old-feature/design.md (title))",
+      "see docs/changes/old-feature/design.md",
+      "`../old-feature/design.md`",
+      "[other](../old-feature-2/design.md)",
+    ].join("\n");
+
+    expect(findLeftoverReferences(text, ["old-feature"])).toEqual([2, 3, 4]);
+  });
+
+  test("rewriteLinks が書き換えた結果には残りが無い", () => {
+    const text = "[a](../old-feature/design.md#x)\n[b]: ../old-feature/design.md";
+
+    expect(
+      findLeftoverReferences(rewriteLinks(text, FILE, PRUNED, ROOT, BASE), ["old-feature"]),
+    ).toEqual([]);
   });
 });
