@@ -99,7 +99,7 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 ```ts
 {
   type: "openrouter:web_search",
-  parameters: { engine: WEB_SEARCH_ENGINE, max_results: 5, max_total_results: 10, max_uses: 2 },
+  parameters: { engine: WEB_SEARCH_ENGINE, max_results: 5, max_total_results: 20, max_uses: 4 },
 }
 ```
 
@@ -117,9 +117,10 @@ server tool はモデルが tool calling に対応しているかに関係なく
 
 - `max_uses`（このツール自身の実行回数上限）が 1 リクエストで課金される検索の回数を抑える。上限を超えた呼び出しもモデルは出すが、OpenRouter はそれを実行せずエラーの結果を返し、課金しない。一方でその呼び出しは `usage.server_tool_use_details.web_search_requests` に数えられる。`max_uses: 1` で 2 回呼んだ応答の `cost` から `upstream_inference_cost` を引くと、検索 1 回分（Parallel fast で $0.001）だけが残った。
 - `max_uses` が効くのは Exa、Parallel、Perplexity、Firecrawl のエンジンである。provider の native 検索では Anthropic にだけ渡され、他の provider は無視する（OpenAPI 定義の `WebSearchServerToolConfig.max_uses`）。そのため `WEB_SEARCH_ENGINE` が `native` のときは、Anthropic 以外のモデルで検索回数の上限が無い。`auto` はモデルの provider が native 検索を持てばそれを使い、持たなければ Exa を使うので、上限が無いのは native 検索が選ばれた場合に限られる。Firecrawl は OpenRouter の残高ではなく、OpenRouter に登録した Firecrawl のキーに課金される。`auto` と `native` も、OpenRouter のワークスペース設定で既定やフォールバックのエンジンに Firecrawl が選ばれていれば Firecrawl で検索する（OpenRouter のドキュメントの記述で、実測はしていない）。`/config web-search on` の応答は、エンジンごとにこれらの違いを示す。
-- `max_results`（1 検索あたりの件数、既定 5）と `max_total_results`（リクエスト全体の累計上限）で、入力に入る検索結果の量を抑える。
+- `max_results`（1 検索あたりの件数、既定 5）と `max_total_results`（リクエスト全体の累計上限）で、入力に入る検索結果の量を抑える。累計が `max_total_results` に達した後の検索は結果を返さないので、`max_total_results` は `max_uses` × `max_results` にそろえる。2026-09-22 の実測では、`max_uses` を 3 や 5 にしても `max_total_results: 10` のままでは結果を返す検索は 2 回までで、検索料金も 2 回分にとどまった。
+- 上限は 4 回とする。3 つのランタイムや 3 つのパッケージの版を一度に聞く質問では、モデルは 3〜5 回の検索を要求した。2026-09-22 に上限 2・3・5 で各 1 回ずつ試すと、3 つのパッケージの版と公開日を聞く質問ですべて正しく答えたのは上限 5 のときだけで、3 つのランタイムの版を聞く質問では上限 3 と 5 のときだった。4 回はこの間から選んだ値で、4 回そのものは試しておらず、試行も各 1 回なので効果の大きさと再現性は確かめていない。
 - これらが効く範囲は HTTP リクエスト 1 回である。client tool を併用する応答では、`runToolLoop()` が最大 5 ターン（`MAX_TURNS`）のすべてのリクエストに同じ `tools` を送る。最終ターンは `tool_choice: "none"` で client tool の呼び出しを止めるが、それが server tool の実行も止めるかは確かめていない。検索料金の上限は、1 リクエストの上限の最大 5 倍と見積もる。
-- client tool が登録されていない現状では、1 応答は 1 リクエストで終わる。server tool だけを渡したリクエストにモデルが function call を返しても、`runToolLoop()` は tool を 1 つも渡していない場合と同じく幻覚としてエラーにし、次のリクエストを出さない。次のリクエストを出すと server tool を再送することになり、`max_uses` の上限がリクエストの数だけ増えるためである。Perplexity の検索料金は 1 応答あたり最大 $0.01 になる。
+- client tool が登録されていない現状では、1 応答は 1 リクエストで終わる。server tool だけを渡したリクエストにモデルが function call を返しても、`runToolLoop()` は tool を 1 つも渡していない場合と同じく幻覚としてエラーにし、次のリクエストを出さない。次のリクエストを出すと server tool を再送することになり、`max_uses` の上限がリクエストの数だけ増えるためである。Perplexity の検索料金は 1 応答あたり最大 $0.02 になる。
 - リクエスト直下の `stop_server_tools_when` でも外側ループを止められるが、`max_tool_calls` を上書きする関係にあり、本 change では使わない。
 
 **エンジンの選定:**
