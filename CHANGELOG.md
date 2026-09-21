@@ -28,31 +28,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improve model command details
 
 
-### Dependencies
+### Fixed
 
-- Bump dependencies
-- Bump @biomejs/biome from 2.4.6 to 2.4.7
-- Update biome.json schema to 2.4.7
-- Bump bun-types, markdownlint-cli2, and @biomejs/biome
-- Bump typescript from 5.9.3 to 6.0.2
-- Bump discord.js, biome, bun-types, @types/node, and lefthook
-- Bump @biomejs/biome from 2.4.10 to 2.4.11
-- Bump the all-dependencies group with 8 updates
-- Bump @types/node in the all-dependencies group (#59)
-- Bump the all-dependencies group with 3 updates
-- Bump the all-dependencies group across 1 directory with 3 updates
-- Bump the all-dependencies group across 1 directory with 3 updates
-- Bump the all-dependencies group with 6 updates
-- Update all non-major dependencies
-- Update zizmor
-- Update all non-major dependencies
-- Pin dependencies
-- Update all non-major dependencies
-- Update bun toolchain to v1.4.0
-- Update all non-major dependencies
-- Update zizmor
-- Update all non-major dependencies
-- Update bun toolchain to v1.4.2
+- Move open-pull-requests-limit to multi-ecosystem group level
+- Satisfy markdownlint MD029 in admin-endpoints design.md
+- Harden multimodal PDF handling and add default prompt fallback
+- Replace discontinued default model with gemma-4-26b
+- Mention handling, page footers, stop/error info improvements
+- Split chat responses by UTF-8 bytes as well as chars
+- Update status of tool calling foundation to implemented
+- Keep bun-types on the bun toolchain group
+- Keep pin updates out of the bun toolchain group
+- Stop Renovate pinning a digest into the zizmor version input
+- Close the gaps the accumulated review found
+- Pin bun-types so it moves with the runtime
+- Close the two gaps the hook review found
+- Complete Renovate migration safeguards
+- Preserve code fences across split messages
+- Accept OpenRouter final usage frames
+- Coolify の Deploy Webhook を POST で呼び、手動起動もできるようにする (#95)
+- Keep the version status across gateway reconnects (#98)
+- Bun run preview を Components V2 の現行 UI に追従させる (#111)
+
+
+### Refactoring
+
+- Address biome 2.4.11 useOptionalChain warnings
+- Extract HMAC-SHA256 helper into src/http/hmac.ts
+- Default model ID を envVars.ts に SSOT 化
+- Remove GitHub release notifications (#102)
+- LLM 呼び出しを Chat Completions から Responses API へ載せ替える (#110)
 
 
 ### Documentation
@@ -110,38 +115,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - メッセージの解説（コンテキストメニュー）の design を追加する (#121)
 
 
-### Fixed
-
-- Move open-pull-requests-limit to multi-ecosystem group level
-- Satisfy markdownlint MD029 in admin-endpoints design.md
-- Harden multimodal PDF handling and add default prompt fallback
-- Replace discontinued default model with gemma-4-26b
-- Mention handling, page footers, stop/error info improvements
-- Split chat responses by UTF-8 bytes as well as chars
-- Update status of tool calling foundation to implemented
-- Keep bun-types on the bun toolchain group
-- Keep pin updates out of the bun toolchain group
-- Stop Renovate pinning a digest into the zizmor version input
-- Close the gaps the accumulated review found
-- Pin bun-types so it moves with the runtime
-- Close the two gaps the hook review found
-- Complete Renovate migration safeguards
-- Preserve code fences across split messages
-- Accept OpenRouter final usage frames
-- Coolify の Deploy Webhook を POST で呼び、手動起動もできるようにする (#95)
-- Keep the version status across gateway reconnects (#98)
-- Bun run preview を Components V2 の現行 UI に追従させる (#111)
-
-
-### Refactoring
-
-- Address biome 2.4.11 useOptionalChain warnings
-- Extract HMAC-SHA256 helper into src/http/hmac.ts
-- Default model ID を envVars.ts に SSOT 化
-- Remove GitHub release notifications (#102)
-- LLM 呼び出しを Chat Completions から Responses API へ載せ替える (#110)
-
-
 ### Testing
 
 - Avoid cross-file console spy interference
@@ -149,6 +122,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Assert the stop button through toJSON
 - テスト bot による e2e と、手動確認をリリースの条件にする運用を追加する (#115)
 - E2e の最後にその回の費用を出す (#122)
+
+
+### Dependencies
+
+- Bump dependencies
+- Bump @biomejs/biome from 2.4.6 to 2.4.7
+- Update biome.json schema to 2.4.7
+- Bump bun-types, markdownlint-cli2, and @biomejs/biome
+- Bump typescript from 5.9.3 to 6.0.2
+- Bump discord.js, biome, bun-types, @types/node, and lefthook
+- Bump @biomejs/biome from 2.4.10 to 2.4.11
+- Bump the all-dependencies group with 8 updates
+- Bump @types/node in the all-dependencies group (#59)
+- Bump the all-dependencies group with 3 updates
+- Bump the all-dependencies group across 1 directory with 3 updates
+- Bump the all-dependencies group across 1 directory with 3 updates
+- Bump the all-dependencies group with 6 updates
+- Update all non-major dependencies
+- Update zizmor
+- Update all non-major dependencies
+- Pin dependencies
+- Update all non-major dependencies
+- Update bun toolchain to v1.4.0
+- Update all non-major dependencies
+- Update zizmor
+- Update all non-major dependencies
+- Update bun toolchain to v1.4.2
 
 
 ## [1.4.0] - 2026-01-14
@@ -159,28 +159,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement v1.4.0 streaming, stop button, prefix removal, auto-reply channels
 
 
-### Documentation
-
-- Remove v1.3.4 section from design.md (implemented)
-
-
 ### Fixed
 
 - V1.4.0 streaming UX improvements and bug fixes
 
 
+### Documentation
+
+- Remove v1.3.4 section from design.md (implemented)
+
+
 ## [1.3.4] - 2025-12-30
+
+
+### Fixed
+
+- Implement v1.3.4 setGuildModel settings overwrite bug fix
 
 
 ### Documentation
 
 - Add release notes guideline for user-facing content only
 - Add v1.3.4 bug fix plan for setGuildModel settings overwrite
-
-
-### Fixed
-
-- Implement v1.3.4 setGuildModel settings overwrite bug fix
 
 
 ## [1.3.3] - 2025-12-30
@@ -279,20 +279,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add GitHub release notification feature
 
 
-### Dependencies
-
-- Bump @biomejs/biome from 2.3.9 to 2.3.10
-- Bump @types/node from 25.0.2 to 25.0.3
-- Bump zod from 4.2.0 to 4.2.1
-- Bump bun-types from 1.3.4 to 1.3.5
-
-
 ### Documentation
 
 - Added user error display and release note delivery functionality
 - Reorganize documentation structure
 - Add Dependabot PR handling skill
 - Add more details regarding error handling (OpenRouter error format, output detail level settings)
+
+
+### Dependencies
+
+- Bump @biomejs/biome from 2.3.9 to 2.3.10
+- Bump @types/node from 25.0.2 to 25.0.3
+- Bump zod from 4.2.0 to 4.2.1
+- Bump bun-types from 1.3.4 to 1.3.5
 
 
 ## [1.0.1] - 2025-12-18
@@ -325,15 +325,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add deployment workflow to trigger Coolify on release
 
 
-### Dependencies
+### Fixed
 
-- Bump bun-types from 1.3.3 to 1.3.4
-- Bump @biomejs/biome from 2.3.7 to 2.3.8
-- Bump zod from 3.25.76 to 4.1.13
-- Bump @types/node from 22.19.1 to 24.10.1
-- Bump @types/node from 25.0.0 to 25.0.2
-- Bump zod from 4.1.13 to 4.2.0
-- Bump @biomejs/biome from 2.3.8 to 2.3.9
+- Update biome.json to valid file exclusion patterns
+- Resolve type errors and lint issues
+- Update Biome schema version to 2.3.8 and adjust bun.lock configuration
+- Optimize Dockerfile for dependency installation and add .dockerignore
+- Update default LLM model to `google/gemini-2.0-flash-exp:free` across documentation and code
 
 
 ### Documentation
@@ -355,18 +353,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added management permission roles and channel restrictions to the database schema, incorporating functional requirements including model selection UI improvements and enhanced code quality
 
 
-### Fixed
-
-- Update biome.json to valid file exclusion patterns
-- Resolve type errors and lint issues
-- Update Biome schema version to 2.3.8 and adjust bun.lock configuration
-- Optimize Dockerfile for dependency installation and add .dockerignore
-- Update default LLM model to `google/gemini-2.0-flash-exp:free` across documentation and code
-
-
 ### Testing
 
 - Add unit and integration tests (54 tests, 98% coverage)
+
+
+### Dependencies
+
+- Bump bun-types from 1.3.3 to 1.3.4
+- Bump @biomejs/biome from 2.3.7 to 2.3.8
+- Bump zod from 3.25.76 to 4.1.13
+- Bump @types/node from 22.19.1 to 24.10.1
+- Bump @types/node from 25.0.0 to 25.0.2
+- Bump zod from 4.1.13 to 4.2.0
+- Bump @biomejs/biome from 2.3.8 to 2.3.9
+<!-- ends the last list, so the link definitions below are not read as part of its final item -->
 [1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AtefAndrus/disqord/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/AtefAndrus/disqord/compare/v1.3.3...v1.3.4

@@ -15,7 +15,7 @@ body = """
 {%- endif %}
 {% for group, commits in commits | group_by(attribute="group") %}
 
-### {{ group | upper_first }}
+### {{ group | striptags | trim | upper_first }}
 
 {% for commit in commits -%}
 - {{ commit.message | split(pat="\n") | first | trim \
@@ -27,6 +27,7 @@ body = """
 {%- endfor %}
 """
 footer = """
+<!-- ends the last list, so the link definitions below are not read as part of its final item -->
 {% for release in releases -%}
   {% if release.version -%}
     {% if release.previous.version -%}
@@ -51,16 +52,16 @@ commit_parsers = [
   { message = '^\[release\]', skip = true },
   { message = '^\[chore\]', skip = true },
   # Bracket prefix format
-  { message = '^\[feat\]', group = "Added" },
-  { message = '^\[fix\]', group = "Fixed" },
-  { message = '^\[docs\]', group = "Documentation" },
-  { message = '^\[refactor\]', group = "Refactoring" },
-  { message = '^\[test\]', group = "Testing" },
-  { message = '^\[perf\]', group = "Performance" },
+  { message = '^\[feat\]', group = "<!-- 0 -->Added" },
+  { message = '^\[fix\]', group = "<!-- 1 -->Fixed" },
+  { message = '^\[docs\]', group = "<!-- 4 -->Documentation" },
+  { message = '^\[refactor\]', group = "<!-- 3 -->Refactoring" },
+  { message = '^\[test\]', group = "<!-- 5 -->Testing" },
+  { message = '^\[perf\]', group = "<!-- 2 -->Performance" },
   # Bot-generated dependency updates (Renovate; Dependabot in older history)
-  { message = '^build\(deps', group = "Dependencies" },
+  { message = '^build\(deps', group = "<!-- 6 -->Dependencies" },
   # Fallback (lowercase conventional-style from older commits)
-  { message = '^feat', group = "Added" },
-  { message = '^fix', group = "Fixed" },
-  { message = '^docs', group = "Documentation" },
+  { message = '^feat', group = "<!-- 0 -->Added" },
+  { message = '^fix', group = "<!-- 1 -->Fixed" },
+  { message = '^docs', group = "<!-- 4 -->Documentation" },
 ]
