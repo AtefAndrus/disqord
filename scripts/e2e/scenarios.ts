@@ -195,6 +195,9 @@ function checkPages(reply: Reply): string[] {
   return [];
 }
 
+/** Fresh per run so that history-recall can only pass through stored history. */
+const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
+
 export const SCENARIOS: Scenario[] = [
   {
     name: "chat",
@@ -275,6 +278,29 @@ export const SCENARIOS: Scenario[] = [
       ...(/^公開日:\s*2026-08-20\s*$/m.test(reply.body.normalize("NFKC").replace(/[*`]/g, ""))
         ? []
         : ["the reply has no 公開日: 2026-08-20 line"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    // Paired with history-recall, which must run right after it. The
+    // passphrase is new on every run, so only the stored history can supply
+    // it: a model cannot know it, and an earlier run's value does not match.
+    // Needs `/config history on` in the guild under test.
+    name: "history-set",
+    manual: true,
+    prompt: `[e2e] 合言葉は「${HISTORY_PASSPHRASE}」です。覚えておいて、「了解」とだけ返事をして。`,
+    check: (reply) => hasUsageFooter(reply),
+  },
+  {
+    name: "history-recall",
+    manual: true,
+    prompt: "[e2e] さっき伝えた合言葉を、「合言葉: 」に続けて1行で答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(HISTORY_PASSPHRASE)
+        ? []
+        : [
+            `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config history on?)`,
+          ]),
       ...hasUsageFooter(reply),
     ],
   },
