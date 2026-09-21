@@ -49,6 +49,7 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 
 - `bun:test`, with tests under `tests/`.
 - Replace `fetch` globally with `mock()`, open SQLite as `:memory:`, implement repository and service interfaces with `mock()`, and assert console output with `spyOn()`.
+- `src/config/index.ts` loads `.env` when it is imported, so locally every test runs with your `.env` while CI has none, and `bun test` sets `NODE_ENV=test`, which the config schema rejects. A test that calls `loadConfig()` sets every variable it depends on, `NODE_ENV` included. Move `.env` aside and run `bun run test` to reproduce CI.
 
 ### End-to-end (`bun run e2e`)
 
@@ -64,6 +65,7 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 ### Manual checks
 
 - What only a human can do (clicking a button in a real client, judging how something looks) never blocks a merge. Record it in the design's Tasks as `- [ ] 手動確認: ...`, keep the design's `status` at `in-progress`, and carry on.
+- A change with no design folder that still leaves a manual check gets a new `docs/changes/<kebab-name>/design.md` whose Tasks hold that check (`status: in-progress`). `/release` finds manual checks only under `docs/changes/`, so a check written only in a PR body is never listed.
 - Manual checks gate the release instead: `/release` lists every open `手動確認` task and stops until the user has done them. `deploy.yml` runs on a published Release, so a merge alone never reaches production. Its `workflow_dispatch` trigger deploys without going through `/release`; whoever runs it by hand owns checking the open `手動確認` tasks first.
 - Make the check one action for the user. `bun run e2e stop` posts a long request and waits up to ten minutes for someone to press 停止, then verifies the stopped state itself.
 
