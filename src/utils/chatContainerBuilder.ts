@@ -68,6 +68,7 @@ export interface FinalMetadata {
   showDetails: boolean;
   model?: string;
   provider?: string;
+  /** Milliseconds from sending the request to the finished answer, not to the first token. */
   latency?: number;
   usage?: UsageMetadata;
   /** Shown next to the search count; only replies that searched show it. */
@@ -345,7 +346,7 @@ export function splitTextIntoMessages(
 }
 
 /**
- * LLM 詳細情報（Tokens/Cost/Model/Latency/Provider/Cached/Reasoning/Searches/TPS）の " | " 区切り文字列。
+ * LLM 詳細情報（Tokens/Cost/Model/Time/Provider/Cached/Reasoning/Searches/TPS）の " | " 区切り文字列。
  * showDetails=false または usage 未取得の場合は undefined。
  */
 export function buildUsageDetailsText(metadata: FinalMetadata): string | undefined {
@@ -365,7 +366,8 @@ export function buildUsageDetailsText(metadata: FinalMetadata): string | undefin
     details.push(`Model: ${metadata.model}`);
   }
   if (metadata.latency !== undefined) {
-    details.push(`Latency: ${metadata.latency}ms`);
+    // "Time", not "Latency": in LLM usage latency reads as time to first token.
+    details.push(`Time: ${(metadata.latency / 1000).toFixed(1)}s`);
   }
   if (metadata.provider) {
     details.push(`Provider: ${metadata.provider}`);

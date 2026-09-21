@@ -17,8 +17,7 @@ import {
   buildStreamingContainer,
 } from "../../../src/utils/chatContainerBuilder";
 
-const USAGE =
-  "Tokens: 1+2=3 | Cost: $0.000001 | Model: vendor/model-x | Latency: 10ms | Provider: P";
+const USAGE = "Tokens: 1+2=3 | Cost: $0.000001 | Model: vendor/model-x | Time: 0.0s | Provider: P";
 const STOPPED = "🛑 Stopped | 4.9s | 360字";
 
 /** A page shaped the way the renderer shapes it: texts, then Separator + footer when there is one. */
