@@ -103,7 +103,7 @@ describe("formatCostSummary", () => {
     expect(lines).toEqual([
       "COST $0.021500 of OpenRouter credits observed on the key during this run",
       "     replies reported $0.020020: chat $0.000020, long $0.020000",
-      "     $0.001480 of the key's change is in no collected footer (a reply that was not collected, or other use of this key)",
+      "     $0.001480 of the key's change is not accounted for by the collected footers (source unknown)",
     ]);
   });
 
@@ -121,7 +121,7 @@ describe("formatCostSummary", () => {
     const [below] = formatCostSummary([], { amount: 0, state: "below-reported" });
 
     expect(changing).toContain("still changing");
-    expect(below).toContain("had not yet been billed");
+    expect(below).toContain("less than the replies reported");
     expect(below).not.toContain("still changing");
   });
 

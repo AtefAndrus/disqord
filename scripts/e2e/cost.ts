@@ -7,7 +7,9 @@
  * - The change in the key's `usage` (OpenRouter credits consumed by the key)
  *   across the run also catches requests whose reply was never collected,
  *   but it includes anything else that used the key meanwhile and excludes
- *   BYOK spending billed by the provider directly (`byok_usage`).
+ *   BYOK spending billed by the provider directly (`byok_usage`). It is the
+ *   key in this script's `.env`, so with `--no-spawn` it only measures the
+ *   running bot when that bot uses the same key.
  *
  * OpenRouter gives no signal that a key's usage has caught up, so the delta
  * is what was observed when polling stopped, not a settled figure.
@@ -51,8 +53,8 @@ export interface SettleDeps {
 export type UsageState = "stable" | "changing" | "below-reported";
 
 /**
- * OpenRouter bills the key after the response has been returned, so a read
- * right after the last reply can still miss it. Polls until the usage has
+ * The key's usage can lag behind the replies, and OpenRouter documents no
+ * timing for when a charge becomes visible on `/key`. Polls until the usage has
  * reached `floor` (the key must have been billed at least what the replies
  * reported) and reads the same value twice in a row, or until `maxReads`.
  * This is a heuristic: a charge can still land after two equal reads.
@@ -88,8 +90,7 @@ function usd(amount: number): string {
 const STATE_NOTE: Record<UsageState, string> = {
   stable: "",
   changing: " (still changing when polling stopped; the final figure may be higher)",
-  "below-reported":
-    " (the key had not yet been billed what the replies reported when polling stopped)",
+  "below-reported": " (less than the replies reported when polling stopped)",
 };
 
 /** The lines printed at the end of a run. `usageDelta` is `undefined` when the key could not be read. */
@@ -119,7 +120,7 @@ export function formatCostSummary(
     const other = usageDelta.amount - reported;
     if (other >= FOOTER_ROUNDING * Math.max(costs.length, 1) * 2) {
       lines.push(
-        `     ${usd(other)} of the key's change is in no collected footer (a reply that was not collected, or other use of this key)`,
+        `     ${usd(other)} of the key's change is not accounted for by the collected footers (source unknown)`,
       );
     }
   }
