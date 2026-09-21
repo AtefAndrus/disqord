@@ -73,6 +73,8 @@ describe("loadConfig: WEB_SEARCH_ENGINE", () => {
     process.env.DISCORD_TOKEN = "token";
     process.env.DISCORD_APPLICATION_ID = "1";
     process.env.OPENROUTER_API_KEY = "key";
+    // bun test sets NODE_ENV=test, which the config schema rejects.
+    process.env.NODE_ENV = "development";
   });
 
   afterEach(() => {
