@@ -43,4 +43,16 @@ export function applyMigrations(db: Database) {
       ADD COLUMN auto_reply_channels TEXT DEFAULT NULL
     `);
   }
+
+  // Migration: Add web_search_enabled column (off by default: every search is billed)
+  const columnsAfterAutoReply = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasWebSearchEnabled = columnsAfterAutoReply.some((c) => c.name === "web_search_enabled");
+  if (!hasWebSearchEnabled) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN web_search_enabled INTEGER NOT NULL DEFAULT 0
+    `);
+  }
 }

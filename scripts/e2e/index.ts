@@ -202,7 +202,7 @@ async function main(): Promise<number> {
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
         const messageId = await send(scenario, deadline);
-        if (scenario.manual) console.log(`  ${scenario.name}: waiting for a manual action…`);
+        if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
         const reply = await waitForReply({
           read: () => repliesAfter(messageId, deadline),
           pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),

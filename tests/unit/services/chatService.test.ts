@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, type mock, test } from "bun:test";
+import { beforeEach, describe, expect, type mock, setSystemTime, test } from "bun:test";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
+import { WEB_SEARCH_SERVER_TOOL } from "../../../src/llm/tools/webSearch";
 import { ChatService } from "../../../src/services/chatService";
 import type { ISettingsService } from "../../../src/services/settingsService";
-import type { ChatCompletionResponse, GuildSettings } from "../../../src/types";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  GuildSettings,
+} from "../../../src/types";
 import {
   createMockGuildSettings,
   createMockLLMClient,
@@ -326,6 +331,36 @@ describe("ChatService", () => {
         messages: [{ role: "user", content: "Hello" }],
       });
       expect(result.status).toBe("final");
+    });
+
+    test("Web検索が有効なギルドでは web_search server tool と日時・非信頼データの system を付けて送る", async () => {
+      setSystemTime(new Date("2026-09-22T05:00:00Z"));
+      try {
+        (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+          createMockGuildSettings({ webSearchEnabled: true }),
+        );
+        const { updater } = createSpyUpdater();
+
+        await chatService.generateChatResponse("guild-123", { text: "Hello" }, "req-ws", updater, {
+          channelId: "channel-1",
+          userId: "user-1",
+        });
+
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+          AbortSignal,
+        ];
+        expect(request.tools).toEqual([WEB_SEARCH_SERVER_TOOL]);
+        expect(request.tool_choice).toBe("auto");
+        expect(request.messages).toHaveLength(2);
+        expect(request.messages[1]).toEqual({ role: "user", content: "Hello" });
+        const system = request.messages[0];
+        expect(system?.role).toBe("system");
+        expect(system?.content).toContain("2026/09/22(火) 14:00 (JST)");
+        expect(system?.content).toContain("非信頼データ");
+      } finally {
+        setSystemTime();
+      }
     });
 
     test("streaming 中の content は累積で updater.stageContent に渡る", async () => {

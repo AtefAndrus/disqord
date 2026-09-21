@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { ButtonStyle } from "discord.js";
 import type { GuildSettings } from "../../../src/types";
 import { buildStatusMessage } from "../../../src/utils/statusMessage";
+import { createMockGuildSettings } from "../../helpers/mockFactories";
 
 describe("buildStatusMessage - 言語統一", () => {
   it("LLM詳細表示が有効/無効で表示される", () => {
@@ -25,6 +26,22 @@ describe("buildStatusMessage - 言語統一", () => {
     const llmDetailsField = embed.toJSON().fields?.find((f) => f.name === "LLM詳細表示");
 
     expect(llmDetailsField?.value).toBe("有効");
+  });
+
+  it("Web検索の有効/無効が表示される", () => {
+    const build = (webSearchEnabled: boolean): string | undefined =>
+      buildStatusMessage({
+        credits: { remaining: 100 },
+        rateLimited: false,
+        cacheStatus: { lastUpdatedAt: new Date(), modelCount: 10 },
+        settings: createMockGuildSettings({ webSearchEnabled }),
+        version: "1.3.2",
+      })
+        .embeds[0]?.toJSON()
+        .fields?.find((f) => f.name === "Web検索")?.value;
+
+    expect(build(true)).toBe("有効");
+    expect(build(false)).toBe("無効");
   });
 
   it("LLM詳細表示が無効の場合は「無効」と表示される", () => {

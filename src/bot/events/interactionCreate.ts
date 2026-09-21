@@ -20,6 +20,7 @@ export interface CommandHandlers {
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configWebSearch: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -108,6 +109,9 @@ export function createInteractionCreateHandler(
                 break;
               case "llm-details":
                 await handlers.configLlmDetails(interaction);
+                break;
+              case "web-search":
+                await handlers.configWebSearch(interaction);
                 break;
             }
           }

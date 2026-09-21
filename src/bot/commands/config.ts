@@ -27,6 +27,18 @@ export const configCommand = new SlashCommandBuilder()
           .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
       ),
   )
+  .addSubcommand((sub) =>
+    sub
+      .setName("web-search")
+      .setDescription("Web検索の切り替え（検索ごとに費用が発生）")
+      .addStringOption((option) =>
+        option
+          .setName("enabled")
+          .setDescription("有効/無効")
+          .setRequired(true)
+          .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+      ),
+  )
   .addSubcommandGroup((group) =>
     group
       .setName("auto-reply")

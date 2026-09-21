@@ -201,6 +201,21 @@ describe("e2e scenarios: check", () => {
     expect(check("image", [page("1", ["COLOR-RED"], USAGE)])).toEqual([]);
   });
 
+  test("search: footer に検索回数があり、本文に「公開日: 2026-08-20」の行があるときだけ通る", () => {
+    const searched = `${USAGE} | Searches: 1`;
+    expect(check("search", [page("1", ["公開日: 2026-08-20"], searched)])).toEqual([]);
+    // 太字や全角コロンで書かれても同じ行として読む
+    expect(check("search", [page("1", ["**公開日：2026-08-20**"], searched)])).toEqual([]);
+    // 検索していない、または本文だけが検索回数を名乗っている
+    expect(check("search", [page("1", ["公開日: 2026-08-20"], USAGE)])).not.toEqual([]);
+    expect(check("search", [page("1", ["公開日: 2026-08-20\nSearches: 1"], USAGE)])).not.toEqual(
+      [],
+    );
+    // 日付違いと、指定の形になっていない回答
+    expect(check("search", [page("1", ["公開日: 2026-08-21"], searched)])).not.toEqual([]);
+    expect(check("search", [page("1", ["2026年8月20日です。"], searched)])).not.toEqual([]);
+  });
+
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {
     expect(check("stop", [page("1", [`川の話。${STOPPED}`], USAGE)])).not.toEqual([]);
     expect(check("stop", [page("1", ["ナイル川は"], STOPPED)])).toEqual([]);

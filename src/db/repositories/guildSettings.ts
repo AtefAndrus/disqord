@@ -15,6 +15,7 @@ interface RawGuildSettings {
   freeModelsOnly: number;
   showLlmDetails: number;
   autoReplyChannels: string | null;
+  webSearchEnabled: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -36,6 +37,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
     freeModelsOnly: Boolean(raw.freeModelsOnly),
     showLlmDetails: Boolean(raw.showLlmDetails ?? 1),
     autoReplyChannels: parseAutoReplyChannels(raw.autoReplyChannels),
+    webSearchEnabled: Boolean(raw.webSearchEnabled),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -51,7 +53,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     const stmt = this.db.query<RawGuildSettings, [string]>(
       `SELECT guild_id as guildId, default_model as defaultModel, free_models_only as freeModelsOnly,
        show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
-       created_at as createdAt, updated_at as updatedAt FROM guild_settings WHERE guild_id = ?`,
+       web_search_enabled as webSearchEnabled, created_at as createdAt, updated_at as updatedAt FROM guild_settings WHERE guild_id = ?`,
     );
     const result = stmt.get(guildId);
     if (!result) return null;
@@ -65,6 +67,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
       freeModelsOnly: settings.freeModelsOnly ?? false,
       showLlmDetails: settings.showLlmDetails ?? true,
       autoReplyChannels: settings.autoReplyChannels ?? [],
+      webSearchEnabled: settings.webSearchEnabled ?? false,
       createdAt: settings.createdAt ?? new Date().toISOString(),
       updatedAt: settings.updatedAt ?? new Date().toISOString(),
     };
@@ -74,13 +77,14 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
 
     this.db
       .query(
-        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, show_llm_details, auto_reply_channels, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO guild_settings (guild_id, default_model, free_models_only, show_llm_details, auto_reply_channels, web_search_enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(guild_id) DO UPDATE SET
          default_model = excluded.default_model,
          free_models_only = excluded.free_models_only,
          show_llm_details = excluded.show_llm_details,
          auto_reply_channels = excluded.auto_reply_channels,
+         web_search_enabled = excluded.web_search_enabled,
          updated_at = excluded.updated_at`,
       )
       .run(
@@ -89,6 +93,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         defaults.freeModelsOnly ? 1 : 0,
         defaults.showLlmDetails ? 1 : 0,
         autoReplyChannelsJson,
+        defaults.webSearchEnabled ? 1 : 0,
         defaults.createdAt,
         defaults.updatedAt,
       );

@@ -343,7 +343,7 @@ export function splitTextIntoMessages(
 }
 
 /**
- * LLM 詳細情報（Tokens/Cost/Model/Latency/Provider/Cached/Reasoning/TPS）の " | " 区切り文字列。
+ * LLM 詳細情報（Tokens/Cost/Model/Latency/Provider/Cached/Reasoning/Searches/TPS）の " | " 区切り文字列。
  * showDetails=false または usage 未取得の場合は undefined。
  */
 export function buildUsageDetailsText(metadata: FinalMetadata): string | undefined {
@@ -373,6 +373,11 @@ export function buildUsageDetailsText(metadata: FinalMetadata): string | undefin
   }
   if (usage.completion_tokens_details?.reasoning_tokens) {
     details.push(`Reasoning: ${usage.completion_tokens_details.reasoning_tokens}`);
+  }
+  // Calls the model made, including those refused past `max_uses`, so this
+  // can exceed the number of searches billed in Cost.
+  if (usage.server_tool_use_details?.web_search_requests) {
+    details.push(`Searches: ${usage.server_tool_use_details.web_search_requests}`);
   }
   if (usage.completion_tokens && metadata.latency) {
     const tokensPerSecond = usage.completion_tokens / (metadata.latency / 1000);

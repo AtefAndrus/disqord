@@ -295,6 +295,7 @@ describe("createMessageCreateHandler", () => {
       freeModelsOnly: false,
       showLlmDetails: true,
       autoReplyChannels: [] as string[],
+      webSearchEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -307,6 +308,7 @@ describe("createMessageCreateHandler", () => {
       toggleShowLlmDetails: mock(() => Promise.resolve(true)),
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
+      setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -436,6 +438,7 @@ describe("createMessageCreateHandler", () => {
             freeModelsOnly: false,
             showLlmDetails: false,
             autoReplyChannels: ["channel-123"],
+            webSearchEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),
@@ -699,6 +702,7 @@ describe("createMessageCreateHandler", () => {
       freeModelsOnly: false,
       showLlmDetails: true,
       autoReplyChannels: ["auto-reply-channel-id"],
+      webSearchEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

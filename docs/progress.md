@@ -27,7 +27,7 @@
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
-| [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | planned | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
+| [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | in-progress | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
 | [セッション分岐 (/fork)](changes/fork/design.md) | 低 | investigating | 会話履歴の途中から新しいセッションへ分岐する /fork（参照コピー・session_id 安定性前提） |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | investigating | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用統計（/stats） |

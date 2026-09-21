@@ -28,6 +28,8 @@ export interface Scenario {
   name: string;
   /** Run only when named on the command line. */
   manual?: boolean;
+  /** What the person running the script has to do in Discord, printed once the prompt is sent. */
+  userAction?: string;
   prompt: string;
   files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
   timeoutMs?: number;
@@ -235,8 +237,32 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // Manual because it passes only after `/config web-search on` in the
+    // guild under test, and every search is billed. The GitHub release
+    // bun-v1.4.0 was published 2026-08-20T14:07:21Z: a fixed answer, unlike
+    // a "latest version" that moves with every release. Naming the tag and
+    // UTC keeps the model from answering a patch release or an announcement
+    // date. A model that already knows the date still passes, so this proves
+    // that a search ran and the answer is right, not that the answer came
+    // from the search.
+    name: "search",
+    manual: true,
+    prompt:
+      "[e2e] Web 検索で、oven-sh/bun の GitHub Release のうちタグ bun-v1.4.0 の公開日を UTC で調べて、「公開日: YYYY-MM-DD」の形の1行で答えて。",
+    check: (reply) => [
+      ...(/(?:^|\|)\s*Searches:\s*[1-9]\d*\s*(?=\||$)/.test(lastPageFooter(reply) ?? "")
+        ? []
+        : ["the usage footer reports no web search (is /config web-search on?)"]),
+      ...(/^公開日:\s*2026-08-20\s*$/m.test(reply.body.normalize("NFKC").replace(/[*`]/g, ""))
+        ? []
+        : ["the reply has no 公開日: 2026-08-20 line"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
     name: "stop",
     manual: true,
+    userAction: "press 停止 on the reply",
     prompt:
       "[e2e: 手動確認] 世界の主要な河川20本をそれぞれ500字以上で解説して。（この返信の「停止」ボタンを押してください）",
     timeoutMs: 600_000,

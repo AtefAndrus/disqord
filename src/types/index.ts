@@ -9,6 +9,7 @@ export interface GuildSettings {
   freeModelsOnly: boolean;
   showLlmDetails: boolean;
   autoReplyChannels: ChannelId[];
+  webSearchEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

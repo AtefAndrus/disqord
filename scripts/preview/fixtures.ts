@@ -62,6 +62,7 @@ const settings: GuildSettings = {
   freeModelsOnly: true,
   showLlmDetails: false,
   autoReplyChannels: ["300000000000000000"],
+  webSearchEnabled: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

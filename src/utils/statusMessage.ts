@@ -45,6 +45,7 @@ export function buildStatusMessage(data: StatusMessageData): {
         inline: true,
       },
       { name: "LLM詳細表示", value: data.settings.showLlmDetails ? "有効" : "無効", inline: true },
+      { name: "Web検索", value: data.settings.webSearchEnabled ? "有効" : "無効", inline: true },
     );
   }
 

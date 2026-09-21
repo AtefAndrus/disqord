@@ -393,6 +393,15 @@ describe("chatContainerBuilder", () => {
       expect(text).toContain("Reasoning: 20");
     });
 
+    test("Web検索を使った応答だけ検索回数を含む", () => {
+      const searched: FinalMetadata = {
+        showDetails: true,
+        usage: { ...usage, server_tool_use_details: { web_search_requests: 2 } },
+      };
+      expect(buildUsageDetailsText(searched)).toContain("Searches: 2");
+      expect(buildUsageDetailsText({ showDetails: true, usage })).not.toContain("Searches");
+    });
+
     test("pageInfo.total>1のときページ番号をprefixする", () => {
       const metadata: FinalMetadata = { showDetails: true, usage };
       const text = buildFinalFooterText(metadata, { page: 2, total: 3 });
