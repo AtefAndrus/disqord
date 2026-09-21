@@ -209,6 +209,32 @@ function estimateMessageTokens(message: ChatMessage): number {
   return estimateContentTokens(message.content);
 }
 
+function estimateHistoricalUserTokens(user: ConversationExchange["user"]): number {
+  const label = user.authorLabel ?? user.authorId ?? "user";
+  let hasText = false;
+  let tokens = 0;
+  for (const part of user.content) {
+    if (part.type === "text") {
+      tokens += estimateTextTokens(hasText ? part.text : `[${label}]: ${part.text}`);
+      hasText = true;
+      continue;
+    }
+    tokens += part.type === "image-ref" ? 1_000 : 2_000;
+  }
+  if (!hasText) {
+    const hasImage = user.content.some((part) => part.type === "image-ref");
+    const hasFile = user.content.some((part) => part.type === "file-ref");
+    const defaultPrompt =
+      hasImage && hasFile
+        ? "添付ファイルについて説明してください。"
+        : hasImage
+          ? "添付された画像について説明してください。"
+          : "添付された文書を要約してください。";
+    tokens += estimateTextTokens(`[${label}]: ${defaultPrompt}`);
+  }
+  return tokens;
+}
+
 function authorPrefixedText(label: string, text: string, parts: ChatMessageContent[]): string {
   if (text.length > 0) return `[${label}]: ${text}`;
   return `[${label}]: ${pickDefaultPrompt(parts)}`;
@@ -250,6 +276,7 @@ async function buildConversationMessages(
   volatileSystemMessages: ChatMessage[],
   webSearchEngine: WebSearchEngine | undefined,
   contextLength: number | null,
+  signal: AbortSignal,
 ): Promise<ChatMessage[]> {
   const budget = contextLength === null ? 16_000 : Math.min(contextLength * 0.5, 32_000);
   const currentPersisted = context.current.content;
@@ -276,7 +303,7 @@ async function buildConversationMessages(
   if (remaining > 0) {
     for (const exchange of [...context.exchanges].reverse()) {
       const exchangeTokens =
-        estimatePersistedContentTokens(exchange.user.content) +
+        estimateHistoricalUserTokens(exchange.user) +
         (exchange.assistant ? estimatePersistedContentTokens(exchange.assistant.content) : 0);
       if (exchangeTokens > remaining) break;
       selected.push(exchange);
@@ -294,7 +321,7 @@ async function buildConversationMessages(
   const historyMessages: ChatMessage[] = [];
   for (const exchange of selected) {
     const strippedContent = strippedById.get(exchange.user.id) ?? exchange.user.content;
-    const hydrated = await hydratePersistedContent(strippedContent);
+    const hydrated = await hydratePersistedContent(strippedContent, fetch, signal);
     historyMessages.push({
       role: "user",
       content: buildHistoricalUserContent(
@@ -433,20 +460,34 @@ export class ChatService implements IChatService {
       if (historyEnabled && input.conversation) {
         let contextLength: number | null = null;
         try {
-          contextLength =
-            (await this.modelService.getModelDetails(settings.defaultModel))?.contextLength ?? null;
+          const detailsResult = await raceWithAbort(
+            this.modelService.getModelDetails(settings.defaultModel),
+            controller.signal,
+          );
+          if (!detailsResult.ok) {
+            return { status: "cancelled", history: initialMessages };
+          }
+          contextLength = detailsResult.value?.contextLength ?? null;
         } catch {
           contextLength = null;
         }
-        const built = await buildConversationMessages(
-          input,
-          tweetParts,
-          input.conversation,
-          leadingSystemMessages,
-          volatileSystemMessages,
-          settings.webSearchEnabled ? this.webSearchEngine : undefined,
-          contextLength,
+        const builtResult = await raceWithAbort(
+          buildConversationMessages(
+            input,
+            tweetParts,
+            input.conversation,
+            leadingSystemMessages,
+            volatileSystemMessages,
+            settings.webSearchEnabled ? this.webSearchEngine : undefined,
+            contextLength,
+            controller.signal,
+          ),
+          controller.signal,
         );
+        if (!builtResult.ok) {
+          return { status: "cancelled", history: initialMessages };
+        }
+        const built = builtResult.value;
         request = buildChatRequest(settings.defaultModel, input, tweetParts, built);
       } else {
         const currentMessages = buildChatMessages(input, tweetParts);
@@ -483,7 +524,9 @@ export class ChatService implements IChatService {
             message.role === "user" && Array.isArray(message.content)
               ? {
                   ...message,
-                  content: message.content.filter((part) => part.type !== "image_url"),
+                  content: message.content.filter(
+                    (part) => part.type !== "image_url" || !expansion?.imageParts.includes(part),
+                  ),
                 }
               : message,
           ),

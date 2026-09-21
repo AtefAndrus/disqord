@@ -117,7 +117,11 @@ describe("conversation content helpers", () => {
       },
       { type: "text", text: "[file unavailable: gone.pdf]" },
     ]);
-    expect(fetcher).toHaveBeenNthCalledWith(1, "https://cdn.test/ok.pdf");
-    expect(fetcher).toHaveBeenNthCalledWith(2, "https://cdn.test/gone.pdf");
+    expect(fetcher).toHaveBeenNthCalledWith(1, "https://cdn.test/ok.pdf", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(fetcher).toHaveBeenNthCalledWith(2, "https://cdn.test/gone.pdf", {
+      signal: expect.any(AbortSignal),
+    });
   });
 });

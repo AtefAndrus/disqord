@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createRawEventHandler } from "../../../../src/bot/events/raw";
 import {
   ConversationRepository,
@@ -73,6 +73,23 @@ describe("raw conversation deletion events", () => {
 
     expect(turnCount()).toBe(0);
     expect(deletedBeforeSave.hasMessage("user-delete")).toBe(true);
+  });
+
+  test("purge failures are logged and do not reject the raw handler", async () => {
+    repository.purgeMessage = async () => {
+      throw new Error("message content must not be logged");
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const handle = createRawEventHandler(repository, deletedBeforeSave);
+
+    await expect(handle({ t: "MESSAGE_DELETE", d: { id: "deleted-message" } })).resolves.toBe(
+      undefined,
+    );
+
+    expect(errorSpy).toHaveBeenCalledWith("Failed to handle raw Discord event", "Error");
+    expect(errorSpy.mock.calls.flat()).not.toContain("message content must not be logged");
+    expect(deletedBeforeSave.hasMessage("deleted-message")).toBe(true);
+    errorSpy.mockRestore();
   });
 
   test("MESSAGE_DELETE_BULK purges all mapped exchanges and remembers every id", async () => {

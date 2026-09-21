@@ -94,17 +94,13 @@ async function bootstrap(): Promise<void> {
 
   const client = await createBotClient();
   const rawEventHandler = createRawEventHandler(conversationRepository, deletedBeforeSave);
-  const ttlTimer = setInterval(
-    () => {
-      void conversationRepository.sweepExpired();
-    },
-    24 * 60 * 60 * 1000,
-  );
   client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
   client.on(Events.Raw, (packet) => {
-    void rawEventHandler(packet);
+    void rawEventHandler(packet).catch(() => {
+      console.error("Failed to handle raw Discord event");
+    });
   });
 
   metrics.attach({ client });
@@ -121,6 +117,13 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
+  const ttlTimer = setInterval(
+    () => {
+      void conversationRepository.sweepExpired();
+    },
+    24 * 60 * 60 * 1000,
+  );
+  ttlTimer.unref();
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);

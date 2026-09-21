@@ -9,6 +9,7 @@ export function getDatabase(): Database {
     dbInstance = new Database(databasePath, { create: true });
     dbInstance.run("PRAGMA journal_mode = WAL");
     dbInstance.run("PRAGMA foreign_keys = ON");
+    dbInstance.run("PRAGMA busy_timeout = 5000");
     applyMigrations(dbInstance);
   }
 

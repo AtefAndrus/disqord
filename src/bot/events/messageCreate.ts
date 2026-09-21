@@ -272,18 +272,18 @@ export function createMessageCreateHandler(
       discordCreatedAt: messageCreatedAt(message),
       handlingStartedAt,
     };
-    if (conversationRepository) {
-      const turnResult = await conversationRepository.createUserAndAssistantTurn(createInput);
-      if (turnResult.duplicate) return;
-      if (turnResult.skipResponse) return;
-      assistantTurnId = turnResult.assistantTurnId;
-      if (turnResult.created && turnResult.userTurnId !== undefined) {
-        historyContext =
-          (await conversationRepository.getContext(turnResult.userTurnId)) ?? undefined;
-      }
-    }
-
     try {
+      if (conversationRepository) {
+        const turnResult = await conversationRepository.createUserAndAssistantTurn(createInput);
+        if (turnResult.duplicate) return;
+        if (turnResult.skipResponse) return;
+        assistantTurnId = turnResult.assistantTurnId;
+        if (turnResult.created && turnResult.userTurnId !== undefined) {
+          historyContext =
+            (await conversationRepository.getContext(turnResult.userTurnId)) ?? undefined;
+        }
+      }
+
       // 初期メッセージ送信（Components V2、停止ボタン付き Section）
       const initialContainer = buildStreamingContainer({
         text: "生成中...",
@@ -294,7 +294,6 @@ export function createMessageCreateHandler(
         triggerMessageId: message.id,
       });
       const initialBotMessage = await message.channel.send(toComponentsV2Payload(initialContainer));
-      await botMessageCreated(initialBotMessage);
       updater = new DiscordStreamingUpdater(
         message,
         initialBotMessage,
@@ -303,6 +302,7 @@ export function createMessageCreateHandler(
         deleteMessage,
         botMessageCreated,
       );
+      await botMessageCreated(initialBotMessage);
 
       const startTime = Date.now();
       const result = await chatService.generateChatResponse(

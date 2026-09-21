@@ -5,6 +5,7 @@ export const SESSION_GAP_MS = 60 * 60 * 1000;
 export const DELETED_RECORD_TTL_MS = 15 * 60 * 1000;
 export const TURN_SAVE_MAX_AGE_MS = 10 * 60 * 1000;
 export const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const PDF_FETCH_TIMEOUT_MS = 30_000;
 
 export type PersistedContentPart =
   | { type: "text"; text: string }
@@ -298,6 +299,7 @@ export function estimatePersistedContentTokens(content: readonly PersistedConten
 export async function hydratePersistedContent(
   content: readonly PersistedContentPart[],
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ChatMessageContent[]> {
   const hydrated: ChatMessageContent[] = [];
   for (const part of content) {
@@ -310,7 +312,9 @@ export async function hydratePersistedContent(
       continue;
     }
     try {
-      const response = await fetcher(part.url);
+      const timeoutSignal = AbortSignal.timeout(PDF_FETCH_TIMEOUT_MS);
+      const fetchSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+      const response = await fetcher(part.url, { signal: fetchSignal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const base64 = Buffer.from(await response.arrayBuffer()).toString("base64");
       hydrated.push({
@@ -386,6 +390,20 @@ export class ConversationRepository implements IConversationRepository {
   async createUserAndAssistantTurn(
     input: CreateConversationTurnInput,
   ): Promise<CreateConversationTurnResult> {
+    const historyEnabled =
+      (this.db
+        .query<{ historyEnabled: number }, [string]>(
+          "SELECT history_enabled as historyEnabled FROM guild_settings WHERE guild_id = ?",
+        )
+        .get(input.guildId)?.historyEnabled ?? 0) === 1;
+    if (!historyEnabled) {
+      return {
+        historyEnabled: false,
+        created: false,
+        duplicate: false,
+        skippedReason: "disabled",
+      };
+    }
     return this.createTurnInTransaction.immediate(input);
   }
 
@@ -413,6 +431,7 @@ export class ConversationRepository implements IConversationRepository {
       )
       .get(currentRow.sessionId);
     if (!session) return null;
+    if (this.isTurnDeleted(userTurnId, session)) return null;
 
     const userRows = this.db
       .query<RawTurn, [number]>(
@@ -423,6 +442,7 @@ export class ConversationRepository implements IConversationRepository {
       )
       .all(currentRow.sessionId)
       .filter((row) => row.id !== userTurnId)
+      .filter((row) => !this.isTurnDeleted(row.id, session))
       .filter((row) => {
         if (row.discordCreatedAt < currentRow.discordCreatedAt) return true;
         if (row.discordCreatedAt > currentRow.discordCreatedAt) return false;
@@ -452,6 +472,7 @@ export class ConversationRepository implements IConversationRepository {
            ORDER BY id DESC LIMIT 1`,
         )
         .get(userRow.id);
+      if (assistantRow && this.isTurnDeleted(assistantRow.id, session)) continue;
       const assistant =
         assistantRow &&
         (assistantRow.status === "completed" || assistantRow.status === "stopped") &&
@@ -704,20 +725,19 @@ export class ConversationRepository implements IConversationRepository {
         skippedReason: "too-old",
       };
     }
-    if (
-      this.deletedBeforeSave.hasTurnBeenDeleted(
-        input.discordMessageId,
-        input.channelId,
-        input.parentChannelId,
-        input.guildId,
-      )
-    ) {
+    const messageDeleted = this.deletedBeforeSave.hasMessage(input.discordMessageId);
+    const scopeDeleted = this.deletedBeforeSave.hasScope(
+      input.channelId,
+      input.parentChannelId,
+      input.guildId,
+    );
+    if (messageDeleted || scopeDeleted) {
       return {
         historyEnabled: true,
         created: false,
         duplicate: false,
         skippedReason: "deleted",
-        skipResponse: true,
+        skipResponse: messageDeleted,
       };
     }
 
@@ -817,6 +837,20 @@ export class ConversationRepository implements IConversationRepository {
         )
         .get(turnId)?.discordMessageId ?? null
     );
+  }
+
+  private isTurnDeleted(turnId: number, session: RawSession): boolean {
+    if (
+      this.deletedBeforeSave.hasScope(session.channelId, session.parentChannelId, session.guildId)
+    ) {
+      return true;
+    }
+    return this.db
+      .query<{ discordMessageId: string }, [number]>(
+        "SELECT discord_msg_id as discordMessageId FROM turn_messages WHERE turn_id = ?",
+      )
+      .all(turnId)
+      .some(({ discordMessageId }) => this.deletedBeforeSave.hasMessage(discordMessageId));
   }
 
   private toPersistedTurn(row: RawTurn): PersistedTurn | null {

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bu
 import {
   ConversationRepository,
   type CreateConversationTurnInput,
+  type CreateConversationTurnResult,
   DELETED_RECORD_TTL_MS,
   DeletedBeforeSaveRecord,
   HISTORY_RETENTION_MS,
@@ -81,7 +82,7 @@ describe("ConversationRepository", () => {
     }
   });
 
-  test("does not write when history is disabled, and re-reads the setting before the transaction", async () => {
+  test("does not write when history is disabled", async () => {
     await settings.setHistoryEnabled("guild-1", false);
     const result = await repository.createUserAndAssistantTurn(input("disabled"));
 
@@ -93,12 +94,41 @@ describe("ConversationRepository", () => {
     expect(rows("sessions")).toHaveLength(0);
     expect(rows("turns")).toHaveLength(0);
     expect(rows("turn_messages")).toHaveLength(0);
+  });
 
-    await settings.setHistoryEnabled("guild-1", true);
-    await settings.setHistoryEnabled("guild-1", false);
-    const rechecked = await repository.createUserAndAssistantTurn(input("rechecked"));
+  test("re-reads history_enabled after the outside read and before saving", async () => {
+    type ImmediateTransaction = {
+      immediate: (turnInput: CreateConversationTurnInput) => CreateConversationTurnResult;
+    };
+    const originalTransaction = db.transaction.bind(db) as unknown as (
+      callback: unknown,
+    ) => ImmediateTransaction;
+    let interceptCreateTurn = true;
+    const hookedDb = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property === "query") return target.query.bind(target);
+        if (property !== "transaction") return Reflect.get(target, property, receiver);
+        return (callback: unknown): ImmediateTransaction => {
+          const transaction = originalTransaction(callback);
+          if (!interceptCreateTurn) return transaction;
+          interceptCreateTurn = false;
+          return {
+            immediate: (turnInput) => {
+              db.query("UPDATE guild_settings SET history_enabled = 0 WHERE guild_id = ?").run(
+                "guild-1",
+              );
+              return transaction.immediate(turnInput);
+            },
+          };
+        };
+      },
+    }) as unknown as Database;
+    const hookedRepository = new ConversationRepository(hookedDb, deletedBeforeSave);
+
+    const rechecked = await hookedRepository.createUserAndAssistantTurn(input("rechecked"));
     expect(rechecked.skippedReason).toBe("disabled");
     expect(rows("turns")).toHaveLength(0);
+    expect(rows("sessions")).toHaveLength(0);
   });
 
   test("is idempotent for a duplicate Discord message", async () => {
@@ -120,33 +150,39 @@ describe("ConversationRepository", () => {
     expect(rows("turns")).toHaveLength(0);
   });
 
-  test("skips IDs and scopes remembered before the user turn exists", async () => {
+  test("an own deleted message skips the response", async () => {
     deletedBeforeSave.recordMessage("deleted-message");
-    expect(
-      (await repository.createUserAndAssistantTurn(input("deleted-message"))).skippedReason,
-    ).toBe("deleted");
+    const result = await repository.createUserAndAssistantTurn(input("deleted-message"));
+    expect(result).toMatchObject({ skippedReason: "deleted", skipResponse: true });
+    expect(rows("turns")).toHaveLength(0);
+  });
 
+  test("a deleted channel skips saving but still answers", async () => {
     deletedBeforeSave.recordChannel("channel-1");
-    expect(
-      (await repository.createUserAndAssistantTurn(input("deleted-channel"))).skippedReason,
-    ).toBe("deleted");
+    const result = await repository.createUserAndAssistantTurn(input("deleted-channel"));
+    expect(result).toMatchObject({ skippedReason: "deleted", skipResponse: false });
+    expect(rows("turns")).toHaveLength(0);
+  });
 
+  test("a deleted thread parent skips saving but still answers", async () => {
     deletedBeforeSave.recordChannel("parent-channel");
-    expect(
-      (
-        await repository.createUserAndAssistantTurn(
-          input("deleted-parent", NOW, {
-            channelId: "thread-1",
-            parentChannelId: "parent-channel",
-          }),
-        )
-      ).skippedReason,
-    ).toBe("deleted");
+    const result = await repository.createUserAndAssistantTurn(
+      input("deleted-parent", NOW, {
+        channelId: "thread-1",
+        parentChannelId: "parent-channel",
+      }),
+    );
+    expect(result).toMatchObject({ skippedReason: "deleted", skipResponse: false });
+    expect(rows("turns")).toHaveLength(0);
+  });
 
+  test("a deleted guild skips saving but still answers without a channel match", async () => {
     deletedBeforeSave.recordGuild("guild-1");
-    expect(
-      (await repository.createUserAndAssistantTurn(input("deleted-guild"))).skippedReason,
-    ).toBe("deleted");
+    const result = await repository.createUserAndAssistantTurn(
+      input("deleted-guild", NOW, { channelId: "guild-only-channel" }),
+    );
+    expect(result).toMatchObject({ skippedReason: "deleted", skipResponse: false });
+    expect(rows("turns")).toHaveLength(0);
   });
 
   test("expires deleted-before-save records after fifteen minutes", () => {
@@ -229,6 +265,46 @@ describe("ConversationRepository", () => {
     expect(rows("turns")).toHaveLength(2);
     expect(rows("sessions")).toHaveLength(1);
     expect(rows("turn_messages")).toHaveLength(1);
+  });
+
+  test("mapping and finalize are no-ops after an exchange has already been purged", async () => {
+    const created = await repository.createUserAndAssistantTurn(input("purged-race"));
+    const assistantTurnId = required(created.assistantTurnId);
+    await repository.onBotMessageSent(assistantTurnId, "purged-bot", NOW + 1);
+    expect(await repository.purgeMessage("purged-bot")).toBe(true);
+
+    expect(await repository.onBotMessageSent(assistantTurnId, "late-bot", NOW + 2)).toBe(false);
+    expect(await repository.finalizeAssistantTurn(assistantTurnId, "completed", "late")).toBe(
+      false,
+    );
+    expect(rows("turns")).toHaveLength(0);
+    expect(rows("turn_messages")).toHaveLength(0);
+  });
+
+  test("deleting any assistant chunk purges the entire exchange", async () => {
+    const created = await repository.createUserAndAssistantTurn(input("split-user"));
+    const assistantTurnId = required(created.assistantTurnId);
+    await repository.onBotMessageSent(assistantTurnId, "split-bot-1", NOW + 1);
+    await repository.onBotMessageSent(assistantTurnId, "split-bot-2", NOW + 2);
+    await repository.finalizeAssistantTurn(assistantTurnId, "completed", "split reply", NOW + 3);
+
+    expect(await repository.purgeMessage("split-bot-2")).toBe(true);
+    expect(rows("turns")).toHaveLength(0);
+    expect(rows("sessions")).toHaveLength(0);
+  });
+
+  test("context excludes an exchange whose mapped message was deleted before purge", async () => {
+    const old = await repository.createUserAndAssistantTurn(input("context-old"));
+    const oldAssistantTurnId = required(old.assistantTurnId);
+    await repository.onBotMessageSent(oldAssistantTurnId, "context-old-bot-1", NOW + 1);
+    await repository.onBotMessageSent(oldAssistantTurnId, "context-old-bot-2", NOW + 2);
+    await repository.finalizeAssistantTurn(oldAssistantTurnId, "completed", "old reply", NOW + 3);
+
+    const current = await repository.createUserAndAssistantTurn(input("context-current", NOW + 4));
+    deletedBeforeSave.recordMessage("context-old-bot-2");
+
+    const context = await repository.getContext(required(current.userTurnId));
+    expect(context?.exchanges).toHaveLength(0);
   });
 
   test("includes only assistant turns finalized before the current message", async () => {

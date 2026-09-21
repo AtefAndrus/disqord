@@ -146,18 +146,22 @@ function createMockConversationRepository(
     assistantTurnId: 2,
   },
 ): IConversationRepository & {
+  createUserAndAssistantTurn: ReturnType<typeof mock>;
   onBotMessageSent: ReturnType<typeof mock>;
   deleteMessageMapping: ReturnType<typeof mock>;
+  finalizeAssistantTurn: ReturnType<typeof mock>;
 } {
   const onBotMessageSent = mock(() => Promise.resolve(true));
   const deleteMessageMapping = mock(() => Promise.resolve(true));
+  const createUserAndAssistantTurn = mock(() => Promise.resolve(result));
+  const finalizeAssistantTurn = mock(() => Promise.resolve(true));
   return {
-    createUserAndAssistantTurn: mock(() => Promise.resolve(result)),
+    createUserAndAssistantTurn,
     getContext: mock(() => Promise.resolve(null)),
     createAssistantTurn: mock(() => Promise.resolve(null)),
     onBotMessageSent,
     deleteMessageMapping,
-    finalizeAssistantTurn: mock(() => Promise.resolve(true)),
+    finalizeAssistantTurn,
     failPendingTurns: mock(() => Promise.resolve(0)),
     purgeMessage: mock(() => Promise.resolve(false)),
     purgeMessages: mock(() => Promise.resolve(false)),
@@ -655,8 +659,58 @@ describe("createMessageCreateHandler", () => {
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
-  test("初期送信と最終描画の追加送信を同じ写像関数へ渡す", async () => {
+  test("初期写像の失敗でもplaceholderをクリーンアップする", async () => {
     const conversationRepository = createMockConversationRepository();
+    conversationRepository.onBotMessageSent.mockImplementationOnce(async () => {
+      throw new Error("mapping failed");
+    });
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(mockBotMessage.delete).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledWith(2, "failed", "");
+  });
+
+  test("履歴保存の失敗は通常のfatal error処理に入る", async () => {
+    const conversationRepository = createMockConversationRepository();
+    conversationRepository.createUserAndAssistantTurn.mockImplementationOnce(async () => {
+      throw new Error("history save failed");
+    });
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockReply).toHaveBeenCalledTimes(1);
+  });
+
+  test("送信済みmessageの実IDを順序どおり写像し、完了後に一度だけfinalizeする", async () => {
+    const conversationRepository = createMockConversationRepository();
+    const events: string[] = [];
+    const mappedIds: string[] = [];
+    conversationRepository.onBotMessageSent.mockImplementation(async (_turnId, messageId) => {
+      mappedIds.push(messageId);
+      events.push(`map:${messageId}`);
+      return true;
+    });
+    conversationRepository.finalizeAssistantTurn.mockImplementation(
+      async (_turnId: number, status: "completed" | "failed" | "stopped") => {
+        events.push(`finalize:${status}`);
+        return true;
+      },
+    );
     (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
       createMockChatResponseFn("x".repeat(10_000)),
     );
@@ -669,12 +723,20 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
-    expect(conversationRepository.onBotMessageSent.mock.calls[0]?.[1]).toBe("bot-msg-123");
+    const sentIds = [mockBotMessage.id, ...extraBotMessages.map((message) => message.id)];
+    expect(mappedIds).toEqual(sentIds);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn.mock.calls[0]?.[1]).toBe("completed");
+    expect(events.at(-1)).toBe("finalize:completed");
   });
 
   test("停止表示の追加送信を写像する", async () => {
     const conversationRepository = createMockConversationRepository();
+    const mappedIds: string[] = [];
+    conversationRepository.onBotMessageSent.mockImplementation(async (_turnId, messageId) => {
+      mappedIds.push(messageId);
+      return true;
+    });
     (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
       createCancelledChatResponseFn("x".repeat(10_000)),
     );
@@ -687,11 +749,19 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+    const sentIds = [mockBotMessage.id, ...extraBotMessages.map((message) => message.id)];
+    expect(mappedIds).toEqual(sentIds);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn.mock.calls[0]?.[1]).toBe("stopped");
   });
 
   test("致命的エラー時の部分文追加送信を写像する", async () => {
     const conversationRepository = createMockConversationRepository();
+    const mappedIds: string[] = [];
+    conversationRepository.onBotMessageSent.mockImplementation(async (_turnId, messageId) => {
+      mappedIds.push(messageId);
+      return true;
+    });
     (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
       createFatalErrorChatResponseFn("x".repeat(10_000), new Error("fatal")),
     );
@@ -704,11 +774,19 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+    const sentIds = [mockBotMessage.id, ...extraBotMessages.map((message) => message.id)];
+    expect(mappedIds).toEqual(sentIds);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn.mock.calls[0]?.[1]).toBe("failed");
   });
 
   test("ストリーミング中の追加送信を写像する", async () => {
     const conversationRepository = createMockConversationRepository();
+    const mappedIds: string[] = [];
+    conversationRepository.onBotMessageSent.mockImplementation(async (_turnId, messageId) => {
+      mappedIds.push(messageId);
+      return true;
+    });
     (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
       createTimedChatResponseFn(
         [{ content: "x".repeat(4_000), advanceMs: 2_100 }],
@@ -724,7 +802,52 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    expect(conversationRepository.onBotMessageSent.mock.calls.length).toBeGreaterThan(1);
+    const sentIds = [mockBotMessage.id, ...extraBotMessages.map((message) => message.id)];
+    expect(mappedIds).toEqual(sentIds);
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn.mock.calls[0]?.[1]).toBe("completed");
+  });
+
+  test("fatal cleanup completes deletes before finalizing the failed turn", async () => {
+    const conversationRepository = createMockConversationRepository();
+    const events: string[] = [];
+    conversationRepository.onBotMessageSent.mockImplementation(async (_turnId, messageId) => {
+      events.push(`map:${messageId}`);
+      return true;
+    });
+    conversationRepository.deleteMessageMapping.mockImplementation(async (messageId) => {
+      events.push(`mapping-delete:${messageId}`);
+      return true;
+    });
+    mockBotMessage.delete.mockImplementation(async () => {
+      events.push(`delete:${mockBotMessage.id}`);
+    });
+    conversationRepository.finalizeAssistantTurn.mockImplementation(
+      async (_turnId: number, status: "completed" | "failed" | "stopped") => {
+        events.push(`finalize:${status}`);
+        return true;
+      },
+    );
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createFatalErrorChatResponseFn("", new Error("fatal")),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationRepository },
+    );
+
+    await handler(mockMessage as never);
+
+    expect(conversationRepository.finalizeAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(conversationRepository.finalizeAssistantTurn.mock.calls[0]?.[1]).toBe("failed");
+    expect(events).toEqual([
+      "map:bot-msg-123",
+      "mapping-delete:bot-msg-123",
+      "delete:bot-msg-123",
+      "finalize:failed",
+    ]);
   });
 
   test("内部削除は写像を消してからDiscordのdeleteを呼ぶ", async () => {
