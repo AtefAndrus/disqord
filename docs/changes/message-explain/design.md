@@ -61,7 +61,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 - 修正: `src/bot/events/interactionCreate.ts` — `isChatInputCommand()` の判定より前に `isMessageContextMenuCommand()` の分岐を置く。今は chat input 以外を無言で捨てている（52 行目）。この分岐は既存の try/catch の外に出るので、エラー処理は `explainCommand.ts` が持つ。
 - 修正: `src/services/chatService.ts` — `ChatUserInput.systemPrompt` を受け、`buildChatMessages()` で `system` メッセージを先頭に置く。
 - 修正: `src/bot/events/streamingUpdater.ts`、`src/bot/events/messageCreate.ts` — Discord への書き込み（編集、追加送信、削除）を送信先の差し替え口経由にし、最終描画、停止表示、エラー時の後始末の関数を両経路から使える場所へ移す。
-- 修正: `src/utils/logger.ts` — 書き出す行から interaction と webhook の URL の token を伏せる。
+- 修正: `src/utils/logger.ts` — `Error` の内容を残す形で直列化し、書き出す行から interaction と webhook の URL の token を伏せる。
 - 修正: `src/llm/toolLoop.ts` — updater の callback の例外を `console` へ直接出している箇所を logger 経由にする。
 - 修正: `scripts/generate-readme.ts` — `generateCommandTable()` に渡す前に chat input 以外を除く。
 - 修正: `src/bot/commands/handlers.ts` — `/help` の手書きのコマンド一覧に解説コマンドを 1 行足す。
@@ -90,7 +90,9 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 転送メッセージ（`message_reference.type` が Forward）は `messageSnapshots` の内容を使い、転送元を取りに行かない。
 返信先は、メッセージが `MessageType.Reply` で、`message_reference.type` が Default のときだけ取得する。
 Discord は `type` の省略を Default と定めているが、discord.js は省略時に `undefined` のまま渡す（`node_modules/discord.js/src/structures/Message.js:376`）ので、`type ?? MessageReferenceType.Default` で比べる。
-取得は上限時間つきの 1 回だけにし、失敗（削除済み、`VIEW_CHANNEL` や `READ_MESSAGE_HISTORY` の不足、ボイスチャンネルのテキストでの `CONNECT` の不足、タイムアウト）したら返信先なしで続け、解説の末尾にその旨を注記する。
+取得は `fetchReference()` を使わず、reference の `channelId` のチャンネルを `client.channels.fetch()` で得てから、`messages.fetch({ message: messageId, force: true })` で上限時間つきの 1 回だけ取る。
+`fetchReference()` はキャッシュ済みのチャンネルを前提とし（`node_modules/discord.js/src/structures/Message.js:798`）、`force` を付けずに取得するので、キャッシュにある返信先を今の権限や削除の有無を確かめずにそのまま返す（`node_modules/discord.js/src/managers/MessageManager.js:104-108`）。
+取得に失敗（削除済み、`VIEW_CHANNEL` や `READ_MESSAGE_HISTORY` の不足、ボイスチャンネルのテキストでの `CONNECT` の不足、タイムアウト）したら返信先なしで続け、解説の末尾にその旨を注記する。
 返信先から使うのはテキストだけで、添付は含めない。
 
 ### 締め切りとエラー処理
@@ -107,8 +109,11 @@ Discord は `type` の省略を Default と定めているが、discord.js は�
 
 interaction 版の送信先は、書き込みを 1 本の待ち行列で 1 件ずつ実行する。
 そのため、閉じる前に受け付けた編集や追加送信は必ず 3 の停止表示より先に終わり、後から完了して停止表示を上書きすることがない。
-閉じた後に完了した追加送信（停止ボタン付きの新しいメッセージ、または最終描画の続きのページ）は、送信先自身が削除する。
-この削除は待ち行列の中で停止表示より先に実行され、時間の上限を置かない。
+待ち行列の 1 件が失敗しても、後続の書き込みは実行する。
+
+閉じた後に完了した追加送信（停止ボタン付きの新しいメッセージ、または最終描画の続きのページ）は、送信先が取り残されたメッセージとして記録し、停止表示を書く対象のメッセージから外す。
+取り残されたメッセージの削除は、停止表示の書き込みの後に行い、時間の上限を置かない。
+削除を停止表示より後にするのは、削除が rate limit の待ちで長引いても、優先すべき停止表示の書き込みを遅らせないためである。
 既存の finalize 後の後始末（`src/bot/events/streamingUpdater.ts:125-139`）と同じ扱いを、閉じた送信先の中で行う形である。
 書き込みの直列化は、interaction token の経路の rate limit が分からない間、同時に複数の書き込みを出さない効果もある。
 
@@ -144,6 +149,10 @@ Discord のエラーに触れうるログがこの 1 か所を通るように、
 updater は Discord へ書き込むので、その例外は token を含む URL を持ちうる。
 logger を通らない残りの `console.error` は `src/utils/logFile.ts` のファイル書き込みの失敗だけで、Discord のエラーを受け取らない。
 こうすれば、エラーの種類や呼び出し元ごとに対処しなくてよい。
+
+ただし今の logger は `Error` を `{}` として書き出す（設計メモ）ので、`console.error` から logger へ移すだけでは callback の例外の内容が消える。
+そこで logger の直列化で `Error` を `name`、`message`、`stack` と列挙可能な項目（`DiscordAPIError` の `url`、`status`、`code` など）を持つオブジェクトに直し、その後の 1 行に token の置き換えを掛ける。
+既存の `logger.error(..., { error })` の呼び出しも、これでエラーの内容が残るようになる。
 置き換えは文字列に対して行うので、URL がエラーの `url` と `message` のどちらに入っていても伏せられる。
 管理 API のログ取得（[docs/admin-api.md](../../admin-api.md)）はこの logger が書いたログファイルを返すので、同じく伏せた後の行になる。
 
@@ -179,18 +188,18 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 - その JSON を今の `generateCommandTable()` に渡すと、説明欄が `undefined` の行 ``| `/解説する` | undefined |`` ができる（同上）。生成スクリプトで chat input 以外を除く理由である。
 - tool registry は空のまま渡されており（`src/index.ts:45-48`）、1 turn のストリームの上限は 10 分である（`src/llm/toolLoop.ts:130`）。
 - `chatService` が requestId を登録するのは `generateChatResponse()` の実行中だけで、呼び出し元の最終描画に入る前に外す（`src/services/chatService.ts:193-233`）。`cancelRequest()` だけでは締め切りを守れず、送信先を閉じる必要がある理由である。
-- discord.js の `fetchReference()` はキャッシュ済みのチャンネルから `channel.messages.fetch()` を呼ぶ（`node_modules/discord.js/src/structures/Message.js:798`）。
+- logger は `meta` を `JSON.stringify` するだけで（`src/utils/logger.ts:13`）、`Error` の `message` と `stack` は列挙されないため `{}` になる。
 
 ### テスト
 
 - e2e（`bun run e2e`）では検証できない。テスト bot は REST でメッセージを投稿して返信を読む仕組みで、message command の実行はクライアント上の人の操作から始まるためである。
 - 材料の組み立ては、本文、入れ子の V2、embed の field、転送の snapshot（V2 と添付を含む）、返信先の成功と失敗、添付の組み合わせで確かめる。返信先の判定は、reference の `type` が Default、省略、Forward の 3 通りで確かめる。
 - 解説経路は、空入力、添付の拒否、モデル非対応、defer の失敗、token 失効時の書き込み失敗で確かめる。
-- 締め切りは、解決しないモデル情報の取得の途中、元応答の編集中、生成中、複数通の最終描画の途中のそれぞれで来た場合を、解決を手で制御する promise で確かめる。どの場合も、締め切り後に通常の描画と生成の開始が行われないこと、締め切り前に受け付けた編集と追加送信が停止表示より先に完了すること、閉じた後に完了した追加送信（停止ボタン付きのものと、ボタンの無い最終描画の続き）が削除されること、表示の書き込みが停止表示の 1 回だけであることを、最終的に残るメッセージの内容で確かめる。
+- 締め切りは、解決しないモデル情報の取得の途中、元応答の編集中、生成中、複数通の最終描画の途中のそれぞれで来た場合を、解決を手で制御する promise で確かめる。どの場合も、締め切り後に通常の描画と生成の開始が行われないこと、締め切り前に受け付けた編集と追加送信が停止表示より先に完了すること、閉じた後に完了した追加送信（停止ボタン付きのものと、ボタンの無い最終描画の続き）が停止表示の後に削除されること、その削除が終わらないままでも停止表示の書き込みが行われること、待ち行列の 1 件の失敗が後続を止めないこと、表示の書き込みが停止表示の 1 回だけであることを、最終的に残るメッセージの内容で確かめる。
 - 生成後のエラーは、プレースホルダーだけでテキストが無い場合、複数通の部分テキストがある場合、エラー表示の書き込み自体が失敗する場合で確かめ、停止ボタンが外れること、部分テキストが残ること、エラーの followup が ephemeral で V2 であることを確かめる。
-- 偽の token を含む `DiscordAPIError` と `HTTPError`（callback と webhook の両方の URL）を logger に渡し、書き出された行に token が含まれないことを確かめる。同じエラーを `runToolLoop()` の updater の callback から同期的な throw と非同期の reject の両方で投げ、コンソールとログファイルのどちらにも token が出ないことを確かめる。rate limit 情報は許可した項目だけが出ることを別に確かめる。
+- 偽の token を含む `DiscordAPIError` と `HTTPError`（callback と webhook の両方の URL）を logger に渡し、書き出された行に token が含まれず、エラーの `message` は残ることを確かめる。同じエラーを `runToolLoop()` の updater の callback から同期的な throw と非同期の reject の両方で投げ、コンソールとログファイルのどちらにも token が出ないことを確かめる。rate limit 情報は許可した項目だけが出ることを別に確かめる。
 - defer の失敗は、Discord が無効と返した場合と通信の失敗の場合の両方で、LLM が呼ばれないことを確かめる。
-- 返信先の取得の失敗は、`CONNECT` の不足を含めて、返信先なしで解説が続き注記が付くことを確かめる。
+- 返信先の取得の失敗は、`CONNECT` の不足を含めて、返信先なしで解説が続き注記が付くことを確かめる。返信先がキャッシュにあっても REST が権限不足や削除済みを返す場合に、キャッシュの本文を使わないことを確かめる。
 - interaction 版の送信先は、ストリーミング中の追加送信、停止、最終描画、余剰の削除要求、中立化、finalize 後の送信の後始末のそれぞれで、webhook の操作だけが呼ばれ（チャンネル API が呼ばれない）、followup に `Ephemeral` と `IsComponentsV2` が付き、正しいメッセージ ID を編集することを確かめる。
 - `systemPrompt` が `system` メッセージとして先頭に入ることを確かめる。
 - チャンネル版の送信先に置き換えた後も、既存の `messageCreate` と `streamingUpdater` のテストがそのまま通ることを確かめる。
