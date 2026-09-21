@@ -33,7 +33,13 @@ Confirm the first release heading is `## [<version>]` rather than `## [Unrelease
 
 ## Step 3: Prune released change docs
 
-Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`.
+Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`, rewriting the links other documents make into those folders to permalinks at the current commit:
+
+```bash
+bun scripts/prune-released-changes.ts
+```
+
+Run it before committing anything under `docs/changes/`: it refuses to run when that directory has uncommitted changes, because the permalinks point at HEAD.
 `docs/progress.md` is generated from the remaining folders' frontmatter, so do not edit it by hand.
 Step 5 commits with `LEFTHOOK=0`, which skips the pre-commit generator, so regenerate it explicitly:
 

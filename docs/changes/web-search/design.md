@@ -16,8 +16,8 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 
 ## 依存 / 関連 change
 
-- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `tools` の混在配列と、毎ターンの結合・再送はここが所有する。本 change は `ServerTool` の要素を 1 つ足す側
-- 連携: [Responses API への移行](../responses-api-migration/design.md) — server tool の要素の形は両 API で同じ。ターンをまたぐ `usage.server_tool_use_details` の累計は同 change が所有する
+- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `tools` の混在配列と、毎ターンの結合・再送はここが所有する。本 change は `ServerTool` の要素を 1 つ足す側
+- 連携: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — server tool の要素の形は両 API で同じ。ターンをまたぐ `usage.server_tool_use_details` の累計は同 change が所有する
 - 連携: [権限管理](../permissions/design.md) — `/config web-search` の認可。未成立時は暫定 `ManageGuild`
 - 連携: [使用統計](../usage-stats/design.md) — 検索回数とコストの保存先
 
@@ -37,7 +37,7 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 - 検索クエリのカスタマイズUI
 - Twitter 以外のSNS（Bluesky / TikTok 等）の展開（fxtwitter/FxEmbed は対応するが本changeのスコープ外）
 - NSFW ツイートの展開（self-host時の elongator 連携は別途検討）
-- マルチモーダル（画像入力）連携の実装本体（[multimodal](../multimodal/design.md) 側で対応。本changeはメディアURLの受け渡しまで）
+- マルチモーダル（画像入力）連携の実装本体（[multimodal](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/multimodal/design.md) 側で対応。本changeはメディアURLの受け渡しまで）
 - 検索引用元（`url_citation`）のUI表示（段階的に対応。本changeでは本文表示と検索回数ログまで）
 - 設定コマンドの権限機構そのものの実装（[権限管理](../permissions/design.md) に一本化）
 
@@ -48,7 +48,7 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 | 一般Web検索の実装 | OpenRouter server tools（`openrouter:web_search`） | OpenRouterがサーバ側で実行し、tool-calling非対応を含む **any model** で動作する。クライアント側のツール実行ループ不要 |
 | `:online` / web plugin | 使用しない | OpenRouter docs で deprecated と明記（server tool への移行が推奨）。新規採用しない |
 | 検索失敗時の挙動 | tool起因エラーのみ **`openrouter:web_search` の要素だけを外して**再試行、他は既存エラー処理 | server tool/検索に起因すると判定できるエラーのみ再試行する。認証・残高不足・rate limit・モデル不正・moderation は既存の `AppError` 処理へ渡す（隠蔽・二重リクエストを避ける）。deprecated な plugin へは逃がさない。**`tools` 配列ごと外さない**（後述） |
-| 再試行時に外す範囲 | `web_search` の要素のみ。client tool と他の server tool は残す | `tools` は client tool と server tool の**混在配列**で、[tool-calling-foundation](../tool-calling-foundation/design.md) が結合・凍結して毎ターン再送する。配列ごと外すと検索障害で Discord 操作やコード実行まで道連れに無効化される |
+| 再試行時に外す範囲 | `web_search` の要素のみ。client tool と他の server tool は残す | `tools` は client tool と server tool の**混在配列**で、[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) が結合・凍結して毎ターン再送する。配列ごと外すと検索障害で Discord 操作やコード実行まで道連れに無効化される |
 | 再試行の所有箇所 | 後続ターンでも外した状態を維持する | 1 ターンだけ外して次ターンで戻すと、同じ失敗を繰り返して費用とレイテンシが増える |
 | Twitter/X の取得 | Bot側で fxtwitter API（`api.fxtwitter.com`）から取得し文脈注入 | X はボット遮断で検索/web_fetch では本文取得が不安定。fxtwitter は構造化JSON・メディア直リンク・APIキー不要・無料 |
 | fxtwitter のAPIバージョン | v2（`GET /2/status/{id}`、返却本体 `status.*`） | v1（`/status/<id>`、`tweet.*`）も稼働中だが、v2 が現行ドキュメントの推奨。レスポンス型を v2 に固定して将来の不整合を避ける |
@@ -75,14 +75,14 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 
 **変更対象ファイル**:
 
-- `src/types/index.ts` - `ServerTool` に `openrouter:web_search` の `parameters` 型を追加（`tools` 自体は [tool-calling-foundation](../tool-calling-foundation/design.md) が実装済み）
+- `src/types/index.ts` - `ServerTool` に `openrouter:web_search` の `parameters` 型を追加（`tools` 自体は [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) が実装済み）
 - `src/services/chatService.ts` - 設定ON時に server tool を付与
 - `src/services/settingsService.ts` - `setWebSearchEnabled` setter を追加
 - `src/db/repositories/guildSettings.ts` / `src/db/schema.ts` / `src/types/index.ts`（`GuildSettings`）- 設定フィールド追加
 
 **型拡張（`ChatCompletionRequest` / `usage`）:**
 
-`tools` は client tool と server tool の**混在配列**として [tool-calling-foundation](../tool-calling-foundation/design.md) が既に定義している（`Tool = FunctionTool | ServerTool`）。
+`tools` は client tool と server tool の**混在配列**として [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) が既に定義している（`Tool = FunctionTool | ServerTool`）。
 本 change は `ServerTool` の要素を 1 つ足す側であり、`tools?: ServerTool[]` のような server tool 専用の型を新設しない。
 
 ```ts
@@ -105,15 +105,15 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 - server tool はモデル判断で 0〜N 回検索しうるため、`max_results`（1検索あたりの件数, **範囲 1–25・既定 5**。Exa/Parallel/Firecrawl に適用、native では無視）と `max_total_results`（リクエスト全体の累計上限）を必ず指定し、費用とコンテキスト肥大を抑える。
 - あわせて `parameters.max_uses`（このツール自身の実行回数上限）を指定する。native 検索では Anthropic にのみ転送され、他の native provider では無視される。
 - リクエスト直下の `stop_server_tools_when` でも外側ループを止められる。ただし `max_tool_calls` を**上書き**する関係なので、両方を送って厳しい方を効かせることはできない。
-- これらの上限が効く範囲は HTTP リクエスト 1 回である。[tool-calling-foundation](../tool-calling-foundation/design.md) の `MAX_TURNS` は 5 で、最終ターンは `tool_choice: "none"` を送るため、server tool を載せられるリクエストは 1 応答あたり最大 4 回になる。1 応答あたりの回数と費用を縛るには、ターンをまたいで `usage.server_tool_use_details` を累計する必要がある。
+- これらの上限が効く範囲は HTTP リクエスト 1 回である。[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) の `MAX_TURNS` は 5 で、最終ターンは `tool_choice: "none"` を送るため、server tool を載せられるリクエストは 1 応答あたり最大 4 回になる。1 応答あたりの回数と費用を縛るには、ターンをまたいで `usage.server_tool_use_details` を累計する必要がある。
 - `usage.server_tool_use_details.web_search_requests` で実際の検索回数を取得できるため、ログ・課金把握に利用する（[使用統計](../usage-stats/design.md) の usage_logs とも整合させる）。server tool が一度も起動しなかったリクエストでは `server_tool_use_details` 自体が usage から省かれるので、未起動と 0 回はキーの有無で区別する。
 
 **ストリーミングの扱い:**
 
-- `chatStream` は Responses のイベントのうち `response.output_text.delta` の本文と function call だけを呼び出し側へ渡し、server tool の item（`openrouter:web_search` 等の `response.output_item.added` / `done`）は heartbeat として捨てている。`annotations` は読んでいない。`usage.server_tool_use_details` は [Responses API への移行](../responses-api-migration/design.md) が parser と `AggregatedUsage` の集計まで用意している。
+- `chatStream` は Responses のイベントのうち `response.output_text.delta` の本文と function call だけを呼び出し側へ渡し、server tool の item（`openrouter:web_search` 等の `response.output_item.added` / `done`）は heartbeat として捨てている。`annotations` は読んでいない。`usage.server_tool_use_details` は [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) が parser と `AggregatedUsage` の集計まで用意している。
 - server tool 使用時はツール実行中のSSEイベント（検索中の状態・`annotations` の引用元）が流れるが、最終回答の `content` は従来どおり取得できる。
 - 初期実装では引用元（`url_citation`）の整形表示は行わず、本文のみ表示する。ただし検索回数ログ・課金表示のため `server_tool_use_details` の取り込みは行う。引用UIは段階的に対応する。
-- `usage` は全レスポンスで自動返却される。[Responses API への移行](../responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない。`server_tool_use_details.web_search_requests` も自動返却の `usage` 内に含まれる。
+- `usage` は全レスポンスで自動返却される。[Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない。`server_tool_use_details.web_search_requests` も自動返却の `usage` 内に含まれる。
 
 **検索結果の扱い（プロンプトインジェクション対策）:**
 
@@ -186,7 +186,7 @@ Web検索（一般）とツイート展開（Twitter/X）は独立した2系統�
 </untrusted-tweet>
 ```
 
-- `status.media.photos[].url`（`pbs.twimg.com` 直リンク）は構造化データとして保持し、[multimodal](../multimodal/design.md) 実装時に画像入力として渡せるようにする。本changeではテキストでの言及に留める。
+- `status.media.photos[].url`（`pbs.twimg.com` 直リンク）は構造化データとして保持し、[multimodal](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/multimodal/design.md) 実装時に画像入力として渡せるようにする。本changeではテキストでの言及に留める。
 
 **エンドポイント切替（self-host対応）:**
 
@@ -257,7 +257,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 
 ### 一般Web検索（server tools）
 
-- [x] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use_details` を追加（[tool-calling-foundation](../tool-calling-foundation/design.md) と [Responses API への移行](../responses-api-migration/design.md) で実装済み）
+- [x] `ChatCompletionRequest` に `tools?`、`usage` に `server_tool_use_details` を追加（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) と [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) で実装済み）
 - [ ] `chatService` で設定ON時に server tool（`max_results` / `max_total_results` 指定）を付与。失敗時は検索なしで継続
 - [ ] `usage.server_tool_use_details.web_search_requests` のログ取り込み
 - [ ] 検索失敗時の限定的 retry（tool起因のみ tools を外して再試行、他は既存エラー処理）

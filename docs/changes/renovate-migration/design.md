@@ -15,7 +15,7 @@ Renovate は PR 本文の rebase チェックボックスや rebase label で任
 
 ## 依存 / 関連 change
 
-- 関連: [ci-pipeline](../ci-pipeline/design.md) — 手動ピン運用と bun drift-check はこの change で導入されたもの。drift-check は本 change 後も安全網として維持する。
+- 関連: [ci-pipeline](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/ci-pipeline/design.md) — 手動ピン運用と bun drift-check はこの change で導入されたもの。drift-check は本 change 後も安全網として維持する。
   なお ci-pipeline の Non-Goals では「Mend hosted app への repo write 付与」を理由に Renovate を不採用としており、本 change はその判断を明示的に置き換える（理由は Decisions の「供給網リスクの受容」参照）
 
 ## Goals / Non-Goals
@@ -342,7 +342,7 @@ Phase 2:
 - **Dashboard に `Could not re-extract the packageFile after updating it` が出るが、これは上流の構造的な制約で対処不要**。この警告は `checkForPendingVersions`（`lib/workers/repository/update/branch/get-updated.ts`）から出る。`minimumReleaseAge` で保留中の新しい版がある依存について、lockfile 更新の結果が Renovate の想定と食い違っていないかを検証する安全確認で、汎用の `extractPackageFile` を呼ぶ。しかし `bun` マネージャは `extractAllPackageFiles` だけを export していて `extractPackageFile` を持たない（`lib/modules/manager/bun/index.ts`。`npm` マネージャも同じ）ため、再抽出が必ず null を返し警告になる。設定側で回避する手段はない（上流 [renovate#41624](https://github.com/renovatebot/renovate/issues/41624) が対応対象）。
   - 実害は「lockfile が想定と違う版を引いていないかの検証が効かない」ことに限られる。本リポジトリの devDependencies は `:pinDevDependencies` で exact に固定されるため `bun install` に選択の余地がなく、リスクは実質的に runtime 依存（`discord.js` / `zod`）のレンジ解決に限定される。
   - 実際、初回の `renovate/all-minor-patch` では `@biomejs/biome` が 2.5.8（2.5.9 はクールダウンで保留）で lockfile と一致していた。
-- **`@skyra/discord-components-core` が abandoned として Dashboard に表示される**（最終リリース 2025-06-18、`abandonments:recommended` の閾値 1 年）。`scripts/preview/` の UI プレビュー描画にのみ使う devDependency で、Bot のランタイムには入らない。代替も存在しない（[ui-preview](../ui-preview/design.md) の Decisions 参照: 公式の描画ツールが無く、discord.js 公式ガイドも本パッケージを採用している）。表示は検知であって障害ではないので、当面は放置し、プレビュー機能自体を見直す際に再評価する。
+- **`@skyra/discord-components-core` が abandoned として Dashboard に表示される**（最終リリース 2025-06-18、`abandonments:recommended` の閾値 1 年）。`scripts/preview/` の UI プレビュー描画にのみ使う devDependency で、Bot のランタイムには入らない。代替も存在しない（[ui-preview](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/ui-preview/design.md) の Decisions 参照: 公式の描画ツールが無く、discord.js 公式ガイドも本パッケージを採用している）。表示は検知であって障害ではないので、当面は放置し、プレビュー機能自体を見直す際に再評価する。
 - `minimumReleaseAgeBehaviour` の既定は `timestamp-required` で、releaseTimestamp を返さない datasource の更新は stable 扱いされず `internalChecksFilter: "strict"`（既定）に落とされて PR が出なくなる（[minimumReleaseAgeBehaviour](https://docs.renovatebot.com/configuration-options/#minimumreleaseagebehaviour)）。GHCR の非対応は確定事項として `ghcr.io/zizmorcore/zizmor`（CLI）のみを例外化済み。action 側の `zizmorcore/zizmor-action` には catch-all の 3 日が残る（Decisions 参照）。Docker Hub の `rhysd/actionlint` は local dry-run で releaseTimestamp を取得できることを確認した。ほかの datasource は 2 サイクル確認のタスクで実測し、timestamp を取得できない依存があれば該当 packageRule で `minimumReleaseAge` を外す。
 - Renovate の bun マネージャは monorepo / workspace 構成で bun.lock の更新漏れ報告があるが、本リポジトリは単一 package.json のため影響を受けにくい見込み。
 - `pin` / `pinDigest` は `group:allNonMajor` にも `group:allDigest` にも含まれないが、Renovate の既定でどちらも `groupName: "Pin Dependencies"` / `groupSlug: "pin-dependencies"` を持つため、通常は 1 本の pin PR にまとまる。個別 PR が乱立する想定はしなくてよい。

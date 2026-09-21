@@ -30,7 +30,7 @@ summary: "/compare で複数モデルへ並列リクエストし回答を比較"
 | -------- | ---- | ---- |
 | 並列実行方式 | `Promise.allSettled()` | 一部失敗でも他は継続 |
 | 最大モデル数 | 4 | **モデルごとに別 message**（1 message = 1 モデルの Container）で送る。TextDisplay は 1 message 合計 4000 字制約があるため複数モデルを 1 message に集約しない。各 message は Container 内 10 / メッセージ全体 40 components の枠に余裕 |
-| 結果表示形式 | モデルごとに 1 Container（Components V2） | [chat-response-v2](../chat-response-v2/design.md) と一貫させる。各 Container の accent color と Model badge TextDisplay でモデルを区別。`chatContainerBuilder` を再利用 |
+| 結果表示形式 | モデルごとに 1 Container（Components V2） | [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) と一貫させる。各 Container の accent color と Model badge TextDisplay でモデルを区別。`chatContainerBuilder` を再利用 |
 
 ## Design
 
@@ -79,7 +79,7 @@ summary: "/compare で複数モデルへ並列リクエストし回答を比較"
 **参照**:
 
 - [Promise.allSettled()](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled)
-- [chat-response-v2](../chat-response-v2/design.md) - `chatContainerBuilder` / Components V2 の組み方・mention safety・分割ロジック
+- [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) - `chatContainerBuilder` / Components V2 の組み方・mention safety・分割ロジック
 - [server-tools](../server-tools/design.md) - `openrouter:fusion`（合議 server tool）は本 change と目的が異なる
 
 ## Tasks

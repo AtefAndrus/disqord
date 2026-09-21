@@ -9,7 +9,7 @@ summary: "LLM に境界付きの Discord 操作（履歴取得/メンバー検�
 
 ## Why
 
-[tool-calling-foundation](../tool-calling-foundation/design.md) で client tool calling のループが入ると、LLM は「ツールを呼ぶ → 結果を受け取る → 続きを応答する」ことができる。しかし基盤自体は具体的なツールを持たない。
+[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) で client tool calling のループが入ると、LLM は「ツールを呼ぶ → 結果を受け取る → 続きを応答する」ことができる。しかし基盤自体は具体的なツールを持たない。
 
 DisQord はチャット bot として既に Discord 上で動いており、ユーザは「このチャンネルの直近の流れを踏まえて」「○○というメンバーいる？」「これスレッド切って」のような、**Discord そのものに対する小さな操作**を会話の流れで頼みたい。これらは毎回スラッシュコマンドを設計するより、LLM がツールとして必要に応じて呼べる方が自然である。
 
@@ -19,9 +19,9 @@ DisQord はチャット bot として既に Discord 上で動いており、ユ�
 
 ## 依存 / 関連 change
 
-- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler`）・`ToolRegistry`・`runToolLoop()` が前提。本 change はここに tool を登録するだけで、protocol ループは持たない
+- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler`）・`ToolRegistry`・`runToolLoop()` が前提。本 change はここに tool を登録するだけで、protocol ループは持たない
 - 連携: [conversation-context](../conversation-context/design.md) — `fetch_more_context` は履歴ストアの session/exchange モデルと予算境界を使う。本 change の他 action（履歴取得等）は live な Discord API を叩く
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — foundation は `ToolRenderPayload` を V2 updater へ透過するが、現在の tool block hook は描画しない。本 change が Discord tool の結果描画を実装し、tool 自体の可否は `isEnabled` で別管理する
+- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — foundation は `ToolRenderPayload` を V2 updater へ透過するが、現在の tool block hook は描画しない。本 change が Discord tool の結果描画を実装し、tool 自体の可否は `isEnabled` で別管理する
 - 連携: [権限管理](../permissions/design.md) — 管理系 action（pin/スレッド作成）の使用ログ/権限境界は将来 stats 側と整合させうる（本 change では tool 単位の log に留める）
 
 ## Goals / Non-Goals
@@ -41,7 +41,7 @@ DisQord はチャット bot として既に Discord 上で動いており、ユ�
 
 - 破壊的/高権限な操作（メンバーの kick/ban/タイムアウト、メッセージ削除、ロールの**作成/削除**、チャンネル管理）は本 change では扱わない
 - ロール**付与**（add/remove role）は枠組み（必要権限の算出・ロール階層チェック）だけ設計に含めるが、v1 の登録 action からは外す（403 enrichment の対象例として記述、実装は将来 action）
-- server tool（web_search 等）は対象外（[web-search](../web-search/design.md) / [tool-calling-foundation](../tool-calling-foundation/design.md) の server tool 経路）
+- server tool（web_search 等）は対象外（[web-search](../web-search/design.md) / [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) の server tool 経路）
 - tool 結果の凝った Discord 描画ロジック（描画は最小限。`ToolRenderPayload` 透過は基盤任せ）
 - DM での実行（基盤同様 guild 前提。`guildId === null` の ctx では全 action `isEnabled=false`）
 

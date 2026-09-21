@@ -18,13 +18,13 @@ summary: "剥がした過去画像をモデル要求時にベストエフォー�
 
 本 change は、その構造化参照（どの turn のどの part か）を引数に取り、画像バイトをベストエフォートで再取得して**当該モデルターンに一時的に再注入する** `view_image` client tool を追加する。これにより、毎ターン生バイトを運ぶコストを払わずに、必要なときだけロスレスに過去画像を蘇生できる。
 
-> 本 tool は client tool（`type:"function"`）であり、[tool-calling-foundation](../tool-calling-foundation/design.md) の `ToolRegistry` に登録され `runToolLoop()` の dispatch 対象になる。再取得・再注入の「いつ・どの画像を」はモデルが判断する。
+> 本 tool は client tool（`type:"function"`）であり、[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) の `ToolRegistry` に登録され `runToolLoop()` の dispatch 対象になる。再取得・再注入の「いつ・どの画像を」はモデルが判断する。
 
 ## 依存 / 関連 change
 
-- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler(args, ctx, signal, meta)`）として登録し、`runToolLoop()` の dispatch・timeout・cancellation 経路に乗る。`ToolRenderPayload` で Discord 描画フックを使う。**staging のキーは loop が所有する per-dispatch トークン**にする（commit も loop 所有なので、staging→promote の対応付けは loop が握り、meta フィールドの一意性保証に本質的に依存しない）。実装上は基盤 `meta`（契約で `{ requestId, toolCallId, invocationId }`、同 doc が「idempotency/reconciliation 用の実行識別子」と明記）の **`invocationId` を相関キーとして使う**のが第一候補だが、**衝突時の振る舞いを明確化**する: dispatch は v1 で逐次・かつ **rebuild-retry では client handler を再 dispatch しない**（既存 `role:"tool"` 結果を再利用）ため、同一ループ内で staging キーが再生成されることは無い（衝突しない）。万一の foundation 実装で `invocationId` が再利用されうる場合は、**composite `{invocationId, toolCallId}` か loop が採番する単調 dispatch カウンタ**をキーにして衝突を排す。**新たな meta フィールドの追加は不要**（loop 所有トークン or 既存 `invocationId`/`toolCallId` で足りる）
+- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler(args, ctx, signal, meta)`）として登録し、`runToolLoop()` の dispatch・timeout・cancellation 経路に乗る。`ToolRenderPayload` で Discord 描画フックを使う。**staging のキーは loop が所有する per-dispatch トークン**にする（commit も loop 所有なので、staging→promote の対応付けは loop が握り、meta フィールドの一意性保証に本質的に依存しない）。実装上は基盤 `meta`（契約で `{ requestId, toolCallId, invocationId }`、同 doc が「idempotency/reconciliation 用の実行識別子」と明記）の **`invocationId` を相関キーとして使う**のが第一候補だが、**衝突時の振る舞いを明確化**する: dispatch は v1 で逐次・かつ **rebuild-retry では client handler を再 dispatch しない**（既存 `role:"tool"` 結果を再利用）ため、同一ループ内で staging キーが再生成されることは無い（衝突しない）。万一の foundation 実装で `invocationId` が再利用されうる場合は、**composite `{invocationId, toolCallId}` か loop が採番する単調 dispatch カウンタ**をキーにして衝突を排す。**新たな meta フィールドの追加は不要**（loop 所有トークン or 既存 `invocationId`/`toolCallId` で足りる）
 - 先行: [conversation-context](../conversation-context/design.md) — `PersistedContentPart`（`image-ref`）・turn/part 参照・剥がし（`stripHistoricalMedia()`）・「メディア再取得はベストエフォート」契約。本 change はその参照キー設計と `image-ref` の保存メタに依存する
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — tool 実行の進捗/結果描画は V2 updater 経由（基盤の `ToolRenderPayload` を透過）
+- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — tool 実行の進捗/結果描画は V2 updater 経由（基盤の `ToolRenderPayload` を透過）
 
 ## Goals / Non-Goals
 
@@ -269,7 +269,7 @@ export const viewImageTool: IClientTool<{ turn_ref: string; part_index: number }
 ## 参照
 
 - [conversation-context design](../conversation-context/design.md) — `PersistedContentPart`（`image-ref`）、`stripHistoricalMedia()`、「メディア再取得はベストエフォート」「バイト永続化は view-image で判断」
-- [tool-calling-foundation design](../tool-calling-foundation/design.md) — `IClientTool`（`isEnabled`/`validate`/`handler(args, ctx, signal, meta)`）、`runToolLoop()`、`ToolRenderPayload`、handler は throw/timeout でも必ず結果を返す契約
+- [tool-calling-foundation design](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `IClientTool`（`isEnabled`/`validate`/`handler(args, ctx, signal, meta)`）、`runToolLoop()`、`ToolRenderPayload`、handler は throw/timeout でも必ず結果を返す契約
 - [OpenRouter Images & PDFs](https://openrouter.ai/docs/features/multimodal/images) — `image_url`（URL / data URL）content part の送信形
 - 既存実装: `src/services/attachmentParser.ts`（`{type:"image_url", image_url:{url}}`、`SUPPORTED_IMAGE_MIME`）
 - 既存実装: `src/services/modelService.ts`（`isMultimodalCapable(model, "image")` tri-state）・`src/bot/events/messageCreate.ts`（ライブ画像送信前の capability ゲート。`false`=中止 / `null`=透過 / `true`=続行）

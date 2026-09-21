@@ -17,8 +17,8 @@ conversation-context は v1 で「1 user → 1 assistant」を `idx_turns_one_as
 ## 依存 / 関連 change
 
 - 先行（**確定済み・必読**）: [conversation-context](../conversation-context/design.md) — `sessions`/`turns`/`turn_messages`、`status`/`active`、`parent_user_turn_id`/`abandoned`、`idx_turns_one_assistant`（v1 制約）、CAS 確定、exchange 単位の境界/予算/保持、`messageUpdate` を v1 で無視。本 change はこれら**実在の契約**の上に載る
-- 連携: [tool-calling-foundation](../tool-calling-foundation/design.md) — 生成は `runToolLoop()`（`Promise<ToolLoopResult>`、判別共用体 final/cancelled/error）経由。再生成で in-flight 生成を打ち切る場合は同基盤の **`AbortSignal` cancellation 経路**（`{status:'cancelled'}`）を使う
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — Components V2 の描画プリミティブ（Container/Section accessory・ボタン・分割送信・stream updater）と制約を利用する。chat-response-v2 自体は再生成 interaction を扱わず描画基盤のみ提供するため、再生成/undo ボタンの追加・customId ルーティング・edit による世代差し替えは**本 change の責務**
+- 連携: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — 生成は `runToolLoop()`（`Promise<ToolLoopResult>`、判別共用体 final/cancelled/error）経由。再生成で in-flight 生成を打ち切る場合は同基盤の **`AbortSignal` cancellation 経路**（`{status:'cancelled'}`）を使う
+- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — Components V2 の描画プリミティブ（Container/Section accessory・ボタン・分割送信・stream updater）と制約を利用する。chat-response-v2 自体は再生成 interaction を扱わず描画基盤のみ提供するため、再生成/undo ボタンの追加・customId ルーティング・edit による世代差し替えは**本 change の責務**
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — compaction の要約生成に使う system prompt / モデル / 予算しきい値は precedence 解決した設定を使う
 - 連携: [使用統計](../usage-stats/design.md) — 再生成・compaction 要約生成の usage/cost も計上対象
 
@@ -342,7 +342,7 @@ conversation-context は v1 で `messageUpdate` を無視する。本 change は
 - **undo（edit）**: 取り消し表示に edit。`turn_messages` は不変（lease 不要、delete しないため）。
 - **redo（edit）**: DB の active 復帰（§3）成功後に、`A` の mapped メッセージ群を `A.content_json` の本文へ `seq` 順に edit し戻す（取り消し表示 → 元の回答本文）。`turn_messages` は不変。authoritative 404/403（取り消し表示中に当該メッセージが外部削除されていた）→ 対応 exchange を purge（redo 結果は表示されないが DB は整合）、transient → 次回 hydrate で best-effort 再同期。undo→redo を通じて新規送信も削除もしない（同じ `discord_msg_id` の edit のみ）。
 - **新規送信しない理由**: 再生成のたびに新規送信するとチャンネルが伸び、`turn_messages` 写像が世代ごとに増殖して purge/同期が複雑化する。
-- **mention 安全性の継承**: 本 change の全 Discord write（再生成の本文 edit・分割差分の追加送信/余剰削除、undo の「取り消し済み」表示 edit、`/regenerate` 等コマンドの返信）は chat-response-v2 の mention safety 規約（[chat-response-v2](../chat-response-v2/design.md) Decisions「Mention safety」）を継承し、**`allowedMentions: { parse: [] }`（`message.reply()` 経路は `repliedUser: false` も）を必ず付ける**。TextDisplay/content はモデル出力をそのまま ping しうるため。chat-response-v2 は送信ヘルパの型シグネチャで強制しており、本 change の再生成/undo インタラクションも同 builder/ヘルパ経由で送って漏れを防ぐ（chat-response-v2 §「再生成ボタン等の新規インタラクション実装は各 change の責務」と整合）。
+- **mention 安全性の継承**: 本 change の全 Discord write（再生成の本文 edit・分割差分の追加送信/余剰削除、undo の「取り消し済み」表示 edit、`/regenerate` 等コマンドの返信）は chat-response-v2 の mention safety 規約（[chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) Decisions「Mention safety」）を継承し、**`allowedMentions: { parse: [] }`（`message.reply()` 経路は `repliedUser: false` も）を必ず付ける**。TextDisplay/content はモデル出力をそのまま ping しうるため。chat-response-v2 は送信ヘルパの型シグネチャで強制しており、本 change の再生成/undo インタラクションも同 builder/ヘルパ経由で送って漏れを防ぐ（chat-response-v2 §「再生成ボタン等の新規インタラクション実装は各 change の責務」と整合）。
 
 ### 6. 変更対象ファイル
 
@@ -402,7 +402,7 @@ conversation-context は v1 で `messageUpdate` を無視する。本 change は
 ## 参照
 
 - [conversation-context design](../conversation-context/design.md) — `turns`/`status`/`active`/`parent_user_turn_id`/`idx_turns_one_assistant`、CAS 確定、§4 境界選択・§5 メディア剥がし・§6 トークン予算、`deleting_internal_at` lease、`messageUpdate` v1 無視
-- [tool-calling-foundation design](../tool-calling-foundation/design.md) — `runToolLoop()`（`Promise<ToolLoopResult>`、cancelled 経路の `AbortSignal`）
+- [tool-calling-foundation design](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `runToolLoop()`（`Promise<ToolLoopResult>`、cancelled 経路の `AbortSignal`）
 - [SQLite partial indexes](https://www.sqlite.org/partialindex.html) — `WHERE` 句付き UNIQUE INDEX の条件評価（**per-statement で即時評価**）
 - [SQLite ALTER TABLE](https://www.sqlite.org/lang_altertable.html) — `ADD COLUMN` の制約（`NOT NULL` は DEFAULT 必須、FK 参照を持つ追加列は DEFAULT NULL 必須）。**実測: FK 参照先テーブルは ADD COLUMN 時に未作成でもよい**（遅延解決）。本 migration は可読性のため `session_summaries` を先に作る
 - [discord.js component collectors](https://discordjs.guide/message-components/interactions.html) — ボタン interaction、3 秒 ack / 15 分トークン、`customId` ルーティング（コレクタは in-memory・再起動で揮発）

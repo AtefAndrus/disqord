@@ -9,7 +9,7 @@ summary: "image_generation / fusion / advisor / subagent の OpenRouter server t
 
 ## Why
 
-OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRouter がサーバ側で実行し、結果も自動でレスポンスに織り込む）が複数ある。これらは client tool calling のループ（[tool-calling-foundation](../tool-calling-foundation/design.md)）を必要とせず、リクエストの `tools` 配列に 1 要素足すだけで「画像生成・複数モデル合議・上位モデルへの相談・安価モデルへの委譲」をモデル判断で呼べるようになる。
+OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRouter がサーバ側で実行し、結果も自動でレスポンスに織り込む）が複数ある。これらは client tool calling のループ（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md)）を必要とせず、リクエストの `tools` 配列に 1 要素足すだけで「画像生成・複数モデル合議・上位モデルへの相談・安価モデルへの委譲」をモデル判断で呼べるようになる。
 
 `openrouter:web_search` / `openrouter:web_fetch` は [web-search](../web-search/design.md) で扱う。本 change は **それ以外**の server tool 群 — `openrouter:image_generation` / `openrouter:fusion` / `openrouter:advisor` / `openrouter:subagent` — を 1 つの調査束として棚卸しし、各ツールが「何を返すか・どのパラメータでコスト/回数を縛るか・DisQord のどの機能に使えるか」を確定させる。個々の採否・実装は後で release 単位に**フォルダ分割**して切り出す（status は `investigating`、束ねたまま調査）。
 
@@ -17,11 +17,11 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 
 ## 依存 / 関連 change
 
-- 関連: [Responses API への移行](../responses-api-migration/design.md) — server tool の送り方は両 API で同じだが、実行が独立した output item として観測できるようになる。実 wire の fixture 化は移行後に行う
-- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — client tool と server tool を結合した `tools` 配列を送る経路（`runToolLoop` の `serverTools` 引数）を提供する。本 change の server tool はそこへ載せる
+- 関連: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — server tool の送り方は両 API で同じだが、実行が独立した output item として観測できるようになる。実 wire の fixture 化は移行後に行う
+- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — client tool と server tool を結合した `tools` 配列を送る経路（`runToolLoop` の `serverTools` 引数）を提供する。本 change の server tool はそこへ載せる
 - 関連: [web-search](../web-search/design.md) — `openrouter:web_search` / `openrouter:web_fetch` は**そちら**で定義。本 change では再定義しない（`web_fetch` は本 change の各 server tool の nested `tools` 候補としてのみ言及）
 - 関連: [model-compare](../model-compare/design.md) — `/model compare`（同一プロンプトを複数モデルへ並列送信し **side-by-side 表示**）は本 change の `openrouter:fusion`（panel→judge の**構造化合議**）とは**目的が異なる**。混同しない（後述）
-- 関連: [Responses API への移行](../responses-api-migration/design.md) — `ChatCompletionRequest`/`usage` 型の現行 API 整合。本 change の server tool パラメータ型・`server_tool_use_details` 取り込みはその整合方針に従う
+- 関連: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `ChatCompletionRequest`/`usage` 型の現行 API 整合。本 change の server tool パラメータ型・`server_tool_use_details` 取り込みはその整合方針に従う
 - 関連: [出力マルチモーダル対応](../multimodal-output/design.md) — `image_generation` の producer adapter が検証済み成果物を渡した後の Discord 添付とレイアウトを所有する
 
 ## Goals / Non-Goals
@@ -38,7 +38,7 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 
 - 本 change での実装そのもの（status は `investigating`。各 server tool は採否確定後、release 単位でフォルダ分割して実装する）
 - `openrouter:web_search` / `openrouter:web_fetch` の定義（[web-search](../web-search/design.md)）
-- client tool calling ループ自体（[tool-calling-foundation](../tool-calling-foundation/design.md)）
+- client tool calling ループ自体（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md)）
 - server tool 結果の Discord 描画ロジックの確定（画像とファイルの共通描画は [出力マルチモーダル対応](../multimodal-output/design.md)、その他の構造化結果は採用する server tool ごとに別途設計）
 
 **将来別 change 候補:**（採用が決まった server tool は release 単位で独立フォルダへ）
@@ -54,7 +54,7 @@ OpenRouter には `{type:"openrouter:<id>"}` 形式の **server tool**（OpenRou
 | 4 ツールの束ね方 | 1 フォルダ・単一 `design.md`、Design を server tool 別小節（`---` 区切り）に分割 | 調査段階で release 単位が未確定。採用が決まったものから別フォルダへ切り出す（CLAUDE.md 粒度方針） |
 | status | `investigating`（採否・優先度は調査後） | どれを最初に出すか未確定。実装着手で `in-progress` へ |
 | server tool の送り方 | `tools` 配列に `{type:"openrouter:<id>", parameters?:{...}}` を追加（パラメータは `parameters` キー配下。top-level spread ではない）。client tool と同一配列に混在可 | docs「server tools と user-defined tools は同一リクエストで併用可」。web-search の `{type:"openrouter:web_search", parameters:{...}}` と同形。dispatch は OpenRouter 側 |
-| `tools` 要素型の定義場所 | `ChatCompletionRequest.tools` を **client `function` tool ∪ server tool** の判別 union として `src/types/index.ts` に 1 か所で定義（[tool-calling-foundation](../tool-calling-foundation/design.md) の mixed array 前提に合わせる） | [web-search](../web-search/design.md) の型 sketch は `tools?: ServerTool[]`（server tool 単独）で、foundation の混在配列と**食い違う**。本 change 採用時にどちらかへ寄せる必要があるため、union 定義箇所を明示し二重定義を避ける（後述） |
+| `tools` 要素型の定義場所 | `ChatCompletionRequest.tools` を **client `function` tool ∪ server tool** の判別 union として `src/types/index.ts` に 1 か所で定義（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) の mixed array 前提に合わせる） | [web-search](../web-search/design.md) の型 sketch は `tools?: ServerTool[]`（server tool 単独）で、foundation の混在配列と**食い違う**。本 change 採用時にどちらかへ寄せる必要があるため、union 定義箇所を明示し二重定義を避ける（後述） |
 | client ループとの関係 | `runToolLoop` の dispatch 対象に**しない**。`serverTools` 引数で渡し毎ターン再送、omit 判定は結合後配列で | server tool は OpenRouter がサーバ側実行。`finish_reason:"tool_calls"` の dispatch は client `function` tool のみ（foundation 準拠） |
 | コスト/回数の制御 | 二層で縛る。(1) リクエスト直下の `max_tool_calls`（既定 30・上限 30）と `stop_server_tools_when`（前者を**上書き**する関係で併用不可）。(2) 各 server tool の `parameters`（本 change では `analysis_models` と `max_tool_calls`〔fusion〕/ `max_tool_calls`〔subagent〕/ image_generation の `quality`・`size`・`model`・ON/OFF） | `MAX_TURNS`/`MAX_TOOL_CALLS_PER_TURN` は client ターンの上限で、1 リクエスト内 0..N 回のサーバ側実行は抑制できない。ただしリクエスト直下の上限が効くのも HTTP リクエスト 1 回分なので、1 応答あたりを縛るにはターンをまたぐ集計が要る |
 | fusion の位置づけ | **構造化合議**（panel→judge、`analysis` + 各モデル raw `responses`）。単一合成回答は返さない。model-compare とは別物 | docs。model-compare は side-by-side 表示が目的で、合意/矛盾の構造化分析はしない |
@@ -81,7 +81,7 @@ tools: [
 ]
 ```
 
-- 型は `ChatCompletionRequest.tools` を拡張（[tool-calling-foundation](../tool-calling-foundation/design.md) が `tools?` を追加する前提）。server tool 要素は `{ type: "openrouter:<id>", parameters?: <ToolParameters> }` 形（パラメータは top-level spread ではなく **`parameters` キー配下**。web-search の `{type:"openrouter:web_search", parameters:{...}}` と同形）。server tool 要素の判別は `type` の `openrouter:` 接頭辞で行う。
+- 型は `ChatCompletionRequest.tools` を拡張（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) が `tools?` を追加する前提）。server tool 要素は `{ type: "openrouter:<id>", parameters?: <ToolParameters> }` 形（パラメータは top-level spread ではなく **`parameters` キー配下**。web-search の `{type:"openrouter:web_search", parameters:{...}}` と同形）。server tool 要素の判別は `type` の `openrouter:` 接頭辞で行う。
   - **`parameters` 配下の `model` と top-level request `model` は別物**: `image_generation`/`advisor`/`subagent` は `parameters.model`（生成/相談/委譲先モデル）を持つが、これはリクエスト本体の `model`（会話を駆動するモデル）とは独立。型でもキーでも混同しない。
 - **型定義の cross-doc tension（要解消）**: foundation は `tools` を **client `function` tool と server tool の混在配列**として扱うが、[web-search](../web-search/design.md) の型 sketch は `ChatCompletionRequest.tools?: ServerTool[]`（server tool 単独）になっており**食い違う**。本 change（および web-search・foundation）採用順次第でどちらかへ寄せる必要がある。方針は **`ChatCompletionRequest.tools` を `(FunctionTool | ServerTool)[]` の判別 union として `src/types/index.ts` に 1 か所定義**し、`ServerTool` を本 4 ツール + `web_search`/`web_fetch` の `type` リテラル union で表す（web-search 側の `ServerTool[]` も同じ `ServerTool` を指すよう統一）。本 change はこの union に 4 ツールの `type` と各 `parameters` 型を**追加**する側で、独自に別型を切らない。
 - DisQord 側は server tool を「リクエストに足すだけ」で、結果は OpenRouter が最終 message・annotations・`usage` に織り込んで返す。client ループの dispatch（`role:"tool"` 生成）は走らない。
@@ -169,7 +169,7 @@ tools: [
 ### 変更対象ファイル（採用時の見込み・調査段階では未確定）
 
 - 修正: `src/types/index.ts` — `ChatCompletionRequest.tools` の判別 union（`FunctionTool | ServerTool`）に server tool 要素型を追加（`{type:"openrouter:image_generation"|"openrouter:fusion"|"openrouter:advisor"|"openrouter:subagent", parameters?:<各ツールの ToolParameters>}`。パラメータは **`parameters` キー配下**。web-search の `ServerTool` と同一定義を共有し二重定義しない）。`StreamDelta` / `usage` への追加フィールド（実 API 検証後）
-- 修正: `src/services/chatService.ts` — 採用した server tool を設定 ON 時に結合 `tools` へ付与（[tool-calling-foundation](../tool-calling-foundation/design.md) の `serverTools` 経路）
+- 修正: `src/services/chatService.ts` — 採用した server tool を設定 ON 時に結合 `tools` へ付与（[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) の `serverTools` 経路）
 - 新規（採用時）: `image_generation` の API 固有レスポンスを検証済み成果物へ変換する producer adapter。Discord 添付は [出力マルチモーダル対応](../multimodal-output/design.md) を利用し、fusion の analysis/responses など画像以外の構造化表示は各採用 change が所有する
 - 修正: 設定（`guildSettings` / `settingsService` / `/config`）— 課金が絡むため ON/OFF を guild 単位で（web-search と同方針）
 
@@ -186,7 +186,7 @@ tools: [
 - [ ] invocation count（何回起動されるか）の制御責務を確定：`image_generation` は parameters に回数上限が無いため付与戦略（明示コマンド時のみ / 1 ターンのみ付与し再送時に外す）で縛る方針を採用フォルダで設計
 - [x] caller 制御の記述を現行仕様へ是正：`max_tool_calls` を持つのは `fusion`（既定 4、範囲 1–16）と `subagent`（上限 25）であり、`advisor` は持たない
 - [ ] `stop_server_tools_when` が本 4 ツールに適用できる共通制御か（`web_search` 系固有か）を実 API で確認し、適用可能なら ON/OFF・付与戦略と並ぶコスト制御に加える
-- [ ] `ChatCompletionRequest.tools` の判別 union（`FunctionTool | ServerTool`）と `ServerTool` 定義を [web-search](../web-search/design.md) / [tool-calling-foundation](../tool-calling-foundation/design.md) と統一（web-search の `ServerTool[]` typing との食い違いを解消）
+- [ ] `ChatCompletionRequest.tools` の判別 union（`FunctionTool | ServerTool`）と `ServerTool` 定義を [web-search](../web-search/design.md) / [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) と統一（web-search の `ServerTool[]` typing との食い違いを解消）
 - [ ] 各 server tool のコスト体系（image_generation の `quality`/`size` 依存、fusion の panel 依存、advisor/subagent の `model` 依存）を確認し、`/config` で出す費用警告文言を準備
 - [ ] どの server tool を最初に release 単位で切り出すか決定（採用が決まったものを独立フォルダへ）
 - [ ] 採用分について：設定 ON/OFF（guild 単位）、`serverTools` への付与、API 固有レスポンスの正規化、結果描画との接続、テストを各フォルダの design.md で設計
@@ -197,7 +197,7 @@ tools: [
 
 - **返り形の未確証**: `image_generation` の画像返り（URL かインライン data URL か）、`fusion`/`advisor`/`subagent` の最終 message 構造は research でも未確証。実装着手前に実 API 検証が必須。
 - **usage 計上キー**: `web_search` は `usage.server_tool_use_details.web_search_requests` が既知だが、他 server tool の計上キー（image_generation の生成回数、fusion の panel 呼び出し数、advisor/subagent の nested 実行）は未確証。コスト把握のため実 API で確認。
-- **streaming との相性**: 現行 `chatStream` は `delta.content` のみ処理。server tool 実行中の中間 SSE イベントや annotations の扱いは [tool-calling-foundation](../tool-calling-foundation/design.md) / [web-search](../web-search/design.md) の parser 拡張と整合させる必要がある。
+- **streaming との相性**: 現行 `chatStream` は `delta.content` のみ処理。server tool 実行中の中間 SSE イベントや annotations の扱いは [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) / [web-search](../web-search/design.md) の parser 拡張と整合させる必要がある。
 - **モデル/プロバイダ依存**: server tool の対応・挙動はモデル/プロバイダで差が出うる。`fusion`/`advisor`/`subagent` が任意モデルで使えるか（web_search のような any model 動作か）は実 API で確認。
 - **invocation count の制御**: `MAX_*` も `parameters` の per-call knob（`analysis_models`/`quality` 等）も「何回起動されるか」は縛らない。`image_generation` のように回数上限 parameters が無いツールは、付与戦略（明示コマンド時のみ / 1 ターンのみ付与）か `stop_server_tools_when`（適用可なら）でしか縛れない。chat 経路で常時 ON にするツールと明示コマンド限定にするツールの線引きを採用時に決める。
 - **nested tools の allowlist**: `subagent` の `parameters.tools` は outer request とは別 allowlist。outer の `serverTools` を素通しすると再帰 subagent や高コスト tool まで許可しうる。既定 subset と再帰可否を採用フォルダで確定する。`advisor` にはこの論点が無い。
@@ -212,5 +212,5 @@ tools: [
 - [OpenRouter Fusion Server Tool](https://openrouter.ai/docs/guides/features/server-tools/fusion) — `openrouter:fusion`。`analysis_models`(1–8)/`model`(analyst)/`max_tool_calls`(既定 4、1–16)/`tools`/`max_completion_tokens`(既定 16,000)。返り `{status, analysis{consensus/contradictions/...}, responses[{model,content}], failed_models?}`。単一合成回答は返さない
 - [OpenRouter Advisor Server Tool](https://openrouter.ai/docs/guides/features/server-tools/advisor) — `openrouter:advisor`。`name`/`model`/`instructions`/`forward_transcript`/`stream`/`max_completion_tokens`/`reasoning`/`temperature`。`tools` と `max_tool_calls` は無い。返り `{status, model, advice}`
 - [OpenRouter Subagent Server Tool](https://openrouter.ai/docs/guides/features/server-tools/subagent) — `openrouter:subagent`。`name`/`model`/`instructions`/`tools`/`max_tool_calls`(上限 25)/`max_completion_tokens`/`reasoning`/`temperature`/`inherit_functions`/`inherited_function_names`。返り `{status, model, task_name, outcome}`
-- [tool-calling-foundation](../tool-calling-foundation/design.md) — client/server tool を同一 `tools` 配列に混在させる経路（`serverTools` 引数）。server tool は dispatch しない
+- [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — client/server tool を同一 `tools` 配列に混在させる経路（`serverTools` 引数）。server tool は dispatch しない
 - [web-search](../web-search/design.md) — `openrouter:web_search` / `openrouter:web_fetch`（本 change では再定義しない）
