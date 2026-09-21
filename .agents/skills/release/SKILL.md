@@ -77,11 +77,13 @@ git push && git push --tags
 
 Create the GitHub Release from the pushed tag, using this version's CHANGELOG section as its notes.
 `--strip header` keeps the footer, whose link definition makes the version heading link to the compare view.
+Publishing triggers the production deploy, so the commands are chained: if git-cliff fails or the notes lack this version's heading, nothing is published.
 
 ```bash
-notes=$(mktemp)
-mise exec -- git-cliff --latest --strip header --output "$notes"
-gh release create v<version> --title "v<version>" --notes-file "$notes" --verify-tag
+notes=$(mktemp) &&
+  mise exec -- git-cliff --latest --strip header --output "$notes" &&
+  grep -q '^## \[<version>\]' "$notes" &&
+  gh release create v<version> --title "v<version>" --notes-file "$notes" --verify-tag
 ```
 
 `--verify-tag` must remain enabled so the command fails instead of creating a tag from another revision.

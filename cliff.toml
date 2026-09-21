@@ -27,6 +27,7 @@ body = """
 {%- endfor %}
 """
 footer = """
+<!-- ends the last list, so the link definitions below are not read as part of its final item -->
 {% for release in releases -%}
   {% if release.version -%}
     {% if release.previous.version -%}

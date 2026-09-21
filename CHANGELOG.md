@@ -367,6 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump @types/node from 25.0.0 to 25.0.2
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
+<!-- ends the last list, so the link definitions below are not read as part of its final item -->
 [1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AtefAndrus/disqord/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/AtefAndrus/disqord/compare/v1.3.3...v1.3.4

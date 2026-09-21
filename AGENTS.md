@@ -77,7 +77,7 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 
 Run the `/release` skill with the target version, for example `/release 1.5.0`.
 It owns the whole procedure, including the one intentional `LEFTHOOK=0` commit on `main`.
-A GitHub Release's notes are that version's CHANGELOG section from git-cliff, grouped by the `[type]` prefix, rather than GitHub's generated notes, which list every merged PR (dependency updates included) in merge order with no grouping. The workflow does not curate notes by hand or deliver them to Discord.
+A GitHub Release's notes are that version's CHANGELOG section from git-cliff, so the notes and CHANGELOG.md say the same thing, grouped by the `[type]` prefix. They therefore carry CHANGELOG's filtering: `[chore]` and `[release]` commits are left out, and there is no contributor attribution. GitHub's generated notes, as this repository had them (no labels, no `.github/release.yml`), listed every merged PR in merge order with no grouping. The workflow does not curate notes by hand or deliver them to Discord.
 The group order in `cliff.toml` comes from the `<!-- n -->` prefix on each group name, which the template strips.
 
 ## Gotchas
