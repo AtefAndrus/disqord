@@ -132,3 +132,29 @@ export class ToolProtocolError extends AppError {
     );
   }
 }
+
+/**
+ * A settings change was validated against a model that another operation
+ * replaced before the change was saved. Retrying against the current
+ * settings is the fix, so the message asks for that.
+ */
+export class SettingsConflictError extends AppError {
+  constructor(message: string) {
+    super(
+      message,
+      "確認中に別の操作でモデルの設定が変わりました。現在の設定を確認して、もう一度操作してください。",
+      409,
+    );
+  }
+}
+
+/**
+ * A settings change breaks a rule against the settings as saved (a paid
+ * model while free-only is on). Retrying does not help; `userMessage` says
+ * what to change first.
+ */
+export class SettingsRuleError extends AppError {
+  constructor(message: string, userMessage: string) {
+    super(message, userMessage, 409);
+  }
+}

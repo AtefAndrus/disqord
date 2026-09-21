@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, mock, test } from "bun:test";
 import {
   type ChatInputCommandInteraction,
@@ -6,7 +7,11 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
+import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
+import { applyMigrations } from "../../../../src/db/schema";
+import { SettingsRuleError } from "../../../../src/errors";
 import { ModelService } from "../../../../src/services/modelService";
+import { SettingsService } from "../../../../src/services/settingsService";
 import {
   createMockGuildSettings,
   createMockLLMClient,
@@ -63,7 +68,10 @@ describe("model command handlers", () => {
     expect(setEmbed.url).toBe(currentEmbed.url);
     expect(current.deferReply).toHaveBeenCalledTimes(1);
     expect(current.reply).not.toHaveBeenCalled();
-    expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", "model-1");
+    expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", {
+      model: "model-1",
+      isFree: true,
+    });
   });
 
   test("詳細取得不能でもcurrentのモデルページURLを表示する", async () => {
@@ -164,5 +172,48 @@ describe("config web-search handler", () => {
     const payload = reply.mock.calls[0]?.[0] as { flags?: number };
     expect(payload.flags).toBe(MessageFlags.Ephemeral);
     expect(repliedEmbed(reply).description).toContain("サーバーの管理");
+  });
+});
+
+describe("model set と無料モデル限定の競合", () => {
+  test("有料モデルの確認中に限定が ON になったら、モデルは保存されず規則違反になる", async () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const settingsService = new SettingsService(new GuildSettingsRepository(db, "free/model:free"));
+    let releaseCheck: (() => void) | undefined;
+    const modelService = {
+      validateModelSelection: mock(() => Promise.resolve({ valid: true })),
+      // Held so that free-only turns on after /model set has read the settings.
+      isFreeModel: mock(
+        () =>
+          new Promise<boolean>((resolve) => {
+            releaseCheck = () => resolve(false);
+          }),
+      ),
+      getModelDetails: mock(() => Promise.resolve(null)),
+    } as unknown as ModelService;
+    const handlers = createCommandHandlers(
+      createMockLLMClient(),
+      settingsService,
+      modelService,
+      "perplexity",
+    );
+    const { interaction, reply } = createInteraction("paid/model");
+
+    const setting = handlers.modelSet(interaction);
+    await Bun.sleep(0);
+    await settingsService.setFreeModelsOnly("guild-1", true, {
+      model: "free/model:free",
+      isFree: true,
+    });
+    releaseCheck?.();
+
+    await expect(setting).rejects.toBeInstanceOf(SettingsRuleError);
+    expect(reply).not.toHaveBeenCalled();
+    expect(await settingsService.getGuildSettings("guild-1")).toMatchObject({
+      defaultModel: "free/model:free",
+      freeModelsOnly: true,
+    });
+    db.close();
   });
 });

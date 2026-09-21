@@ -1,6 +1,12 @@
-import type { ButtonInteraction, ChatInputCommandInteraction, Interaction } from "discord.js";
+import type {
+  ButtonInteraction,
+  ChatInputCommandInteraction,
+  EmbedBuilder,
+  Interaction,
+} from "discord.js";
 import { MessageFlags } from "discord.js";
 import packageJson from "../../../package.json";
+import { SettingsConflictError, SettingsRuleError } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
@@ -11,6 +17,18 @@ import { logger } from "../../utils/logger";
 import { metrics } from "../../utils/metrics";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
+
+/**
+ * A rejected settings change carries text meant for the user (a conflict
+ * says to retry, a free-only violation says what to change), shown under the
+ * title the free-only checks used before they moved into the service. Other
+ * failures keep their generic reply.
+ */
+function settingsErrorEmbed(error: unknown): EmbedBuilder | undefined {
+  return error instanceof SettingsConflictError || error instanceof SettingsRuleError
+    ? createErrorEmbed(error.userMessage, "設定エラー")
+    : undefined;
+}
 
 export interface CommandHandlers {
   help: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -132,7 +150,10 @@ export function createInteractionCreateHandler(
           interaction.replied || interaction.deferred
             ? interaction.followUp.bind(interaction)
             : interaction.reply.bind(interaction);
-        await reply("コマンドの実行中にエラーが発生しました。");
+        const settingsError = settingsErrorEmbed(error);
+        await reply(
+          settingsError ? { embeds: [settingsError] } : "コマンドの実行中にエラーが発生しました。",
+        );
       } catch (replyError) {
         logger.error("Failed to send error message", { replyError });
       }
@@ -177,26 +198,15 @@ async function handleButtonInteraction(
     }
 
     if (customId === "status_toggle_free_only") {
-      const settings = await settingsService.getGuildSettings(interaction.guildId);
-      const newValue = !settings.freeModelsOnly;
-
-      if (newValue) {
-        const isFree = await modelService.isFreeModel(settings.defaultModel);
-        if (!isFree) {
-          await interaction.reply({
-            embeds: [
-              createErrorEmbed(
-                `現在のモデル \`${settings.defaultModel}\` は無料モデルではありません。先に無料モデルに変更してから有効化してください。`,
-                "設定エラー",
-              ),
-            ],
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-      }
-
-      await settingsService.setFreeModelsOnly(interaction.guildId, newValue);
+      // The direction is decided on the stored value inside the service, so
+      // two presses at once flip twice. The model check is passed either
+      // way because only the service knows whether this press turns it on.
+      const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
+      const isFree = await modelService.isFreeModel(defaultModel);
+      await settingsService.toggleFreeModelsOnly(interaction.guildId, {
+        model: defaultModel,
+        isFree,
+      });
     } else if (customId === "status_toggle_llm_details") {
       await settingsService.toggleShowLlmDetails(interaction.guildId);
     } else if (customId === "status_model_refresh") {
@@ -253,7 +263,7 @@ async function handleButtonInteraction(
           ? interaction.followUp.bind(interaction)
           : interaction.reply.bind(interaction);
       await reply({
-        embeds: [createErrorEmbed("操作中にエラーが発生しました。")],
+        embeds: [settingsErrorEmbed(error) ?? createErrorEmbed("操作中にエラーが発生しました。")],
         flags: MessageFlags.Ephemeral,
       });
     } catch (replyError) {

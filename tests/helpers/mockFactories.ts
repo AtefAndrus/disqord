@@ -1,29 +1,7 @@
 import { mock } from "bun:test";
-import type { IGuildSettingsRepository } from "../../src/db/repositories/guildSettings";
 import type { ILLMClient } from "../../src/llm/openrouter";
-import type { ISettingsService } from "../../src/services/settingsService";
+import type { ISettingsService, ModelCheck } from "../../src/services/settingsService";
 import type { ChatCompletionResponse, GuildSettings } from "../../src/types";
-
-export function createMockGuildSettingsRepository(): IGuildSettingsRepository {
-  return {
-    findByGuildId: mock(() => Promise.resolve(null)),
-    upsert: mock((guildId: string, settings: Partial<GuildSettings>) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: settings.defaultModel ?? "test-model:fixture",
-        freeModelsOnly: settings.freeModelsOnly ?? false,
-        showLlmDetails: settings.showLlmDetails ?? true,
-        autoReplyChannels: settings.autoReplyChannels ?? [],
-        webSearchEnabled: settings.webSearchEnabled ?? false,
-        createdAt: settings.createdAt ?? new Date().toISOString(),
-        updatedAt: settings.updatedAt ?? new Date().toISOString(),
-      }),
-    ),
-    updateShowLlmDetails: mock(() => Promise.resolve()),
-    updateAutoReplyChannels: mock(() => Promise.resolve()),
-    delete: mock(() => Promise.resolve(true)),
-  };
-}
 
 export function createMockLLMClient(): ILLMClient {
   return {
@@ -81,58 +59,23 @@ export function createMockLLMClient(): ILLMClient {
 }
 
 export function createMockSettingsService(): ISettingsService {
+  const settings = (guildId: string, overrides: Partial<GuildSettings> = {}): GuildSettings =>
+    createMockGuildSettings({ guildId, ...overrides });
   return {
-    getGuildSettings: mock((guildId: string) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: "test-model:fixture",
-        freeModelsOnly: false,
-        showLlmDetails: true,
-        autoReplyChannels: [],
-        webSearchEnabled: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
+    getGuildSettings: mock((guildId: string) => Promise.resolve(settings(guildId))),
+    setGuildModel: mock((guildId: string, check: ModelCheck) =>
+      Promise.resolve(settings(guildId, { defaultModel: check.model })),
     ),
-    setGuildModel: mock((guildId: string, model: string) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: model,
-        freeModelsOnly: false,
-        showLlmDetails: true,
-        autoReplyChannels: [],
-        webSearchEnabled: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
+    setFreeModelsOnly: mock((guildId: string, freeModelsOnly: boolean, _check?: ModelCheck) =>
+      Promise.resolve(settings(guildId, { freeModelsOnly })),
     ),
-    setFreeModelsOnly: mock((guildId: string, freeModelsOnly: boolean) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: "test-model:fixture",
-        freeModelsOnly,
-        showLlmDetails: true,
-        autoReplyChannels: [],
-        webSearchEnabled: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
-    ),
+    toggleFreeModelsOnly: mock((_guildId: string, _check: ModelCheck) => Promise.resolve(true)),
     setShowLlmDetails: mock((_guildId: string, _showLlmDetails: boolean) => Promise.resolve()),
     toggleShowLlmDetails: mock((_guildId: string) => Promise.resolve(true)),
     addAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve()),
     removeAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve(true)),
     setWebSearchEnabled: mock((guildId: string, webSearchEnabled: boolean) =>
-      Promise.resolve({
-        guildId,
-        defaultModel: "test-model:fixture",
-        freeModelsOnly: false,
-        showLlmDetails: true,
-        autoReplyChannels: [],
-        webSearchEnabled,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }),
+      Promise.resolve(settings(guildId, { webSearchEnabled })),
     ),
   };
 }

@@ -103,7 +103,10 @@ export function createCommandHandlers(
         return;
       }
 
-      await settingsService.setGuildModel(interaction.guildId, model);
+      // The check above used settings read before any await; the save
+      // re-checks free-only against the stored settings.
+      const isFree = await modelService.isFreeModel(model);
+      await settingsService.setGuildModel(interaction.guildId, { model, isFree });
 
       // モデル詳細情報を取得して表示
       const details = await modelService.getModelDetails(model);
@@ -178,19 +181,17 @@ export function createCommandHandlers(
       const enabled = interaction.options.getString("enabled", true) === "on";
 
       if (enabled) {
-        const settings = await settingsService.getGuildSettings(interaction.guildId);
-        const isFree = await modelService.isFreeModel(settings.defaultModel);
-        if (!isFree) {
-          const errorEmbed = createErrorEmbed(
-            `現在のモデル \`${settings.defaultModel}\` は無料モデルではありません。先に無料モデルに変更してから有効化してください。`,
-            "設定エラー",
-          );
-          await interaction.reply({ embeds: [errorEmbed] });
-          return;
-        }
+        // The service rejects a paid model, or a model replaced while this
+        // one was being checked, against the settings as stored.
+        const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
+        const isFree = await modelService.isFreeModel(defaultModel);
+        await settingsService.setFreeModelsOnly(interaction.guildId, true, {
+          model: defaultModel,
+          isFree,
+        });
+      } else {
+        await settingsService.setFreeModelsOnly(interaction.guildId, false);
       }
-
-      await settingsService.setFreeModelsOnly(interaction.guildId, enabled);
       const successEmbed = createSuccessEmbed(
         enabled
           ? "無料モデル限定を **有効** にしました。"
