@@ -223,6 +223,41 @@ describe("chatContainerBuilder", () => {
       }
     });
 
+    test("全体が予算に収まるなら、最後の行が短くても1つのchunkのまま返す", () => {
+      expect(splitMarkdownByCharsAndBytes("a\nb\nc\nd\ne\nf\ng", 3000, 9000)).toEqual([
+        "a\nb\nc\nd\ne\nf\ng",
+      ]);
+      const answer = `${"本文の段落。".repeat(20)}\n\n- [a](<https://a.test/1>)\n- [b](<https://a.test/2>)`;
+      expect(splitMarkdownByCharsAndBytes(answer, 3000, 9000)).toEqual([answer]);
+    });
+
+    test("再開したcode blockの残りが収まるなら、最後の行を別chunkにしない", () => {
+      // 生成途中の未閉鎖 code block。残り（c/d/e の行）は2つ目のchunkに収まる
+      const text = `\`\`\`ts\n${"a".repeat(30)}\n${"b".repeat(30)}\n${"c".repeat(20)}\n${"d".repeat(20)}\ne`;
+      expect(splitMarkdownByCharsAndBytes(text, 80, 80)).toEqual([
+        `\`\`\`ts\n${"a".repeat(30)}\n${"b".repeat(30)}\n\`\`\``,
+        `\`\`\`ts\n${"c".repeat(20)}\n${"d".repeat(20)}\ne\n\`\`\``,
+      ]);
+    });
+
+    test("末尾のopening fenceまで読んでも、fence手前で止めたchunkは改行まで戻って切る", () => {
+      // 走査は fence を読み切って末尾に届くが、chunk の候補は fence の手前で止まっている。
+      // 残りがある扱いになるので、従来どおり直前の改行で切る
+      expect(splitMarkdownByCharsAndBytes("aaaaaaaaa\nx```ts\n", 100, 100)).toEqual([
+        "aaaaaaaaa\n",
+        "x",
+        "```ts\n```",
+      ]);
+    });
+
+    test("予算を超えるときは、切る位置の直前20%にある改行まで戻って切る", () => {
+      const text = `${"a".repeat(9)}\n${"b".repeat(5)}`;
+      expect(splitMarkdownByCharsAndBytes(text, 12, 12)).toEqual([
+        `${"a".repeat(9)}\n`,
+        "b".repeat(5),
+      ]);
+    });
+
     test("chunk境界をtriple backtickの途中に置かない", () => {
       const text = `${"a".repeat(12)}\`\`\`ts\n${"b".repeat(20)}`;
       const chunks = splitMarkdownByCharsAndBytes(text, 15, 15);
