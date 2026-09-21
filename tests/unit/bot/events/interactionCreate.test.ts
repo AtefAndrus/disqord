@@ -5,7 +5,7 @@ import type { CommandHandlers } from "../../../../src/bot/events/interactionCrea
 import { createInteractionCreateHandler } from "../../../../src/bot/events/interactionCreate";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
-import { SettingsConflictError } from "../../../../src/errors";
+import { SettingsConflictError, SettingsRuleError } from "../../../../src/errors";
 import type { ILLMClient } from "../../../../src/llm/openrouter";
 import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
@@ -146,20 +146,32 @@ describe("interactionCreate: 無料モデル限定ボタン", () => {
   });
 
   test.each([false, true])(
-    "%p の状態で 2 回同時に押すと、2 回反転して元に戻る",
+    "%p の状態で 2 回同時に押すと、両方が成功して 2 回反転し元に戻る",
     async (initial) => {
       await settingsService.setFreeModelsOnly("guild-1", initial, {
         model: FREE_MODEL,
         isFree: true,
       });
+      const toggleResults: boolean[] = [];
+      const toggle = settingsService.toggleFreeModelsOnly.bind(settingsService);
+      spyOn(settingsService, "toggleFreeModelsOnly").mockImplementation(async (...args) => {
+        const result = await toggle(...args);
+        toggleResults.push(result);
+        return result;
+      });
+      const first = statusButton();
+      const second = statusButton();
 
-      const presses = Promise.all([
-        handler(statusButton() as never),
-        handler(statusButton() as never),
-      ]);
+      const presses = Promise.all([handler(first as never), handler(second as never)]);
       await releaseChecks();
       await presses;
 
+      // 2 回とも失敗しても最終値は元に戻るので、両方の押下が成功したことも確かめる
+      expect(toggleResults).toEqual([!initial, initial]);
+      for (const press of [first, second]) {
+        expect(press.reply).not.toHaveBeenCalled();
+        expect(press.update).toHaveBeenCalledTimes(1);
+      }
       expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(initial);
     },
   );
@@ -175,6 +187,7 @@ describe("interactionCreate: 無料モデル限定ボタン", () => {
     expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
     const payload = press.reply.mock.calls[0]?.[0] as { embeds: EmbedBuilder[]; flags: number };
     expect(payload.flags).toBe(MessageFlags.Ephemeral);
+    expect(payload.embeds[0]?.toJSON().title).toBe("設定エラー");
     expect(payload.embeds[0]?.toJSON().description).toContain("もう一度操作してください");
   });
 
@@ -193,36 +206,50 @@ describe("interactionCreate: 無料モデル限定ボタン", () => {
 });
 
 describe("interactionCreate: コマンドのエラー表示", () => {
-  test("利用者向けの文言を持つエラーはその文言を、それ以外は汎用の文言を返す", async () => {
+  async function run(error: Error): Promise<unknown> {
     spyOn(console, "error").mockImplementation(() => {});
-    const run = async (error: Error): Promise<string | undefined> => {
-      const handlers = {
-        configFreeOnly: mock(() => Promise.reject(error)),
-      } as unknown as CommandHandlers;
-      const handler = createInteractionCreateHandler(
-        handlers,
-        {} as ISettingsService,
-        {} as IModelService,
-        {} as ILLMClient,
-        {} as IChatService,
-        "perplexity",
-      );
-      const reply = mock((_payload: unknown) => Promise.resolve());
-      await handler({
-        commandName: "config",
-        isAutocomplete: () => false,
-        isButton: () => false,
-        isChatInputCommand: () => true,
-        options: { getSubcommandGroup: () => null, getSubcommand: () => "free-only" },
-        replied: false,
-        deferred: false,
-        reply,
-      } as never);
-      const payload = reply.mock.calls[0]?.[0] as { embeds: EmbedBuilder[] };
-      return payload.embeds[0]?.toJSON().description;
-    };
+    const handlers = {
+      configFreeOnly: mock(() => Promise.reject(error)),
+    } as unknown as CommandHandlers;
+    const handler = createInteractionCreateHandler(
+      handlers,
+      {} as ISettingsService,
+      {} as IModelService,
+      {} as ILLMClient,
+      {} as IChatService,
+      "perplexity",
+    );
+    const reply = mock((_payload: unknown) => Promise.resolve());
+    await handler({
+      commandName: "config",
+      isAutocomplete: () => false,
+      isButton: () => false,
+      isChatInputCommand: () => true,
+      options: { getSubcommandGroup: () => null, getSubcommand: () => "free-only" },
+      replied: false,
+      deferred: false,
+      reply,
+    } as never);
+    return reply.mock.calls[0]?.[0];
+  }
 
-    expect(await run(new SettingsConflictError("changed"))).toContain("もう一度操作してください");
+  function embedOf(payload: unknown): { title?: string; description?: string } | undefined {
+    return (payload as { embeds: EmbedBuilder[] }).embeds[0]?.toJSON();
+  }
+
+  test("設定の競合と規則違反は、見出し「設定エラー」でそれぞれの案内を返す", async () => {
+    const conflict = embedOf(await run(new SettingsConflictError("changed")));
+    expect(conflict?.title).toBe("設定エラー");
+    expect(conflict?.description).toContain("もう一度操作してください");
+
+    const rule = embedOf(
+      await run(new SettingsRuleError("paid", "先に無料モデルに変更してください。")),
+    );
+    expect(rule?.title).toBe("設定エラー");
+    expect(rule?.description).toBe("先に無料モデルに変更してください。");
+  });
+
+  test("それ以外の失敗は、これまでどおり汎用の文言だけを返す", async () => {
     expect(await run(new Error("boom"))).toBe("コマンドの実行中にエラーが発生しました。");
   });
 });

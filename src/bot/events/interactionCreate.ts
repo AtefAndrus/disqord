@@ -6,7 +6,7 @@ import type {
 } from "discord.js";
 import { MessageFlags } from "discord.js";
 import packageJson from "../../../package.json";
-import { AppError } from "../../errors";
+import { SettingsConflictError, SettingsRuleError } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
@@ -19,12 +19,15 @@ import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 
 /**
- * An AppError carries text meant for the user (a settings conflict says to
- * retry, a free-only violation says what to change); anything else gets the
- * generic message.
+ * A rejected settings change carries text meant for the user (a conflict
+ * says to retry, a free-only violation says what to change), shown under the
+ * title the free-only checks used before they moved into the service. Other
+ * failures keep their generic reply.
  */
-function errorEmbedFor(error: unknown, fallback: string): EmbedBuilder {
-  return createErrorEmbed(error instanceof AppError ? error.userMessage : fallback);
+function settingsErrorEmbed(error: unknown): EmbedBuilder | undefined {
+  return error instanceof SettingsConflictError || error instanceof SettingsRuleError
+    ? createErrorEmbed(error.userMessage, "設定エラー")
+    : undefined;
 }
 
 export interface CommandHandlers {
@@ -147,7 +150,10 @@ export function createInteractionCreateHandler(
           interaction.replied || interaction.deferred
             ? interaction.followUp.bind(interaction)
             : interaction.reply.bind(interaction);
-        await reply({ embeds: [errorEmbedFor(error, "コマンドの実行中にエラーが発生しました。")] });
+        const settingsError = settingsErrorEmbed(error);
+        await reply(
+          settingsError ? { embeds: [settingsError] } : "コマンドの実行中にエラーが発生しました。",
+        );
       } catch (replyError) {
         logger.error("Failed to send error message", { replyError });
       }
@@ -257,7 +263,7 @@ async function handleButtonInteraction(
           ? interaction.followUp.bind(interaction)
           : interaction.reply.bind(interaction);
       await reply({
-        embeds: [errorEmbedFor(error, "操作中にエラーが発生しました。")],
+        embeds: [settingsErrorEmbed(error) ?? createErrorEmbed("操作中にエラーが発生しました。")],
         flags: MessageFlags.Ephemeral,
       });
     } catch (replyError) {

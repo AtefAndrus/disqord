@@ -44,13 +44,17 @@ describe("SettingsService", () => {
     });
 
     test("行の作成と同時に書き込みがあっても、書き込みを消さない", async () => {
-      const [, afterWrite] = await Promise.all([
+      const [read, afterWrite] = await Promise.all([
         service.getGuildSettings(G),
         service.setWebSearchEnabled(G, true),
       ]);
 
       expect(afterWrite.webSearchEnabled).toBe(true);
-      expect((await service.getGuildSettings(G)).webSearchEnabled).toBe(true);
+      const stored = await repo.findByGuildId(G);
+      if (!stored) throw new Error("row missing");
+      expect(stored.webSearchEnabled).toBe(true);
+      // 返したのは保存された行（書き込みの前か後）で、手元で作った既定値ではない
+      expect({ ...read, webSearchEnabled: true, updatedAt: stored.updatedAt }).toEqual(stored);
     });
   });
 
@@ -213,12 +217,20 @@ describe("SettingsService", () => {
       });
     });
 
-    test("無料モデルへの変更と限定の有効化は、どちらが先でも両方成功する", async () => {
+    test.each([
+      ["モデル変更が先", true],
+      ["限定の有効化が先", false],
+    ])("無料モデルへの変更と限定の有効化は、%s でも両方成功する", async (_label, modelFirst) => {
       const OTHER_FREE = { model: "other/model:free", isFree: true };
       await service.setGuildModel(G, FREE);
 
-      await service.setGuildModel(G, OTHER_FREE);
-      await service.setFreeModelsOnly(G, true, OTHER_FREE);
+      if (modelFirst) {
+        await service.setGuildModel(G, OTHER_FREE);
+        await service.setFreeModelsOnly(G, true, OTHER_FREE);
+      } else {
+        await service.setFreeModelsOnly(G, true, FREE);
+        await service.setGuildModel(G, OTHER_FREE);
+      }
 
       expect(await repo.findByGuildId(G)).toMatchObject({
         defaultModel: OTHER_FREE.model,
