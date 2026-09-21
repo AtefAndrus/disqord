@@ -23,7 +23,13 @@
  * the code. The run ends by printing what it cost (see `cost.ts`).
  */
 import { loadConfig } from "../../src/config";
-import { formatCostSummary, readKeyUsage, type ScenarioCost, settledUsage } from "./cost";
+import {
+  formatCostSummary,
+  observeUsage,
+  readKeyUsage,
+  type ScenarioCost,
+  type UsageState,
+} from "./cost";
 import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
   costOf,
@@ -243,15 +249,15 @@ async function main(): Promise<number> {
   return failures === 0 ? 0 : 1;
 }
 
-/** The change in the key's usage since `before`, once it has settled. Never fails the run. */
+/** The change in the key's usage since `before`, as observed when polling stopped. Never fails the run. */
 async function usageDelta(
   before: number | undefined,
   costs: ScenarioCost[],
-): Promise<{ amount: number; settled: boolean } | undefined> {
+): Promise<{ amount: number; state: UsageState } | undefined> {
   if (before === undefined) return undefined;
   const reported = costs.reduce((sum, { cost }) => sum + (cost ?? 0), 0);
   try {
-    const { usage, settled } = await settledUsage(
+    const { usage, state } = await observeUsage(
       {
         read: () => readKeyUsage(config.openRouterApiKey),
         pause: () => Bun.sleep(USAGE_POLL_INTERVAL_MS),
@@ -259,7 +265,7 @@ async function usageDelta(
       before + reported,
       costs.filter(({ cost }) => cost !== undefined).length,
     );
-    return { amount: usage - before, settled };
+    return { amount: usage - before, state };
   } catch (error) {
     console.log(
       `  cost: could not read the OpenRouter key's usage: ${error instanceof Error ? error.message : error}`,

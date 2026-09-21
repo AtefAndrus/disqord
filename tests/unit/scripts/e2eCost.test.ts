@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { formatCostSummary, readKeyUsage, settledUsage } from "../../../scripts/e2e/cost";
+import { formatCostSummary, observeUsage, readKeyUsage } from "../../../scripts/e2e/cost";
 
-/** Feeds `settledUsage` one scripted value per read. */
+/** Feeds `observeUsage` one scripted value per read. */
 function scripted(values: number[]): {
   read: () => Promise<number>;
   pause: () => Promise<void>;
@@ -19,45 +19,47 @@ function scripted(values: number[]): {
   };
 }
 
-describe("settledUsage", () => {
-  test("返信が報告した額に届いた後、同じ値を 2 回続けて読んだら確定する", async () => {
+describe("observeUsage", () => {
+  test("返信が報告した額に届いた後、同じ値を 2 回続けて読んだら stable を返す", async () => {
     const io = scripted([1.0, 1.01, 1.02, 1.02, 1.02]);
 
-    const result = await settledUsage(io, 1.02, 1);
+    const result = await observeUsage(io, 1.02, 1);
 
-    expect(result).toEqual({ usage: 1.02, settled: true });
+    expect(result).toEqual({ usage: 1.02, state: "stable" });
     expect(io.reads()).toBe(4);
   });
 
-  test("返信が報告した額に届く前に値が止まっても、確定とは見なさない", async () => {
+  test("返信が報告した額に届く前に値が止まっても、stable とは見なさない", async () => {
     const io = scripted([1.0, 1.0, 1.0, 1.02, 1.02]);
 
-    const result = await settledUsage(io, 1.02, 1);
+    const result = await observeUsage(io, 1.02, 1);
 
-    expect(result).toEqual({ usage: 1.02, settled: true });
+    expect(result).toEqual({ usage: 1.02, state: "stable" });
     expect(io.reads()).toBe(5);
   });
 
   test("footer の 6 桁への丸めの分だけ下回っても、報告額に届いたと見なす", async () => {
     const io = scripted([1.0199996, 1.0199996]);
 
-    const result = await settledUsage(io, 1.02, 1);
-
-    expect(result.settled).toBe(true);
+    expect((await observeUsage(io, 1.02, 1)).state).toBe("stable");
   });
 
-  test("読み取り回数の上限まで確定しなければ、最後の値を未確定として返す", async () => {
+  test("上限まで値が動き続けたら changing を返す", async () => {
     const io = scripted([1.0, 1.01, 1.02, 1.03]);
 
-    const result = await settledUsage(io, 1.0, 0, 4);
-
-    expect(result).toEqual({ usage: 1.03, settled: false });
+    expect(await observeUsage(io, 1.0, 0, 4)).toEqual({ usage: 1.03, state: "changing" });
   });
 
-  test("何も課金されない実行（無料モデル）は、開始時の値のまま確定する", async () => {
+  test("上限まで報告額に届かなければ、値が動いていなくても below-reported を返す", async () => {
+    const io = scripted([1.0]);
+
+    expect(await observeUsage(io, 1.02, 1, 4)).toEqual({ usage: 1.0, state: "below-reported" });
+  });
+
+  test("何も課金されない実行（無料モデル）は、開始時の値のまま stable になる", async () => {
     const io = scripted([1.0, 1.0]);
 
-    expect(await settledUsage(io, 1.0, 0)).toEqual({ usage: 1.0, settled: true });
+    expect(await observeUsage(io, 1.0, 0)).toEqual({ usage: 1.0, state: "stable" });
   });
 });
 
@@ -89,47 +91,59 @@ describe("readKeyUsage", () => {
 });
 
 describe("formatCostSummary", () => {
-  test("キーの増分を総額として出し、返信ごとの額と、どの返信にも出ていない差額を並べる", () => {
+  test("キーの増分を観測値として出し、返信ごとの額と、どの footer にも無い差額を並べる", () => {
     const lines = formatCostSummary(
       [
         { name: "chat", cost: 0.00002 },
         { name: "long", cost: 0.02 },
       ],
-      { amount: 0.0215, settled: true },
+      { amount: 0.0215, state: "stable" },
     );
 
-    expect(lines[0]).toStartWith("COST $0.021500 billed to the OpenRouter key");
-    expect(lines[0]).not.toContain("still changing");
-    expect(lines[1]).toBe("     replies reported $0.020020: chat $0.000020, long $0.020000");
-    expect(lines[2]).toContain("the other $0.001480 is in no reply's footer");
+    expect(lines).toEqual([
+      "COST $0.021500 of OpenRouter credits observed on the key during this run",
+      "     replies reported $0.020020: chat $0.000020, long $0.020000",
+      "     $0.001480 of the key's change is in no collected footer (a reply that was not collected, or other use of this key)",
+    ]);
   });
 
   test("差額が丸め誤差の範囲なら差額の行を出さない", () => {
     const lines = formatCostSummary([{ name: "chat", cost: 0.000021 }], {
       amount: 0.0000212,
-      settled: true,
+      state: "stable",
     });
 
     expect(lines).toHaveLength(2);
   });
 
-  test("確定しなかった増分には注記を付け、額の無いシナリオは unknown と書く", () => {
+  test("観測の状態ごとに注記を変える", () => {
+    const [changing] = formatCostSummary([], { amount: 0.1, state: "changing" });
+    const [below] = formatCostSummary([], { amount: 0, state: "below-reported" });
+
+    expect(changing).toContain("still changing");
+    expect(below).toContain("had not yet been billed");
+    expect(below).not.toContain("still changing");
+  });
+
+  test("額の無いシナリオは unknown と書き、後から課金されうることを注記する", () => {
     const lines = formatCostSummary(
       [
         { name: "chat", cost: 0.00002 },
         { name: "long", cost: undefined },
       ],
-      { amount: 0.00002, settled: false },
+      { amount: 0.00002, state: "stable" },
     );
 
-    expect(lines[0]).toContain("still changing");
     expect(lines[1]).toContain("long unknown");
+    expect(lines[2]).toContain("may still be billed after this run");
   });
 
   test("キーを読めなかったときは総額を unknown とし、返信の額だけを出す", () => {
     const lines = formatCostSummary([{ name: "chat", cost: 0.00002 }], undefined);
 
-    expect(lines[0]).toBe("COST unknown: the OpenRouter key's usage could not be read");
-    expect(lines[1]).toBe("     replies reported $0.000020: chat $0.000020");
+    expect(lines).toEqual([
+      "COST unknown: the OpenRouter key's usage could not be read",
+      "     replies reported $0.000020: chat $0.000020",
+    ]);
   });
 });
