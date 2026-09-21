@@ -28,6 +28,59 @@ describe("rewriteLinks", () => {
     expect(rewriteLinks(text, FILE, PRUNED, ROOT, BASE)).toBe(text);
   });
 
+  test("title 付き、<...> のリンク先、前後の空白、参照定義も書き換える", () => {
+    const url = `${BASE}/docs/changes/old-feature/design.md`;
+    const text = [
+      '[a](../old-feature/design.md "title")',
+      "[b](<../old-feature/design.md>)",
+      "[c]( ../old-feature/design.md )",
+      "[old]: ../old-feature/design.md",
+      '  [old2]: <../old-feature/design.md> "title"',
+    ].join("\n");
+
+    expect(rewriteLinks(text, FILE, PRUNED, ROOT, BASE)).toBe(
+      [
+        `[a](${url} "title")`,
+        `[b](<${url}>)`,
+        `[c]( ${url} )`,
+        `[old]: ${url}`,
+        `  [old2]: <${url}> "title"`,
+      ].join("\n"),
+    );
+  });
+
+  test("コードブロックとインラインコードの中は書き換えない", () => {
+    const text = [
+      "`[x](../old-feature/design.md)` と [y](../old-feature/design.md)",
+      "```md",
+      "[z](../old-feature/design.md)",
+      "```",
+    ].join("\n");
+
+    expect(rewriteLinks(text, FILE, PRUNED, ROOT, BASE).split("\n")).toEqual([
+      `\`[x](../old-feature/design.md)\` と [y](${BASE}/docs/changes/old-feature/design.md)`,
+      "```md",
+      "[z](../old-feature/design.md)",
+      "```",
+    ]);
+  });
+
+  test("先頭が / のリポジトリ相対パス、パーセントエンコード、クエリと複数の # を扱う", () => {
+    const text = [
+      "[root](/docs/changes/old-feature/design.md)",
+      "[enc](../%6Fld-feature/design.md#a#b)",
+      "[query](../old-feature/design.md?plain=1#L3)",
+      "[proto](//example.com/docs/changes/old-feature/design.md)",
+    ].join("\n");
+
+    expect(rewriteLinks(text, FILE, PRUNED, ROOT, BASE).split("\n")).toEqual([
+      `[root](${BASE}/docs/changes/old-feature/design.md)`,
+      `[enc](${BASE}/docs/changes/old-feature/design.md#a#b)`,
+      `[query](${BASE}/docs/changes/old-feature/design.md?plain=1#L3)`,
+      "[proto](//example.com/docs/changes/old-feature/design.md)",
+    ]);
+  });
+
   test("別の階層のファイルからのリンクもリポジトリ相対のパスで書き換える", () => {
     const text = "[d](changes/old-feature/design.md)";
 

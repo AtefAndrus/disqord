@@ -8,19 +8,69 @@
  * the link would lose the pointer to the design a later change builds on.
  *
  * Usage: bun scripts/prune-released-changes.ts
- * Run it on a commit whose `docs/changes/` is committed and unmodified: the
- * permalinks point at HEAD.
+ * The permalinks point at HEAD, so every file in a folder to delete must be
+ * tracked; an edit not yet committed (a ticked manual check) is fine, the
+ * link then shows the committed version.
+ *
+ * This is not a full CommonMark parser. It handles inline links (with an
+ * optional title, `<...>` destinations, and surrounding spaces), reference
+ * definitions, and repository-root paths, and it leaves fenced code blocks
+ * and code spans alone. `CHANGELOG.md` is skipped because git-cliff
+ * regenerates it from commit messages.
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { parseFrontmatter } from "./generate-readme";
 
-const LINK = /(\]\()([^)\s]+)(\))/g;
+const INLINE_LINK = /(\]\(\s*)(<[^>\n]*>|[^\s)]+)((?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\s*\))/g;
+const REFERENCE_DEFINITION = /^(\s{0,3}\[[^\]\n]+\]:\s*)(<[^>\n]*>|\S+)(.*)$/;
+const FENCE = /^\s{0,3}(```|~~~)/;
+
+/** Rewrites one link destination, or returns it unchanged when it is not a relative link into a pruned folder. */
+function rewriteDestination(
+  destination: string,
+  file: string,
+  prunedDirs: readonly string[],
+  repoRoot: string,
+  blobBase: string,
+): string {
+  const angled = destination.startsWith("<") && destination.endsWith(">");
+  const href = angled ? destination.slice(1, -1) : destination;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("#") || href.startsWith("//")) {
+    return destination;
+  }
+  const suffixAt = href.search(/[?#]/);
+  const rawPath = suffixAt === -1 ? href : href.slice(0, suffixAt);
+  const suffix = suffixAt === -1 ? "" : href.slice(suffixAt);
+  let path: string;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    return destination;
+  }
+  const target = path.startsWith("/")
+    ? resolve(repoRoot, `.${path}`)
+    : resolve(dirname(file), path);
+  if (!prunedDirs.some((dir) => target === dir || target.startsWith(dir + sep))) {
+    return destination;
+  }
+  const repoPath = relative(repoRoot, target).split(sep).map(encodeURIComponent).join("/");
+  const rewritten = `${blobBase}/${repoPath}${suffix}`;
+  return angled ? `<${rewritten}>` : rewritten;
+}
+
+/** Applies `rewrite` to the parts of `line` outside code spans. */
+function outsideCodeSpans(line: string, rewrite: (text: string) => string): string {
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((part, index) => (index % 2 === 1 ? part : rewrite(part)))
+    .join("");
+}
 
 /**
- * Rewrites the relative links in `text` (the content of `file`) that point
- * inside one of `prunedDirs` to `<blobBase>/<repo path>`, keeping any `#anchor`.
+ * Rewrites the links in `text` (the content of `file`) that point inside one
+ * of `prunedDirs` to `<blobBase>/<repo path>`, keeping any query and fragment.
  * All paths are absolute; `blobBase` is `https://github.com/<owner>/<repo>/blob/<sha>`.
  */
 export function rewriteLinks(
@@ -30,15 +80,32 @@ export function rewriteLinks(
   repoRoot: string,
   blobBase: string,
 ): string {
-  return text.replace(LINK, (whole, open: string, href: string, close: string) => {
-    if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("#")) return whole;
-    const [path = "", anchor] = href.split("#", 2);
-    const target = resolve(dirname(file), path);
-    const inPruned = prunedDirs.some((dir) => target === dir || target.startsWith(dir + sep));
-    if (!inPruned) return whole;
-    const repoPath = relative(repoRoot, target).split(sep).join("/");
-    return `${open}${blobBase}/${repoPath}${anchor === undefined ? "" : `#${anchor}`}${close}`;
-  });
+  const to = (destination: string): string =>
+    rewriteDestination(destination, file, prunedDirs, repoRoot, blobBase);
+  let fence: string | undefined;
+  return text
+    .split("\n")
+    .map((line) => {
+      const marker = line.match(FENCE)?.[1];
+      if (marker !== undefined && (fence === undefined || fence === marker)) {
+        fence = fence === undefined ? marker : undefined;
+        return line;
+      }
+      if (fence !== undefined) return line;
+      const definition = line.match(REFERENCE_DEFINITION);
+      if (definition) {
+        const [, head = "", destination = "", tail = ""] = definition;
+        return `${head}${to(destination)}${tail}`;
+      }
+      return outsideCodeSpans(line, (part) =>
+        part.replace(
+          INLINE_LINK,
+          (_whole, open: string, destination: string, close: string) =>
+            `${open}${to(destination)}${close}`,
+        ),
+      );
+    })
+    .join("\n");
 }
 
 /** `https://github.com/<owner>/<repo>` from an HTTPS or SSH (including host-alias) remote URL. */
@@ -54,7 +121,7 @@ function markdownFiles(dir: string, skip: readonly string[]): string[] {
     const path = resolve(dir, entry.name);
     if (skip.some((s) => path === s || path.startsWith(s + sep))) continue;
     if (entry.isDirectory()) files.push(...markdownFiles(path, skip));
-    else if (entry.name.endsWith(".md")) files.push(path);
+    else if (entry.name.toLowerCase().endsWith(".md")) files.push(path);
   }
   return files;
 }
@@ -80,8 +147,13 @@ function main(): void {
     return;
   }
 
-  const dirty = git("status", "--porcelain", "--", "docs/changes");
-  if (dirty) throw new Error(`docs/changes has uncommitted changes:\n${dirty}`);
+  // A file HEAD does not have would get a permalink that 404s, and deleting
+  // it would lose it for good.
+  const prunedPaths = pruned.map((dir) => relative(repoRoot, dir));
+  const untracked = git("ls-files", "--others", "--", ...prunedPaths);
+  if (untracked) {
+    throw new Error(`files in the folders to delete are not committed:\n${untracked}`);
+  }
   const blobBase = `${githubUrlFromRemote(git("remote", "get-url", "origin"))}/blob/${git("rev-parse", "HEAD")}`;
 
   const skip = [
