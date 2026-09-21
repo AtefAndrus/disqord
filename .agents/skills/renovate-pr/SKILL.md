@@ -21,8 +21,9 @@ description: Inspect, refresh, verify, and merge this repository's Renovate depe
 4. For Biome, require the package version and `biome.json` schema URL to match.
 5. For Bun, require `mise.toml`, `Dockerfile`, `package.json`, and `bun.lock` to move as one compatible group.
 6. If the PR is `BEHIND`, run `gh pr update-branch <N>` or request a Renovate rebase from the Dependency Dashboard.
-7. Wait for checks on the current head, then confirm that the head SHA has not changed and `mergeStateStatus` is `CLEAN` before merging.
-8. Merge with `gh pr merge <N> --merge` and verify the post-merge `main` CI.
+7. Read the `lock-age` job's summary or its warnings for the current head. Resolve every added version published under three days ago or marked as not checked before merging; the job never fails, so a green check does not mean the lock was reviewed.
+8. Wait for checks on the current head, then confirm that the head SHA has not changed and `mergeStateStatus` is `CLEAN` before merging.
+9. Merge with `gh pr merge <N> --merge` and verify the post-merge `main` CI.
 
 Renovate can force-push an updated dependency set between verification and merge.
 If GitHub rejects a merge as out of date, read the branch ref and current head again, wait for checks attached to that exact commit, and retry only after the PR becomes `CLEAN`.
@@ -37,5 +38,19 @@ gh pr update-branch <N>
 gh pr checks <N> --watch
 gh pr merge <N> --merge
 ```
+
+## Checking a `renovate.json5` change locally
+
+Run a lookup against a copy of the working tree, never the tree itself:
+
+```bash
+RENOVATE_X_IGNORE_RE2=true LOG_LEVEL=debug LOG_FORMAT=json GITHUB_COM_TOKEN=$(gh auth token) \
+  npx --yes renovate@<version> --platform=local --dry-run=lookup > lookup.json
+```
+
+- Delete the `hostRules` entry from the copy's `renovate.json5`. Its `{{ secrets.TAKUMI_GUARD_TOKEN }}` exists only in the Mend Portal, and a local run stops with `Unknown secrets name`. The registry proxy accepts anonymous requests from a local IP.
+- Commit the copy's changes; the local platform reads files through git.
+- Read the `packageFiles with updates` entry: each dependency's `updates[]` gives `updateType`, `newValue`, and `pendingChecks`.
+- To see whether the cooldown applies to an update, raise `minimumReleaseAge` on the copy and check that a version younger than the new value turns `pendingChecks: true`.
 
 Do not push dependency edits directly to `main` or bypass required checks.
