@@ -355,7 +355,7 @@ describe("ChatService", () => {
         expect(request.tools).toEqual([
           {
             type: "openrouter:web_search",
-            parameters: { engine: "exa", max_results: 5, max_total_results: 10, max_uses: 2 },
+            parameters: { engine: "exa", max_results: 5, max_total_results: 20, max_uses: 4 },
           },
         ]);
         expect(request.tool_choice).toBe("auto");

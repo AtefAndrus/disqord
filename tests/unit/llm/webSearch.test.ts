@@ -77,7 +77,7 @@ describe("formatSearchResultLinks", () => {
 
 describe("describeSearchBilling", () => {
   test("上限が効かない native 検索と、課金先の違う Firecrawl をそれぞれ伝える", () => {
-    expect(describeSearchBilling("perplexity")).toContain("1応答あたり最大2回");
+    expect(describeSearchBilling("perplexity")).toContain("1応答あたり最大4回");
     expect(describeSearchBilling("perplexity")).not.toContain("効きません");
     expect(describeSearchBilling("native")).toContain(
       "Anthropic 以外のモデルの native 検索にはこの上限が効きません",

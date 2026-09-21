@@ -4,6 +4,16 @@ import type { ServerTool, SystemChatMessage, WebSearchResultLink } from "../../t
 export type WebSearchEngine = AppConfig["webSearchEngine"];
 
 /**
+ * Searches per request. Questions about several things at once (three
+ * packages' versions, three runtimes) issued three to five searches, and in
+ * a one-sample check on 2026-09-22 answered more of their facts correctly
+ * with four or five allowed than with two. At Perplexity's $0.005 per search
+ * this caps search charges at $0.02 per reply.
+ */
+export const MAX_SEARCHES = 4;
+const RESULTS_PER_SEARCH = 5;
+
+/**
  * `openrouter:web_search` as sent on every turn when a guild enables web search.
  *
  * Perplexity is the default engine rather than Parallel or Exa: on
@@ -16,16 +26,19 @@ export type WebSearchEngine = AppConfig["webSearchEngine"];
  *
  * `max_uses` bounds the billed searches per request. The model can still
  * issue more calls; those return an error result, are counted in
- * `web_search_requests`, and are not billed.
+ * `web_search_requests`, and are not billed. `max_total_results` is derived
+ * from it: once a request has collected that many results, later searches
+ * return nothing, so a smaller total silently caps the searches below
+ * `max_uses` (10 results allowed only two useful searches of 5).
  */
 export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
   return {
     type: "openrouter:web_search",
     parameters: {
       engine,
-      max_results: 5,
-      max_total_results: 10,
-      max_uses: 2,
+      max_results: RESULTS_PER_SEARCH,
+      max_total_results: MAX_SEARCHES * RESULTS_PER_SEARCH,
+      max_uses: MAX_SEARCHES,
     },
   };
 }
@@ -41,13 +54,13 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
 export function describeSearchBilling(engine: WebSearchEngine): string {
   switch (engine) {
     case "native":
-      return "検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大2回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。";
+      return `検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大${MAX_SEARCHES}回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。`;
     case "auto":
-      return "検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大2回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。";
+      return `検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大${MAX_SEARCHES}回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。`;
     case "firecrawl":
-      return "検索の費用は OpenRouter ではなく、OpenRouter に登録した Firecrawl のキーに課金されます（1応答あたり最大2回）。";
+      return `検索の費用は OpenRouter ではなく、OpenRouter に登録した Firecrawl のキーに課金されます（1応答あたり最大${MAX_SEARCHES}回）。`;
     default:
-      return "検索の費用は OpenRouter の残高から引かれます（1応答あたり最大2回）。";
+      return `検索の費用は OpenRouter の残高から引かれます（1応答あたり最大${MAX_SEARCHES}回）。`;
   }
 }
 
