@@ -106,6 +106,26 @@ jobs:
           advanced-security: false # SARIF/GHAS アップロード無効化（security-events: write 昇格を回避）
           online-audits: false # 外部 API 参照を無効化（offline 運用）
 
+  # PR が bun.lock に足す版 (推移的な依存を含む) のうち、公開から 3 日未満のものを警告する。
+  # Renovate のクールダウンは直接依存の候補にしか掛からず、lock 再生成で入る推移的な依存は
+  # 誰も見ていないため。脆弱性修正を止めないよう、落とさずに警告だけ出す (scripts/check-lock-age.ts)。
+  lock-age:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # base の bun.lock を git show で読むため
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: "2026.9.9"
+          install_args: bun
+      - name: Check the age of packages bun.lock adds
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bun scripts/check-lock-age.ts "$BASE_SHA"
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
