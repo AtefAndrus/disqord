@@ -54,6 +54,12 @@ describe("formatSearchResultLinks", () => {
     expect(text).toContain("[a b c (d.test)]");
   });
 
+  test("Markdown を作りうる文字が残るホスト名のリンクは表示しない", () => {
+    expect(
+      formatSearchResultLinks([{ url: "https://%60trusted%60.test/", title: "x" }]),
+    ).toBeUndefined();
+  });
+
   test("300 文字を超える URL は表示しない", () => {
     const long = `https://a.test/${"x".repeat(300)}`;
     expect(formatSearchResultLinks([{ url: long, title: "long" }])).toBeUndefined();

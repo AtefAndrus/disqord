@@ -41,9 +41,9 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
 export function describeSearchBilling(engine: WebSearchEngine): string {
   switch (engine) {
     case "native":
-      return "検索の費用は OpenRouter の残高から引かれます。1応答あたり最大2回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。";
+      return "検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大2回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。";
     case "auto":
-      return "検索の費用は OpenRouter の残高から引かれます。1応答あたり最大2回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。";
+      return "検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大2回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。";
     case "firecrawl":
       return "検索の費用は OpenRouter ではなく、OpenRouter に登録した Firecrawl のキーに課金されます（1応答あたり最大2回）。";
     default:
@@ -143,6 +143,9 @@ export function formatSearchResultLinks(results: WebSearchResultLink[]): string 
     seen.add(href);
     const title = sanitizeTitle(result.title ?? "");
     const host = url.hostname;
+    // `URL` keeps some characters in a host (a backtick decoded from `%60`),
+    // so the host shown in the label gets its own check.
+    if (!/^[a-z0-9.-]+$/.test(host)) continue;
     const label = title.length > 0 ? `${title.slice(0, MAX_TITLE_CHARS)} (${host})` : host;
     lines.push(`- [${label}](<${href}>)`);
   }
