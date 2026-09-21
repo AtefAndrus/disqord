@@ -243,10 +243,10 @@ export class ChatService implements IChatService {
       ) {
         try {
           const expansionResult = await raceWithAbort(
-            this.tweetService.expandTweets(input.text, controller.signal, () =>
+            this.tweetService.expandTweets(input.text, controller.signal, (signal) =>
               raceWithAbort(
                 this.modelService.isMultimodalCapable(settings.defaultModel, "image"),
-                controller.signal,
+                signal,
               ).then((result) => (result.ok ? result.value : null)),
             ),
             controller.signal,

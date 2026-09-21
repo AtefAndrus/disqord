@@ -151,7 +151,7 @@ export function extractTweetUrls(text: string): TweetUrl[] {
     }
 
     const segments = url.pathname.split("/");
-    const id =
+    const idSegment =
       segments.length >= 5 &&
       segments[1] === "i" &&
       segments[2] === "web" &&
@@ -162,6 +162,7 @@ export function extractTweetUrls(text: string): TweetUrl[] {
             (segments[2] === "status" || segments[2] === "statuses")
           ? segments[3]
           : undefined;
+    const id = idSegment?.match(/^\d+/u)?.[0];
 
     if (!id || !/^\d{2,20}$/u.test(id) || seen.has(id)) continue;
     seen.add(id);
@@ -680,7 +681,8 @@ async function classifyResponse(response: Response): Promise<AttemptResult> {
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (error: unknown) {
+    if (!(error instanceof SyntaxError)) throw error;
     return { kind: "dropped", reason: "non-JSON response" };
   }
   if (!isRecord(body) || !isFiniteNumber(body.code)) {
@@ -706,6 +708,14 @@ async function classifyResponse(response: Response): Promise<AttemptResult> {
   const record = parseTweetRecord(body.status);
   if (!record) return { kind: "dropped", reason: "malformed status" };
   return record.type === "status" ? { kind: "expanded", record } : { kind: "tombstone", record };
+}
+
+async function cancelResponseBody(response: Response | undefined): Promise<void> {
+  try {
+    await response?.body?.cancel();
+  } catch {
+    // The body can already be locked or consumed by response.json().
+  }
 }
 
 export class TweetService implements ITweetService {
@@ -849,20 +859,24 @@ export class TweetService implements ITweetService {
     parentSignal: AbortSignal,
     deadline: ExpansionDeadline,
   ): Promise<AttemptResult> {
-    const combined = combineSignals(parentSignal, deadline.signal);
+    const attemptController = new AbortController();
+    const combined = combineSignals(parentSignal, deadline.signal, attemptController.signal);
     deadline.start();
     const release = await this.limiter.acquire(combined.signal);
     if (!release) {
+      attemptController.abort();
       combined.dispose();
       return { kind: "cancelled", by: parentSignal.aborted ? "parent" : "deadline" };
     }
 
     if (combined.signal.aborted) {
+      attemptController.abort();
       release();
       combined.dispose();
       return { kind: "cancelled", by: parentSignal.aborted ? "parent" : "deadline" };
     }
 
+    let response: Response | undefined;
     try {
       let request: Promise<Response>;
       try {
@@ -889,7 +903,8 @@ export class TweetService implements ITweetService {
         return { kind: "retryable", reason: "network error", delayMs: 500, retryAllowed: true };
       }
 
-      const classified = await raceWithSignal(classifyResponse(fetched.value), combined.signal);
+      response = fetched.value;
+      const classified = await raceWithSignal(classifyResponse(response), combined.signal);
       if (!classified.ok) {
         if (classified.aborted) {
           return {
@@ -897,15 +912,17 @@ export class TweetService implements ITweetService {
             by: parentSignal.aborted ? "parent" : "deadline",
           };
         }
-        return { kind: "dropped", reason: "malformed response" };
+        return { kind: "retryable", reason: "network error", delayMs: 500, retryAllowed: true };
       }
       const result = classified.value;
       if (parentSignal.aborted) return { kind: "cancelled", by: "parent" };
       if (deadline.signal.aborted) return { kind: "cancelled", by: "deadline" };
       return result;
     } finally {
-      release();
+      attemptController.abort();
+      await cancelResponseBody(response);
       combined.dispose();
+      release();
     }
   }
 }

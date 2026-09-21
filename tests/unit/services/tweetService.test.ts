@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { getEventListeners } from "node:events";
 import {
   extractTweetIds,
   formatTweetBlock,
@@ -44,23 +45,71 @@ describe("tweetService", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("対応する全ホスト、パス、山括弧を抽出し、重複排除と最大3件を適用する", () => {
-    const text = [
-      "https://twitter.com/a/status/20?x=1#top",
-      "https://www.twitter.com/a/statuses/21/photo/1",
-      "https://mobile.twitter.com/a/status/22",
-      "<https://x.com/a/status/23>",
-      "https://www.x.com/a/status/24",
-      "https://fxtwitter.com/a/status/25",
-      "https://fixupx.com/a/status/26",
-      "https://vxtwitter.com/a/status/27",
-      "https://x.com/i/web/status/20",
-      "https://x.com/a/status/1",
-      "https://x.com/a/status/123456789012345678901",
-      "https://x.com/a/status/not-number",
-    ].join(" ");
+  test.each([
+    "twitter.com",
+    "www.twitter.com",
+    "mobile.twitter.com",
+    "x.com",
+    "www.x.com",
+    "fxtwitter.com",
+    "fixupx.com",
+    "vxtwitter.com",
+  ])("accepted host を個別に抽出する: %s", (host) => {
+    expect(extractTweetIds(`https://${host}/a/status/20`)).toEqual(["20"]);
+  });
 
-    expect(extractTweetIds(text)).toEqual(["20", "21", "22"]);
+  test.each(["status", "statuses"])("accepted path を個別に抽出する: /%s/", (path) => {
+    expect(extractTweetIds(`https://x.com/a/${path}/20`)).toEqual(["20"]);
+  });
+
+  test("/i/web/status/ の path を抽出する", () => {
+    expect(extractTweetIds("https://x.com/i/web/status/20")).toEqual(["20"]);
+  });
+
+  test("ID の形式が不正な URL は除外する", () => {
+    expect(
+      extractTweetIds(
+        [
+          "https://x.com/a/status/1",
+          "https://x.com/a/status/123456789012345678901",
+          "https://x.com/a/status/not-number",
+          "https://x.com/a/status/20",
+        ].join(" "),
+      ),
+    ).toEqual(["20"]);
+  });
+
+  test("山括弧で囲まれた URL を抽出する", () => {
+    expect(extractTweetIds("<https://x.com/a/status/20>")).toEqual(["20"]);
+  });
+
+  test.each([
+    "[投稿](https://x.com/a/status/20)",
+    "https://x.com/a/status/20。",
+    "https://x.com/a/status/20、",
+  ])("markdown link と URL 末尾の句読点から ID を抽出する: %s", (text) => {
+    expect(extractTweetIds(text)).toEqual(["20"]);
+  });
+
+  test("同じ ID を重複排除する", () => {
+    expect(
+      extractTweetIds(
+        "https://x.com/a/status/20 https://twitter.com/b/statuses/20 https://x.com/c/status/21",
+      ),
+    ).toEqual(["20", "21"]);
+  });
+
+  test("出現順で最大3件に制限する", () => {
+    expect(
+      extractTweetIds(
+        [
+          "https://x.com/a/status/20",
+          "https://x.com/a/status/21",
+          "https://x.com/a/status/22",
+          "https://x.com/a/status/23",
+        ].join(" "),
+      ),
+    ).toEqual(["20", "21", "22"]);
   });
 
   test("成功、tombstone、404をそれぞれ展開する", async () => {
@@ -107,6 +156,59 @@ describe("tweetService", () => {
     expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("bad"));
   });
 
+  test("HTTP 200 の body 読み取りネットワークエラーは1回だけ再試行する", async () => {
+    const brokenResponse = new Response("", { status: 200 });
+    brokenResponse.json = (): Promise<unknown> =>
+      Promise.reject(new TypeError("connection reset while reading body"));
+    mockFetch
+      .mockResolvedValueOnce(brokenResponse)
+      .mockResolvedValueOnce(jsonResponse({ code: 200, status: status({ text: "retried" }) }));
+
+    const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+      "https://x.com/a/status/20",
+      new AbortController().signal,
+    );
+
+    expect(result.textParts[0]?.text).toContain("retried");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("分類前にレスポンス body を cancel し、signal を abort してから枠を返す", async () => {
+    const limiter = new TweetRequestLimiter(1);
+    let finishCancel!: () => void;
+    const cancelBody = mock(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCancel = resolve;
+        }),
+    );
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
+      status: 404,
+    });
+    let firstSignal: AbortSignal | undefined;
+    mockFetch.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/20")) {
+        firstSignal = init?.signal ?? undefined;
+        return Promise.resolve(response);
+      }
+      return Promise.resolve(jsonResponse({ code: 200, status: status({ text: "next" }) }));
+    });
+
+    const expansion = new TweetService("https://api.fxtwitter.test", "1.5.0", limiter).expandTweets(
+      "https://x.com/a/status/20 https://x.com/a/status/21",
+      new AbortController().signal,
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(cancelBody).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(firstSignal?.aborted).toBe(true);
+
+    finishCancel();
+    await expect(expansion).resolves.toMatchObject({ status: "expanded" });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   test("429、5xx、ネットワークエラーは1回だけ再試行する", async () => {
     const attempts = new Map<string, number>();
     mockFetch.mockImplementation((input: RequestInfo | URL) => {
@@ -131,6 +233,58 @@ describe("tweetService", () => {
     expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 
+  test("2回連続で失敗したリクエストは3回目を送らない", async () => {
+    mockFetch.mockRejectedValue(new Error("network"));
+
+    const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+      "https://x.com/a/status/20",
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("none");
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("既定の約500ms待機が終わるまで再試行を送らない", async () => {
+    const requestTimes: number[] = [];
+    mockFetch.mockImplementation(() => {
+      requestTimes.push(performance.now());
+      return requestTimes.length === 1
+        ? Promise.resolve(new Response("", { status: 503 }))
+        : Promise.resolve(jsonResponse({ code: 200, status: status({ text: "retried" }) }));
+    });
+
+    const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+      "https://x.com/a/status/20",
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("expanded");
+    expect(requestTimes).toHaveLength(2);
+    const firstRequestTime = requestTimes[0];
+    const secondRequestTime = requestTimes[1];
+    if (firstRequestTime === undefined || secondRequestTime === undefined) {
+      throw new Error("expected two request timestamps");
+    }
+    expect(secondRequestTime - firstRequestTime).toBeGreaterThanOrEqual(450);
+  });
+
+  test("Retry-After が残りの総期限より大きければ再試行しない", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response("", { status: 429, headers: { "Retry-After": "6" } }),
+    );
+
+    const startedAt = performance.now();
+    const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+      "https://x.com/a/status/20",
+      new AbortController().signal,
+    );
+
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+    expect(result.status).toBe("none");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
   test("Retry-Afterが無い429は既定の待ち時間で再試行する", async () => {
     mockFetch
       .mockResolvedValueOnce(new Response("", { status: 429 }))
@@ -146,25 +300,35 @@ describe("tweetService", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  test("HTTP-dateや不正なRetry-Afterは再試行しない", async () => {
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response("", {
-          status: 429,
-          headers: { "Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT" },
-        }),
-      )
-      .mockResolvedValueOnce(
-        new Response("", { status: 429, headers: { "Retry-After": "not-a-number" } }),
-      );
+  test("HTTP-date形式の Retry-After は再試行しない", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response("", {
+        status: 429,
+        headers: { "Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT" },
+      }),
+    );
 
     const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
-      "https://x.com/a/status/20 https://x.com/a/status/21",
+      "https://x.com/a/status/20",
       new AbortController().signal,
     );
 
     expect(result.status).toBe("none");
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("不正な Retry-After は再試行しない", async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response("", { status: 429, headers: { "Retry-After": "not-a-number" } }),
+    );
+
+    const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+      "https://x.com/a/status/20",
+      new AbortController().signal,
+    );
+
+    expect(result.status).toBe("none");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   test("引用、カード、ノート、投票、メディアを指定順で整形する", () => {
@@ -382,6 +546,53 @@ describe("tweetService", () => {
     }
   });
 
+  test("body 読み取り中に総期限が切れても即座に返り、body・timer・listenerを残さない", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    let scheduledTimers = 0;
+    let clearedTimers = 0;
+    globalThis.setTimeout = ((...args: Parameters<typeof originalSetTimeout>) => {
+      const [handler, delay, ...rest] = args;
+      scheduledTimers++;
+      return originalSetTimeout(handler, delay === TWEET_FETCH_DEADLINE_MS ? 0 : delay, ...rest);
+    }) as typeof globalThis.setTimeout;
+    globalThis.clearTimeout = ((...args: Parameters<typeof originalClearTimeout>) => {
+      clearedTimers++;
+      return originalClearTimeout(...args);
+    }) as typeof globalThis.clearTimeout;
+
+    let bodyCancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel: () => {
+          bodyCancelled = true;
+        },
+      }),
+      { status: 200 },
+    );
+    response.json = (): Promise<unknown> => new Promise<unknown>(() => {});
+    mockFetch.mockResolvedValue(response);
+    const controller = new AbortController();
+
+    try {
+      const startedAt = performance.now();
+      const result = await new TweetService("https://api.fxtwitter.test", "1.5.0").expandTweets(
+        "https://x.com/a/status/20",
+        controller.signal,
+      );
+
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+      expect(result.status).toBe("none");
+      expect(bodyCancelled).toBe(true);
+      expect(scheduledTimers).toBe(1);
+      expect(clearedTimers).toBe(1);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+    }
+  });
+
   test("スロット待ちの中断済み waiter は枠を取らず、次の FIFO waiter を通す", async () => {
     const limiter = new TweetRequestLimiter(1);
     const first = await limiter.acquire(new AbortController().signal);
@@ -395,6 +606,108 @@ describe("tweetService", () => {
     const releaseNext = await next;
     expect(releaseNext).toBeFunction();
     releaseNext?.();
+    expect(limiter.activeCount).toBe(0);
+  });
+
+  test("複数の待機 waiter に枠を FIFO 順で渡す", async () => {
+    const limiter = new TweetRequestLimiter(1);
+    const first = await limiter.acquire(new AbortController().signal);
+    if (!first) throw new Error("first acquire failed");
+
+    const order: string[] = [];
+    const waiters = ["first", "second", "third"].map((label) =>
+      (async (): Promise<(() => void) | undefined> => {
+        const release = await limiter.acquire(new AbortController().signal);
+        order.push(label);
+        return release;
+      })(),
+    );
+
+    first();
+    const releaseFirst = await waiters[0];
+    releaseFirst?.();
+    const releaseSecond = await waiters[1];
+    releaseSecond?.();
+    const releaseThird = await waiters[2];
+    releaseThird?.();
+
+    expect(order).toEqual(["first", "second", "third"]);
+    expect(limiter.activeCount).toBe(0);
+  });
+
+  test("4枠の上限を複数の expandTweets 呼び出しにまたがって守る", async () => {
+    const limiter = new TweetRequestLimiter(4);
+    let active = 0;
+    let maximumActive = 0;
+    let started = 0;
+    let resolveFirstBatch!: () => void;
+    let resolveSecondBatch!: () => void;
+    const firstBatch = new Promise<void>((resolve) => {
+      resolveFirstBatch = resolve;
+    });
+    const secondBatch = new Promise<void>((resolve) => {
+      resolveSecondBatch = resolve;
+    });
+    const pending: Array<() => void> = [];
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const id = String(input).split("/").at(-1) ?? "";
+      started++;
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      if (started === 4) resolveFirstBatch();
+      if (started === 8) resolveSecondBatch();
+      return new Promise<Response>((resolve) => {
+        pending.push(() => {
+          active--;
+          resolve(jsonResponse({ code: 200, status: status({ text: id }) }));
+        });
+      });
+    });
+
+    const service = new TweetService("https://api.fxtwitter.test", "1.5.0", limiter);
+    const signal = new AbortController().signal;
+    const expansions = Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        service.expandTweets(`https://x.com/a/status/${index + 20}`, signal),
+      ),
+    );
+
+    await firstBatch;
+    expect(active).toBe(4);
+    expect(maximumActive).toBe(4);
+    const firstPending = pending.splice(0);
+    firstPending.forEach((resolve) => {
+      resolve();
+    });
+
+    await secondBatch;
+    expect(active).toBe(4);
+    expect(maximumActive).toBe(4);
+    const secondPending = pending.splice(0);
+    secondPending.forEach((resolve) => {
+      resolve();
+    });
+
+    const results = await expansions;
+    expect(results.every((result) => result.status === "expanded")).toBe(true);
+    expect(maximumActive).toBe(4);
+    expect(limiter.activeCount).toBe(0);
+  });
+
+  test("枠を渡した直後の abort と二重 release でも枠を漏らさない", async () => {
+    const limiter = new TweetRequestLimiter(1);
+    const controller = new AbortController();
+    const release = await limiter.acquire(controller.signal);
+    if (!release) throw new Error("acquire failed");
+    const queued = limiter.acquire(new AbortController().signal);
+
+    controller.abort();
+    release();
+    release();
+
+    const releaseQueued = await queued;
+    expect(releaseQueued).toBeFunction();
+    releaseQueued?.();
     expect(limiter.activeCount).toBe(0);
   });
 

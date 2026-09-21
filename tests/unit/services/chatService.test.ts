@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { getEventListeners } from "node:events";
 import { BadRequestError } from "../../../src/errors";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
@@ -6,6 +7,7 @@ import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { ChatService } from "../../../src/services/chatService";
 import { ModelService } from "../../../src/services/modelService";
 import type { ISettingsService } from "../../../src/services/settingsService";
+import { TWEET_FETCH_DEADLINE_MS, TweetService } from "../../../src/services/tweetService";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -427,6 +429,81 @@ describe("ChatService", () => {
         { type: "text", text: "read this" },
         { type: "text", text: "<untrusted-tweet>tweet</untrusted-tweet>" },
       ]);
+    });
+
+    test("実TweetServiceの画像対応判定に期限signalを渡し、生成signalのlistenerを残さない", async () => {
+      const originalFetch = globalThis.fetch;
+      const originalSetTimeout = globalThis.setTimeout;
+      const originalAbortController = globalThis.AbortController;
+      const createdControllers: AbortController[] = [];
+      class TrackingAbortController extends originalAbortController {
+        constructor() {
+          super();
+          createdControllers.push(this);
+        }
+      }
+      const mockFetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: 200,
+              status: {
+                type: "status",
+                text: "tweet",
+                created_timestamp: 0,
+                likes: 1,
+                reposts: 2,
+                replies: 3,
+                author: { name: "Alice", screen_name: "alice" },
+                media: { photos: [{ url: "https://pbs.twimg.com/photo.jpg" }], videos: [] },
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
+      globalThis.AbortController = TrackingAbortController;
+      globalThis.setTimeout = ((...args: Parameters<typeof originalSetTimeout>) => {
+        const [handler, delay, ...rest] = args;
+        return originalSetTimeout(handler, delay === TWEET_FETCH_DEADLINE_MS ? 0 : delay, ...rest);
+      }) as typeof globalThis.setTimeout;
+      mockLLMClient.listModelsWithPricing = mock(() => new Promise<never>(() => {}));
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: true }),
+      );
+      const realTweetService = new TweetService("https://api.fxtwitter.test", "1.5.0");
+      const realChatService = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        realTweetService,
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      try {
+        const result = await realChatService.generateChatResponse(
+          "guild-123",
+          { text: "https://x.com/a/status/20" },
+          "req-real-tweet",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+
+        expect(result.status).toBe("final");
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+        expect(mockLLMClient.listModelsWithPricing).toHaveBeenCalledTimes(1);
+        const generationController = createdControllers[0];
+        if (!generationController) throw new Error("generation controller was not created");
+        expect(generationController.signal.aborted).toBe(false);
+        expect(getEventListeners(generationController.signal, "abort")).toHaveLength(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.AbortController = originalAbortController;
+      }
     });
 
     test("ツイート展開がOFFならサービスもネットワークも呼ばず、リクエストを変えない", async () => {
