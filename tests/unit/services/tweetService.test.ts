@@ -91,6 +91,31 @@ describe("tweetService", () => {
     expect(extractTweetIds(text)).toEqual(["20"]);
   });
 
+  test.each([
+    "https://x.com/a/status/20abc",
+    "https://x.com/a/status/20_1",
+    "https://x.com/a/status/20%22evil",
+  ])(
+    "ID の直後に英数字、アンダースコア、パーセント記号が続く URL は先頭の数字に切り詰めず除外する: %s",
+    (text) => {
+      expect(extractTweetIds(text)).toEqual([]);
+    },
+  );
+
+  test("続けて書かれた Markdown リンクをそれぞれ抽出する", () => {
+    expect(extractTweetIds("[a](https://x.com/a/status/20)[b](https://x.com/b/status/21)")).toEqual(
+      ["20", "21"],
+    );
+  });
+
+  test.each([
+    "https://evil.x.com/a/status/20",
+    "https://x.com.evil.test/a/status/20",
+    "https://x.com@evil.test/a/status/20",
+  ])("対象ホストではない URL は除外する: %s", (text) => {
+    expect(extractTweetIds(text)).toEqual([]);
+  });
+
   test("同じ ID を重複排除する", () => {
     expect(
       extractTweetIds(
@@ -173,15 +198,10 @@ describe("tweetService", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
-  test("分類前にレスポンス body を cancel し、signal を abort してから枠を返す", async () => {
+  test("未読の body の cancel を始め、signal を abort してから、cancel の完了を待たずに枠を返す", async () => {
     const limiter = new TweetRequestLimiter(1);
-    let finishCancel!: () => void;
-    const cancelBody = mock(
-      () =>
-        new Promise<void>((resolve) => {
-          finishCancel = resolve;
-        }),
-    );
+    // Never settles: releasing the slot must not depend on it.
+    const cancelBody = mock(() => new Promise<void>(() => {}));
     const response = new Response(new ReadableStream<Uint8Array>({ cancel: cancelBody }), {
       status: 404,
     });
@@ -194,19 +214,19 @@ describe("tweetService", () => {
       return Promise.resolve(jsonResponse({ code: 200, status: status({ text: "next" }) }));
     });
 
-    const expansion = new TweetService("https://api.fxtwitter.test", "1.5.0", limiter).expandTweets(
+    const result = await new TweetService(
+      "https://api.fxtwitter.test",
+      "1.5.0",
+      limiter,
+    ).expandTweets(
       "https://x.com/a/status/20 https://x.com/a/status/21",
       new AbortController().signal,
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(cancelBody).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(firstSignal?.aborted).toBe(true);
-
-    finishCancel();
-    await expect(expansion).resolves.toMatchObject({ status: "expanded" });
     expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: "expanded" });
   });
 
   test("429、5xx、ネットワークエラーは1回だけ再試行する", async () => {

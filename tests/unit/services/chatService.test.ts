@@ -506,6 +506,85 @@ describe("ChatService", () => {
       }
     });
 
+    test("実TweetService経由で、取得したポストの本文と画像がモデルへのリクエストに入る", async () => {
+      const originalFetch = globalThis.fetch;
+      const mockFetch = mock(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              code: 200,
+              status: {
+                type: "status",
+                text: "just setting up my twttr",
+                created_timestamp: 0,
+                likes: 1,
+                reposts: 2,
+                replies: 3,
+                author: { name: "jack", screen_name: "jack" },
+                media: { photos: [{ url: "https://pbs.twimg.com/photo.jpg" }], videos: [] },
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+      );
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 1640000000,
+            contextLength: 4096,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "image"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ twitterExpandEnabled: true }),
+      );
+      const realChatService = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        new TweetService("https://api.fxtwitter.test", "1.5.0"),
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      try {
+        const result = await realChatService.generateChatResponse(
+          "guild-123",
+          { text: "これ何? https://x.com/jack/status/20" },
+          "req-real-tweet-content",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+
+        expect(result.status).toBe("final");
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+        ];
+        const system = request.messages.find((m) => m.role === "system");
+        expect(JSON.stringify(system?.content)).toContain("untrusted-tweet");
+        const user = request.messages.find((m) => m.role === "user");
+        if (!user || !Array.isArray(user.content)) throw new Error("user content must be parts");
+        const texts = user.content.flatMap((p) => (p.type === "text" ? [p.text] : []));
+        expect(texts[0]).toBe("これ何? https://x.com/jack/status/20");
+        expect(texts[1]).toContain('<untrusted-tweet url="https://x.com/i/status/20">');
+        expect(texts[1]).toContain("just setting up my twttr");
+        expect(user.content).toContainEqual({
+          type: "image_url",
+          image_url: { url: "https://pbs.twimg.com/photo.jpg" },
+        });
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
     test("ツイート展開がOFFならサービスもネットワークも呼ばず、リクエストを変えない", async () => {
       mockTweetService.extractTweetIds = mock(() => {
         throw new Error("must not extract when disabled");
