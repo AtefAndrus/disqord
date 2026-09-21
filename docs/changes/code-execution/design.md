@@ -23,10 +23,10 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](../responses-api-migration/design.md) — shell server tool は Responses API と Messages API でしか使えず、Chat Completions では 400 になる。`usage.cost_details.server_tool_cost` と `usage.server_tool_use_details` の parser と集計も同 change が用意する
-- 先行: [tool-calling-foundation](../tool-calling-foundation/design.md) — `runToolLoop()` の `serverTools` 引数が server tool を毎ターンの `tools` へ載せる
+- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — shell server tool は Responses API と Messages API でしか使えず、Chat Completions では 400 になる。`usage.cost_details.server_tool_cost` と `usage.server_tool_use_details` の parser と集計も同 change が用意する
+- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `runToolLoop()` の `serverTools` 引数が server tool を毎ターンの `tools` へ載せる
 - 連携: [OpenRouter サーバツール群](../server-tools/design.md) / [Web 検索 + ツイート展開](../web-search/design.md) — server tool の item を client が呼び出し側へ渡す経路（後述の `StreamServerToolChunk`）と、1 発言あたりの server tool 実行回数の予算（後述）を共有する。最初に実装する change が作り、後続はそれを使う
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — 実行の進捗と結果は V2 updater の tool block hook に描画する
+- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 実行の進捗と結果は V2 updater の tool block hook に描画する
 - 先行: [出力マルチモーダル対応](../multimodal-output/design.md) — 添付、component 数、合計バイト数の予算をまとめて配分する layout planner を使う。同 change より先に実装する場合は、同等の planner を本 change で実装し、同 change がそれを引き取る
 - 連携: [権限管理](../permissions/design.md) — 2 つのトグルの変更は、同 change の設定変更の共通認可契約に従う
 - 連携: [回答の再生成・編集/undo・compaction](../conversation-regeneration/design.md) — 実行結果のメッセージは回答と同じ生成に属する。生成が失効したときの公開の停止と、結果メッセージの削除の契約を共有する（後述）

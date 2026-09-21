@@ -33,7 +33,15 @@ Confirm the first release heading is `## [<version>]` rather than `## [Unrelease
 
 ## Step 3: Prune released change docs
 
-Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`.
+Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`, rewriting the links other documents make into those folders to permalinks at the current commit:
+
+```bash
+bun scripts/prune-released-changes.ts
+```
+
+The permalinks point at HEAD, so the script refuses to run when a folder to delete holds a file HEAD does not have (untracked, ignored, or only staged). Uncommitted edits to files already in HEAD, such as a manual check ticked in pre-flight, are fine: the link then shows the committed version.
+It rewrites Markdown anywhere in the repository except `CHANGELOG.md`, which git-cliff regenerates.
+If a line still names a folder to delete in a form it does not rewrite, it lists those lines and stops without changing anything; replace them with a permalink by hand and rerun.
 `docs/progress.md` is generated from the remaining folders' frontmatter, so do not edit it by hand.
 Step 5 commits with `LEFTHOOK=0`, which skips the pre-commit generator, so regenerate it explicitly:
 
@@ -54,11 +62,12 @@ bun run lint:md
 
 リリースコミットは main 上で作る（この手順に限り意図的）。
 pre-commit のブランチガードが main への直コミットを止めるので `LEFTHOOK=0` で明示的にバイパスする。
-対象は `package.json` / `CHANGELOG.md` / `docs/progress.md` と `docs/changes/` 配下の削除に限定する。
+対象は `package.json` / `CHANGELOG.md` / `docs/progress.md`、`docs/changes/` 配下の削除、Step 3 のスクリプトがリンクを書き換えた Markdown に限定する。
+pre-flight で作業ツリーがクリーンなことを確かめているので、`git add -u` で追跡済みファイルの変更と削除をまとめて入れれば、この範囲に収まる。コミット前に `git status` で想定外のファイルが無いことを確かめる。
 lint / typecheck / test は pre-flight で完了しているため、リリースコミットでは再実行しない。
 
 ```bash
-git add package.json CHANGELOG.md docs/progress.md docs/changes
+git add -u
 LEFTHOOK=0 git commit -m "[release] bump version to v<version>"
 git tag v<version>
 git push && git push --tags

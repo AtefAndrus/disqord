@@ -15,7 +15,7 @@ summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
 ## 依存 / 関連 change
 
 - 関連: [権限管理](../permissions/design.md) — 同じ `guild_settings` を触るが、リリース単位としては独立。`/stats` の実行権限は同 change の共通認可契約に従う
-- 先行: [Responses API への移行](../responses-api-migration/design.md) — usage のフィールド名と、ターンをまたぐ集計対象は同 change が確定する。本 change は確定した集計結果を保存する側
+- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — usage のフィールド名と、ターンをまたぐ集計対象は同 change が確定する。本 change は確定した集計結果を保存する側
 - 関連: [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — cache read / write トークンの計上先は本 change の `usage_logs`
 - 関連: [Web 検索 + ツイート展開](../web-search/design.md) — server tool の実行回数（`usage.server_tool_use_details`）の計上先は本 change の `usage_logs`
 
@@ -130,7 +130,7 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 - ログは永続保存（削除機能は将来検討）
 - 個人情報保護: メッセージ内容は保存しない
 - コスト計算: OpenRouterレスポンスの`usage`から取得。**`usage.cost` は無料モデルでは 0、ストリーミング前段チャンク等では欠落し得る**（公式に「null」と明記はされていない）ため、記録時は `cost ?? 0` でガードする（`usage_logs.cost REAL NOT NULL DEFAULT 0` は null 非許容なので明示フォールバックが必要）
-- `usage` は全レスポンスで自動返却される。[Responses API への移行](../responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない
+- `usage` は全レスポンスで自動返却される。[Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない
 - 記録対象は、同 change が `AggregatedUsage` に載せるフィールドから選ぶ。基本トークンと `cost` のほか、`prompt_tokens_details.cached_tokens` / `cache_write_tokens`、`completion_tokens_details.reasoning_tokens`、`cost_details`、`server_tool_use_details`（server tool の実行回数）が候補になる
 - `server_tool_use_details` は server tool が一度も起動しなかったリクエストでは usage から省かれる。未起動と 0 回を区別するなら、値ではなくキーの有無で判定する
 - パフォーマンス: インデックスで集計クエリを高速化

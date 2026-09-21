@@ -17,8 +17,8 @@ API 固有の取得処理と Discord 固有の描画処理を分離し、検証�
 
 ## 依存 / 関連 change
 
-- 関連: [Responses API への移行](../responses-api-migration/design.md) — 生成成果物の wire 形は API surface に依存するため、producer adapter の fixture 化は移行後に行う
-- 先行：[LLM チャット返信の Components V2 化](../chat-response-v2/design.md) は、テキスト応答の分割、ストリーミング更新、metadata 表示を担う描画基盤を提供する
+- 関連: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 生成成果物の wire 形は API surface に依存するため、producer adapter の fixture 化は移行後に行う
+- 先行：[LLM チャット返信の Components V2 化](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) は、テキスト応答の分割、ストリーミング更新、metadata 表示を担う描画基盤を提供する
 - 関連：[OpenRouter サーバツール群](../server-tools/design.md) は、`openrouter:image_generation` の呼び出し方、実レスポンス、コスト制御を調査し、採用時に producer adapter を実装する画像生成 change を切り出す
 
 ## Goals / Non-Goals
@@ -37,7 +37,7 @@ API 固有の取得処理と Discord 固有の描画処理を分離し、検証�
 - 画像生成 server tool を有効化する条件、パラメータ、費用警告の決定（[OpenRouter サーバツール群](../server-tools/design.md) から分割する画像生成 change で扱う）
 - `/api/v1/images` と `/image` コマンドを使う独立した画像生成フロー
 - client tool が生成したファイルの表示（各 tool change が自身の `ToolRenderPayload` と描画を所有する）
-- 入力画像と入力 PDF の解析（[マルチモーダル対応](../multimodal/design.md)）
+- 入力画像と入力 PDF の解析（[マルチモーダル対応](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/multimodal/design.md)）
 - 生成物の永続保存、再ホスト、履歴からの再取得
 - 画像の加工、動画と音声の出力
 

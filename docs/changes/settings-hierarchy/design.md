@@ -13,7 +13,7 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](../responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す配管は同 change が用意する。あわせて送信可能なパラメータ集合が狭まる（後述）
+- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す配管は同 change が用意する。あわせて送信可能なパラメータ集合が狭まる（後述）
 - 連携: [reasoning-output](../reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
 
 ## Goals / Non-Goals
@@ -85,7 +85,7 @@ ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 
 **`supported_parameters` をそのまま許可リストにできない（重要）:**
 
-[Responses API への移行](../responses-api-migration/design.md) 後、送信できるパラメータ集合は Models API が返す名前と一致しない。
+[Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) 後、送信できるパラメータ集合は Models API が返す名前と一致しない。
 
 - Responses に無いもの: `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `response_format` / `seed` / `stop` / `top_a` / `prediction`。これらは許可リストに載っていても送れない
 - 名前が違うもの: `max_tokens` / `max_completion_tokens` は Responses では `max_output_tokens`

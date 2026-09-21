@@ -19,7 +19,7 @@ bot のプロセスが生成の途中で終了すると、「生成中...」と�
 
 ## 依存 / 関連 change
 
-- 連携: [chat-response-v2](../chat-response-v2/design.md) — 停止表示（`buildStoppedContainer`）と、updater の確定処理を使う
+- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 停止表示（`buildStoppedContainer`）と、updater の確定処理を使う
 - 連携: [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — 同 change は `pending` の exchange を永続化する。終了時に中断した exchange をどの状態で残すかを合わせる必要がある
 
 ## Goals / Non-Goals

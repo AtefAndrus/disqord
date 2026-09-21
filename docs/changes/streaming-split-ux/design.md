@@ -14,7 +14,7 @@ summary: "複数メッセージに分かれる返信で、数文字だけのメ�
 
 ## 依存 / 関連 change
 
-- 先行: [chat-response-v2](../chat-response-v2/design.md) — 分割（`splitTextIntoMessages`）と updater はこの change の成果物
+- 先行: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 分割（`splitTextIntoMessages`）と updater はこの change の成果物
 
 ## Goals / Non-Goals
 
