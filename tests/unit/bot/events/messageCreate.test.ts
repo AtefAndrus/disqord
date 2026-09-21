@@ -1142,13 +1142,36 @@ describe("createMessageCreateHandler", () => {
     const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
     const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
     expect(text).toContain(
-      "2026年8月20日です。\n\n-# 検索結果\n- [Bun 1.4](<https://bun.com/blog/bun-v1.4>)",
+      "2026年8月20日です。\n\n-# 検索結果\n- [Bun 1.4 (bun.com)](<https://bun.com/blog/bun-v1.4>)",
     );
     expect(text).toContain("Searches: 1 (perplexity)");
     const logged = infoSpy.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(logged).toContain("Web search");
     expect(logged).toContain("Bun v1.4.0");
     expect(logged).toContain("https://bun.com/blog/bun-v1.4");
+  });
+
+  test("code block の途中で打ち切られた回答は、閉じてから検索結果を付ける", async () => {
+    const answer = createMockChatResponseFn("```ts\nconst a = 1;", "length");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        webSearch: { calls: [], results: [{ url: "https://a.test/", title: "A" }] },
+      }),
+    );
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+
+    await handler(mockMessage as never);
+
+    const lastEditArg = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const text = extractTextContents(toContainerJSON(lastEditArg)).join("\n");
+    expect(text).toContain(
+      "```ts\nconst a = 1;\n```\n\n-# 検索結果\n- [A (a.test)](<https://a.test/>)",
+    );
   });
 
   test("停止（cancelled）時、受信済みテキストがあればfooterに受信文字数を含める", async () => {

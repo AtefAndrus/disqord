@@ -30,6 +30,16 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
   };
 }
 
+/**
+ * Whether `max_uses` caps the searches. OpenRouter forwards it to a
+ * provider's native search only for Anthropic and other native providers
+ * ignore it (WebSearchServerToolConfig in openapi.json), so `native` and
+ * `auto` (native when the provider has it) give no cap for most models.
+ */
+export function isSearchCountCapped(engine: WebSearchEngine): boolean {
+  return engine !== "native" && engine !== "auto";
+}
+
 const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   year: "numeric",
@@ -58,12 +68,31 @@ export function buildWebSearchSystemMessage(now: Date): SystemChatMessage {
 
 export const MAX_RESULT_LINKS = 5;
 const MAX_TITLE_CHARS = 80;
+/**
+ * Longer URLs are dropped. A link line is split like any other text, and the
+ * splitter backs up to a newline only within the last 20% of a page (about
+ * 600 characters for a mostly Japanese reply), so a line well under that is
+ * not cut in two unless its host name is extremely long.
+ */
+const MAX_URL_CHARS = 300;
+
+/** Removes `://` until none is left, since removing one can join a new one. */
+function stripSchemeSeparators(text: string): string {
+  let current = text;
+  for (;;) {
+    const next = current.replace(/:\/\//g, " ");
+    if (next === current) return current;
+    current = next;
+  }
+}
 
 /**
  * The markdown list appended to a reply, or undefined when there is nothing
  * to show. The titles and URLs come from web pages, so anything that could
  * break out of the link syntax (brackets, newlines, `<`/`>`) or turn a
- * title into a mention is removed, and only http(s) URLs are kept.
+ * title into a mention is removed, and only http(s) URLs are kept. Every
+ * label ends with the link's real host, so a title that names another site
+ * cannot pass for a link to it.
  */
 export function formatSearchResultLinks(results: WebSearchResultLink[]): string | undefined {
   const lines: string[] = [];
@@ -78,15 +107,15 @@ export function formatSearchResultLinks(results: WebSearchResultLink[]): string 
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") continue;
     const href = url.href;
-    if (/[\s<>]/.test(href) || seen.has(href)) continue;
+    if (href.length > MAX_URL_CHARS || /[\s<>]/.test(href) || seen.has(href)) continue;
     seen.add(href);
-    // A URL-looking label would read as a link to somewhere other than `href`.
-    const title = (result.title ?? "")
-      .replace(/:\/\//g, " ")
-      .replace(/[[\]()<>`*_~|\\@#]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-    const label = title.length > 0 ? title.slice(0, MAX_TITLE_CHARS) : url.hostname;
+    // Characters are removed before `://`, because removing one of them
+    // (a backslash in `https:/\/`) can itself produce a `://`.
+    const title = stripSchemeSeparators(
+      (result.title ?? "").replace(/[[\]()<>`*_~|\\@#]/g, "").replace(/\s+/g, " "),
+    ).trim();
+    const host = url.hostname;
+    const label = title.length > 0 ? `${title.slice(0, MAX_TITLE_CHARS)} (${host})` : host;
     lines.push(`- [${label}](<${href}>)`);
   }
   return lines.length > 0 ? `-# 検索結果\n${lines.join("\n")}` : undefined;

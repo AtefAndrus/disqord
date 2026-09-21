@@ -264,7 +264,11 @@ export function createMessageCreateHandler(
       // OpenRouter が空文字列で完了した場合、setContent("") の同期 throw を避けるためフォールバックする
       // 検索結果のリンクは本文の後ろに足してから分割し、長い回答では最終ページに載るようにする
       const answerText = updater.text || "（応答なし）";
-      const finalText = resultLinks ? `${answerText}\n\n${resultLinks}` : answerText;
+      // 出力長の上限で code block の途中で終わった回答は、閉じてから付けないとリンクまでコードになる
+      const openFence = (answerText.match(/```/g)?.length ?? 0) % 2 === 1;
+      const finalText = resultLinks
+        ? `${answerText}${openFence ? "\n```" : ""}\n\n${resultLinks}`
+        : answerText;
       const footerBudget = estimateFinalFooterBudget(metadata);
       const chunks = splitTextIntoMessages(
         finalText,

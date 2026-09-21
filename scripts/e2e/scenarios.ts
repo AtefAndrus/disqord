@@ -242,9 +242,12 @@ export const SCENARIOS: Scenario[] = [
     // bun-v1.4.0 was published 2026-08-20T14:07:21Z: a fixed answer, unlike
     // a "latest version" that moves with every release. Naming the tag and
     // UTC keeps the model from answering a patch release or an announcement
-    // date. A model that already knows the date still passes, so this proves
-    // that a search ran and the answer is right, not that the answer came
-    // from the search.
+    // date. `Searches: N` in the footer counts search calls the model made,
+    // including ones refused past `max_uses`, so it alone does not show that
+    // a search returned anything; the result links the bot appends are built
+    // only from results OpenRouter handed to the model. A model that already
+    // knows the date still passes, so this does not show that the answer
+    // came from the search.
     name: "search",
     manual: true,
     prompt:
@@ -255,6 +258,9 @@ export const SCENARIOS: Scenario[] = [
       )
         ? []
         : ["the usage footer reports no web search (is /config web-search on?)"]),
+      ...(/^-# 検索結果\n- \[.+\]\(<https?:\/\/[^>\s]+>\)$/m.test(reply.body)
+        ? []
+        : ["the reply lists no search results (the search returned nothing)"]),
       ...(/^公開日:\s*2026-08-20\s*$/m.test(reply.body.normalize("NFKC").replace(/[*`]/g, ""))
         ? []
         : ["the reply has no 公開日: 2026-08-20 line"]),
