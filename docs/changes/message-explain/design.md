@@ -60,6 +60,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 - 修正: `src/bot/commands/index.ts` — `commandDefinitions` に解説コマンドを加える。登録は既存の `rest.put(Routes.applicationCommands(...))` がそのまま行う。
 - 修正: `src/bot/events/interactionCreate.ts` — `isChatInputCommand()` の判定より前に `isMessageContextMenuCommand()` の分岐を置く。今は chat input 以外を無言で捨てている（52 行目）。この分岐は既存の try/catch の外に出るので、エラー処理は `explainCommand.ts` が持つ。
 - 修正: `src/services/chatService.ts` — `ChatUserInput.systemPrompt` を受け、`buildChatMessages()` で `system` メッセージを先頭に置く。
+- 修正: `src/services/attachmentParser.ts` — `parseAttachments()` が名前、URL、MIME、サイズだけを持つ添付を受け取れるようにする。
 - 修正: `src/bot/events/streamingUpdater.ts`、`src/bot/events/messageCreate.ts` — Discord への書き込み（編集、追加送信、削除）を送信先の差し替え口経由にし、最終描画、停止表示、エラー時の後始末の関数を両経路から使える場所へ移す。
 - 修正: `src/utils/logger.ts` — `Error` の内容を残す形で直列化し、書き出す行から interaction と webhook の URL の token を伏せる。
 - 修正: `src/llm/toolLoop.ts` — updater の callback の例外を `console` へ直接出している箇所を logger 経由にする。
@@ -69,30 +70,39 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 
 ### 実装内容
 
-1. interaction を受けたら、対象メッセージと転送の snapshot のテキストと添付の一覧を、キャッシュから切り離した値として同期的に取り出す。discord.js は転送元のチャンネルがキャッシュにあると snapshot をそのチャンネルのメッセージキャッシュに登録する（`node_modules/discord.js/src/structures/Message.js:463`）ので、後から読むと、転送元がその間に編集された場合に転送先の利用者が見ていない内容が混ざるためである。取り出しは同期処理だけで、3 秒の期限を圧迫しない。
-2. 続けて 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。defer に失敗したら、LLM は呼ばずにログだけ残して終える。失敗には、interaction が無効か期限切れだと Discord が返した場合と、通信の失敗で Discord が受け付けたか分からない場合があり、後者では token が使える可能性もある。それでも終えるのは、受け付けられたか分からない応答の上に解説を出す手順を持たないためである。ログにはこの 2 種類を区別して残す。
-3. 残りの材料を集める（範囲は次の小節「解説の材料」）。返信先を取得し、1 で取り出した添付の一覧を既存の `parseAttachments()` に通し、画像があれば既存の `isMultimodalCapable()` でモデルの対応を確かめる。
-4. テキストも添付も無ければ、「解説できる内容がありません」を返して終える。添付の拒否やモデル非対応も、通常のチャット経路と同じ文言で返す。
-5. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id` である。
-6. 描画は interaction 用の送信先を使う。1 通目は `editReply()` で Components V2 にし、2 通目以降は `followUp({ flags: Ephemeral | IsComponentsV2 })` で足し、編集と削除は interaction token の webhook 経由で行う。
+1. interaction を受けたら、3 秒以内に `deferReply({ flags: Ephemeral })` を返す。defer に失敗したら、LLM は呼ばずにログだけ残して終える。失敗には、interaction が無効か期限切れだと Discord が返した場合と、通信の失敗で Discord が受け付けたか分からない場合があり、後者では token が使える可能性もある。それでも終えるのは、受け付けられたか分からない応答の上に解説を出す手順を持たないためである。ログにはこの 2 種類を区別して残す。
+2. 材料を集める（取得元と範囲は次の小節「解説の材料」）。添付を `parseAttachments()` に通し、画像があれば既存の `isMultimodalCapable()` でモデルの対応を確かめる。
+3. テキストも添付も無ければ、「解説できる内容がありません」を返して終える。添付の拒否やモデル非対応も、通常のチャット経路と同じ文言で返す。
+4. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id` である。
+5. 描画は interaction 用の送信先を使う。1 通目は `editReply()` で Components V2 にし、2 通目以降は `followUp({ flags: Ephemeral | IsComponentsV2 })` で足し、編集と削除は interaction token の webhook 経由で行う。
 
 システムプロンプトには、対象メッセージに出てくる専門用語、略語、固有名詞、前提知識を取り出して短く説明すること、発言の意図の推測は必要な範囲にとどめること、確かでない点は確かでないと書くことを指示する。
 文面は実装時に調整する。
 
 ### 解説の材料
 
-1 件のメッセージからテキストを取り出す規則を一つ定め、対象メッセージと転送の snapshot の両方に同じ規則を使う。
+材料は、discord.js のメッセージのキャッシュではなく、REST で取得した API の生のメッセージ（`APIMessage`）から取り出す。
+対象メッセージは `client.rest.get(Routes.channelMessage(channelId, messageId))` で取得し、転送の snapshot はその応答の `message_snapshots` を使う。
+Discord は snapshot を転送した時点の内容で固定し、転送元の変更を反映しないと定めている（`developers/resources/message.mdx` の Message Reference Types）。
+一方 discord.js は、転送元のチャンネルがキャッシュにあると snapshot をそのキャッシュに登録し（`node_modules/discord.js/src/structures/Message.js:463`）、既存のキャッシュのメッセージへ上書きで合成する（`node_modules/discord.js/src/managers/CachedManager.js:46`）。
+snapshot は一部の項目だけを持つので、省略された項目（`components` など）にはキャッシュにある転送元の今の内容が残る（`node_modules/discord.js/src/structures/Message.js:152`）。
+これを材料にすると、利用者が見ていない転送元の内容が解説に混ざる。利用者が転送元のチャンネルを読めない場合は、読めない内容を解説経由で知ることになる。
+対象メッセージの取得に失敗したら、`interaction.targetMessage` の対象メッセージ自身の項目だけを使い、snapshot は使わずに、転送元を読めなかったことを解説の末尾に注記する。
+対象メッセージ自身の項目は完全なメッセージとして届くので、省略による合成は起きない。
+
+1 件の `APIMessage` から材料を取り出す規則を一つ定め、対象メッセージ、snapshot、返信先に同じ規則を使う。
 
 - 本文（`content`）。
 - Components V2 のテキスト。Container と Section の内側まで辿り、TextDisplay の本文を出現順に集める。ボタンなどの操作部品は含めない。
 - embed のテキスト。title、description、各 field の name と value、footer を集める。この bot の `/status` のように、情報を field に置く embed があるためである。
-- 添付の画像と PDF。対象メッセージと snapshot の添付を合わせて `parseAttachments()` に通す。
+- 添付の画像と PDF。`attachments` に加え、Components V2 の MediaGallery、Thumbnail、File のうち `attachment_id` を持つ項目（アップロードされたファイル）を集める。Discord は `attachments` を「embed や component から参照されていないファイル」と定めている（`developers/resources/message.mdx` の Message Structure）ので、`attachments` だけでは component に表示したファイルが漏れる。`attachment_id` の無い外部 URL と、embed の画像は含めない。embed の画像はアップロードと外部 URL を区別できず、外部の任意の URL を bot が取得することになるためである。
+- 集めた添付は、既存の `parseAttachments()` に通し、通常のチャット経路と同じ形式とサイズの制限を掛ける。`parseAttachments()` は今は discord.js の `Attachment` の `Collection` を受け取るので、名前、URL、MIME、サイズだけを持つ形を受け取るように引数の型を広げる。
 
-転送メッセージ（`message_reference.type` が Forward）は `messageSnapshots` の内容を使い、転送元を取りに行かない。
+転送メッセージ（`message_reference.type` が Forward）は snapshot の内容を使い、転送元を取りに行かない。
 返信先は、メッセージが `MessageType.Reply` で、`message_reference.type` が Default のときだけ取得する。
 Discord は `type` の省略を Default と定めているが、discord.js は省略時に `undefined` のまま渡す（`node_modules/discord.js/src/structures/Message.js:376`）ので、`type ?? MessageReferenceType.Default` で比べる。
-取得は `fetchReference()` を使わず、reference の `channelId` のチャンネルを `client.channels.fetch()` で得てから、`messages.fetch({ message: messageId, force: true })` で上限時間つきの 1 回だけ取る。
-`fetchReference()` はキャッシュ済みのチャンネルを前提とし（`node_modules/discord.js/src/structures/Message.js:798`）、`force` を付けずに取得するので、キャッシュにある返信先を今の権限や削除の有無を確かめずにそのまま返す（`node_modules/discord.js/src/managers/MessageManager.js:104-108`）。
+取得は対象メッセージと同じく REST の `Routes.channelMessage()` で上限時間つきの 1 回だけ行う。
+`fetchReference()` は使わない。キャッシュ済みのチャンネルを前提とし（`node_modules/discord.js/src/structures/Message.js:798`）、`force` を付けずに取得するので、キャッシュにある返信先を今の権限や削除の有無を確かめずにそのまま返す（`node_modules/discord.js/src/managers/MessageManager.js:104-108`）。
 取得に失敗（削除済み、`VIEW_CHANNEL` や `READ_MESSAGE_HISTORY` の不足、ボイスチャンネルのテキストでの `CONNECT` の不足、タイムアウト）したら返信先なしで続け、解説の末尾にその旨を注記する。
 返信先から使うのはテキストだけで、添付は含めない。
 
@@ -209,7 +219,7 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 ### テスト
 
 - e2e（`bun run e2e`）では検証できない。テスト bot は REST でメッセージを投稿して返信を読む仕組みで、message command の実行はクライアント上の人の操作から始まるためである。
-- 材料の組み立ては、本文、入れ子の V2、embed の field、転送の snapshot（V2 と添付を含む）、返信先の成功と失敗、添付の組み合わせで確かめる。返信先の判定は、reference の `type` が Default、省略、Forward の 3 通りで確かめる。
+- 材料の組み立ては、本文、入れ子の V2、embed の field、転送の snapshot（V2 と添付を含む）、返信先の成功と失敗、`attachments` の添付と component に表示した添付（`attachment_id` の有無の両方）の組み合わせで確かめる。転送元がキャッシュにあり snapshot が `components` を省略している場合に、キャッシュの転送元の内容が材料に入らないこと、対象メッセージの REST 取得に失敗した場合に snapshot を使わず注記が付くことを確かめる。返信先の判定は、reference の `type` が Default、省略、Forward の 3 通りで確かめる。
 - 解説経路は、空入力、添付の拒否、モデル非対応、defer の失敗、token 失効時の書き込み失敗で確かめる。
 - 締め切りは、解決しないモデル情報の取得の途中、元応答の編集中、生成中、複数通の最終描画の途中のそれぞれで来た場合を、解決を手で制御する promise で確かめる。どの場合も、締め切り後に通常の描画と生成の開始が行われないこと、締め切り前に受け付けた編集と追加送信が停止表示より先に完了すること、閉じた後に完了した追加送信（停止ボタン付きのものと、ボタンの無い最終描画の続き）が削除されること、締め切りの前に始まって終わらない削除と締め切りの後に始まった削除のどちらがあっても停止表示の書き込みが行われること、削除の待ち行列へ渡したメッセージに停止表示が書かれないこと、待ち行列の 1 件の失敗が後続を止めないこと、隣り合う複数の余りのメッセージがすべて削除されること、削除の失敗が閉じる前と後のどちらでも中立化の書き込みを生まないこと、表示の書き込みが停止表示の 1 回だけであることを、最終的に残るメッセージの内容で確かめる。
 - 生成後のエラーは、プレースホルダーだけでテキストが無い場合、複数通の部分テキストがある場合、エラー表示の書き込み自体が失敗する場合で確かめ、停止ボタンが外れること、部分テキストが残ること、エラーの followup が ephemeral で V2 であることを確かめる。
@@ -225,7 +235,7 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 - [ ] `ChatUserInput.systemPrompt` を追加し、`buildChatMessages()` で `system` メッセージにする
 - [ ] 送信先の差し替え口を定義し、`streamingUpdater.ts` と `messageCreate.ts` の描画をチャンネル版の送信先経由にする（挙動は変えない）
 - [ ] interaction 版の送信先を実装する
-- [ ] 材料の取り出し（V2、embed、snapshot、返信先）を実装する
+- [ ] REST で取得した `APIMessage` からの材料の取り出し（V2、embed、component の添付、snapshot、返信先）と、`parseAttachments()` の引数の型の拡張を実装する
 - [ ] `src/bot/commands/explain.ts` と `src/bot/events/explainCommand.ts` を実装し、`interactionCreate.ts` から分岐させる
 - [ ] 締め切りとエラー処理を実装する
 - [ ] logger で interaction と webhook の URL の token を伏せ、`toolLoop.ts` の `console` 出力を logger 経由にする
@@ -234,7 +244,7 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 - [ ] `bun run e2e` で既存のチャット経路が壊れていないことを確かめる
 - [ ] 手動確認: 開発サーバーでメッセージを右クリック → アプリ → 解説する を実行し、本人にだけ見える解説がストリーミング表示され、長文なら分割され、`/config llm-details` が有効なら footer が出ることを確かめる
 - [ ] 手動確認: 2 通以上に分かれる解説の生成中に、2 通目以降に付いた停止ボタンを押し、停止表示に切り替わることを確かめる
-- [ ] 手動確認: 画像付き、PDF 付き、bot 自身の返信（Components V2）、返信の付いたメッセージ、転送メッセージに対して実行し、それぞれの内容が解説に反映されることを確かめる
+- [ ] 手動確認: 画像付き、PDF 付き、bot 自身の返信（Components V2）、返信の付いたメッセージ、転送メッセージ、画像を MediaGallery で表示したメッセージに対して実行し、それぞれの内容が解説に反映されることを確かめる
 - [ ] 手動確認: 上の確認の間、Discord の REST の `rateLimited` イベントを「ログに interaction token を残さない」の項目だけ一時的にログへ出し、ストリーミングの表示の遅れが通常のチャット返信と同程度であることを確かめる
 - [ ] `docs/changes/message-explain/` 削除（リリース完了時、git 履歴がアーカイブ）
 
