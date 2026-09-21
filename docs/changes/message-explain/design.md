@@ -69,11 +69,12 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 
 ### 実装内容
 
-1. interaction を受けたら、3 秒以内に `deferReply({ flags: Ephemeral })` を返す。defer に失敗したら、LLM は呼ばずにログだけ残して終える。失敗には、interaction が無効か期限切れだと Discord が返した場合と、通信の失敗で Discord が受け付けたか分からない場合があり、後者では token が使える可能性もある。それでも終えるのは、受け付けられたか分からない応答の上に解説を出す手順を持たないためである。ログにはこの 2 種類を区別して残す。
-2. 材料を集める（範囲は次の小節「解説の材料」）。添付は既存の `parseAttachments()` に通し、画像があれば既存の `isMultimodalCapable()` でモデルの対応を確かめる。
-3. テキストも添付も無ければ、「解説できる内容がありません」を返して終える。添付の拒否やモデル非対応も、通常のチャット経路と同じ文言で返す。
-4. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id` である。
-5. 描画は interaction 用の送信先を使う。1 通目は `editReply()` で Components V2 にし、2 通目以降は `followUp({ flags: Ephemeral | IsComponentsV2 })` で足し、編集と削除は interaction token の webhook 経由で行う。
+1. interaction を受けたら、対象メッセージと転送の snapshot のテキストと添付の一覧を、キャッシュから切り離した値として同期的に取り出す。discord.js は転送元のチャンネルがキャッシュにあると snapshot をそのチャンネルのメッセージキャッシュに登録する（`node_modules/discord.js/src/structures/Message.js:463`）ので、後から読むと、転送元がその間に編集された場合に転送先の利用者が見ていない内容が混ざるためである。取り出しは同期処理だけで、3 秒の期限を圧迫しない。
+2. 続けて 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。defer に失敗したら、LLM は呼ばずにログだけ残して終える。失敗には、interaction が無効か期限切れだと Discord が返した場合と、通信の失敗で Discord が受け付けたか分からない場合があり、後者では token が使える可能性もある。それでも終えるのは、受け付けられたか分からない応答の上に解説を出す手順を持たないためである。ログにはこの 2 種類を区別して残す。
+3. 残りの材料を集める（範囲は次の小節「解説の材料」）。返信先を取得し、1 で取り出した添付の一覧を既存の `parseAttachments()` に通し、画像があれば既存の `isMultimodalCapable()` でモデルの対応を確かめる。
+4. テキストも添付も無ければ、「解説できる内容がありません」を返して終える。添付の拒否やモデル非対応も、通常のチャット経路と同じ文言で返す。
+5. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id` である。
+6. 描画は interaction 用の送信先を使う。1 通目は `editReply()` で Components V2 にし、2 通目以降は `followUp({ flags: Ephemeral | IsComponentsV2 })` で足し、編集と削除は interaction token の webhook 経由で行う。
 
 システムプロンプトには、対象メッセージに出てくる専門用語、略語、固有名詞、前提知識を取り出して短く説明すること、発言の意図の推測は必要な範囲にとどめること、確かでない点は確かでないと書くことを指示する。
 文面は実装時に調整する。
@@ -127,7 +128,7 @@ interaction token の経路で削除と編集が bucket を共有するかは確
 
 締め切りに負けた本体の処理は走り続けうるが、その結果は捨てる。
 準備の途中で締め切りが来ると、残りの準備（モデル情報や添付の取得）は最後まで走りうる。
-これは許容する。準備は bot の中のキャッシュ更新と Discord や OpenRouter からの読み取りだけで、利用者に見える出力も課金も伴わないためである。
+これは許容する。準備が行うのは、Discord や OpenRouter からの読み取り、bot の中のキャッシュ更新、未登録のサーバーでの既定設定の保存（`src/services/settingsService.ts:20-36`）で、どれも利用者に見える出力も課金も伴わず、締め切りに関係なくいずれ行われてよい処理だからである。
 締め切り後に本体が利用者に影響を与えうるのは、送信先への書き込み（閉じているので何もしない）と生成の開始だけである。
 生成の開始は、締め切りの判定と `generateChatResponse()` の呼び出しを同期的に続けて置くことで防ぐ。
 `generateChatResponse()` は最初の `await` より前に requestId を登録する（`src/services/chatService.ts:193-194`）ので、判定を通った直後に締め切りが来ても 2 の `cancelRequest()` が効く。
