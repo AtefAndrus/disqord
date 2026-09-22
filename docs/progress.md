@@ -9,7 +9,7 @@
 <!-- AUTO:PROGRESS:START -->
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
-| [対話UX改善（会話履歴ストア）](changes/conversation-context/design.md) | 高 | in-progress | DB 永続の会話履歴、無活動ギャップとトークン予算による文脈構築、OpenRouter session routing、削除への追従 |
+| [対話UX改善（会話履歴）](changes/conversation-context/design.md) | 高 | planned | 直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く |
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
@@ -29,7 +29,6 @@
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | planned | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [画像の遅延再注入](changes/view-image-rehydration/design.md) | 中 | planned | 剥がした過去画像をモデル要求時にベストエフォート再取得して当該ターンへ再注入する view_image client tool |
 | [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | in-progress | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
-| [会話履歴の削除同期の強化](changes/conversation-context-sync/design.md) | 低 | investigating | オフライン中の削除の補足、送信後クラッシュの孤児メッセージの後始末、未応答 turn の再開、reply チェーンの取り込み |
 | [セッション分岐 (/fork)](changes/fork/design.md) | 低 | investigating | 会話履歴の途中から新しいセッションへ分岐する /fork（参照コピー・session_id 安定性前提） |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | investigating | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用統計（/stats） |

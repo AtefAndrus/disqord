@@ -1,275 +1,251 @@
 ---
-title: "対話UX改善（会話履歴ストア）"
-status: in-progress
+title: "対話UX改善（会話履歴）"
+status: planned
 priority: high
-summary: "DB 永続の会話履歴、無活動ギャップとトークン予算による文脈構築、OpenRouter session routing、削除への追従"
+summary: "直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く"
 ---
 
-# 対話UX改善（会話履歴ストア）
+# 対話UX改善（会話履歴）
 
 ## Why
 
-現状、Bot への各メッセージは独立処理され会話の文脈が保持されない。ユーザは毎回文脈を説明し直す必要がある。
-`ChatService` の `buildChatMessages()`（`src/services/chatService.ts`）は、いま届いたメッセージ 1 件だけを `[{ role: "user", content }]` として送り、Discord から過去のメッセージを取得する処理も持たない。
+Bot への発言ごとに文脈を説明し直さずに済むよう、同じチャンネルの直前の会話をモデルに渡す。
+「↑」や「上の話」のように、Bot をメンションしていない直前の発言を指すことも多いので、応答対象になった発言だけでなく、チャンネルの会話そのものを渡す。
+一方、会話を毎回まるごと送ると、長い会話や大きな添付のたびに入力が膨らむ。
+既定では直近の会話だけを渡し、それより前の発言と過去の添付は、必要なときにモデルが tool で取りに行く。
 
-本 change で**多ターンの会話文脈の DB 永続基盤**を入れる。DB 逐次永続化は、(1) `/fork` 等の将来機能や圧縮要約の置き場、(2) 履歴 fetch のレート制限回避（bot は既に `messageCreate` で対象メッセージを受信）、(3) 後続の再生成/編集/undo の土台、を提供する（身内利用前提でプライバシー許容）。
+会話の本文は Discord から毎回読み、Bot の DB には持たない。
+Discord が今残っている会話をそのまま返すので、本文の複製とその同期を Bot が持たずに済む。
+利用者が消した発言は、次に読むときには Discord から返らない。
+DB に残すのは、分割した Bot の返答をまとめるための、本文を持たない管理記録だけである。
 
-固定 N 件で切る方式は会話途中でも一律に切れて筋が悪いため、**無活動ギャップ + トークン予算**でセッション境界を決め、古い画像は剥がして文脈コストを抑える。
-
-Bot は OpenRouter の Responses API（`POST /responses`）で生成する。
-Responses API は会話状態をサーバ側へ保存せず（`store` は `false` 固定）、`previous_response_id` に値を入れたリクエストは HTTP 400 で拒否される（OpenAPI 定義の `ResponsesRequest`）。
-そのため会話履歴の source of truth は本 change の DB とし、毎回の `input` に履歴全体を載せる。
-一方、`ResponsesRequest` の top-level `session_id` は同じ会話を同一プロバイダへ寄せる sticky routing と観測に使え、プロバイダ側 prompt caching の再利用率を高められるため、ローカル session ごとの不透明な識別子として併用する。
-
-> **スコープ分離**: **回答再生成・編集/undo・compaction**は、本基盤（turn/session モデル）の上の独立機能として [conversation-regeneration](../conversation-regeneration/design.md) が扱う。Bot がオフラインの間の削除の取りこぼしを埋める処理と、応答途中のクラッシュで残った Discord メッセージの後始末は [会話履歴の削除同期の強化](../conversation-context-sync/design.md) が扱う。本 change は**履歴ストア + 境界 + 構造化メディア + オンライン中の削除追従と保持**に集中する。
+OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`store` は `false` 固定）、`previous_response_id` に値を入れたリクエストは HTTP 400 で拒否される（OpenAPI 定義の `ResponsesRequest`）。
+そのため会話は毎回の `input` に載せる。
 
 ## 依存 / 関連 change
 
-- 前提（リリース済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `runToolLoop()` は `requestFields`（`ToolLoopRequestFields`、`src/llm/toolLoop.ts`）に渡したフィールドを、初回・tool 実行後の再リクエスト・最終ターンのすべてのリクエストへ載せる。`OpenRouterClient` の `toResponsesBody()` は、自分が変換しないフィールドをそのまま body へ展開する。本 change は `ChatCompletionRequest` に `session_id` を足し、`ChatService` から `requestFields: { session_id }` を渡すだけでよい
-- 後続: [conversation-regeneration](../conversation-regeneration/design.md) — 本基盤を前提とする回答再生成・編集/undo・compaction
-- 後続: [会話履歴の削除同期の強化](../conversation-context-sync/design.md) — オフライン中の削除の補足、孤児メッセージの後始末、未応答 turn の再開、reply チェーンの取り込み
-- 連携: [settings-hierarchy](../settings-hierarchy/design.md) — **優先順位で解決した単一 system prompt**（override precedence、合成ではない）を前置
-- 連携: [discord-tool](../discord-tool/design.md) — モデル駆動の文脈取得（`fetch_more_context`）は本基盤の上の発展
-- 連携: [view-image-rehydration](../view-image-rehydration/design.md) — 本 change の構造化メディア参照を使い剥がした画像をベストエフォート再取得
-- 連携: [使用統計](../usage-stats/design.md) — usage/トークンの**コスト計上**（message 本文は保存しない。履歴本体は本 change）
-- 連携: [Web 検索](../web-search/design.md) — Web 検索 ON 時に `input` の先頭へ置く system メッセージが分単位の現在日時を含み、prompt cache の prefix を毎分変える（「8. OpenRouter session routing と prompt caching」で配置を変える）
-- 連携: [code-execution](../code-execution/design.md) — コンテナは応答ごとの ID（`run_<messageId>_<hex>`）で作り、本 change の session をキーにしない。`container_auto` は `session_id` があると `sess_<session_id>` の共有コンテナになるため同 change は使わない。本 change が `session_id` を送り始めても code-execution の挙動は変わらない
+- 前提（リリース済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `runToolLoop()`（`src/llm/toolLoop.ts`）と `ToolRegistry`（`src/llm/tools/registry.ts`）。client tool は 1 つも登録されていない
+- 連携: [Web 検索](../web-search/design.md) — Web 検索 ON 時の system メッセージは、変わらない指示を先頭に、現在日時を今回の発言の直前に置く（prompt cache の先頭を毎分変えないため）
+- 連携: [discord-tool](../discord-tool/design.md) — 同 change の `fetch_recent_messages` / `fetch_more_context` の役割は本 change の `read_earlier_messages` が担う
+- 連携: [view-image-rehydration](../view-image-rehydration/design.md) — 過去の画像を見直す役割は本 change の `view_attachment` が担う
+- 後続: [conversation-regeneration](../conversation-regeneration/design.md) / [fork](../fork/design.md) — DB の会話ストアを前提にしない形で、本 change の後に設計し直す
+- 連携: [使用統計](../usage-stats/design.md) — cache の読み取り・書き込み token の永続化
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- **addressed turn**（メンションまたは autoReply チャンネルで bot に向けられた発話。範囲は Decisions の「addressing の範囲」）+ **bot 応答**を**論理ターン**として DB 永続化（1 ターン ↔ 0..N Discord メッセージ）
-- gap で区切る **session** + 依存閉じた **exchange 単位**のトークン予算で文脈を構築
-- ChatMessage parts（text/image-ref/file-ref・順序）を**再構築可能な versioned JSON**で保存（base64 は保存しない）
-- メディア剥がし（保存不変・リクエスト配列のみ）
-- 共有チャンネルの発話者識別（ラベルのスナップショット）
-- 保持/プライバシー: guild 単位のオプトイン、無効化時の purge、TTL、Bot がオンラインの間に gateway で受け取った Discord メッセージ削除 / bulk 削除 / チャンネル削除 / スレッド削除 / guild 退出への追従（例外は「9. プライバシー / 保持」の「追従の限界」）
-- ローカル session ごとに外部へ漏らしても Discord の guild/channel/user を推測できない `openrouter_session_id` を発行し、同じ session の全 OpenRouter リクエストへ `session_id` として付与
-- 共通 prompt prefix を安定させ、provider prompt caching が効く形で履歴を送る。cache が利用できないモデルや request でも応答を継続
+- 今回の発言の直前の会話（Bot をメンションしていない発言を含む）を Discord から読んでモデルに渡す
+- それより前の発言と過去の添付を、モデルが tool で取りに行けるようにする
+- 分割した Bot の返答をまとめ、完了し、トリガーの発言と全ページが Discord に残っている返答だけを渡す
+- Gemini などの暗黙の prompt cache が効くよう、同じ会話の中では送る内容の先頭を変えない
+- ギルド単位の 1 つのスイッチ（既定 OFF）で有効にする
+- tool に対応しないモデルでも、窓だけで答えられる
 
-**Non-Goals:** 直近 N 件で切る方式（採用しない） / **回答再生成・編集/undo・compaction**（→ [conversation-regeneration](../conversation-regeneration/design.md)） / Bot がオフラインの間の削除の補足、送信後クラッシュで残った Discord メッセージの削除、未応答 user turn の再開、reply チェーンの取り込み（→ [会話履歴の削除同期の強化](../conversation-context-sync/design.md)） / OpenRouter 上の会話履歴保存・`previous_response_id` 継続 / `X-OpenRouter-Cache` による完成回答の response caching / provider ごとの明示的 `cache_control` 最適化 / チャンネル単位のオプトイン（→ [settings-hierarchy](../settings-hierarchy/design.md)） / 受動参加（全メッセージ保存）→ Phase 2 / 意図的沈黙 `[SILENT]` → Phase 2 / DM → 将来（`DirectMessages` intent 未設定・設定が guild 前提） / 意味的境界検出 → 将来 / `/search` → 見送り / `/fork` → 別 change
+**Non-Goals:**
+
+- 会話の本文や添付を Bot の DB に保存すること
+- 応答の生成中に消された発言を、その応答から取り除くこと（次の応答からは読まれない）
+- 回答の再生成、編集への追従、undo、会話の要約（compaction）、fork（それぞれ後続 change で設計する）
+- DM（`DirectMessages` intent を持たない）、ボイスチャンネルのテキスト
+- チャンネル単位の ON/OFF（[settings-hierarchy](../settings-hierarchy/design.md) の範囲）
+- 他の bot、webhook、システムメッセージの取り込み（開発時の e2e 用 tester bot だけは例外、下記）
 
 ## Decisions
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 永続化の単位 | 論理ターン（`turns`）+ Discord 写像（`turn_messages`、0..N、`seq`） | 1:1 では分割送信(N)・将来の `[SILENT]`(0)・undo を表現できない |
-| exchange リンク | assistant turn に `parent_user_turn_id`（その user turn に答える）。1 user → 1 assistant | exchange 単位の境界選択（user 親なしで assistant だけ残さない）に必須 |
-| reply 先の記録 | user turn に `reply_to_discord_msg_id`（Discord の `message.reference.messageId`）と、その ID に写像があれば `reply_to_turn_id` を記録するだけにとどめ、文脈構築には使わない | 別 session の発言への reply を文脈に引き込む規則（深さ、循環、purge 済みの扱い）は後続 change の範囲。記録だけは今しないと後から復元できない |
-| セッション同一性 | `sessions`（gap 区切り）。turn は `session_id` 保持、guild/channel は session 由来（重複保持しない） | 安定 ID（fork/sandbox）+ 重複カラム不整合の排除 |
-| session の割り当て | チャンネルの最新 session の `last_activity_at` から今回の user メッセージの Discord 生成時刻までが GAP（60 分）以内ならその session、超えるか session が無ければ新規。`last_activity_at = MAX(last_activity_at, t)` | 到着順に処理する単純な規則で、session の時刻による再配置や併合をしない。この近似の影響は 2 つある。遅れて処理された発言は、本来続くはずだった古い session の履歴を参照できない。その発言が最新の session に入ると、以後その session の文脈に含まれる。GAP の境界付近では、gateway の遅延や添付の取得による数秒の処理順の逆転でも起きる（例: 最後の発言が 12:00、次の発言 A が 12:59:59、その次の B が 13:00:01 で、B が先に保存されると A も B の新しい session に入る）。身内規模の利用では許容する。`t` が `last_activity_at` より前（負の時刻差）なら同じ session に入れ、`last_activity_at` は変えない |
-| OpenRouter session routing | session 作成時に `crypto.randomUUID()` で `openrouter_session_id` を発行し、同じ local session の request と tool loop 内の再 request へ一貫して付与する | OpenRouter の `session_id` は会話保存 ID ではなく sticky routing / 観測用である。Discord ID や連番 DB ID の外部送信を避ける |
-| prompt caching | v1 は provider の implicit caching を利用し、共通 prompt prefix を安定させる。`ResponsesRequest` の top-level `cache_control`（最後の cacheable block に自動で breakpoint を置く）、`prompt_cache_key`、`prompt_cache_options` は送らない | 最小 prefix 長・cache write 料金・対応形式が provider ごとに異なり、Anthropic の cache write は通常入力より高い。全モデル共通の明示 cache 方針は、同じ session が続かない会話で write 料金だけを払う結果になりうる。付けるかは実測（Tasks）の後で決める |
-| cache usage | 既存の `mapResponsesUsage()`（`src/llm/openrouter.ts`）が `usage.input_tokens_details.{cached_tokens,cache_write_tokens}` を内部の `prompt_tokens_details.*` へ写し、`runToolLoop()` がターンをまたいで合算し、LLM 詳細フッターが `Cached: N` を出す。本 change は新たな parser を持たず、値の永続化は [使用統計](../usage-stats/design.md) に任せる | 未対応 provider と cache miss を区別する型の方針（未返却は「不明」）は既存のまま使える |
-| OpenRouter Responses API | 会話状態の保存先として採用しない | Responses API は stateless であり、`store` は `false` 固定、`previous_response_id` は 400 で拒否される |
-| addressing の範囲 | 現在の `shouldRespond()`（`src/bot/events/messageCreate.ts`）が応答する発言、つまり bot へのメンションを含む発言と autoReply チャンネル（およびその配下のスレッド）の発言を addressed turn とする。`message.mentions.has()` は返信通知によるメンションも数えるので、返信通知を付けた bot のメッセージへのリプライは本文に `<@bot>` が無くても addressed turn になる。返信通知を切ったリプライは addressed turn にならない | 本 change は応答する条件を変えない。返信通知を切ったリプライにも応答させるかは Open Questions |
-| 変動する system 情報の位置 | 現在日時のように毎回変わる system 情報は、履歴の後ろ、今回の user turn の直前に置く。先頭の system メッセージには変わらない内容だけを置く | prompt cache は先頭からの一致でしか効かない。Web 検索 ON 時の system メッセージは分単位の現在日時を含み、先頭に置くと毎分 prefix が変わって履歴全体が cache miss になる |
-| FK 強制 | 接続時に `PRAGMA foreign_keys = ON`（WAL と `busy_timeout = 5000` と並べて `src/db/index.ts` で設定）+ 子に `ON DELETE CASCADE`。外部キーの子側の列にはすべて、その列を先頭に持つ index を置く | SQLite は FK 既定 off。子側の index が無いと、親の削除のたびに子の表を全件走査し、大量の purge がイベントループを止める |
-| 送信直前の履歴の確認 | 取得した履歴のスナップショットは、履歴を組み立てる前、最初のリクエストの前、画像を外したやり直しの前に、`isContextCurrent()` で確かめる。履歴が ON で、session が残り、スナップショットの各 exchange（今回の exchange を含み、取得後に付いた assistant も DB から引く）が削除記録にも purge 待ちにも当たらないときだけ、そのまま送る。確かめられなければ、今回の発言だけを `session_id` なしで送る | 取得から送信までの間には、ツイート展開、モデル情報の取得、PDF の再取得などの待ちがある。その間の `/config history off`（続けて `on` にされても）や削除を、送る直前の 1 か所で反映するため |
-| 冪等性 | user turn の作成は `turn_messages.discord_msg_id` の UNIQUE で冪等にする。同じ Discord メッセージの 2 回目の `messageCreate` は、写像があれば何もしない | gateway の再送で同じ発言に 2 回答えないため |
-| bot turn の確定 | 生成の前に assistant turn を `pending` で作り、送信・追加送信のたびに写像を足し、最終描画（追加送信と余ったメッセージの削除）を終えてから `completed` / `stopped` / `failed` と `finalized_at` を書く。起動時に残っている `pending` はすべて `failed` にする | 応答の途中で bot が落ちた turn を、次の起動後に文脈へ入れないため。落ちた時点で送信済みだったメッセージは写像ごと残し、削除は後続 change に回す |
-| assistant turn を文脈に入れる時刻 | `finalized_at`（確定した時刻）が今回の user 発言の Discord 生成時刻以下のものだけを入れる | 最初の bot メッセージは「生成中」の placeholder で、その時刻は回答が完成した時刻ではない。利用者が前の回答の完成前に次の発言を書いた場合、その発言の文脈に後から完成した回答を入れない |
-| 内部削除と外部削除の区別 | bot が自分のメッセージを消すときは、Discord の削除を呼ぶ前に写像を DB から消す。内部削除すると決めたメッセージは、その時点から削除への追従の対象外とする。削除イベントの処理は写像のあるメッセージだけを扱う | 写像を先に消せば、自分の削除で届く削除イベントは写像が無いので何もしない。代わりに、写像を消した後に利用者が同じメッセージを消しても exchange は purge されず、Discord の削除と中立化の編集が両方失敗したメッセージも写像なしで残る。内部削除の対象は、最終描画で余ったメッセージ、停止後に届いた遅延送信、失敗した応答の後始末に限られ、どれも exchange の保存内容（`content_json`）の一部ではない。削除中のマーカーやリースを持つ方式は、この限界を閉じられる一方で DB 側の状態と起動時の回復処理が増えるため、本 change では使わない |
-| 保存前に届いた削除 | 削除イベントで受け取ったメッセージ ID と、削除されたチャンネル・スレッド・guild の ID を、写像の有無にかかわらずプロセス内に 15 分間覚える。user turn の作成時には、発言のメッセージ ID・チャンネル ID・親チャンネル ID・guild ID をこれと照合し、どれかが記録にあれば turn を作らない。写像の追加時にはメッセージ ID を照合し、記録にあれば exchange を purge する。`messageCreate` の開始から user turn の作成までが 10 分を超えた発言は、照合の結果にかかわらず保存せず、履歴なしで応答する | 添付の取得など保存前の非同期処理の間や、送信が成功してから写像を足すまでの間に届いた削除は、その時点では写像や session が無いので削除イベントの処理だけでは拾えない。範囲の削除は payload に個々のメッセージ ID を持たないので、範囲の ID も覚える。10 分の打ち切りは、記録の寿命（15 分）より長く保存を待った処理が、失効した記録を見て削除済みの発言を保存することを防ぐ。プロセス内の記録なので再起動をまたがない。削除を受け取った直後に落ちた場合、後続 change が扱えるのは永続化済みの写像から確かめられる範囲に限られる |
-| コンテンツ表現 | **`PersistedContentPart`（text / image-ref{url,mime} / file-ref{url,filename,mime}）の versioned JSON**。`CHECK(json_valid)`。hydration 時に `ChatMessageContent` へ変換 | 永続形（URL/メタ）と OpenRouter DTO（`file_data` は base64 必須）は**非同形**。base64 を保存しない決定とも一致 |
-| メディア再取得 | 過去の添付は送らないので取り直さない（`hydratePersistedContent()` の PDF 再取得の経路は、履歴からは呼ばれない） | 過去の添付を見直す手段は、Discord から添付を取り直す tool として別途用意する |
-| メディア剥がし | 過去の turn の画像・ファイルはすべて `[earlier image omitted]` / `[earlier file omitted: <filename>]` に置き換え、今回の user turn の添付だけを送る。リクエスト配列のみ・保存不変 | 添付を含む最新の turn を残して毎回送り直すと、大きな PDF がその後の添付の無い発言のたびに送られ続ける。添付を送った発言への返答が、その内容を言語化している |
-| 境界の予算選択 | 依存閉じた exchange（user + その assistant）単位で新しい順に採用 | 行単位だと role 整合が壊れる |
-| 共有チャンネル | user turn に `author_label`（表示名スナップショット）+ 安定 `author_id` | 表示名は変わりうるので再現性のためスナップショット |
-| オプトイン | guild 設定 `history_enabled`（既定 0）。0 の guild では turn を保存せず、現行どおり今回の発言だけを送る。1 → 0 に変えたらその guild の履歴を物理削除する。turn を作る transaction の中で `history_enabled` を読み直し、0 なら何も作らない | 発言を DB に残すことを guild の管理者が明示的に選ぶ。無効化後に古い履歴が残ると、再度有効化したときに意図しない文脈が戻る |
-| 履歴の DB 操作の失敗 | `historyRecorder` を履歴の全 write と context 構築に使い、各操作の失敗を捕捉して回答経路へ例外を渡さない。context の read に失敗した場合は履歴と `session_id` なしで回答する。history off の発言では履歴の DB 操作を行わない。送信済み bot message の写像保存に失敗したら親 user turn を削除し、purge にも失敗した対象はメッセージ ID と channel / thread / guild の scope を持つプロセス内の非期限付き集合に残して context から除外し、context 構築時と TTL sweep 時に再試行する。purge に成功した対象は集合から取り除く。 | 履歴は回答より二次的であり、削除を追従できない内容を残すより fail closed（purge）を優先するため |
-| 保持/purge | 容量 TTL は exchange 単位（最後の turn から 30 日を過ぎた後の、次の sweep で消す）。Discord メッセージ削除（写像のあるもの）、チャンネル削除、スレッド削除、guild 退出は該当範囲を CASCADE で物理削除する | 消したものは DB からも消す。TTL を turn 単位にすると exchange の片側だけが残る |
-| 削除イベントの受け方 | discord.js のイベントではなく、`Events.Raw` で gateway の `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE` を受け、payload の ID で DB を引く | discord.js 14.26.5 の `threadDelete` はスレッドが channel cache にある場合だけ発火し、`messageDelete` もチャンネルの解決に依存する。再起動後の archived thread のように、DB に履歴があってキャッシュに無い対象の削除を取りこぼす。gateway の payload はキャッシュに関係なく ID を持つ |
+| 会話の情報源 | 応答のたびに Discord の REST（`GET /channels/{id}/messages`）から読む。本文と添付を DB に保存しない | Discord が今残っている会話をそのまま返すので、本文の複製と、その削除や編集への同期を Bot が持たずに済む。Bot をメンションしていない発言も同じ経路で読める。本文を DB に複製する方式は、削除への追従（削除イベントの取りこぼし、写像の管理、再試行）が実装の大半を占めるうえ、未メンションの発言を扱うには別の保存が要るので採らない |
+| 削除の扱い | 削除イベントは追わない。Bot の返答は、読むたびにトリガーの発言と全ページが Discord に残っていることを確かめ、どれかが欠けていれば返答ごと渡さない | 利用者が自分の発言を消したとき、それに答えた Bot の返答が元の発言を引用していても渡らないようにする。読む時点で確かめるので、Bot の停止中の削除も同じ規則で扱える |
+| 応答の途中の削除と OFF | 応答の開始時に読んだ内容は、その応答の中では使い切る。応答の途中の削除やスイッチの OFF は、進行中の応答には反映せず、次の応答から反映する | 既に送った内容は取り消せない。進行中の応答（`runToolLoop()` の最大 5 ターン）を途中で止めるための監視（読み込んだメッセージの集合、削除イベントとの照合、ストリーミングの中断）は実装と検証の負担が大きく、得られるのは進行中の 1 応答の残りのリクエストに載せないことだけである |
+| 窓の決め方 | チャンネルごとに窓の開始位置をメモリに持ち、同じ会話の間は開始位置を動かさずに新しい発言を後ろに足す。窓が上限を超えたときだけ開始位置を進める（下記） | Gemini の暗黙の prompt cache は先頭からの一致でしか効かず、キャッシュから読んだ入力は通常の 1/10 の料金になる（`gemini-3.8-flash` で $0.75 → $0.075 / 100 万トークン、2026-09-22 の OpenRouter のモデル一覧）。直近 N 件で切る方式は発言のたびに先頭が押し出されて、会話の部分が毎回キャッシュから外れる |
+| 窓の上限 | 概算 8,000 トークン、40 件、一番古い発言が 60 分以内。どれかを超えたら、開始位置を一気に進め、概算 4,000 トークン以下、20 件以下、一番古い発言が 30 分以内の 3 つをすべて満たす所まで縮める。60 分発言が無いチャンネルは、次の発言で窓を作り直す | 開始位置を進めるたびにキャッシュが外れるので、上限に触れるたびに少しずつ進めるのではなく、次に上限に触れるまで余裕ができる所までまとめて進める |
+| reply 先 | 今回の発言が Discord の reply で、返信先が窓に入っていなければ、同じチャンネルの返信先を 1 件だけ窓の後ろ（変動する部分）に足す（24 時間以内） | 利用者が明示的に指した発言は、窓の外でも渡す価値がある。窓の先頭を変えないよう後ろに置く |
+| 過去の添付 | 窓や tool の結果では `[添付 m7/1: PDF "hanrei.pdf" 123 KB]` のような表記だけを渡す。今回の発言の添付は中身を渡す | 添付の中身を毎回送ると入力が膨らむ。今回の添付への質問に余計な往復を要求しない |
+| tool | `read_earlier_messages` と `view_attachment` の 2 つだけ | モデルの判断を要する選択肢を増やさない。どちらも「窓の外を取りに行く」という 1 つの役割に絞る |
+| tool の提示 | モデルが `supported_parameters` に `tools` を持ち、スイッチが ON なら、応答の開始時から 2 つとも提示する | tool の一覧は `runToolLoop()` の開始時に固定される。添付の有無で出し分けると、後から読んだ発言の添付を開けない |
+| tool に対応しないモデル | tool を出さず、窓と reply 先だけで答える。窓の上限は tool 対応モデルと同じ | 窓を別の規則にすると、同じチャンネルでモデルを切り替えたときに開始位置の扱いが分かれる |
+| 返答の管理記録 | 本文を持たない記録を DB に置く: トリガーの message ID、返答ページの message ID と順序、総ページ数、状態（pending / completed / stopped / failed）、確定時刻。スイッチが ON の間だけ作る。確定時刻から 24 時間で消す | Bot の返答は複数の Discord メッセージに分かれ、Discord のメッセージだけでは、どのページが同じ返答か、どの発言への返答か、完了したかが分からない |
+| 渡す Bot の返答 | 記録があり、状態が completed か stopped で、確定時刻が今回の発言より前で、登録されたページ数が総ページ数と一致し、トリガーの発言と全ページが Discord に残っているものだけ | 記録の書き込みが一部だけ失敗した返答や、完了しなかった返答、削除された発言への返答を渡さない。どの条件でも迷ったら渡さない側に倒す |
+| Bot 自身の削除 | 最終描画で余ったページや、失敗した応答の後始末のページは、Discord の削除を呼ぶ前に記録から外し、総ページ数に数えない | 自分で消したページを「欠けたページ」と数えて、正常な返答を渡さなくなることを防ぐ |
+| 同意 | ギルド単位の 1 つのスイッチ `history_enabled`（既定 0）。意味は「Bot をメンションしていない発言を含む直近の会話を LLM に送る」 | 身内向けの bot で、管理者 1 人の判断で足りる。チャンネル単位の同意は設けない。Discord 上の設定の応答には注意書きを出さず、送る範囲は運用者向けに README に書く |
+| 認可 | 窓と tool の読み取りの前に、Bot と呼び出した利用者の両方が、そのチャンネルで `ViewChannel` と `ReadMessageHistory` を持つことを確かめる。private thread では、さらに呼び出した利用者がそのスレッドの参加者であるか `ManageThreads` を持つことを確かめる | Bot の権限で読むので、呼び出した利用者が読めない履歴を Bot 経由で読ませない |
+| 非信頼データ | 過去の発言、表示名、添付の中身、Bot 自身の過去の返答を、引用資料として渡す。system の指示には昇格させず、過去の発言を今回の依頼として扱わせない | 他人の発言や添付にはプロンプトインジェクションが含まれうる |
+| session_id | 窓と同じくチャンネルごとにメモリで UUID を持ち、窓を作り直すときに作り直す。Responses API の top-level `session_id` として送る。永続化しない | OpenRouter はキャッシュが効いたプロバイダに後続のリクエストを寄せる（sticky routing、10 分使われなければ解除）。窓と同じ区切りにすることで、同じ窓の間は同じプロバイダに寄る |
+| 明示的なキャッシュ | `cache_control` などは送らず、暗黙のキャッシュだけを使う | Gemini の明示的なキャッシュは書き込みと 5 分間の保存に料金が掛かる。窓の先頭を固定すれば、暗黙のキャッシュで足りるかを先に測る |
+| 運用上の上限 | 1 応答あたり、Discord の REST（履歴の取得、個別のメッセージの取得、添付を得るためのメッセージの取り直し）は 12 回まで。CDN からの添付のダウンロードはこれに数えず、下記のバイト数の上限で抑える。窓の取得は 5 秒で打ち切り、取れなければ今回の発言だけで答える。discord.js の REST キューに任せ、`retry_after` に従う | ユーザごと・ギルドごとの追加の制限は、今の規模では設けない。1 応答の上限は同時に走る応答の総量までは抑えないので、待ち時間や 429 が問題になった時点で改めて検討する |
 
 ## Design
 
-### 1. スキーマ
+### 1. 窓
 
-```sql
-PRAGMA foreign_keys = ON;  -- src/db/index.ts に追加（現状 WAL のみ）
+チャンネルごとにメモリに次を持つ: 窓の開始位置（message ID）、`session_id`、最後に使った時刻。
 
-CREATE TABLE sessions (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  openrouter_session_id TEXT NOT NULL UNIQUE, -- UUID。OpenRouter sticky routing 用であり local FK には使わない
-  guild_id     TEXT NOT NULL,
-  channel_id   TEXT NOT NULL,              -- スレッドなら thread id
-  parent_channel_id TEXT,                  -- スレッドの親チャンネル（親削除時の purge 用。非スレッドは NULL）
-  started_at   INTEGER NOT NULL,           -- Discord 生成時刻（ms）
-  last_activity_at INTEGER NOT NULL        -- user メッセージの Discord 生成時刻の最大値（ms）
-);
-CREATE INDEX idx_sessions_channel ON sessions(channel_id, last_activity_at);
-CREATE INDEX idx_sessions_parent  ON sessions(parent_channel_id);
-CREATE INDEX idx_sessions_guild   ON sessions(guild_id);
+1. `history_enabled` が 0 なら何もしない。リクエストは今回の発言だけになる。
+2. 認可を確かめる（Decisions「認可」）。満たさなければ今回の発言だけで答える。
+3. 今回の message ID を上限として固定する。応答の途中で投稿された発言は取り込まない。
+4. チャンネルの状態が無いか、最後に使ってから 60 分を過ぎていれば、今回の発言の直前から遡って、縮めた後の上限（概算 4,000 トークン、20 件、30 分）に収まる所を新しい開始位置にし、`session_id` を作り直す。
+5. 開始位置から今回の発言の直前までを、`after = 開始位置の 1 つ前` から古い順に取得する（1 回 100 件まで、ページが続く限り、REST の上限まで）。
+6. 適格性の判定（下記 3）を通った発言だけを残す。
+7. 残した発言が上限（Decisions「窓の上限」）のどれかを超えていたら、開始位置を、縮めた後の 3 つの条件をすべて満たす所まで進める（先頭から exchange 単位で落とす）。
+8. reply 先を足す（Decisions「reply 先」）。
 
-CREATE TABLE turns (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id    INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  role          TEXT NOT NULL CHECK(role IN ('user','assistant')),
-  author_id     TEXT,
-  author_label  TEXT,
-  parent_user_turn_id    INTEGER REFERENCES turns(id) ON DELETE CASCADE,
-  reply_to_turn_id       INTEGER REFERENCES turns(id) ON DELETE SET NULL,
-  reply_to_discord_msg_id TEXT,
-  status        TEXT NOT NULL,
-  content_schema_version INTEGER NOT NULL DEFAULT 1 CHECK(content_schema_version >= 1),
-  content_json  TEXT NOT NULL CHECK(json_valid(content_json)),
-  active        INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-  discord_created_at INTEGER NOT NULL,     -- user は発言の生成時刻、assistant は最初に送った bot メッセージの生成時刻（未送信なら生成開始時刻）。並びと TTL に使う
-  finalized_at  INTEGER,                   -- assistant の確定時刻（ms）。pending の間と user turn は NULL
-  CHECK (
-    (role='user'
-      AND author_id IS NOT NULL AND author_label IS NOT NULL
-      AND parent_user_turn_id IS NULL
-      AND status IN ('completed','abandoned'))
-    OR
-    (role='assistant'
-      AND author_id IS NULL AND author_label IS NULL
-      AND parent_user_turn_id IS NOT NULL
-      AND reply_to_turn_id IS NULL AND reply_to_discord_msg_id IS NULL
-      AND status IN ('pending','completed','stopped','failed'))
-  )
-);
-CREATE INDEX idx_turns_session ON turns(session_id, discord_created_at, id);
-CREATE UNIQUE INDEX idx_turns_one_assistant ON turns(parent_user_turn_id) WHERE role='assistant' AND status != 'failed';
-CREATE INDEX idx_turns_created ON turns(discord_created_at); -- TTL sweep
-CREATE INDEX idx_turns_parent ON turns(parent_user_turn_id); -- user turn から assistant を引く（上の部分 UNIQUE index は条件付きなので使えない）
-CREATE INDEX idx_turns_reply_to ON turns(reply_to_turn_id); -- turn の削除で ON DELETE SET NULL が参照元を引く
+並びは「不変の system メッセージ → tool の定義 → 窓の引用（古い順）→ reply 先 → 変動する system 情報（現在日時など）→ 今回の発言」とする。
+同じ窓の間は、既に引用した発言の内容と適格性が変わらない限り、窓の引用の部分が前回の送信の先頭と一致し、後ろに発言が足されるだけになる。毎回 Discord から読むので、発言の削除や編集、表示名の変更、前回は未完了だった返答が完了したことなどで、先頭が変わることはある。
 
-CREATE TABLE turn_messages (
-  turn_id        INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
-  discord_msg_id TEXT NOT NULL,
-  seq            INTEGER NOT NULL CHECK(seq >= 0),
-  PRIMARY KEY (turn_id, discord_msg_id),
-  UNIQUE (turn_id, seq)
-);
-CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
+#### 上限の数え方
+
+- 件数は、適格性の判定を通った発言の件数で数える。分割した Bot の返答は 1 件と数える。窓、reply 先、tool の結果のすべてで同じ数え方をする。
+- tool のページングで既に見せた reply 先に再び達したときは、参照だけを返し、件数に重ねて数えない。
+- 概算トークンは、発話者ラベル、参照 ID、添付の表記を含めた、実際に渡す文字列で数える（ASCII は 4 文字 1 トークン、それ以外は 1 文字 1 トークン）。
+- REST の回数は、アプリから discord.js の REST を呼んだ回数で数える。discord.js が内部で行う再試行は数えない。
+
+### 2. Discord のメッセージの正規化
+
+- 人の発言: `content` を本文とし、表示名（サーバーのニックネーム、無ければユーザ名）を発話者ラベルにする。ラベルは改行と制御文字を除き 32 字で切る。
+- Bot の返答: Components V2 で送っているので `content` は空である。各ページの Container の中の TextDisplay から回答本文を取り出し、Separator の後ろのフッター（トークン数、費用、ページ番号など）を除く。先頭のモデル名の表示は、記録で 1 ページ目と分かるページからだけ除く。フッターの判定は `scripts/e2e/scenarios.ts` の `footerOf()` と同じ構造の判断で、本体のコードに共通の関数として置き、e2e からも使う。
+- 分割した返答は、記録のページ順でつなげて 1 つの返答として渡す。
+- 添付は、1 始まりの番号、種別（画像、PDF、その他）、ファイル名、サイズだけを表記する。元の CDN URL はモデルに見せない。
+- 各発言には、この応答の中だけで通じる参照 ID（`m1`、`m2` …）を振る。
+
+### 3. 適格性の判定
+
+窓、reply 先、`read_earlier_messages` のすべての経路で、同じ関数で判定する。
+
+- 人の発言: 対象（他の bot、webhook、システムメッセージは除く）。
+- 開発時の e2e: `E2E_TESTER_BOT_ID` の bot の発言は人の発言として扱う。`NODE_ENV=production` ではこの設定を読まない（`messageCreate` の既存の扱いと同じ）。
+- Bot の返答: Decisions「渡す Bot の返答」の条件をすべて満たすときだけ対象。トリガーの発言が取得した範囲に無ければ `GET /channels/{id}/messages/{id}` で確かめ、404 なら渡さない。ページも同じ。確かめられない（REST の上限、5xx、timeout）ときも渡さない。
+- 人の発言ごとに、それをトリガーとする管理記録を引く。記録があり、その返答ページのどれかが Discord に無い（404）ときは、外部から消されたとみなし、トリガーの発言と返答を、窓・reply 先・tool のすべての経路から外す。ページが全部消された場合も、記録から引いたページが 1 つも取得できないので同じ扱いになる。記録上のページのうち Bot 自身が消したものは、Decisions「Bot 自身の削除」により記録に残っていないので数えない。
+- 返答を渡さない理由が外部削除以外（未完了、失敗、記録の欠け、確定時刻が今回の発言より後、窓の境界、確かめられない）のときは、トリガーの発言そのものは渡す。
+- 返答が窓の境界で一部のページしか入らない場合は、返答ごと窓から外す（半端に渡さない）。
+
+### 4. tool
+
+#### `read_earlier_messages`
+
+- 引数: `count`（整数、既定 5、1〜20）。数えるのは、適格性の判定を通った発言の件数（分割した Bot の返答は 1 件）。
+- この応答で見せた範囲（窓と、それまでの tool の結果）より前の発言を、新しい方から `count` 件、古い順に並べて返す。
+- 応答の中で、REST で走査した一番古い message ID（カーソル）と、取得したがまだ見せていない適格な発言（バッファ）を持つ。バッファから先に返し、足りなければカーソルより前を `before = カーソル`、`limit = 100` で取得してカーソルを進める。適格でない発言だけのページでも、カーソルは進む。
+- reply 先はカーソルに影響させない。後でページングが reply 先に達したら、既に見せた発言として参照 ID だけを返し、本文を重ねない。
+- 1 応答の中で呼べるのは 3 回まで。モデルに見せる発言は、窓（最大 40 件）、reply 先、tool の結果を合わせて 60 件まで。過去 24 時間より前は返さない。
+- 返り値は古い順の JSON で、12 KiB 以内に収める。収まらない分は、古い方の発言をバッファに戻して `has_more: true` を返す。1 件で 12 KiB を超える発言は、本文を切り詰めて `truncated: true` を付ける。
+
+```json
+{
+  "messages": [
+    {
+      "ref": "m7",
+      "author": "田中",
+      "kind": "user",
+      "time": "2026-09-22T10:00:00+09:00",
+      "text": "この資料について",
+      "attachments": [{ "index": 1, "kind": "pdf", "filename": "hanrei.pdf", "size_bytes": 123456 }],
+      "truncated": false
+    }
+  ],
+  "has_more": true,
+  "stop_reason": null
+}
 ```
 
-- `src/db/schema.ts` の `applyMigrations()` に `CREATE TABLE IF NOT EXISTS` として足す。`guild_settings` には既存パターン（`PRAGMA table_info` → `ALTER TABLE ADD COLUMN`）で `history_enabled INTEGER NOT NULL DEFAULT 0` を足す。
-- `active`、user turn の `abandoned`、`reply_to_turn_id` は本 change では使い道を持たない（`active` は `failed` にするとき 0 にするだけ、`abandoned` は作らない、`reply_to_turn_id` は reply 先に写像があれば記録するだけ）。後続の [conversation-regeneration](../conversation-regeneration/design.md)（undo の `active=0`）と [会話履歴の削除同期の強化](../conversation-context-sync/design.md)（未応答 turn の `abandoned`、reply チェーン）がこれらを前提にしているので、後から列を足す移行を避けるために最初から持つ。
-- 1 user → 1 assistant は `idx_turns_one_assistant` で強制する。`failed` は index の対象外にし、後続 change が失敗した応答をやり直せるようにしておく。再生成で複数世代を持たせるのは [conversation-regeneration](../conversation-regeneration/design.md) の範囲で、同 change がこの index を置き換える。
-- assistant turn の挿入は同じ transaction の中で親の `role='user'` と `session_id` の一致を確かめてから行う（CHECK はサブクエリを書けない）。
-- `json_valid` は構文だけを見る。repository は読み出し時に、root が配列であること、各 part が `content_schema_version` の形に合うことを確かめ、合わない turn は文脈から外して `console.warn` を出す。
-- 写像の追加は `INSERT ... SELECT ... WHERE EXISTS (SELECT 1 FROM turns WHERE id = ? AND status = 'pending')` とし、purge 済みや確定済みの turn へは何も足さない（FK が有効なので、存在しない turn への素の INSERT はエラーになる）。
-- repository は `src/db/repositories/conversation.ts` の 1 つとし、書き込みは既存の `GuildSettingsRepository.update()` と同じく `db.transaction(...).immediate`（`BEGIN IMMEDIATE`）で直列化する。
+- `stop_reason` は、回数の上限、件数の上限、24 時間、権限が無い、取得に失敗した、のどれかを区別して返す。Discord は `ReadMessageHistory` が無いと空の配列を返すので、空の配列だけを「履歴が無い」とは扱わない。
 
-### 2. 保存経路
+#### `view_attachment`
 
-`messageCreate` が応答すると決めた後（`shouldRespond()` と添付の検証を通った後）、guild の `history_enabled` が 1 のときだけ次を行う。`history_enabled` は手順 1 の transaction の中で読み直し、0 になっていれば何も作らず、履歴なしで応答する。
+- 引数: `message_ref`（この応答で見せた参照 ID）、`attachment_index`（1 始まり）。任意の URL、チャンネル ID、見せていない message ID は受け付けない。
+- 参照 ID と番号を、最初に見せた時点の Discord の `attachment.id` に固定して解決する。メッセージを取り直した後に添付の並びが変わっても、別の添付に切り替えない。
+- 認可を確かめてからメッセージを取り直し、新しい署名付き URL を得る。添付が消えていたら `unavailable` を返す。
+- 対応形式は PNG / JPEG / GIF / WebP と PDF。1 応答で開ける過去の添付は異なる 2 件まで（失敗した呼び出しも数える）、画像 1 件 8 MiB、PDF 1 件 20 MiB まで。取得先のホスト（Discord の CDN）、redirect 先、MIME、実際のバイト数を確かめる。同じ添付を 2 度取得しない（2 度目は取得済みと返す）。
+- 画像は、モデルが画像入力に対応すると判定できたとき（`isMultimodalCapable(model, "image") === true`）だけ返す。そうでなければ、文字列の tool エラーを返す。
+- 結果は Responses API の `function_call_output` の `output` に、`input_image` / `input_file` の part の配列として返す（OpenAPI の `output` がこの形を許すことは確認済み）。
+- 取得した中身は、その応答の中だけで使い、次の発言では表記に戻る。
 
-1. **user turn**: `BEGIN IMMEDIATE` の中で、`discord_msg_id = message.id` の写像があれば何もせず応答もしない（gateway の再送）。Decisions「保存前に届いた削除」の判定（メッセージ・チャンネル・親チャンネル・guild の ID の照合と、開始から 10 分の打ち切り）に当たれば、turn を作らない。メッセージ ID が記録にあれば応答もしない。それ以外（範囲の削除か打ち切り）は履歴なしで応答する。無ければ session を割り当て（Decisions「session の割り当て」）、user turn（`status='completed'`、`content_json` は今回の入力の `PersistedContentPart[]`、`author_label` は `message.member?.displayName ?? message.author.username`、`reply_to_discord_msg_id` は `message.reference?.messageId`）と写像（`seq=0`）を作る。スレッドなら `parent_channel_id` に親チャンネルの ID を入れる。
-2. **assistant turn**: 同じ transaction で `pending` の assistant turn を作る。これより後で文脈を組むので、今回の user turn は文脈に入り、今回の assistant turn（`pending`）は入らない。
-3. **送信の写像**: bot のメッセージを送る経路は次の 5 つあり、すべてを 1 つの記録関数（`onBotMessageSent(turnId, message)`）に通す。記録関数は写像を `seq` の昇順で足し、最初の写像のときに `discord_created_at` をそのメッセージの生成時刻に更新し、ID が「保存前に届いた削除」の記録にあれば exchange を purge する。
-   - 初期メッセージの `channel.send()`（`src/bot/events/messageCreate.ts`）
-   - `DiscordStreamingUpdater`（`src/bot/events/streamingUpdater.ts`）のストリーミング中の追加送信
-   - 最終描画での追加送信
-   - 致命的エラー時に部分文を出す追加送信
-   - 停止表示での追加送信
-4. **内部削除**: bot が自分のメッセージを消す経路もすべて 1 つの関数（`deleteOwnMessage(message)`）に通し、Discord の削除を呼ぶ前に写像を消す。経路は、最終描画で余ったメッセージの `deleteOrNeutralize`、致命的エラー時の `cleanupBotMessagesOnFatalError`、`DiscordStreamingUpdater` が finalize 後に完了した send を消す処理の 3 つである。finalize 後に完了した send は、記録関数を通さずにこの関数で消し、写像を足さない。
-5. **確定**: 最終描画の追加送信と余ったメッセージの削除を終えてから、`completed`（全文）/ `stopped`（停止ボタン、部分文）/ `failed`（エラー、`active=0`）、最終の `content_json`、`finalized_at` を書く。更新は `WHERE status='pending'` を付け、既に purge された turn や確定済みの turn には何もしない。
+### 5. tool 基盤の拡張
 
-- **起動時**: `ClientReady` の前に `UPDATE turns SET status='failed', active=0 WHERE status='pending'` を実行する。
-- **生成中の purge**: 生成中に元の user メッセージが削除されると exchange ごと消え（下記 9）、以後の写像の追加と確定は対象 turn が無いので何もしない。生成と Discord への送信そのものは止めない（その回答は Discord に残るが DB には残らない）。
-- `history_enabled` が 0 の guild では DB に何も書かず、文脈は今回の発言だけになる。
+- `IToolHandlerResult.llmResult`（`src/llm/tools/registry.ts`）を、文字列だけでなくマルチモーダルの part の配列も返せるようにする。
+- dispatcher（`src/llm/tools/toolHandler.ts`）の 16 KiB の切り詰めは文字列の結果にだけ適用し、part の配列にはバイト数の上限を別に適用する。
+- `toResponsesInput()`（`src/llm/openrouter.ts`）の `function_call_output` の変換を、part の配列に対応させる。
+- `file-parser` plugin は、今は最初の入力に file part があるときだけ付く。tool の結果で PDF を返しうる応答（`view_attachment` を提示する応答）では最初から付ける。
+- tool の結果に入れた PDF を `file-parser` が扱えるかは、この基盤の変更の最初に実機で確かめる。扱えない場合は、PDF だけ文字列の tool エラーにして進めるか、別の経路を実装するかをその時点で決める。
 
-### 3. 構造化コンテンツ & メディア
+### 6. 返答の管理記録
 
-- 永続型 `PersistedContentPart`: `{type:'text', text}` / `{type:'image-ref', url, mime}` / `{type:'file-ref', url, filename, mime}`（**base64 を保存しない**）。`content_json` は versioned 配列。
-- user turn は添付の元の情報から作る。`parseAttachments()`（`src/services/attachmentParser.ts`）の戻り値は PDF の元 URL と画像の MIME を持たないので、送信用の part と並べて保存用の参照（URL、MIME、ファイル名）も返すように変える。
-- assistant turn はテキスト 1 part とする。
-- hydration: request 構築時に `PersistedContentPart[]` → `ChatMessageContent[]` へ変換する。画像は URL をそのまま `image_url` に渡すので、URL が失効していても Bot 側では気づけず、provider 側の取得失敗になる（剥がしで残るのは予算内でメディアを含む最新の user turn だけだが、それが最新の発言とは限らず、経過時間も制限しない。GAP 未満でテキストの会話が続けば、失効した画像の URL を送り続けて応答が失敗しうる）。PDF は再 fetch して base64 の `file` part にし、取得できなければ text part `[file unavailable: <filename>]` にする。
-- 今回の user turn のメディアは、hydration を通さず現行どおり `parseAttachments()` の結果をそのまま使う。
-- `file-parser` plugin（`PDF_PARSER_PLUGIN`）は現在、今回の入力に file part があるときだけ付く（`buildChatRequest()`）。履歴の hydration 後は、送る `input` のどこかに file part が残っていれば付ける。
+```sql
+CREATE TABLE reply_records (
+  trigger_msg_id  TEXT PRIMARY KEY,         -- 返答した発言の message ID
+  channel_id      TEXT NOT NULL,
+  guild_id        TEXT NOT NULL,
+  status          TEXT NOT NULL CHECK(status IN ('pending','completed','stopped','failed')),
+  page_count      INTEGER,                  -- 確定時の総ページ数。pending の間は NULL
+  finalized_at    INTEGER,                  -- 確定時刻（ms）。pending の間は NULL
+  created_at      INTEGER NOT NULL
+);
+CREATE TABLE reply_pages (
+  page_msg_id     TEXT PRIMARY KEY,
+  trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
+  seq             INTEGER NOT NULL CHECK(seq >= 0),
+  UNIQUE (trigger_msg_id, seq)
+);
+CREATE INDEX idx_reply_records_finalized ON reply_records(finalized_at);
+```
 
-### 4. 文脈の構築
+- スイッチが ON のギルドでだけ、生成の前に `pending` で作る。送信・追加送信のたびにページを足し、最終描画（追加送信と余ったページの削除）を終えてから、状態、総ページ数、確定時刻を書く。
+- 送信の経路（初期メッセージ、ストリーミング中の追加送信、最終描画での追加送信、致命的エラー時の部分文、停止表示）と、Bot 自身の削除の経路（余ったページ、致命的エラー時の後始末、finalize 後に届いた送信）は、それぞれ 1 つの関数に集める。
+- 起動時に残っている `pending` は `failed` にする（確定時刻は書かない）。`COALESCE(finalized_at, created_at)` から 24 時間を過ぎた記録は、状態によらず、起動時と 1 時間ごとに消す。窓と tool が読めるのは過去 24 時間までなので、それより古い記録は参照されない。
+- 記録の書き込みに失敗しても、応答は止めない。失敗した返答は「渡す Bot の返答」の条件（記録があり、ページ数が一致する）を満たさなくなり、渡されない。
+- 記録の無い Bot の返答（スイッチが OFF の間の返答、クラッシュで記録が残らなかった返答）は渡さない。
 
-1. 今回の user turn の session から、`discord_created_at` が今回の user turn より前の user turn を取り出す（同時刻は `discord_msg_id` を数値として比べる。snowflake は時刻順なので、到着順に依存せず「回答対象より後の発話」を除ける）。
-2. `active=1` の turn だけを使う。取り出した user turn はすべて含める。assistant turn は `completed` / `stopped` で、かつ `finalized_at` が今回の user 発言の生成時刻以下のものだけを、その親 user turn の直後に置く。`pending` / `failed` と、今回の発言より後に完成した回答は入れない。この場合、その親 user turn は回答なしで文脈に入る。
-3. 今回の user turn を除いた exchange を新しい順に見て、予算（下記 6）に収まる間だけ採用し、古い順に並べ直す。
-4. 並びは「不変の system メッセージ → 採用した履歴（古い順）→ 変動する system 情報 → 今回の user turn」とする（下記 8）。
+### 7. session_id と prompt cache
 
-### 5. メディア剥がし
+- `session_id` は窓と同じ区切りで作り、`runToolLoop()` の `requestFields` で全ターンに載せる。`ChatCompletionRequest` に `session_id?: string` を足す。
+- 同じ窓の間は、既に引用した発言の内容と適格性が変わらない限り、送る内容の先頭（system メッセージ、tool の定義、窓の引用）が前回と一致する。窓の開始位置を進めた直後の 1 回と、tool の結果が加わった部分は、キャッシュから外れる。
+- 効き具合は LLM 詳細のフッターの `Cached: N` で見る。
 
-永続参照（`PersistedContentPart[]`）の段階で適用する純関数 `stripHistoricalMedia()`。
-今回の user turn（列の最後）以外の turn の image-ref / file-ref を、`[earlier image omitted]` / `[earlier file omitted: <filename>]` の text part に置き換える。
-過去の添付は hydrate しないので、PDF を再 fetch しない。予算の見積もりも置き換えた後の内容で数える。
-保存している `content_json` は変えない。
+### 8. 本文ストアの撤去（未リリースの実装からの移行）
 
-### 6. トークン予算
+main には、会話の本文を DB に保存する実装がリリース前の状態で入っている。
+対象は `sessions` / `turns` / `turn_messages` の各表、`src/db/repositories/conversation.ts`、`src/services/historyRecorder.ts`、`src/bot/events/raw.ts`、`src/services/attachmentParser.ts` の保存用の参照（`storageRefs` と `PersistedAttachmentRef`）、`GuildSettingsRepository.setHistoryEnabled()` の `DELETE FROM sessions`、起動時の `failPendingTurns()` と定期 sweep、`messageCreate` / `DiscordStreamingUpdater` の保存経路、`ChatService` の履歴の組み立てである。
 
-- 予算は `min(contextLength × 0.5, 32000)` トークンとする。`contextLength` は `IModelService.getModelDetails()` から取り、取れなければ予算そのものを 16000 とする。
-- 推定は文字数ベースの概算で、上限の保証ではない（ASCII は 4 文字 1 トークン、それ以外は 1 文字 1 トークン）。画像 1 枚は 1000 トークン、PDF は取得前のため 1 件 2000 トークンと見積もる。
-- 予算から、system メッセージ、tool の定義（送る場合）、今回の user turn、応答の予約（4000 トークン）を差し引いた残りに履歴を詰める。残りが 0 以下なら履歴を入れない。
-- 見積もりが外れて provider が文脈長超過で 400 を返した場合は、既存の `BadRequestError` の処理に任せる。縮約して再試行する仕組みは持たない。
+- 本 change の実装は 1 つの PR で、読み取り元の切り替えと本文ストアの撤去を同時に行う。途中の状態（新しい読み取りが有効で、同意がまだ古い意味のまま）を main に作らないため。
+- 移行は `applyMigrations()` の中で、`turns` 表が存在するときだけ、1 つの transaction で `turn_messages` / `turns` / `sessions` を DROP し、`guild_settings.history_enabled` を 0 に戻す。`turns` 表の有無で判定するので、2 度目の起動では何もしない。新規の DB では `turns` 表が無いので何もしない。`history_enabled` の意味が変わるので、既存の ON を引き継がず、管理者に選び直してもらう。
+- 本文ストアを前提にした e2e の説明（AGENTS.md の `history-set` / `history-recall` の節）と README の「保存する内容」の説明を、新しい挙動に書き換える。
+- `/config history off` の応答（`src/bot/commands/handlers.ts`）は、削除するものが無くなるので「会話履歴を **無効** にしました。」にする。
 
-### 7. 共有チャンネルの発話者識別
+### 9. e2e
 
-user turn を `input` に描画するとき、本文の先頭に `[{author_label}]:` と空白 1 つを付けて発話者を区別する。
-`author_label` は保存時に正規化する: 改行とタブを空白に、制御文字・ゼロ幅文字・bidi 制御文字と `[` `]` を除き、前後の空白を落として 32 字で切る。空になったら `author_id` を使う。
-OpenAI 形式の `name` フィールドは provider 差があり、Responses API の `input` でも扱いが揃わないので使わない。
-今回の user turn にも同じ接頭辞を付ける（履歴の有無で今回の発言の形を変えない）。
-
-### 8. OpenRouter session routing と prompt caching
-
-- 同じ local `sessions.id` に属する生成は、tool 実行後の再リクエストと最終ターンを含め、すべて同じ `openrouter_session_id` を Responses API の top-level `session_id`（最大 256 文字）として送る。`ChatService.generateChatResponse()` が `runToolLoop()` の `requestFields` に渡せば、全ターンに載る。`history_enabled` が 0 の guild では送らない。
-- gap 越えで新しい local session を作る場合は、新しい `openrouter_session_id` を発行して provider routing を前の session と分離する。
-- cache hit は request の prefix 一致に依存するため、system prompt、tool schema、履歴 message の順序と serialization を決定的に保ち、新しい user turn だけを末尾へ追加する。
-- Web 検索 ON 時の system メッセージ（`buildWebSearchSystemMessage()`）は、検索の指示と非信頼データの注意を先頭の不変の system メッセージに、現在日時を今回の user turn の直前の system メッセージに分けて置く。
-- Web 検索の ON/OFF を切り替えると `tools` と先頭の system メッセージが変わり、その次の 1 回は cache miss になる。これは許容する。
-- cache metadata が無い、cache miss になる、または routing 先が変わる場合も通常応答は失敗させない。
-
-### 9. プライバシー / 保持
-
-- 削除は `Events.Raw` で gateway の payload から受ける（Decisions「削除イベントの受け方」）。現在 `src/index.ts` が購読するのは `ClientReady` / `messageCreate` / `interactionCreate` だけで、以下の handler は本 change で新設する。受け取ったメッセージ ID はすべて「保存前に届いた削除」の記録に入れる。
-- `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK`: 写像のあるメッセージについて、写像先が user turn ならその user turn を、assistant turn ならその親 user turn を削除する（CASCADE で exchange 全体が消える）。分割送信のどれか 1 つが消されても exchange 全体を消す。削除後に空になった session も消す。
-- `CHANNEL_DELETE`: `channel_id` がそのチャンネルの session と、`parent_channel_id` がそのチャンネルの session（子スレッド）を消す。
-- `THREAD_DELETE`: `channel_id` がそのスレッドの session を消す。
-- `GUILD_DELETE`: payload に `unavailable: true` が無い場合（bot の退出・キック）だけ、その guild の session をすべて消す。`unavailable: true` は Discord 側の障害による一時的な利用不能なので消さない。
-- TTL: 起動時と 24 時間ごとに、最後の turn の `discord_created_at` が 30 日より前の exchange を消し、空になった session も消す。
-- `/config history <on|off>`: 暫定で `ManageGuild` を handler 内で確認する（[権限管理](../permissions/design.md) の機構ができたらそれに従う）。`off` にしたら同じ transaction でその guild の session をすべて消す。応答は ON/OFF と、OFF で保存済みの履歴を消したことだけを伝える。保存する内容と削除への追従の限界は、運用者向けに README に書く。
-- **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。purge が失敗し続ける場合はプロセスが稼働している間だけ再試行し、再起動後は TTL または `/config history off` まで exchange が残る。
-- `/status` に履歴の ON/OFF を出す。README に保存する内容、保持期間（最後の発言から 30 日を過ぎた後の次の sweep で消える）、削除への追従の範囲と上の限界を書く。
-- `messageUpdate`（user 編集）は無視し、保存した内容を保つ。編集に追従した再生成は [conversation-regeneration](../conversation-regeneration/design.md) の範囲。
+- tester bot の発言を人の発言として扱う（3 の例外）ので、合言葉を tester bot が先に投稿しておけば、窓から読めるかを確かめられる。
+- 未メンションの発言を窓から読めるかは、tester bot がメンションなしで資料を投稿し（Bot は応答しない）、続けてメンション付きで尋ねる形で確かめる。runner にメンションなしで投稿する機能を足す。
+- `read_earlier_messages` と `view_attachment` は、答えの内容に加えて、LLM 詳細のフッターか bot のログで tool が実際に呼ばれたことを確かめる。
 
 ## Tasks
 
-- [x] `PRAGMA foreign_keys = ON` を `src/db/index.ts` に追加し、テストが独自に開く `:memory:` の接続にも同じ PRAGMA を掛けてから、既存テストが通ることを確かめる
-- [x] `sessions` / `turns` / `turn_messages` と `guild_settings.history_enabled` のマイグレーション
-- [x] `ConversationRepository`: session の割り当て、user turn と pending assistant turn の作成（冪等）、写像の追加、確定、写像の削除、purge（メッセージ・チャンネル・スレッド・guild）、TTL sweep、起動時の pending の失敗化
-- [x] `PersistedContentPart` 型と、入力からの変換・hydration
-- [x] 文脈の構築（cutoff、exchange 単位の予算、並び）と `stripHistoricalMedia()`
-- [x] トークン予算の推定
-- [x] `author_label` の正規化と接頭辞の描画
-- [x] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
-- [x] 履歴の DB 操作を `src/services/historyRecorder.ts` に集約し、失敗時の fail closed、pending purge の再試行、履歴 context の除外を実装する
-- [x] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
-- [x] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
-- [x] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す
-- [x] `file-parser` plugin の付与条件を履歴全体へ広げる
-- [x] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
-- [x] `/config history` と `/status`、README
-- [x] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
-- [x] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加（`history-set` / `history-recall`、名前指定時のみ）
-- [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録。top-level `cache_control` を付けるかをこの結果で決める
-- [ ] 手動確認: 実クライアントで `/config history on` にして 2 往復会話し、bot の返答メッセージを削除すると次の返答がその exchange を覚えていないこと、`/config history off` の後は前の会話を覚えていないことを確かめる
+- [ ] tool 基盤: マルチモーダルの tool 結果、dispatcher の上限、`function_call_output` の変換、`file-parser` の付与条件
+- [ ] tool の結果に入れた PDF を `file-parser` が扱えるかの実機確認
+- [ ] Discord のメッセージの正規化（Bot の返答の本文の取り出しを共通の関数にし、e2e からも使う）
+- [ ] 返答の管理記録と、送信・Bot 自身の削除の経路の集約
+- [ ] 窓（開始位置の固定、上限でのまとめ進め、60 分での作り直し）、reply 先、認可、適格性の判定
+- [ ] `read_earlier_messages`（カーソルとバッファ）と `view_attachment`
+- [ ] `session_id` と、Web 検索の system メッセージの分割
+- [ ] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
+- [ ] README と AGENTS.md の書き換え
+- [ ] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
+- [ ] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
+- [ ] prompt cache の効き具合の実測（同じ窓で続けて尋ね、`Cached: N` と費用を記録する）
+- [ ] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF を見直す質問、自分の発言を消した後にそれを指す質問を試す
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **返信通知を切ったリプライでの応答（要決定）**: 返信通知を切った bot のメッセージへのリプライ（メンションとして数えられない）も addressed turn にするか。会話の続きを自然に書けるようになる一方、応答する条件が広がり、autoReply でないチャンネルでも bot が話し始める。本 change の範囲に入れるなら `shouldRespond()` の変更と e2e シナリオの追加が要る
-- **受動参加スコープ**（Phase 2、MessageContent 範囲・保存量・privacy）
-- **トークン推定精度**（日本語/メディア。文脈長超過は 400 のエラー表示になる）
-- **prompt cache の provider 差**（最小 cache 対象長、write 料金、TTL、暗黙 caching の有無は provider と model で異なるため、cache hit と費用削減は保証しない）
-- **削除への追従の限界**: Bot の停止中に消されたメッセージと、「9. プライバシー / 保持」の「追従の限界」に挙げた場合は DB に残る。停止中の削除の補足は [会話履歴の削除同期の強化](../conversation-context-sync/design.md) の範囲で、それまでは `/config history off` で guild 単位に消せる
-- **DM**（将来、`DirectMessages` intent・設定 fallback・privacy）
+- **モデルが tool を呼ばずに推測で答える**: 「取得した範囲にない過去の内容は、取得するか、分からないと答える」と指示するが、実際に tool を適切に使うかはモデル次第である。実機で評価し、足りなければ窓の上限を広げる。
+- **費用と遅延**: 窓の確かめ（トリガーやページの個別取得）と tool の往復で REST と遅延が増える。1 応答あたりの費用と時間を測る。
+- **Bot の停止中や、取得に失敗した返答が渡らない**: 迷ったら渡さない規則なので、確かめられない返答は文脈から抜ける。会話が欠けて見えることがある。
+- **返信通知を切ったリプライでの応答（要決定）**: 返信通知を切った Bot のメッセージへのリプライ（メンションとして数えられない）にも応答させるか。
 
 ## 参照
 
-- [OpenRouter OpenAPI 定義](https://openrouter.ai/openapi.json) — `ResponsesRequest` の `session_id`（sticky routing と観測、最大 256 文字）、`store`（`false` 固定）、`previous_response_id`（400 で拒否）、top-level `cache_control` / `prompt_cache_key` / `prompt_cache_options`
-- [OpenRouter Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) — provider 別の implicit / explicit caching、cache usage
-- [OpenRouter Responses API](https://openrouter.ai/docs/api/reference/responses/overview) — stateless API
-- [SQLite foreign keys](https://www.sqlite.org/foreignkeys.html) — FK は既定 off
-- [discord.js Client events](https://discord.js.org/docs/packages/discord.js/14.26.5/Client:Class) — `raw` イベント。`threadDelete` はスレッドが channel cache にある場合だけ発火する（14.26.5 の `ThreadDeleteAction`）
-- [Discord Gateway Events](https://discord.com/developers/docs/events/gateway-events) — `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable`）
-- 着想元: hermes-agent のメディア剥がし、構造化履歴
+- [Discord Get Channel Messages](https://docs.discord.com/developers/resources/message#get-channel-messages) — 新しい順、`before` / `after`、`ReadMessageHistory` が無いと空の配列
+- [Discord Threads](https://docs.discord.com/developers/topics/threads#permissions) — private thread の閲覧条件
+- [Discord Signed Attachment CDN URLs](https://docs.discord.com/developers/reference#signed-attachment-cdn-urls) — 添付の URL は署名付きで失効する
+- [Discord Rate Limits](https://docs.discord.com/developers/topics/rate-limits)
+- [OpenRouter OpenAPI 定義](https://openrouter.ai/openapi.json) — `ResponsesRequest` の `session_id`、`store`、`previous_response_id`、`function_call_output` の `output`
+- [OpenRouter Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching) — Gemini の暗黙のキャッシュ、sticky routing

@@ -31,7 +31,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 - 連携: [権限管理](../permissions/design.md) — 2 つのトグルの変更は、同 change の設定変更の共通認可契約に従う
 - 連携: [回答の再生成・編集/undo・compaction](../conversation-regeneration/design.md) — 実行結果のメッセージは回答と同じ生成に属する。生成が失効したときの公開の停止と、結果メッセージの削除の契約を共有する（後述）
 - 連携: [使用統計](../usage-stats/design.md) — サンドボックス課金（`server_tool_cost`）を保存対象に含める
-- 関連: [対話UX改善（会話履歴ストア）](../conversation-context/design.md) — 同 change が `session_id` を送り始めると、`container_auto` のコンテナ ID が会話単位に変わる。本 change はコンテナ ID を明示するので影響を受けない（Decisions 参照）
+- 関連: [対話UX改善（会話履歴）](../conversation-context/design.md) — 同 change が `session_id` を送り始めると、`container_auto` のコンテナ ID が会話単位に変わる。本 change はコンテナ ID を明示するので影響を受けない（Decisions 参照）
 
 ## Goals / Non-Goals
 
