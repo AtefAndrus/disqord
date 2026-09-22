@@ -70,6 +70,22 @@ export interface IReplyRecordLookup {
   listPages(triggerMsgId: string): ReplyPage[];
 }
 
+export function classifyNotFoundMessage(
+  messageId: string,
+  records: IReplyRecordLookup,
+  externalDeletions: MessageEligibilityExternalDeletionSet,
+): void {
+  const record = records.findByPage(messageId) ?? records.findByTrigger(messageId);
+  if (!record) {
+    externalDeletions.add(messageId);
+    return;
+  }
+  const isRegistered =
+    messageId === record.triggerMsgId ||
+    records.listPages(record.triggerMsgId).some((page) => page.pageMsgId === messageId);
+  if (isRegistered) externalDeletions.add(record.triggerMsgId);
+}
+
 function isE2eTester(message: RawDiscordMessage, input: MessageEligibilityInput): boolean {
   return (
     input.nodeEnv !== "production" &&
@@ -339,12 +355,16 @@ export class MessageEligibilityService {
       record.triggerMsgId,
       knownTrigger ?? knownMessages.get(record.triggerMsgId),
       budget,
+      externalDeletions,
       signal,
     );
     const pages = this.records.listPages(record.triggerMsgId);
     if (trigger.status === "not-found") {
-      externalDeletions.add(record.triggerMsgId);
-      return { externallyDeleted: true, trigger, pages: [] };
+      return {
+        externallyDeleted: externalDeletions.has(record.triggerMsgId),
+        trigger,
+        pages: [],
+      };
     }
     const fetchedPages: Array<{ page: ReplyPage; result: DiscordMessageFetchResult }> = [];
     for (const page of pages) {
@@ -353,12 +373,16 @@ export class MessageEligibilityService {
         page.pageMsgId,
         knownMessages.get(page.pageMsgId),
         budget,
+        externalDeletions,
         signal,
       );
       fetchedPages.push({ page, result: fetched });
       if (fetched.status === "not-found") {
-        externalDeletions.add(record.triggerMsgId);
-        return { externallyDeleted: true, trigger, pages: fetchedPages };
+        return {
+          externallyDeleted: externalDeletions.has(record.triggerMsgId),
+          trigger,
+          pages: fetchedPages,
+        };
       }
     }
     return {
@@ -387,7 +411,9 @@ export class MessageEligibilityService {
     const fetchedPages: Array<RawDiscordMessage & { page: ReplyPage }> = [];
     for (const { page, result } of checked.pages) {
       if (result.status !== "found") {
-        return { status: result.status === "not-found" ? "deleted" : "failed" };
+        return {
+          status: result.status === "not-found" && checked.externallyDeleted ? "deleted" : "failed",
+        };
       }
       if (messageTime(result.message) < cutoffAt) return { status: "too-old" };
       fetchedPages.push({ ...result.message, page });
@@ -403,10 +429,16 @@ export class MessageEligibilityService {
     messageId: string,
     known: RawDiscordMessage | undefined,
     budget: DiscordRestBudget,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal | undefined,
   ): Promise<DiscordMessageFetchResult> {
     if (known) return Promise.resolve({ status: "found", message: known });
-    return this.reader.fetch(channelId, messageId, budget, signal);
+    return this.reader.fetch(channelId, messageId, budget, signal).then((result) => {
+      if (result.status === "not-found" && !signal?.aborted) {
+        classifyNotFoundMessage(messageId, this.records, externalDeletions);
+      }
+      return result;
+    });
   }
 }
 

@@ -11,6 +11,7 @@ import type {
 } from "../../../src/services/discordMessageReader";
 import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
 import {
+  classifyNotFoundMessage,
   type MessageEligibilityCache,
   type MessageEligibilityExternalDeletionSet,
   MessageEligibilityService,
@@ -125,6 +126,131 @@ describe("MessageEligibilityService", () => {
 
     expect(result.eligible).toBe(false);
     expect(result.externallyDeleted).toBe(true);
+  });
+
+  test("keeps an exchange when its page was unregistered before the 404", async () => {
+    const trigger = human("trigger");
+    const page = botPage("page");
+    const replyRecord = record();
+    let pageListCalls = 0;
+    const records: IReplyRecordRepository = {
+      createPending: mock(() => true),
+      appendPage: mock(() => true),
+      removePage: mock(() => true),
+      finalize: mock(() => true),
+      findByTrigger: mock((id: string) => (id === "trigger" ? replyRecord : null)),
+      findByPage: mock((id: string) => (id === "page" ? replyRecord : null)),
+      listPages: mock(() => {
+        pageListCalls += 1;
+        return pageListCalls === 1 ? [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }] : [];
+      }),
+      markPendingFailed: mock(() => 0),
+      deleteExpired: mock(() => 0),
+    };
+    const reader: IDiscordMessageReader = {
+      list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),
+      fetch: mock(async (): Promise<DiscordMessageFetchResult> => ({ status: "not-found" })),
+    };
+    const service = new MessageEligibilityService(reader, records);
+    const budget = new DiscordRestBudget();
+    const cache: MessageEligibilityCache = new Map();
+    const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
+    const input = { currentTimestampMs, botUserId: "bot", channelId: "channel" };
+
+    const pageResult = await service.evaluate(
+      page,
+      input,
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+      externalDeletions,
+    );
+    const triggerResult = await service.evaluate(
+      trigger,
+      input,
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+      externalDeletions,
+    );
+
+    expect(pageResult.reason).toBe("unconfirmable");
+    expect(triggerResult.eligible).toBe(true);
+    expect(triggerResult.externallyDeleted).toBe(false);
+    expect(externalDeletions).toEqual(new Set());
+  });
+
+  test("excludes an exchange when its page remains registered at the 404", async () => {
+    const trigger = human("trigger");
+    const page = botPage("page");
+    const { service, budget } = setup(
+      record(),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async () => ({ status: "not-found" }),
+    );
+    const cache: MessageEligibilityCache = new Map();
+    const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
+    const input = { currentTimestampMs, botUserId: "bot", channelId: "channel" };
+
+    const triggerResult = await service.evaluate(
+      trigger,
+      input,
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+      externalDeletions,
+    );
+    const pageResult = await service.evaluate(
+      page,
+      input,
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+      externalDeletions,
+    );
+
+    expect(triggerResult.eligible).toBe(false);
+    expect(triggerResult.externallyDeleted).toBe(true);
+    expect(pageResult.eligible).toBe(false);
+    expect(pageResult.externallyDeleted).toBe(true);
+    expect(externalDeletions).toEqual(new Set(["trigger"]));
+  });
+
+  test("excludes a human message when no record exists at its 404", async () => {
+    const trigger = human("trigger");
+    const records: IReplyRecordRepository = {
+      createPending: mock(() => true),
+      appendPage: mock(() => true),
+      removePage: mock(() => true),
+      finalize: mock(() => true),
+      findByTrigger: mock(() => null),
+      findByPage: mock(() => null),
+      listPages: mock(() => []),
+      markPendingFailed: mock(() => 0),
+      deleteExpired: mock(() => 0),
+    };
+    const reader: IDiscordMessageReader = {
+      list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),
+      fetch: mock(async (): Promise<DiscordMessageFetchResult> => ({ status: "not-found" })),
+    };
+    const service = new MessageEligibilityService(reader, records);
+    const budget = new DiscordRestBudget();
+    const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
+
+    classifyNotFoundMessage(trigger.id, records, externalDeletions);
+
+    const result = await service.evaluate(
+      trigger,
+      { currentTimestampMs, botUserId: "bot", channelId: "channel" },
+      budget,
+      new Map(),
+      new Map(),
+      externalDeletions,
+    );
+
+    expect(result.eligible).toBe(false);
+    expect(result.externallyDeleted).toBe(true);
+    expect(externalDeletions).toEqual(new Set(["trigger"]));
   });
 
   test("applies external-deletion checks to tester-bot triggers", async () => {

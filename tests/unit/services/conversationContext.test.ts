@@ -185,6 +185,42 @@ for (const anchorStatus of ["not-found", "failed"] as const) {
   });
 }
 
+test("excludes an exchange when the extend anchor is externally deleted", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "90",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const pages: ReplyPage[] = [{ pageMsgId: "100", triggerMsgId: "90", seq: 0 }];
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "90" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "100" ? replyRecord : null));
+  repository.listPages = mock(() => pages);
+  const page100 = message("100", undefined, {
+    author: { id: "bot", username: "bot", bot: true },
+    content: "",
+  });
+  reader.listResponses.push({ status: "ok", messages: [page100] });
+  reader.fetchResponses.push({ status: "found", message: message("90") });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const first = await service.build(input(message("102", new Date(NOW).toISOString())));
+
+  reader.fetchResponses.push({ status: "not-found" }, { status: "found", message: message("90") });
+  reader.listResponses.push({ status: "ok", messages: [page100] });
+  const second = await service.build(input(message("103", new Date(NOW).toISOString())));
+
+  expect(first?.messages).toHaveLength(1);
+  expect(second?.messages).toEqual([]);
+  expect(second?.windowStartMessageId).toBe(first?.windowStartMessageId);
+  expect(second?.sessionId).toBe(first?.sessionId);
+  expect(reader.fetchQueries).toEqual(["90", "100"]);
+});
+
 test("rebuilds a stale message below the stored start without clobbering the newer state", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [message("119")] });
@@ -342,6 +378,58 @@ test("shrinks one extend directly to all compact limits and renews the session o
   expect(new Date(second?.messages[0]?.time ?? 0).getTime()).toBeGreaterThanOrEqual(
     NOW - WINDOW_SHRUNK_AGE_MS,
   );
+});
+
+test("keeps the extend window state when reply-target deletion removes the over-limit exchange", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "50",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "50" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "30" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "30", triggerMsgId: "50", seq: 0 }]);
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 20 }, (_, index) => message(String(index + 1))),
+  });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const first = await service.build(input(message("21", new Date(NOW).toISOString())));
+
+  const extension = Array.from({ length: 40 }, (_, index) => {
+    const id = String(index + 2);
+    return id === "30"
+      ? message(id, undefined, {
+          author: { id: "bot", username: "bot", bot: true },
+          content: "",
+        })
+      : message(id);
+  });
+  reader.fetchResponses.push(
+    { status: "found", message: message("1") },
+    { status: "found", message: message("50") },
+    { status: "not-found" },
+  );
+  reader.listResponses.push({ status: "ok", messages: extension });
+  const second = await service.build(
+    input(
+      message("100", new Date(NOW).toISOString(), {
+        message_reference: { channel_id: "channel", message_id: "50" },
+      }),
+    ),
+  );
+
+  expect(second?.windowStartMessageId).toBe(first?.windowStartMessageId);
+  expect(second?.sessionId).toBe(first?.sessionId);
+  expect(second?.messages).toHaveLength(40);
+  expect(second?.messages.map((entry) => entry.id)).not.toContain("30");
+  expect(reader.fetchQueries).toEqual(["1", "50", "50"]);
 });
 
 test("keeps rebuilding while eligible entries stay below the compact boundary until the REST budget ends", async () => {
@@ -851,7 +939,7 @@ test("memoizes a deleted exchange across raw pages and reply-target lookup", asy
   const repository = records();
   repository.findByTrigger = mock((id: string) => (id === "900" ? replyRecord : null));
   repository.findByPage = mock((id: string) =>
-    id === "900" || (Number(id) >= 901 && Number(id) <= 913) ? replyRecord : null,
+    id === "900" || id === "9999" || (Number(id) >= 901 && Number(id) <= 913) ? replyRecord : null,
   );
   repository.listPages = mock(() => [missingPage]);
   reader.listResponses.push({
@@ -912,6 +1000,108 @@ test("removes a trigger when reply-target lookup confirms its deletion", async (
   expect(context?.messages).toEqual([]);
   expect(context?.replyTarget).toBeUndefined();
   expect(reader.fetchQueries).toEqual(["101", "101"]);
+});
+
+test("excludes an attachment exchange after the message re-fetch confirms deletion", async () => {
+  const trigger = message("100", undefined, {
+    attachments: [
+      {
+        id: "attachment",
+        filename: "file.png",
+        url: "https://cdn.discordapp.com/attachments/1/file.png",
+        content_type: "image/png",
+        size: 1,
+      },
+    ],
+  });
+  const page = message("101", undefined, {
+    author: { id: "bot", username: "bot", bot: true },
+    content: "",
+  });
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "100" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "101" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "101", triggerMsgId: "100", seq: 0 }]);
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [trigger] });
+  reader.fetchResponses.push({ status: "found", message: page });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("102", new Date(NOW).toISOString())));
+
+  reader.fetchResponses.push({ status: "not-found" });
+  const attachmentResult = await context?.toolContext.viewAttachment(
+    "m1",
+    1,
+    "model",
+    new AbortController().signal,
+  );
+  reader.listResponses.push({ status: "ok", messages: [page] });
+  const readResult = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: unknown[] };
+
+  expect(attachmentResult).toBe('{"error":"attachment_unavailable"}');
+  expect(readResult.messages).toEqual([]);
+});
+
+test("keeps an exchange when its pinned attachment is gone but the message remains", async () => {
+  const trigger = message("100", undefined, {
+    attachments: [
+      {
+        id: "attachment",
+        filename: "file.png",
+        url: "https://cdn.discordapp.com/attachments/1/file.png",
+        content_type: "image/png",
+        size: 1,
+      },
+    ],
+  });
+  const page = message("101", undefined, {
+    author: { id: "bot", username: "bot", bot: true },
+    content: "",
+  });
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "100" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "101" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "101", triggerMsgId: "100", seq: 0 }]);
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [trigger] });
+  reader.fetchResponses.push({ status: "found", message: page });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("102", new Date(NOW).toISOString())));
+
+  reader.fetchResponses.push({ status: "found", message: { ...trigger, attachments: [] } });
+  const attachmentResult = await context?.toolContext.viewAttachment(
+    "m1",
+    1,
+    "model",
+    new AbortController().signal,
+  );
+  reader.listResponses.push({ status: "ok", messages: [page] });
+  const readResult = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: unknown[] };
+
+  expect(attachmentResult).toBe('{"error":"attachment_unavailable"}');
+  expect(readResult.messages).toHaveLength(1);
 });
 
 test("excludes a split reply when a reconstructed page crosses the 24-hour cutoff", async () => {

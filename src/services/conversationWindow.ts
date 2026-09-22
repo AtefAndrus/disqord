@@ -20,6 +20,7 @@ import {
   canReadConversation,
 } from "./messageAuthorization";
 import {
+  classifyNotFoundMessage,
   type MessageEligibilityCache,
   type MessageEligibilityExternalDeletionSet,
   MessageEligibilityService,
@@ -496,9 +497,6 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    const shrunk = shrinkToLimits(messages, now, input.current.id);
-    const { messages: selected, startMessageId } = shrunk;
-    const sessionId = crypto.randomUUID();
     const replyTarget = await this.findReplyTarget(
       input,
       rawMessages,
@@ -509,6 +507,12 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
+    const filteredMessages = messages.filter(
+      (message) => !externalDeletions.has(message.exchangeId),
+    );
+    const shrunk = shrinkToLimits(filteredMessages, now, input.current.id);
+    const { messages: selected, startMessageId } = shrunk;
+    const sessionId = crypto.randomUUID();
     if (commitState) {
       this.commitState(
         input.current.channel_id,
@@ -531,10 +535,11 @@ export class ConversationWindowService {
     generation: number,
   ): Promise<WindowBuildResult | null> {
     if (signal.aborted) return null;
-    const anchor = await this.reader.fetch(
+    const anchor = await this.fetchMessage(
       input.current.channel_id,
       state.startMessageId,
       budget,
+      externalDeletions,
       signal,
     );
     if (signal.aborted) return null;
@@ -577,12 +582,6 @@ export class ConversationWindowService {
     let selected = selectEntries(messages, state.startMessageId);
     let startMessageId = state.startMessageId;
     let sessionId = state.sessionId;
-    if (rawLimitExceeded(selected, now)) {
-      const shrunk = shrinkToLimits(selected, now, input.current.id);
-      selected = shrunk.messages;
-      startMessageId = shrunk.startMessageId;
-      sessionId = crypto.randomUUID();
-    }
     const replyTarget = await this.findReplyTarget(
       input,
       rawMessages,
@@ -593,6 +592,13 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
+    selected = selected.filter((message) => !externalDeletions.has(message.exchangeId));
+    if (rawLimitExceeded(selected, now)) {
+      const shrunk = shrinkToLimits(selected, now, input.current.id);
+      selected = shrunk.messages;
+      startMessageId = shrunk.startMessageId;
+      sessionId = crypto.randomUUID();
+    }
     this.commitState(
       input.current.channel_id,
       { startMessageId, sessionId, lastUsedAt: now },
@@ -677,11 +683,15 @@ export class ConversationWindowService {
     const known = rawMessages.find((message) => message.id === targetId);
     const target = known
       ? ({ status: "found", message: known } satisfies DiscordMessageFetchResult)
-      : await this.reader.fetch(input.current.channel_id, targetId, budget, signal);
+      : await this.fetchMessage(
+          input.current.channel_id,
+          targetId,
+          budget,
+          externalDeletions,
+          signal,
+        );
     if (signal.aborted) return undefined;
     if (target.status === "not-found") {
-      const record = this.records.findByTrigger(targetId) ?? this.records.findByPage(targetId);
-      if (record) externalDeletions.add(record.triggerMsgId);
       return undefined;
     }
     if (
@@ -715,6 +725,20 @@ export class ConversationWindowService {
         ? normalizeBotReply(result.reply.record.triggerMsgId, result.reply.pages)
         : undefined;
     return resolved && !externalDeletions.has(resolved.exchangeId) ? resolved : undefined;
+  }
+
+  private async fetchMessage(
+    channelId: string,
+    messageId: string,
+    budget: DiscordRestBudget,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
+    signal: AbortSignal,
+  ): Promise<DiscordMessageFetchResult> {
+    const result = await this.reader.fetch(channelId, messageId, budget, signal);
+    if (result.status === "not-found" && !signal.aborted) {
+      classifyNotFoundMessage(messageId, this.records, externalDeletions);
+    }
+    return result;
   }
 
   private addShown(state: ResponseState, message: NormalizedMessage): NormalizedMessage {
@@ -1027,10 +1051,11 @@ export class ConversationWindowService {
         return result;
       }
     }
-    const fetched = await this.reader.fetch(
+    const fetched = await this.fetchMessage(
       state.current.channel_id,
       message.id,
       state.budget,
+      state.externalDeletions,
       signal,
     );
     if (fetched.status !== "found") {
