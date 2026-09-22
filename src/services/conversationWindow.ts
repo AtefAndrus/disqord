@@ -196,6 +196,12 @@ function reachesShrunkBoundary(messages: readonly NormalizedMessage[], now: numb
   );
 }
 
+// 同じミリ秒の発言はページ境界で取得順が入れ替わるので、message ID で順位を決める。
+function byChronology(left: NormalizedMessage, right: NormalizedMessage): number {
+  if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs;
+  return compareMessageIds(left.id, right.id);
+}
+
 function entryPositionId(message: NormalizedMessage): string {
   return message.kind === "assistant" ? (message.pageIds?.[0] ?? message.id) : message.id;
 }
@@ -242,17 +248,36 @@ export function truncateTextByBytes(text: string, maxBytes: number): string {
   return new TextDecoder().decode(bytes.slice(0, end));
 }
 
+interface ToolReference {
+  ref: string;
+  id: string;
+  timestampMs: number;
+}
+
 function asToolResult(
   messages: readonly NormalizedMessage[],
   hasMore: boolean,
   reason: ConversationStopReason,
-  references: readonly string[] = [],
+  references: readonly ToolReference[] = [],
 ): string {
+  // 既に見せた reply 先は本文を重ねず参照だけを返すが、並びは本文と同じ古い順に保つ。
+  const entries = [
+    ...messages.map((message) => ({
+      id: message.id,
+      timestampMs: message.timestampMs,
+      value: formatMessageForTool(message) as ReadEarlierToolMessage,
+    })),
+    ...references.map((reference) => ({
+      id: reference.id,
+      timestampMs: reference.timestampMs,
+      value: { ref: reference.ref } as ReadEarlierToolMessage,
+    })),
+  ].sort((left, right) => {
+    if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs;
+    return compareMessageIds(left.id, right.id);
+  });
   const value: ReadEarlierMessageResult = {
-    messages: [
-      ...messages.map((message) => formatMessageForTool(message)),
-      ...references.map((ref) => ({ ref })),
-    ],
+    messages: entries.map((entry) => entry.value),
     has_more: hasMore,
     stop_reason: reason,
   };
@@ -783,7 +808,7 @@ export class ConversationWindowService {
     if (available <= 0) return asToolResult([], true, "message_limit");
     const targetCount = Math.min(count, available);
     let stoppedReason: ConversationStopReason = null;
-    const references: string[] = [];
+    const references: ToolReference[] = [];
     while (
       this.eligibleBufferCount(draft) < targetCount &&
       !draft.cutoffReached &&
@@ -852,7 +877,13 @@ export class ConversationWindowService {
             !draft.externalDeletions.has(draft.replyTarget.exchangeId)
           ) {
             draft.reachedReplyTarget = true;
-            if (draft.replyTarget.ref) references.push(draft.replyTarget.ref);
+            if (draft.replyTarget.ref) {
+              references.push({
+                ref: draft.replyTarget.ref,
+                id: draft.replyTarget.id,
+                timestampMs: draft.replyTarget.timestampMs,
+              });
+            }
           }
           continue;
         }
@@ -860,7 +891,7 @@ export class ConversationWindowService {
           continue;
         draft.buffer.push(entry);
       }
-      draft.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
+      draft.buffer.sort(byChronology);
       if (page.messages.length < 100 || draft.cutoffReached) {
         draft.exhausted = true;
         break;
@@ -958,7 +989,7 @@ export class ConversationWindowService {
     messages: readonly NormalizedMessage[],
     hasMore: boolean,
     reason: ConversationStopReason,
-    references: readonly string[] = [],
+    references: readonly ToolReference[] = [],
   ): Promise<NormalizedMessage[]> {
     const fits = (items: readonly NormalizedMessage[]): boolean =>
       new TextEncoder().encode(asToolResult(items, hasMore, reason, references)).length <=
@@ -1002,7 +1033,7 @@ export class ConversationWindowService {
       if (returned) deferred.push(returned);
     }
     state.buffer.push(...deferred);
-    state.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
+    state.buffer.sort(byChronology);
     return items;
   }
 

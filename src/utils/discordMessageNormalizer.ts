@@ -126,8 +126,11 @@ export function normalizeAuthorLabel(rawLabel: string, authorId: string): string
   return Array.from(trimmed).slice(0, 32).join("");
 }
 
+// REST で読んだ履歴の Message には member が無く、ニックネームは今回の発言でしか得られない。
+// 追加の取得を避けるため、履歴では表示名 (global_name)、それも無ければユーザ名に落とす。
 function authorLabel(message: RawDiscordMessage): string {
-  return normalizeAuthorLabel(message.member?.nick ?? message.author.username, message.author.id);
+  const label = message.member?.nick ?? message.author.global_name ?? message.author.username;
+  return normalizeAuthorLabel(label, message.author.id);
 }
 
 function attachmentKind(contentType: string | null | undefined): NormalizedAttachmentKind {

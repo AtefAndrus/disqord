@@ -82,4 +82,23 @@ describe("Discord message normalization", () => {
       truncated: false,
     });
   });
+
+  test("falls back to the display name when REST history carries no member", () => {
+    const message: RawDiscordMessage = {
+      id: "message",
+      channel_id: "channel",
+      content: "body",
+      timestamp: "2026-09-22T12:00:00.000Z",
+      author: { id: "user", username: "account123", global_name: "田中", bot: false },
+      attachments: [],
+    };
+
+    expect(normalizeHumanMessage(message).author).toBe("田中");
+    expect(
+      normalizeHumanMessage({
+        ...message,
+        author: { id: "user", username: "account123", bot: false },
+      }).author,
+    ).toBe("account123");
+  });
 });

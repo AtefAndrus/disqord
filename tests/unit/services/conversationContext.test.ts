@@ -813,6 +813,62 @@ test("the reply target is already counted and does not appear twice while paging
   expect(reader.listQueries[1]).toEqual({ before: "1000", limit: 100 });
 });
 
+test("the reply target's reference keeps its place in the chronological order", async () => {
+  const reader = new FakeReader();
+  const target = message("800", new Date(NOW - 2_000).toISOString());
+  const older = message("700", new Date(NOW - 3_000).toISOString());
+  const newer = message("900", new Date(NOW - 1_500).toISOString());
+  reader.listResponses.push({ status: "ok", messages: [] });
+  reader.fetchResponses.push({ status: "found", message: target });
+  reader.listResponses.push({ status: "ok", messages: [newer, target, older] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(
+    input(
+      message("1000", new Date(NOW).toISOString(), {
+        message_reference: { channel_id: "channel", message_id: "800" },
+      }),
+    ),
+  );
+
+  const parsed = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(5, new AbortController().signal)) as string,
+  ) as { messages: Array<{ ref?: string; text?: string }> };
+
+  expect(parsed.messages.map((entry) => entry.text ?? `ref:${entry.ref}`)).toEqual([
+    "message-700",
+    "ref:m1",
+    "message-900",
+  ]);
+});
+
+test("read_earlier_messages orders same-millisecond messages by id across pages", async () => {
+  const reader = new FakeReader();
+  const sameTime = new Date(NOW - 5_000).toISOString();
+  const firstPage = [
+    message("100", sameTime),
+    ...Array.from({ length: 99 }, (_, index) =>
+      message(String(101 + index), sameTime, {
+        author: { id: "other-bot", username: "other-bot", bot: true },
+      }),
+    ),
+  ];
+  reader.listResponses.push({ status: "ok", messages: [] });
+  reader.listResponses.push({ status: "ok", messages: firstPage });
+  reader.listResponses.push({
+    status: "ok",
+    messages: [message("98", sameTime), message("99", sameTime)],
+  });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  const parsed = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(2, new AbortController().signal)) as string,
+  ) as { messages: Array<{ text: string }> };
+
+  // 同じミリ秒なので、新しい方の 2 件は message ID で決まる。
+  expect(parsed.messages.map((entry) => entry.text)).toEqual(["message-99", "message-100"]);
+});
+
 test("read_earlier_messages enforces the combined sixty-message and three-call caps", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({
