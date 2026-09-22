@@ -54,7 +54,6 @@ export function createInteractionCreateHandler(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
-  fxtwitterApiBase = "https://api.fxtwitter.com",
 ) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -70,7 +69,6 @@ export function createInteractionCreateHandler(
         llmClient,
         chatService,
         webSearchEngine,
-        fxtwitterApiBase,
       );
       return;
     }
@@ -178,7 +176,6 @@ async function handleButtonInteraction(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
-  fxtwitterApiBase: string,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply({
@@ -262,7 +259,6 @@ async function handleButtonInteraction(
       cacheStatus,
       settings: updatedSettings,
       webSearchEngine,
-      fxtwitterHostname: new URL(fxtwitterApiBase).hostname,
       version: packageJson.version,
     });
 

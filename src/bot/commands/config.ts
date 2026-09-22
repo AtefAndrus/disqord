@@ -42,7 +42,7 @@ export const configCommand = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName("twitter-expand")
-      .setDescription("ツイート展開の切り替え（投稿内容を外部ホストへ送信）")
+      .setDescription("ツイート展開の切り替え")
       .addStringOption((option) =>
         option
           .setName("enabled")
@@ -54,7 +54,7 @@ export const configCommand = new SlashCommandBuilder()
   .addSubcommand((sub) =>
     sub
       .setName("history")
-      .setDescription("会話履歴保存の切り替え（発言をデータベースに保存）")
+      .setDescription("会話履歴の切り替え")
       .addStringOption((option) =>
         option
           .setName("enabled")

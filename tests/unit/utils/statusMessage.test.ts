@@ -21,7 +21,6 @@ describe("buildStatusMessage - 言語統一", () => {
         historyEnabled: true,
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 
@@ -31,7 +30,7 @@ describe("buildStatusMessage - 言語統一", () => {
 
     expect(llmDetailsField?.value).toBe("有効");
     const tweetField = embed.toJSON().fields?.find((f) => f.name === "ツイート展開");
-    expect(tweetField?.value).toBe("有効（api.fxtwitter.com）");
+    expect(tweetField?.value).toBe("有効");
     const historyField = embed.toJSON().fields?.find((f) => f.name === "会話履歴");
     expect(historyField?.value).toBe("有効");
   });
@@ -44,7 +43,6 @@ describe("buildStatusMessage - 言語統一", () => {
         cacheStatus: { lastUpdatedAt: new Date(), modelCount: 10 },
         settings: createMockGuildSettings({ webSearchEnabled }),
         webSearchEngine: "perplexity",
-        fxtwitterHostname: "api.fxtwitter.com",
         version: "1.3.2",
       })
         .embeds[0]?.toJSON()
@@ -70,7 +68,6 @@ describe("buildStatusMessage - 言語統一", () => {
         historyEnabled: false,
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 
@@ -101,7 +98,6 @@ describe("buildStatusMessage - ボタンUX", () => {
         updatedAt: "2025-01-01",
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 
@@ -126,7 +122,6 @@ describe("buildStatusMessage - ボタンUX", () => {
         updatedAt: "2025-01-01",
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 
@@ -151,7 +146,6 @@ describe("buildStatusMessage - ボタンUX", () => {
         updatedAt: "2025-01-01",
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 
@@ -176,7 +170,6 @@ describe("buildStatusMessage - ボタンUX", () => {
         updatedAt: "2025-01-01",
       } as GuildSettings,
       webSearchEngine: "perplexity",
-      fxtwitterHostname: "api.fxtwitter.com",
       version: "1.3.2",
     };
 

@@ -81,8 +81,8 @@ docker run -d \
 | `/config free-only <enabled>` | 無料モデル限定の切り替え |
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
 | `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
-| `/config twitter-expand <enabled>` | ツイート展開の切り替え（投稿内容を外部ホストへ送信） |
-| `/config history <enabled>` | 会話履歴保存の切り替え（発言をデータベースに保存） |
+| `/config twitter-expand <enabled>` | ツイート展開の切り替え |
+| `/config history <enabled>` | 会話履歴の切り替え |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
 | `/config auto-reply list` | 自動応答チャンネル一覧を表示 |

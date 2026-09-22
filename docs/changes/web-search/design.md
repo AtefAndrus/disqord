@@ -286,7 +286,7 @@ server tool はモデルが tool calling に対応しているかに関係なく
 **権限と表示:**
 
 - `/config twitter-expand` の権限も Web検索と同様に [権限管理](../permissions/design.md) に従う（暫定 `ManageGuild`）。
-- `/status` には ON/OFF と、ON のときは送信先のホスト名（`FXTWITTER_API_BASE` のホスト）を出す。
+- `/status` と `/config twitter-expand` の応答には ON/OFF だけを出す。ポストの ID が fxtwitter のホストへ送られることは、運用者向けに README に書く。Discord 上の表示に外部送信の注意書きを出すと、利用者の判断に必要な情報を増やさずに不安だけを与えるためである。
 
 **e2e:**
 
@@ -374,7 +374,7 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - [x] `FXTWITTER_API_BASE` を `envVars.ts` と `config/index.ts`（configSchema / loadConfig）に追加
 - [x] `guild_settings.twitter_expand_enabled`（既定 1）と `settingsService.setTwitterExpandEnabled`
 - [x] `/config twitter-expand` サブコマンドとハンドラ（暫定 `ManageGuild`）
-- [x] `/status` にツイート展開の状態と送信先ホストを表示し、README に外部送信を明記
+- [x] `/status` にツイート展開の状態を表示し、README に外部送信を明記
 - [x] テスト（URL 抽出、レスポンス分類、再試行、無害化、整形、注入、画像の選別、設定の読み書き、コマンド）
 - [x] e2e に既定で走る `tweet` シナリオを追加
 - [ ] 手動確認: 実クライアントで `/config twitter-expand off` と `on` を実行し、`/status` の表示が切り替わること、OFF の間はツイート URL を貼っても本文が展開されないことを確かめる
