@@ -233,7 +233,7 @@ main には、会話の本文を DB に保存する実装がリリース前の�
 - [x] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
 - [x] README と AGENTS.md の書き換え
 - [x] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
-- [ ] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
+- [x] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
 - [ ] prompt cache の効き具合の実測（同じ窓で続けて尋ね、`Cached: N` と費用を記録する）
 - [ ] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF を見直す質問、自分の発言を消した後にそれを指す質問を試す
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
