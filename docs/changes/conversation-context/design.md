@@ -249,7 +249,7 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 - [x] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
 - [x] `/config history` と `/status`、README
 - [x] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
-- [ ] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加
+- [x] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加（`history-set` / `history-recall`、名前指定時のみ）
 - [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録。top-level `cache_control` を付けるかをこの結果で決める
 - [ ] 手動確認: 実クライアントで `/config history on` にして 2 往復会話し、bot の返答メッセージを削除すると次の返答がその exchange を覚えていないこと、`/config history off` の後は前の会話を覚えていないことを確かめる
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
