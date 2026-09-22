@@ -378,6 +378,8 @@ export class ConversationWindowService {
         verificationCache,
         externalDeletions,
       };
+      // ここの除外は二重の守りである。同じ判定を rebuild() と extend() が reply 先の確認の後に行い、
+      // reply 先自体は findReplyTarget() が落とす。テストが落ちるのはそちらなので、両方を残す。
       const messages = result.messages
         .filter((message) => !externalDeletions.has(message.exchangeId))
         .map((message) => this.addShown(responseState, message));
