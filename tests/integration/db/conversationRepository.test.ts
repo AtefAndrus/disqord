@@ -66,6 +66,59 @@ describe("ConversationRepository", () => {
     return db.query(`SELECT * FROM ${table}`).all() as Array<Record<string, unknown>>;
   }
 
+  test("the schema rejects rows that break the design's constraints", () => {
+    db.query(
+      `INSERT INTO sessions (openrouter_session_id, guild_id, channel_id, started_at, last_activity_at)
+       VALUES ('constraint-session', 'guild-1', 'channel-1', 1, 1)`,
+    ).run();
+    const sessionId = (
+      db
+        .query("SELECT id FROM sessions WHERE openrouter_session_id = 'constraint-session'")
+        .get() as {
+        id: number;
+      }
+    ).id;
+    const insertTurn = (columns: string, values: string): void => {
+      db.query(`INSERT INTO turns (session_id, ${columns}) VALUES (${sessionId}, ${values})`).run();
+    };
+    const validUser = "role, author_id, author_label, status, content_json, discord_created_at";
+
+    // A user turn cannot be pending, and must have an author.
+    expect(() => insertTurn(validUser, "'user', 'u', 'U', 'pending', '[]', 1")).toThrow();
+    expect(() =>
+      insertTurn(
+        "role, author_label, status, content_json, discord_created_at",
+        "'user', 'U', 'completed', '[]', 1",
+      ),
+    ).toThrow();
+    // content_json must be valid JSON.
+    expect(() => insertTurn(validUser, "'user', 'u', 'U', 'completed', 'not json', 1")).toThrow();
+    // An assistant turn needs a parent and has no author.
+    expect(() =>
+      insertTurn(
+        "role, status, content_json, discord_created_at",
+        "'assistant', 'completed', '[]', 1",
+      ),
+    ).toThrow();
+
+    insertTurn(validUser, "'user', 'u', 'U', 'completed', '[]', 1");
+    const userTurnId = (db.query("SELECT last_insert_rowid() as id").get() as { id: number }).id;
+    expect(() =>
+      db
+        .query("INSERT INTO turn_messages (turn_id, discord_msg_id, seq) VALUES (?, 'm', -1)")
+        .run(userTurnId),
+    ).toThrow();
+    // A second live assistant for the same user turn is rejected; a failed one is not counted.
+    const insertAssistant = (status: string): void =>
+      insertTurn(
+        "role, parent_user_turn_id, status, content_json, discord_created_at",
+        `'assistant', ${userTurnId}, '${status}', '[]', 1`,
+      );
+    insertAssistant("failed");
+    insertAssistant("completed");
+    expect(() => insertAssistant("pending")).toThrow();
+  });
+
   test("enables foreign keys and creates the complete schema", () => {
     expect(db.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get()?.foreign_keys).toBe(
       1,

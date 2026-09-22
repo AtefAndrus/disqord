@@ -415,6 +415,58 @@ describe("ChatService", () => {
       });
     });
 
+    test("history turned off after the context was read sends neither history nor session_id", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ historyEnabled: false }),
+      );
+      const originalFetch = globalThis.fetch;
+      const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50]))));
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+      const defaultExchange = conversationContext().exchanges[0];
+      if (!defaultExchange) throw new Error("default exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            user: {
+              ...defaultExchange.user,
+              content: [
+                { type: "text", text: "before" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/history.pdf",
+                  filename: "history.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+            assistant: defaultExchange.assistant,
+          },
+        ],
+      });
+
+      try {
+        const { updater } = createSpyUpdater();
+        await chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context },
+          "req-history-off",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.session_id).toBeUndefined();
+      expect(request.messages.filter((message) => message.role === "assistant")).toEqual([]);
+      expect(JSON.stringify(request.messages)).not.toContain("before");
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
     test("does not re-fetch a historical PDF after it has been stripped", async () => {
       (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
         createMockGuildSettings({ historyEnabled: true }),

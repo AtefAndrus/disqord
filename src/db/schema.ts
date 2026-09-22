@@ -136,6 +136,10 @@ export function applyMigrations(db: Database) {
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_one_assistant ON turns(parent_user_turn_id) WHERE role='assistant' AND status != 'failed'",
   );
   db.run("CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(discord_created_at)");
+  // The unique index above is partial (role and status), so looking up the
+  // assistant of a user turn cannot use it; without this one, building a
+  // context scans every turn once per exchange and blocks the event loop.
+  db.run("CREATE INDEX IF NOT EXISTS idx_turns_parent ON turns(parent_user_turn_id)");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS turn_messages (
