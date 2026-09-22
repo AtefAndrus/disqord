@@ -919,19 +919,14 @@ export class ConversationRepository implements IConversationRepository {
       "SELECT id FROM turns WHERE id = ? AND session_id = ? AND active = 1",
     );
     if (!turnIds.every((turnId) => lookup.get(turnId, session.id) !== null)) return false;
-    if (
-      this.isTurnDeleted(context.current.id, session) ||
-      this.isTurnPendingPurge(context.current.id, session, pendingPurgeTargets)
-    ) {
-      return false;
-    }
-    // Checked per exchange, children included: a snapshot taken while an
-    // answer was still pending holds only the user turn, yet a later
-    // deletion of that answer must still keep the user turn out.
-    return context.exchanges.every(
-      ({ user }) =>
-        !this.isExchangeDeleted(user.id, session) &&
-        !this.isExchangePendingPurge(user.id, session, pendingPurgeTargets),
+    // Checked per exchange, children included, for the current turn as well
+    // as the history: a snapshot holds only the user turn of an exchange
+    // whose answer was pending when it was taken (the current one always),
+    // yet a later deletion or purge of that answer must still stop it.
+    return [context.current.id, ...context.exchanges.map(({ user }) => user.id)].every(
+      (userTurnId) =>
+        !this.isExchangeDeleted(userTurnId, session) &&
+        !this.isExchangePendingPurge(userTurnId, session, pendingPurgeTargets),
     );
   }
 

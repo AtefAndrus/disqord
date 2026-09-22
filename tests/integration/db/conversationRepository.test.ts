@@ -486,6 +486,21 @@ describe("ConversationRepository", () => {
     expect(await repository.isContextCurrent(context)).toBe(false);
   });
 
+  test("a snapshot stops being current when the current exchange's answer is pending purge", async () => {
+    const current = await repository.createUserAndAssistantTurn(input("current", NOW));
+    const context = await repository.getContext(required(current.userTurnId));
+    if (!context) throw new Error("context was not built");
+    const assistantTurnId = required(current.assistantTurnId);
+    expect(await repository.isContextCurrent(context)).toBe(true);
+
+    // The mapping of the first bot message failed and so did the exchange purge.
+    expect(
+      await repository.isContextCurrent(context, [
+        { type: "assistant", assistantTurnId, messageIds: ["current-bot"], scope: {} },
+      ]),
+    ).toBe(false);
+  });
+
   test("TTL keeps an exchange whose latest turn is within retention", async () => {
     const oldUser = NOW - HISTORY_RETENTION_MS - 1_000;
     const recentReply = NOW - HISTORY_RETENTION_MS + 60_000;
