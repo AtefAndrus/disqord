@@ -589,6 +589,9 @@ export class ConversationWindowService {
         (message) => compareMessageIds(message.id, input.current.id) < 0,
       );
       fetched.push(...eligibleRange);
+      // 今回の発言に達したら、そのページで走査は終わりである。
+      // 続けると REST 予算を使い切り、取得済みの窓ごと失うことがある。
+      if (eligibleRange.length < page.messages.length) break;
       if (page.messages.length < 100 || eligibleRange.length === 0) break;
       const last = page.messages.at(-1);
       if (!last || last.id === after) break;

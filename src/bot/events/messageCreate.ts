@@ -393,7 +393,10 @@ export function createMessageCreateHandler(
           text: content,
           parts: attachmentResult.parts,
           authorLabel: normalizeAuthorLabel(
-            message.member?.nickname ?? message.author.username ?? message.author.id,
+            message.member?.nickname ??
+              message.author.globalName ??
+              message.author.username ??
+              message.author.id,
             message.author.id,
           ),
           ...(conversation && { conversation }),

@@ -185,6 +185,28 @@ for (const anchorStatus of ["not-found", "failed"] as const) {
   });
 }
 
+test("stops extending on the page that reaches the current message", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [message("100")] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const first = await service.build(input(message("101", new Date(NOW).toISOString())));
+
+  reader.fetchResponses.push({ status: "found", message: message("100") });
+  reader.listResponses.push({
+    status: "ok",
+    messages: [
+      ...Array.from({ length: 99 }, (_, index) => message(String(102 + index))),
+      message("500", new Date(NOW).toISOString()),
+    ],
+  });
+  const second = await service.build(input(message("500", new Date(NOW).toISOString())));
+
+  // 100 件のページに今回の発言が入っていたので、ここで走査は終わる。
+  expect(first?.windowStartMessageId).toBe("100");
+  expect(reader.listQueries).toHaveLength(2);
+  expect(second?.messages.map((entry) => entry.id)).not.toContain("500");
+});
+
 test("excludes an exchange when the extend anchor is externally deleted", async () => {
   const reader = new FakeReader();
   const replyRecord: ReplyRecord = {

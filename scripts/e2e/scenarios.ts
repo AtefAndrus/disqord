@@ -212,6 +212,8 @@ function checkPages(reply: Reply): string[] {
 /** Fresh per run so that history-recall can only pass through stored history. */
 const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
 const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
+// 実行ごとに変える: 固定値だと、窓に残った前回の回答から答えても通ってしまう。
+const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 
 export const SCENARIOS: Scenario[] = [
@@ -324,12 +326,12 @@ export const SCENARIOS: Scenario[] = [
     name: "history-window",
     manual: true,
     setup: {
-      prompt: "[e2e] 窓の確認用の合言葉は WINDOW-CONTEXT-OK です。",
+      prompt: `[e2e] 窓の確認用の合言葉は ${WINDOW_TOKEN} です。`,
       mention: false,
     },
     prompt: "[e2e] メンションなしで直前に投稿された合言葉を答えて。",
     check: (reply) => [
-      ...(reply.body.includes("WINDOW-CONTEXT-OK")
+      ...(reply.body.includes(WINDOW_TOKEN)
         ? []
         : ["the reply does not include the unmentioned message"]),
       ...hasUsageFooter(reply),

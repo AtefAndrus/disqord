@@ -90,7 +90,7 @@ function bodyOf(payload: ComponentsV2CallArg): string {
 interface MockMessage {
   id: string;
   type: MessageType;
-  author: { bot: boolean; id: string };
+  author: { bot: boolean; id: string; username?: string; globalName?: string | null };
   guild: { id: string } | null;
   client: { user: { id: string } | null };
   mentions: { has: ReturnType<typeof mock> };
@@ -384,6 +384,27 @@ describe("createMessageCreateHandler", () => {
     globalThis.fetch = originalFetch;
     // setSystemTime を使うテストが時計を書き換えたままにしないよう、実時間に戻す
     setSystemTime();
+  });
+
+  test("ニックネームが無ければ表示名を発話者ラベルにする", async () => {
+    mockMessage.author.username = "account123";
+    mockMessage.author.globalName = "田中";
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+
+    await handler(mockMessage as never);
+
+    // 履歴側の正規化も同じ順で選ぶので、同じ人が両方で同じラベルになる。
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
+      "guild-123",
+      expect.objectContaining({ authorLabel: "田中" }),
+      "msg-123",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   test("Botからのメッセージは無視する", async () => {
