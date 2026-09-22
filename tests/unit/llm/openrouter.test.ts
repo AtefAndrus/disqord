@@ -299,6 +299,46 @@ describe("OpenRouterClient", () => {
       ]);
     });
 
+    test("tool の input_image / input_file part 配列を function_call_output にそのまま渡す", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      await client.chat({
+        model: "test-model",
+        messages: [
+          {
+            role: "tool",
+            tool_call_id: "call-attachment",
+            content: [
+              { type: "input_image", detail: "auto", image_url: "data:image/png;base64,AA==" },
+              {
+                type: "input_file",
+                filename: "document.pdf",
+                file_data: "data:application/pdf;base64,AA==",
+              },
+            ],
+          },
+        ],
+      });
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        input: unknown[];
+      };
+      expect(body.input).toEqual([
+        {
+          type: "function_call_output",
+          call_id: "call-attachment",
+          output: [
+            { type: "input_image", detail: "auto", image_url: "data:image/png;base64,AA==" },
+            {
+              type: "input_file",
+              filename: "document.pdf",
+              file_data: "data:application/pdf;base64,AA==",
+            },
+          ],
+        },
+      ]);
+    });
+
     test("plugins が未指定の場合は body の JSON に含まれない", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

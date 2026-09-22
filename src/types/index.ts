@@ -110,7 +110,7 @@ export interface AssistantChatMessage {
 
 export interface ToolChatMessage {
   role: "tool";
-  content: string;
+  content: string | ResponsesInputContentPart[];
   tool_call_id: string;
 }
 
@@ -194,7 +194,7 @@ export type ResponsesInputItem =
   | { role: "system" | "user"; content: string | ResponsesInputContentPart[] }
   | { role: "assistant"; content: string }
   | { type: "function_call"; call_id: string; name: string; arguments: string }
-  | { type: "function_call_output"; call_id: string; output: string };
+  | { type: "function_call_output"; call_id: string; output: string | ResponsesInputContentPart[] };
 
 export interface ResponsesFunctionTool extends FunctionToolDefinition {
   type: "function";

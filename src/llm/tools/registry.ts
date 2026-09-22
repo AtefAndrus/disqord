@@ -1,4 +1,16 @@
-import type { FunctionTool } from "../../types";
+import type { FunctionTool, ResponsesInputContentPart } from "../../types";
+
+export type ToolLlmResult = string | ResponsesInputContentPart[];
+
+export interface ConversationToolContext {
+  readEarlierMessages(count: number): Promise<ToolLlmResult>;
+  viewAttachment(
+    messageRef: string,
+    attachmentIndex: number,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<ToolLlmResult>;
+}
 
 /**
  * Opaque render fragment interpreted by the chat-response-v2 updater. This
@@ -11,6 +23,9 @@ export interface IToolContext {
   guildId: string | null;
   channelId: string;
   userId: string;
+  model?: string;
+  toolsAllowed?: boolean;
+  conversation?: ConversationToolContext;
 }
 
 /** Identifiers for a single tool invocation, used for idempotency/reconciliation. */
@@ -22,7 +37,7 @@ export interface IToolInvocationMeta {
 }
 
 export interface IToolHandlerResult {
-  llmResult: string;
+  llmResult: ToolLlmResult;
   render?: ToolRenderPayload;
 }
 

@@ -31,6 +31,7 @@ describe("ModelService", () => {
       pricing: { prompt: "0.001", completion: "0.002" },
       inputModalities: ["text", "image", "file"],
       outputModalities: ["text"],
+      supportedParameters: ["tools", "temperature"],
     },
     {
       id: "paid-model-2",
@@ -223,6 +224,8 @@ describe("ModelService", () => {
         isFree: false,
         inputModalities: ["text", "image", "file"],
         outputModalities: ["text"],
+        supportedParameters: ["tools", "temperature"],
+        supportsTools: true,
       });
     });
 
@@ -236,6 +239,11 @@ describe("ModelService", () => {
       const details = await modelService.getModelDetails("non-existing-model");
 
       expect(details).toBeNull();
+    });
+
+    test("detects tool support from supported_parameters", async () => {
+      expect(await modelService.supportsTools("paid-model-1")).toBe(true);
+      expect(await modelService.supportsTools("paid-model-2")).toBe(false);
     });
   });
 

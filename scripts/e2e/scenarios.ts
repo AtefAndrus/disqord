@@ -1,4 +1,8 @@
 import { EmbedColors } from "../../src/types/embed";
+import {
+  extractComponentsV2Footer,
+  type RawDiscordMessage,
+} from "../../src/utils/discordMessageNormalizer";
 import { PDF_DATA, PNG_DATA } from "./fixtures";
 
 export interface DiscordMessage {
@@ -31,7 +35,10 @@ export interface Scenario {
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
   prompt: string;
+  setup?: { prompt: string; mention?: boolean; files?: Scenario["files"] };
+  mention?: boolean;
   files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
+  toolName?: "read_earlier_messages" | "view_attachment";
   timeoutMs?: number;
   /** Returns the reasons the reply is wrong; empty means it passed. */
   check: (reply: Reply) => string[];
@@ -39,7 +46,6 @@ export interface Scenario {
 
 // Discord component types.
 const TEXT_DISPLAY = 10;
-const SEPARATOR = 14;
 const CONTAINER = 17;
 const STOP_BUTTON_ID_PREFIX = "stop_response_";
 
@@ -63,13 +69,15 @@ function childrenOf(container: Component | undefined): Component[] {
  * produce a Separator, so that position identifies the footer.
  */
 function footerOf(message: DiscordMessage): string | undefined {
-  const children = childrenOf(containerOf(message));
-  const last = children.at(-1);
-  const beforeLast = children.at(-2);
-  if (last?.type === TEXT_DISPLAY && beforeLast?.type === SEPARATOR) {
-    return typeof last.content === "string" ? last.content : undefined;
-  }
-  return undefined;
+  const raw: RawDiscordMessage = {
+    id: message.id,
+    channel_id: "",
+    content: message.content,
+    timestamp: "",
+    author: message.author,
+    components: message.components,
+  };
+  return extractComponentsV2Footer(raw);
 }
 
 function collectText(node: unknown, out: string[]): void {
@@ -290,6 +298,46 @@ export const SCENARIOS: Scenario[] = [
     manual: true,
     prompt: `[e2e] 合言葉は「${HISTORY_PASSPHRASE}」です。覚えておいて、「了解」とだけ返事をして。`,
     check: (reply) => hasUsageFooter(reply),
+  },
+  {
+    name: "history-window",
+    manual: true,
+    setup: {
+      prompt: "[e2e] 窓の確認用の合言葉は WINDOW-CONTEXT-OK です。",
+      mention: false,
+    },
+    prompt: "[e2e] メンションなしで直前に投稿された合言葉を答えて。",
+    check: (reply) => [
+      ...(reply.body.includes("WINDOW-CONTEXT-OK")
+        ? []
+        : ["the reply does not include the unmentioned message"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    name: "read-earlier",
+    manual: true,
+    toolName: "read_earlier_messages",
+    prompt: "[e2e] 必ず read_earlier_messages を呼び出してから、取得した過去の発言に触れて答えて。",
+    check: (reply) => [
+      ...(reply.body.includes("過去") ? [] : ["the reply does not mention the earlier history"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    name: "view-attachment",
+    manual: true,
+    toolName: "view_attachment",
+    setup: {
+      prompt: "[e2e] この画像を後で参照するために覚えておいて。",
+      mention: false,
+      files: [{ name: "attachment.png", type: "image/png", data: PNG_DATA }],
+    },
+    prompt: "[e2e] 必ず view_attachment で直前の画像を開き、画像の色を答えて。",
+    check: (reply) => [
+      ...(reply.body.includes("COLOR-RED") ? [] : ["the reply did not identify the attachment"]),
+      ...hasUsageFooter(reply),
+    ],
   },
   {
     name: "history-recall",

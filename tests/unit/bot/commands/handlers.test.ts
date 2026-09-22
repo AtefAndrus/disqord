@@ -283,7 +283,7 @@ describe("config history handler", () => {
     expect(description).toBe("会話履歴を **有効** にしました。");
   });
 
-  test("off purges through the service and explains that saved history is removed", async () => {
+  test("off disables history without claiming that stored history was removed", async () => {
     const llmClient = createMockLLMClient();
     const settingsService = createMockSettingsService();
     const handlers = createCommandHandlers(
@@ -297,7 +297,7 @@ describe("config history handler", () => {
     await handlers.configHistory(interaction);
 
     expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", false);
-    expect(repliedEmbed(reply).description).toContain("保存済みの会話履歴を削除");
+    expect(repliedEmbed(reply).description).toBe("会話履歴を **無効** にしました。");
   });
 
   test("without ManageGuild it replies ephemerally and does not change the setting", async () => {

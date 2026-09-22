@@ -296,9 +296,7 @@ export function createCommandHandlers(
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setHistoryEnabled(interaction.guildId, enabled);
       const embed = createSuccessEmbed(
-        enabled
-          ? "会話履歴を **有効** にしました。"
-          : "会話履歴を **無効** にし、保存済みの会話履歴を削除しました。",
+        enabled ? "会話履歴を **有効** にしました。" : "会話履歴を **無効** にしました。",
         "会話履歴設定",
       );
       await interaction.reply({ embeds: [embed] });

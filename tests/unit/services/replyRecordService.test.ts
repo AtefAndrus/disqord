@@ -1,9 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Message } from "discord.js";
-import { createDeleteOwnMessage } from "../../../../src/bot/events/messageCreate";
-import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
+import { createDeleteOwnMessage } from "../../../src/bot/events/messageCreate";
+import type { IReplyRecordService } from "../../../src/services/replyRecordService";
 
-function createReplyRecordService(events: string[]): IReplyRecordService {
+function service(events: string[]): IReplyRecordService {
   return {
     createPending: mock(async () => true),
     appendPage: mock(async () => ({ recorded: true, finalized: false })),
@@ -20,8 +20,8 @@ function createReplyRecordService(events: string[]): IReplyRecordService {
   };
 }
 
-describe("message create reply-record funnel", () => {
-  test("removes a page record before deleting the Discord message", async () => {
+describe("reply-record send/delete funnel", () => {
+  test("removes the page row before calling Discord delete", async () => {
     const events: string[] = [];
     const botMessage = {
       id: "page-1",
@@ -30,13 +30,9 @@ describe("message create reply-record funnel", () => {
       }),
       edit: mock(async () => {}),
     } as unknown as Message;
+    const deleteOwnMessage = createDeleteOwnMessage(service(events), "trigger", "model", 0);
 
-    await createDeleteOwnMessage(
-      createReplyRecordService(events),
-      "trigger",
-      "model",
-      0,
-    )(botMessage);
+    await deleteOwnMessage(botMessage);
 
     expect(events).toEqual(["record-remove", "discord-delete"]);
   });

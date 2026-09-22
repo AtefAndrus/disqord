@@ -1,7 +1,8 @@
-import type { ToolChatMessage } from "../../types";
+import type { ResponsesInputContentPart, ToolChatMessage } from "../../types";
 import type {
   IClientTool,
   IToolContext,
+  IToolHandlerResult,
   IToolInvocationMeta,
   ToolRegistry,
   ToolRenderPayload,
@@ -52,6 +53,8 @@ export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 export const MIN_TOOL_TIMEOUT_MS = 1_000;
 export const MAX_TOOL_TIMEOUT_MS = 120_000;
 export const MAX_TOOL_RESULT_BYTES = 16_384;
+/** Backstop for binary tool parts; attachment tools enforce their smaller per-format limits. */
+export const MAX_TOOL_RESULT_PART_BYTES = 32 * 1024 * 1024;
 
 /**
  * Absolute last resort: returned only when producing/serializing a normal
@@ -143,9 +146,28 @@ function clampTimeoutMs(timeoutMs: number | undefined): number {
   return Math.min(MAX_TOOL_TIMEOUT_MS, Math.max(MIN_TOOL_TIMEOUT_MS, value));
 }
 
-type HandlerSettlement =
-  | { ok: true; value: { llmResult: string; render?: ToolRenderPayload } }
-  | { ok: false; error: unknown };
+type HandlerSettlement = { ok: true; value: IToolHandlerResult } | { ok: false; error: unknown };
+
+function isResponsesInputContentPart(value: unknown): value is ResponsesInputContentPart {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const part = value as Record<string, unknown>;
+  if (part.type === "input_text") return typeof part.text === "string";
+  if (part.type === "input_image") {
+    return part.detail === "auto" && typeof part.image_url === "string";
+  }
+  return (
+    part.type === "input_file" &&
+    typeof part.filename === "string" &&
+    typeof part.file_data === "string"
+  );
+}
+
+function clipToolResultParts(
+  parts: ResponsesInputContentPart[],
+): ResponsesInputContentPart[] | null {
+  const encoded = utf8Encoder.encode(JSON.stringify(parts));
+  return encoded.length <= MAX_TOOL_RESULT_PART_BYTES ? parts : null;
+}
 
 export class ToolDispatcher {
   constructor(private readonly registry: ToolRegistry) {}
@@ -278,6 +300,8 @@ export class ToolDispatcher {
       invocationId: crypto.randomUUID(),
     };
 
+    console.info(`[tool] client tool invoked name=${tool.name}`);
+
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onRequestAbort: (() => void) | undefined;
 
@@ -346,19 +370,43 @@ export class ToolDispatcher {
         );
       }
 
-      // `IToolHandlerResult.llmResult: string` only binds at compile time —
+      // `IToolHandlerResult.llmResult` only binds at compile time —
       // a handler is arbitrary tool-author code, so a runtime value that
       // doesn't actually match (e.g. `{ llmResult: undefined }`) must be
       // caught here. Otherwise it reaches `clipToolResultBytes()` (which
       // assumes a string) and produces a `status:"ok"` tool message whose
       // `content` isn't a string, silently dropping the required `content`
       // field from the next model request instead of failing loudly.
-      if (typeof settlement.value.llmResult !== "string") {
+      const llmResult = settlement.value.llmResult;
+      if (
+        typeof llmResult !== "string" &&
+        (!Array.isArray(llmResult) || !llmResult.every(isResponsesInputContentPart))
+      ) {
         return this.errorOutcome(
           call,
           "error",
-          `Tool "${call.name}" returned a non-string result; its output cannot be forwarded to the model.`,
+          `Tool "${call.name}" returned a non-string result or invalid parts; its output cannot be forwarded to the model.`,
         );
+      }
+
+      if (typeof llmResult !== "string") {
+        const bounded = clipToolResultParts(llmResult);
+        if (bounded === null) {
+          return this.errorOutcome(
+            call,
+            "error",
+            `Tool "${call.name}" returned a result that exceeds the multimodal output limit.`,
+          );
+        }
+        return {
+          status: "ok",
+          toolMessage: {
+            role: "tool",
+            tool_call_id: call.id,
+            content: bounded,
+          },
+          ...(settlement.value.render !== undefined && { render: settlement.value.render }),
+        };
       }
 
       return {
@@ -366,7 +414,7 @@ export class ToolDispatcher {
         toolMessage: {
           role: "tool",
           tool_call_id: call.id,
-          content: clipToolResultBytes(settlement.value.llmResult),
+          content: clipToolResultBytes(llmResult),
         },
         ...(settlement.value.render !== undefined && { render: settlement.value.render }),
       };

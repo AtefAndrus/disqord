@@ -1,6 +1,6 @@
 ---
 title: "対話UX改善（会話履歴）"
-status: planned
+status: in-progress
 priority: high
 summary: "直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く"
 ---
@@ -166,7 +166,9 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 - dispatcher（`src/llm/tools/toolHandler.ts`）の 16 KiB の切り詰めは文字列の結果にだけ適用し、part の配列にはバイト数の上限を別に適用する。
 - `toResponsesInput()`（`src/llm/openrouter.ts`）の `function_call_output` の変換を、part の配列に対応させる。
 - `file-parser` plugin は、今は最初の入力に file part があるときだけ付く。tool の結果で PDF を返しうる応答（`view_attachment` を提示する応答）では最初から付ける。
-- tool の結果に入れた PDF を `file-parser` が扱えるかは、この基盤の変更の最初に実機で確かめる。扱えない場合は、PDF だけ文字列の tool エラーにして進めるか、別の経路を実装するかをその時点で決める。
+- Responses API の `function_call_output` の `output` に `[{ type: "input_file", filename, file_data: "data:application/pdf;base64,..." }]` を入れた PDF は、`plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]` をリクエストに付けた場合だけモデルに読み取られることを、2026-09-22 に `google/gemini-3.8-flash` で確認した（plugin ありでは正しく回答し、なしでは PDF がモデルに届かなかった）。
+- したがって `view_attachment` を提示する応答では、最初のリクエストから `file-parser` plugin を付ける。
+- `function_call_output` の `output` に `[{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,..." }]` を入れた画像は、同日同モデルで plugin なしでも正しく読み取られることを確認した。
 
 ### 6. 返答の管理記録
 
@@ -219,16 +221,16 @@ main には、会話の本文を DB に保存する実装がリリース前の�
 
 ## Tasks
 
-- [ ] tool 基盤: マルチモーダルの tool 結果、dispatcher の上限、`function_call_output` の変換、`file-parser` の付与条件
-- [ ] tool の結果に入れた PDF を `file-parser` が扱えるかの実機確認
-- [ ] Discord のメッセージの正規化（Bot の返答の本文の取り出しを共通の関数にし、e2e からも使う）
-- [ ] 返答の管理記録と、送信・Bot 自身の削除の経路の集約
-- [ ] 窓（開始位置の固定、上限でのまとめ進め、60 分での作り直し）、reply 先、認可、適格性の判定
-- [ ] `read_earlier_messages`（カーソルとバッファ）と `view_attachment`
-- [ ] `session_id` と、Web 検索の system メッセージの分割
-- [ ] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
-- [ ] README と AGENTS.md の書き換え
-- [ ] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
+- [x] tool 基盤: マルチモーダルの tool 結果、dispatcher の上限、`function_call_output` の変換、`file-parser` の付与条件
+- [x] tool の結果に入れた PDF を `file-parser` が扱えるかの実機確認
+- [x] Discord のメッセージの正規化（Bot の返答の本文の取り出しを共通の関数にし、e2e からも使う）
+- [x] 返答の管理記録と、送信・Bot 自身の削除の経路の集約
+- [x] 窓（開始位置の固定、上限でのまとめ進め、60 分での作り直し）、reply 先、認可、適格性の判定
+- [x] `read_earlier_messages`（カーソルとバッファ）と `view_attachment`
+- [x] `session_id` と、Web 検索の system メッセージの分割
+- [x] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
+- [x] README と AGENTS.md の書き換え
+- [x] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
 - [ ] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
 - [ ] prompt cache の効き具合の実測（同じ窓で続けて尋ね、`Cached: N` と費用を記録する）
 - [ ] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF を見直す質問、自分の発言を消した後にそれを指す質問を試す

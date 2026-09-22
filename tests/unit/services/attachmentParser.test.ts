@@ -56,9 +56,6 @@ describe("parseAttachments", () => {
 
     expect(result).toEqual({
       parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
-      storageRefs: [
-        { type: "image-ref", url: "https://cdn.discord.test/photo.png", mime: "image/png" },
-      ],
       hasImage: true,
       hasPdf: false,
       rejected: [],
@@ -94,14 +91,6 @@ describe("parseAttachments", () => {
         {
           type: "file",
           file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
-        },
-      ],
-      storageRefs: [
-        {
-          type: "file-ref",
-          url: "https://cdn.discord.test/spec.pdf",
-          filename: "spec.pdf",
-          mime: "application/pdf",
         },
       ],
       hasImage: false,
@@ -335,7 +324,6 @@ describe("parseAttachments", () => {
     const result = await parseAttachments(makeCollection([]));
     expect(result).toEqual({
       parts: [],
-      storageRefs: [],
       hasImage: false,
       hasPdf: false,
       rejected: [],
