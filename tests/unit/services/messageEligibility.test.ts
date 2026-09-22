@@ -10,7 +10,10 @@ import type {
   IDiscordMessageReader,
 } from "../../../src/services/discordMessageReader";
 import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
-import { MessageEligibilityService } from "../../../src/services/messageEligibility";
+import {
+  type MessageEligibilityCache,
+  MessageEligibilityService,
+} from "../../../src/services/messageEligibility";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 
 const currentTimestampMs = Date.parse("2026-09-22T12:00:00.000Z");
@@ -137,5 +140,79 @@ describe("MessageEligibilityService", () => {
     expect(result.eligible).toBe(true);
     expect(result.isHuman).toBe(true);
     expect(result.reason).toBe("pending");
+  });
+
+  test("excludes the trigger when a pending record's recorded page was externally deleted", async () => {
+    const trigger = human("trigger");
+    const { service, budget } = setup(
+      record("pending"),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) =>
+        id === "trigger" ? { status: "found", message: trigger } : { status: "not-found" },
+    );
+
+    const result = await service.evaluate(
+      trigger,
+      { currentTimestampMs, botUserId: "bot", channelId: "channel" },
+      budget,
+      new Map([["trigger", trigger]]),
+    );
+
+    expect(result.eligible).toBe(false);
+    expect(result.externallyDeleted).toBe(true);
+    expect(result.reason).toBe("externally-deleted");
+  });
+
+  test("excludes the trigger when a failed record's recorded page was externally deleted", async () => {
+    const trigger = human("trigger");
+    const { service, budget } = setup(
+      record("failed"),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) =>
+        id === "trigger" ? { status: "found", message: trigger } : { status: "not-found" },
+    );
+
+    const result = await service.evaluate(
+      trigger,
+      { currentTimestampMs, botUserId: "bot", channelId: "channel" },
+      budget,
+      new Map([["trigger", trigger]]),
+    );
+
+    expect(result.eligible).toBe(false);
+    expect(result.externallyDeleted).toBe(true);
+    expect(result.reason).toBe("externally-deleted");
+  });
+
+  test("caches the external-deletion check per response instead of refetching for each entry", async () => {
+    const trigger = human("trigger");
+    const page = botPage("page");
+    let fetchCalls = 0;
+    const { service, budget } = setup(
+      record("completed"),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) => {
+        fetchCalls += 1;
+        return id === "trigger" ? { status: "found", message: trigger } : { status: "not-found" };
+      },
+    );
+    const cache: MessageEligibilityCache = new Map();
+
+    await service.evaluate(
+      trigger,
+      { currentTimestampMs, botUserId: "bot", channelId: "channel" },
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+    );
+    await service.evaluate(
+      page,
+      { currentTimestampMs, botUserId: "bot", channelId: "channel" },
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+    );
+
+    expect(fetchCalls).toBe(1);
   });
 });

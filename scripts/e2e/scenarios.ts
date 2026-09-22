@@ -330,7 +330,8 @@ export const SCENARIOS: Scenario[] = [
       mention: false,
       fillerCount: WINDOW_RAW_MESSAGE_LIMIT,
     },
-    prompt: `[e2e] 必ず read_earlier_messages を呼び出してから、取得した発言に含まれる ${READ_EARLIER_TOKEN} をそのまま答えて。`,
+    prompt:
+      "[e2e] 必ず read_earlier_messages を呼び出してから、取得した発言に含まれていた確認用トークンをそのまま答えて。",
     check: (reply) => [
       ...(reply.body.includes(READ_EARLIER_TOKEN)
         ? []

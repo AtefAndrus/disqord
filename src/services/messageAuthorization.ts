@@ -1,4 +1,5 @@
 import { ChannelType, PermissionFlagsBits } from "discord.js";
+import type { DiscordRestBudget } from "./discordMessageReader";
 
 export interface PermissionLike {
   has(permission: bigint): boolean;
@@ -33,9 +34,11 @@ async function isPrivateThreadParticipant(
   channel: AuthorizationChannelLike,
   userId: string,
   userPermissions: PermissionLike | null,
+  budget: DiscordRestBudget,
 ): Promise<boolean> {
   if (userPermissions?.has(PermissionFlagsBits.ManageThreads)) return true;
   if (!channel.members?.fetch) return false;
+  if (!budget.consume()) return false;
   try {
     await channel.members.fetch({ member: userId, force: true });
     return true;
@@ -48,6 +51,7 @@ async function isPrivateThreadParticipant(
 export async function canReadConversation(
   message: AuthorizationMessageLike,
   botUser: unknown,
+  budget: DiscordRestBudget,
 ): Promise<boolean> {
   const userSubject = message.member ?? message.author;
   if (!hasReadPermissions(message.channel, botUser)) return false;
@@ -55,5 +59,5 @@ export async function canReadConversation(
 
   if (message.channel.type !== ChannelType.PrivateThread) return true;
   const userPermissions = message.channel.permissionsFor?.(userSubject) ?? null;
-  return isPrivateThreadParticipant(message.channel, message.author.id, userPermissions);
+  return isPrivateThreadParticipant(message.channel, message.author.id, userPermissions, budget);
 }

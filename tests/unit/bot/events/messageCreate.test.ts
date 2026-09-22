@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { type Message, MessageType } from "discord.js";
 import {
   createDeleteOwnMessage,
@@ -125,5 +125,83 @@ describe("message create reply-record funnel", () => {
     })(message);
 
     expect(replyRecordService.finalize).toHaveBeenCalledWith("trigger", "completed", 3);
+  });
+
+  test("does not leak reply text into logs when fatal cleanup fails", async () => {
+    const secretText = `secret-${crypto.randomUUID()}`;
+    const warnLines: string[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation(((line: string) => {
+      warnLines.push(line);
+    }) as typeof console.warn);
+    try {
+      class FakeDiscordApiError extends Error {
+        requestBody = {
+          json: { components: [{ type: 17, components: [{ type: 10, content: secretText }] }] },
+        };
+
+        constructor() {
+          super("Invalid Form Body");
+          this.name = "DiscordAPIError[50035]";
+        }
+      }
+      const pageMessage = {
+        id: "page-1",
+        edit: mock(async () => {
+          throw new FakeDiscordApiError();
+        }),
+        delete: mock(async () => {}),
+      };
+      const channel = { id: "channel", send: mock(async () => pageMessage) };
+      const message = {
+        id: "trigger",
+        content: "<@bot> request",
+        type: MessageType.Default,
+        channel,
+        mentions: { has: mock(() => true) },
+        author: { id: "user", username: "user", bot: false },
+        member: null,
+        client: { user: { id: "bot" } },
+        guild: { id: "guild" },
+        attachments: { values: () => [] },
+        reply: mock(async () => {}),
+      } as unknown as Message;
+      const settingsService = {
+        getGuildSettings: mock(async () => ({
+          guildId: "guild",
+          defaultModel: "model",
+          freeModelsOnly: false,
+          showLlmDetails: false,
+          autoReplyChannels: [],
+          webSearchEnabled: false,
+          twitterExpandEnabled: true,
+          historyEnabled: false,
+          createdAt: "now",
+          updatedAt: "now",
+        })),
+      } as unknown as ISettingsService;
+      const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
+      const chatService = {
+        generateChatResponse: mock(
+          async (
+            _guildId: string,
+            _input: unknown,
+            _requestId: string,
+            updater: { beginTurn(): void; stageContent(text: string): Promise<void> },
+          ) => {
+            updater.beginTurn();
+            await updater.stageContent(secretText);
+            throw new Error("boom");
+          },
+        ),
+      } as unknown as IChatService;
+
+      await createMessageCreateHandler(chatService, settingsService, modelService, {})(message);
+
+      const combined = warnLines.join("\n");
+      expect(combined).toContain("Failed to clean up a bot message");
+      expect(combined).not.toContain(secretText);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

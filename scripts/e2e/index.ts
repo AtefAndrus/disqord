@@ -170,11 +170,16 @@ async function startBot(): Promise<RunningBot> {
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
   const toolCalls = new Set<string>();
+  let pending = "";
   let output = "";
   const inspect = (chunk: string): void => {
-    for (const match of chunk.matchAll(/client tool invoked.*?name["']?[:=]\s*["']?([\w-]+)/g)) {
-      const name = match[1];
-      if (name) toolCalls.add(name);
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      for (const match of line.matchAll(/client tool invoked.*?name["']?[:=]\s*["']?([\w-]+)/g)) {
+        const name = match[1];
+        if (name) toolCalls.add(name);
+      }
     }
   };
   const loggedIn = (async (): Promise<boolean> => {

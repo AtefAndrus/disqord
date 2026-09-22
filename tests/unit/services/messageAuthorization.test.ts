@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { ChannelType, PermissionFlagsBits } from "discord.js";
+import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
 import {
   type AuthorizationMessageLike,
   canReadConversation,
@@ -33,7 +34,7 @@ describe("canReadConversation", () => {
       },
     };
 
-    expect(await canReadConversation(message(channel), {})).toBe(false);
+    expect(await canReadConversation(message(channel), {}, new DiscordRestBudget())).toBe(false);
   });
 
   test("accepts a private-thread participant or ManageThreads holder", async () => {
@@ -48,7 +49,9 @@ describe("canReadConversation", () => {
         }),
       },
     };
-    expect(await canReadConversation(message(participantChannel), {})).toBe(true);
+    expect(
+      await canReadConversation(message(participantChannel), {}, new DiscordRestBudget()),
+    ).toBe(true);
 
     const manageThreads = {
       type: ChannelType.PrivateThread,
@@ -64,7 +67,9 @@ describe("canReadConversation", () => {
         }),
       },
     };
-    expect(await canReadConversation(message(manageThreads), {})).toBe(true);
+    expect(await canReadConversation(message(manageThreads), {}, new DiscordRestBudget())).toBe(
+      true,
+    );
   });
 
   test("does not trust a stale private-thread cache when a forced fetch rejects", async () => {
@@ -79,6 +84,18 @@ describe("canReadConversation", () => {
       },
     };
 
-    expect(await canReadConversation(message(channel), {})).toBe(false);
+    expect(await canReadConversation(message(channel), {}, new DiscordRestBudget())).toBe(false);
+  });
+
+  test("does not fetch private-thread membership after the REST budget is exhausted", async () => {
+    const fetch = mock(async () => ({}));
+    const channel = {
+      type: ChannelType.PrivateThread,
+      permissionsFor: mock(() => permission(read)),
+      members: { fetch },
+    };
+
+    expect(await canReadConversation(message(channel), {}, new DiscordRestBudget(0))).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -161,6 +161,45 @@ function exchangeGroups(messages: readonly NormalizedMessage[]): NormalizedMessa
   return groups;
 }
 
+interface ShrunkMeasurements {
+  count: number;
+  tokens: number;
+  oldestAgeMs: number | undefined;
+}
+
+function measureShrunkLimits(
+  messages: readonly NormalizedMessage[],
+  now: number,
+): ShrunkMeasurements {
+  const oldest = messages[0];
+  return {
+    count: messages.length,
+    tokens: messages.reduce(
+      (total, message, index) => total + estimateNormalizedMessageTokens(message, `m${index + 1}`),
+      0,
+    ),
+    oldestAgeMs: oldest === undefined ? undefined : now - oldest.timestampMs,
+  };
+}
+
+function fitsShrunkLimits(messages: readonly NormalizedMessage[], now: number): boolean {
+  const measurements = measureShrunkLimits(messages, now);
+  return (
+    measurements.count <= WINDOW_SHRUNK_MESSAGE_LIMIT &&
+    measurements.tokens <= WINDOW_SHRUNK_TOKEN_LIMIT &&
+    (measurements.oldestAgeMs === undefined || measurements.oldestAgeMs <= WINDOW_SHRUNK_AGE_MS)
+  );
+}
+
+function reachesShrunkBoundary(messages: readonly NormalizedMessage[], now: number): boolean {
+  const measurements = measureShrunkLimits(messages, now);
+  return (
+    measurements.count >= WINDOW_SHRUNK_MESSAGE_LIMIT ||
+    measurements.tokens >= WINDOW_SHRUNK_TOKEN_LIMIT ||
+    (measurements.oldestAgeMs !== undefined && measurements.oldestAgeMs >= WINDOW_SHRUNK_AGE_MS)
+  );
+}
+
 function shrinkToLimits(messages: readonly NormalizedMessage[], now: number): NormalizedMessage[] {
   const groups = exchangeGroups(messages);
   let firstGroup = 0;
@@ -171,38 +210,11 @@ function shrinkToLimits(messages: readonly NormalizedMessage[], now: number): No
     return messages.filter((message) => retainedExchangeIds.has(message.exchangeId));
   };
   let candidate = candidateFor(firstGroup);
-  const fits = (value: readonly NormalizedMessage[]): boolean => {
-    const oldest = value[0];
-    return (
-      value.length <= WINDOW_SHRUNK_MESSAGE_LIMIT &&
-      value.reduce(
-        (total, message, index) =>
-          total + estimateNormalizedMessageTokens(message, `m${index + 1}`),
-        0,
-      ) <= WINDOW_SHRUNK_TOKEN_LIMIT &&
-      (oldest === undefined || now - oldest.timestampMs <= WINDOW_SHRUNK_AGE_MS)
-    );
-  };
-  while (candidate.length > 0 && !fits(candidate) && firstGroup < groups.length) {
+  while (candidate.length > 0 && !fitsShrunkLimits(candidate, now) && firstGroup < groups.length) {
     firstGroup += 1;
     candidate = candidateFor(firstGroup);
   }
   return candidate;
-}
-
-function rawMessagesReachShrunkBoundary(
-  messages: readonly RawDiscordMessage[],
-  now: number,
-): boolean {
-  if (messages.length >= WINDOW_SHRUNK_MESSAGE_LIMIT) return true;
-  const oldest = messages[0];
-  if (oldest && now - messageTime(oldest) > WINDOW_SHRUNK_AGE_MS) return true;
-  const estimatedTokens = messages.reduce(
-    (total, message) =>
-      total + Math.ceil((message.content.length + message.author.username.length + 32) / 4),
-    0,
-  );
-  return estimatedTokens >= WINDOW_SHRUNK_TOKEN_LIMIT;
 }
 
 function truncateTextByBytes(text: string, maxBytes: number): string {
@@ -232,6 +244,8 @@ function asToolResult(
 
 export class ConversationWindowService {
   private readonly states = new Map<string, WindowState>();
+  private readonly generations = new Map<string, number>();
+  private readonly committedGenerations = new Map<string, number>();
   private readonly eligibility: MessageEligibilityService;
 
   constructor(
@@ -248,33 +262,51 @@ export class ConversationWindowService {
     const now = this.now();
     this.sweepStaleChannels(now);
     if (!input.historyEnabled) return null;
-    const authorized = input.authorize
-      ? await input.authorize()
-      : input.authorizationMessage
-        ? await canReadConversation(input.authorizationMessage, input.botUser)
-        : false;
-    if (!authorized) return null;
-
     const currentTime = messageTime(input.current) || now;
     const budget = new RestBudget(CONVERSATION_REST_LIMIT);
-    const state = this.states.get(input.current.channel_id);
-    const needsRebuild = state === undefined || now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS;
     const verificationCache: MessageEligibilityCache = new Map();
     const controller = new AbortController();
+    const authorize = input.authorize
+      ? input.authorize
+      : input.authorizationMessage
+        ? () =>
+            canReadConversation(
+              input.authorizationMessage as AuthorizationMessageLike,
+              input.botUser,
+              budget,
+            )
+        : async () => false;
+    const generation = this.nextGeneration(input.current.channel_id);
 
     try {
       const result = await this.withTimeout(
-        needsRebuild
-          ? this.rebuild(input, currentTime, now, budget, verificationCache, controller.signal)
-          : this.extend(
-              input,
-              state,
-              currentTime,
-              now,
-              budget,
-              verificationCache,
-              controller.signal,
-            ),
+        (async () => {
+          if (!(await authorize())) return null;
+          if (controller.signal.aborted) return null;
+          const state = this.states.get(input.current.channel_id);
+          const needsRebuild =
+            state === undefined || now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS;
+          return needsRebuild
+            ? this.rebuild(
+                input,
+                currentTime,
+                now,
+                budget,
+                verificationCache,
+                controller.signal,
+                generation,
+              )
+            : this.extend(
+                input,
+                state,
+                currentTime,
+                now,
+                budget,
+                verificationCache,
+                controller.signal,
+                generation,
+              );
+        })(),
         this.windowFetchTimeoutMs,
         controller,
       );
@@ -286,15 +318,7 @@ export class ConversationWindowService {
         nodeEnv: input.nodeEnv,
         userId: input.userId,
         channel: input.channel,
-        authorize: input.authorize
-          ? input.authorize
-          : input.authorizationMessage
-            ? () =>
-                canReadConversation(
-                  input.authorizationMessage as AuthorizationMessageLike,
-                  input.botUser,
-                )
-            : async () => false,
+        authorize,
         budget,
         cursor: result.startMessageId,
         cutoffAt: currentTime - CONVERSATION_MAX_AGE_MS,
@@ -352,6 +376,18 @@ export class ConversationWindowService {
     return removed;
   }
 
+  private nextGeneration(channelId: string): number {
+    const generation = (this.generations.get(channelId) ?? 0) + 1;
+    this.generations.set(channelId, generation);
+    return generation;
+  }
+
+  private commitState(channelId: string, state: WindowState, generation: number): void {
+    if (generation <= (this.committedGenerations.get(channelId) ?? 0)) return;
+    this.states.set(channelId, state);
+    this.committedGenerations.set(channelId, generation);
+  }
+
   private async rebuild(
     input: BuildConversationWindowInput,
     currentTime: number,
@@ -359,6 +395,7 @@ export class ConversationWindowService {
     budget: DiscordRestBudget,
     verificationCache: MessageEligibilityCache,
     signal: AbortSignal,
+    generation: number,
   ): Promise<WindowBuildResult | null> {
     const collected: RawDiscordMessage[] = [];
     let before = input.current.id;
@@ -379,11 +416,22 @@ export class ConversationWindowService {
       if (
         page.messages.length < 100 ||
         oldest === undefined ||
-        messageTime(oldest) <= now - WINDOW_SHRUNK_AGE_MS ||
-        rawMessagesReachShrunkBoundary(collected, now)
+        messageTime(oldest) <= now - WINDOW_SHRUNK_AGE_MS
       ) {
         break;
       }
+      if (budget.used >= budget.limit) break;
+      const eligible = await this.eligibleEntries(
+        uniqueMessages(collected),
+        input,
+        currentTime,
+        budget,
+        true,
+        verificationCache,
+        signal,
+      );
+      if (signal.aborted) return null;
+      if (reachesShrunkBoundary(eligible, now) || budget.used >= budget.limit) break;
       before = oldest.id;
     }
     const rawMessages = uniqueMessages(collected);
@@ -409,7 +457,11 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    this.states.set(input.current.channel_id, { startMessageId, sessionId, lastUsedAt: now });
+    this.commitState(
+      input.current.channel_id,
+      { startMessageId, sessionId, lastUsedAt: now },
+      generation,
+    );
     return { messages: shrunk, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
@@ -421,6 +473,7 @@ export class ConversationWindowService {
     budget: DiscordRestBudget,
     verificationCache: MessageEligibilityCache,
     signal: AbortSignal,
+    generation: number,
   ): Promise<WindowBuildResult | null> {
     if (signal.aborted) return null;
     const anchor = await this.reader.fetch(
@@ -431,7 +484,7 @@ export class ConversationWindowService {
     );
     if (signal.aborted) return null;
     if (anchor.status === "not-found" || anchor.status === "failed") {
-      return this.rebuild(input, currentTime, now, budget, verificationCache, signal);
+      return this.rebuild(input, currentTime, now, budget, verificationCache, signal, generation);
     }
     const fetched: RawDiscordMessage[] =
       anchor.status === "found" && compareMessageIds(anchor.message.id, input.current.id) < 0
@@ -485,7 +538,11 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    this.states.set(input.current.channel_id, { startMessageId, sessionId, lastUsedAt: now });
+    this.commitState(
+      input.current.channel_id,
+      { startMessageId, sessionId, lastUsedAt: now },
+      generation,
+    );
     return { messages: selected, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
@@ -610,6 +667,9 @@ export class ConversationWindowService {
   ): Promise<ToolLlmResult> {
     const aborted = (): ToolLlmResult => asToolResult([], true, "fetch_failed");
     if (signal.aborted) return aborted();
+    if (state.calls >= READ_EARLIER_MAX_CALLS) {
+      return asToolResult([], true, "call_limit");
+    }
     if (!(await state.authorize())) {
       return asToolResult([], false, "no_permission");
     }
@@ -622,9 +682,6 @@ export class ConversationWindowService {
       shown: new Map(state.shown),
       seenReplies: new Set(state.seenReplies),
     };
-    if (draft.calls > READ_EARLIER_MAX_CALLS) {
-      return asToolResult([], true, "call_limit");
-    }
     const count = Math.max(1, Math.min(20, Math.trunc(requestedCount)));
     const available = READ_EARLIER_MAX_MESSAGES - draft.shownCount;
     if (available <= 0) return asToolResult([], true, "message_limit");
@@ -703,7 +760,7 @@ export class ConversationWindowService {
       if (draft.shown.has(message.id)) continue;
       shown.push(this.addShown(draft, message));
     }
-    const reason = stoppedReason
+    const provisionalReason = stoppedReason
       ? stoppedReason
       : cutoffReached && draft.buffer.length === 0
         ? "24h_cutoff"
@@ -711,9 +768,22 @@ export class ConversationWindowService {
           ? "message_limit"
           : null;
     const provisionalHasMore = draft.buffer.length > 0 || !draft.exhausted;
-    const output = await this.fitToolResult(draft, shown, provisionalHasMore, reason, references);
+    const output = await this.fitToolResult(
+      draft,
+      shown,
+      provisionalHasMore,
+      provisionalReason,
+      references,
+    );
     if (signal.aborted) return aborted();
     const hasMore = draft.buffer.length > 0 || !draft.exhausted;
+    const reason = stoppedReason
+      ? stoppedReason
+      : cutoffReached && draft.buffer.length === 0
+        ? "24h_cutoff"
+        : available <= output.length
+          ? "message_limit"
+          : null;
     const outputIds = new Set(output.map((message) => message.id));
     for (const message of shown) {
       if (!outputIds.has(message.id)) {

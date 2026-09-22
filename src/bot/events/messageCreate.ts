@@ -35,6 +35,10 @@ import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
 
+function operationError(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
 function shouldRespond(
   message: Message,
   botId: string,
@@ -150,7 +154,7 @@ export function createDeleteOwnMessage(
       await botMessage.delete();
     } catch (deleteError) {
       logger.warn("Failed to delete bot message, attempting to neutralize instead", {
-        deleteError,
+        error: operationError(deleteError),
         messageId: botMessage.id,
       });
       try {
@@ -165,7 +169,7 @@ export function createDeleteOwnMessage(
         await botMessage.edit(toComponentsV2EditPayload(neutralContainer));
       } catch (neutralizeError) {
         logger.warn("Failed to neutralize bot message", {
-          neutralizeError,
+          error: operationError(neutralizeError),
           messageId: botMessage.id,
         });
       }
@@ -325,7 +329,10 @@ export function createMessageCreateHandler(
           nodeEnv: process.env.NODE_ENV,
         });
       } catch (error) {
-        logger.warn("Failed to build the conversation window", { error, messageId: message.id });
+        logger.warn("Failed to build the conversation window", {
+          error: operationError(error),
+          messageId: message.id,
+        });
       }
     }
 
@@ -492,7 +499,11 @@ export function createMessageCreateHandler(
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
       const errorId = crypto.randomUUID().slice(0, 8);
-      logger.error("Failed to generate response", { errorId, error, guildId: message.guild.id });
+      logger.error("Failed to generate response", {
+        errorId,
+        error: operationError(error),
+        guildId: message.guild.id,
+      });
 
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから行うクリーンアップ表示を停止ボタン付きの stale な内容で上書きさせない。
@@ -522,7 +533,7 @@ export function createMessageCreateHandler(
         await message.reply(toComponentsV2ReplyPayload(errorContainer));
       } catch (replyError) {
         logger.error("Failed to send error message", {
-          replyError,
+          error: operationError(replyError),
           errorId,
           guildId: message.guild.id,
         });
@@ -571,7 +582,9 @@ async function cleanupBotMessagesOnFatalError(
       try {
         await deleteOrNeutralize(botMessage, modelName, color, deleteMessage);
       } catch (error) {
-        logger.warn("Failed to clean up a bot message after a fatal error", { error });
+        logger.warn("Failed to clean up a bot message after a fatal error", {
+          error: operationError(error),
+        });
       }
     }
     return 0;
@@ -606,13 +619,13 @@ async function cleanupBotMessagesOnFatalError(
           await botMessageCreated(newMessage);
         }
       } catch (error) {
-        logger.warn("Failed to clean up a bot message", { error });
+        logger.warn("Failed to clean up a bot message", { error: operationError(error) });
       }
     } else {
       try {
         await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
       } catch (error) {
-        logger.warn("Failed to delete an excess bot message", { error });
+        logger.warn("Failed to delete an excess bot message", { error: operationError(error) });
       }
     }
   }

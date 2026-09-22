@@ -53,7 +53,14 @@ export type MessageEligibilityVerification =
   | { status: "too-old" }
   | { status: "failed" };
 
-export type MessageEligibilityCache = Map<string, Promise<MessageEligibilityVerification>>;
+interface CachedReplyVerification {
+  externallyDeleted: boolean;
+  trigger: DiscordMessageFetchResult;
+  pages: Array<{ page: ReplyPage; result: DiscordMessageFetchResult }>;
+  verification?: MessageEligibilityVerification;
+}
+
+export type MessageEligibilityCache = Map<string, Promise<CachedReplyVerification>>;
 
 export interface IReplyRecordLookup {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
@@ -116,6 +123,23 @@ export class MessageEligibilityService {
       if (!record) {
         return { eligible: true, isHuman: true, externallyDeleted: false, reason: "human" };
       }
+      const checked = await this.checkReplyWithCache(
+        record,
+        message,
+        input,
+        budget,
+        knownMessages,
+        verificationCache,
+        signal,
+      );
+      if (checked.externallyDeleted) {
+        return {
+          eligible: false,
+          isHuman: true,
+          externallyDeleted: true,
+          reason: "externally-deleted",
+        };
+      }
       const reason = recordStatusReason(record);
       if (reason) {
         return { eligible: true, isHuman: true, externallyDeleted: false, reason };
@@ -130,7 +154,6 @@ export class MessageEligibilityService {
       }
       const verified = await this.verifyReplyWithCache(
         record,
-        message,
         input,
         budget,
         knownMessages,
@@ -170,6 +193,23 @@ export class MessageEligibilityService {
         reason: "record-missing",
       };
     }
+    const checked = await this.checkReplyWithCache(
+      record,
+      undefined,
+      input,
+      budget,
+      knownMessages,
+      verificationCache,
+      signal,
+    );
+    if (checked.externallyDeleted) {
+      return {
+        eligible: false,
+        isHuman: false,
+        externallyDeleted: true,
+        reason: "externally-deleted",
+      };
+    }
     const reason = recordStatusReason(record);
     if (reason) {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason };
@@ -184,7 +224,6 @@ export class MessageEligibilityService {
     }
     const verified = await this.verifyReplyWithCache(
       record,
-      undefined,
       input,
       budget,
       knownMessages,
@@ -219,7 +258,7 @@ export class MessageEligibilityService {
     };
   }
 
-  private verifyReplyWithCache(
+  private checkReplyWithCache(
     record: ReplyRecord,
     knownTrigger: RawDiscordMessage | undefined,
     input: MessageEligibilityInput,
@@ -227,10 +266,10 @@ export class MessageEligibilityService {
     knownMessages: ReadonlyMap<string, RawDiscordMessage>,
     verificationCache: MessageEligibilityCache,
     signal: AbortSignal | undefined,
-  ): Promise<MessageEligibilityVerification> {
+  ): Promise<CachedReplyVerification> {
     const cached = verificationCache.get(record.triggerMsgId);
     if (cached) return cached;
-    const verification = this.verifyReply(
+    const verification = this.checkReply(
       record,
       knownTrigger,
       input,
@@ -242,14 +281,38 @@ export class MessageEligibilityService {
     return verification;
   }
 
-  private async verifyReply(
+  private verifyReplyWithCache(
+    record: ReplyRecord,
+    input: MessageEligibilityInput,
+    budget: DiscordRestBudget,
+    knownMessages: ReadonlyMap<string, RawDiscordMessage>,
+    verificationCache: MessageEligibilityCache,
+    signal: AbortSignal | undefined,
+  ): Promise<MessageEligibilityVerification> {
+    return this.checkReplyWithCache(
+      record,
+      undefined,
+      input,
+      budget,
+      knownMessages,
+      verificationCache,
+      signal,
+    ).then((checked) => {
+      if (checked.verification) return checked.verification;
+      const verification = this.verifyReply(record, input, checked);
+      checked.verification = verification;
+      return verification;
+    });
+  }
+
+  private async checkReply(
     record: ReplyRecord,
     knownTrigger: RawDiscordMessage | undefined,
     input: MessageEligibilityInput,
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage>,
     signal: AbortSignal | undefined,
-  ): Promise<MessageEligibilityVerification> {
+  ): Promise<CachedReplyVerification> {
     const trigger = await this.fetchKnownOrRemote(
       input.channelId,
       record.triggerMsgId,
@@ -257,16 +320,11 @@ export class MessageEligibilityService {
       budget,
       signal,
     );
-    if (trigger.status === "not-found") return { status: "deleted" };
-    if (trigger.status === "failed") return { status: "failed" };
-    const cutoffAt = input.currentTimestampMs - (input.maxAgeMs ?? 24 * 60 * 60 * 1000);
-    if (messageTime(trigger.message) < cutoffAt) return { status: "too-old" };
-
     const pages = this.records.listPages(record.triggerMsgId);
-    if (record.pageCount === null || pages.length !== record.pageCount || pages.length === 0) {
-      return { status: "failed" };
+    if (trigger.status === "not-found") {
+      return { externallyDeleted: true, trigger, pages: [] };
     }
-    const fetchedPages: Array<RawDiscordMessage & { page: ReplyPage }> = [];
+    const fetchedPages: Array<{ page: ReplyPage; result: DiscordMessageFetchResult }> = [];
     for (const page of pages) {
       const fetched = await this.fetchKnownOrRemote(
         input.channelId,
@@ -275,14 +333,45 @@ export class MessageEligibilityService {
         budget,
         signal,
       );
-      if (fetched.status === "not-found") return { status: "deleted" };
-      if (fetched.status === "failed") return { status: "failed" };
-      if (messageTime(fetched.message) < cutoffAt) return { status: "too-old" };
-      fetchedPages.push({ ...fetched.message, page });
+      fetchedPages.push({ page, result: fetched });
+      if (fetched.status === "not-found") {
+        return { externallyDeleted: true, trigger, pages: fetchedPages };
+      }
+    }
+    return {
+      externallyDeleted: false,
+      trigger,
+      pages: fetchedPages,
+    };
+  }
+
+  private verifyReply(
+    record: ReplyRecord,
+    input: MessageEligibilityInput,
+    checked: CachedReplyVerification,
+  ): MessageEligibilityVerification {
+    if (checked.externallyDeleted) return { status: "deleted" };
+    if (checked.trigger.status !== "found") return { status: "failed" };
+    const cutoffAt = input.currentTimestampMs - (input.maxAgeMs ?? 24 * 60 * 60 * 1000);
+    if (messageTime(checked.trigger.message) < cutoffAt) return { status: "too-old" };
+    if (
+      record.pageCount === null ||
+      checked.pages.length !== record.pageCount ||
+      checked.pages.length === 0
+    ) {
+      return { status: "failed" };
+    }
+    const fetchedPages: Array<RawDiscordMessage & { page: ReplyPage }> = [];
+    for (const { page, result } of checked.pages) {
+      if (result.status !== "found") {
+        return { status: result.status === "not-found" ? "deleted" : "failed" };
+      }
+      if (messageTime(result.message) < cutoffAt) return { status: "too-old" };
+      fetchedPages.push({ ...result.message, page });
     }
     return {
       status: "verified",
-      value: { record, pages: fetchedPages, trigger: trigger.message },
+      value: { record, pages: fetchedPages, trigger: checked.trigger.message },
     };
   }
 

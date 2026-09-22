@@ -239,28 +239,44 @@ test("shrinks one extend directly to all compact limits and renews the session o
   );
 });
 
-test("stops rebuilding after one recent page already crosses the compact boundary", async () => {
+test("keeps rebuilding while eligible entries stay below the compact boundary until the REST budget ends", async () => {
+  const reader = new FakeReader();
+  const pageOf = (base: number): RawDiscordMessage[] =>
+    Array.from({ length: 100 }, (_, index) => {
+      const id = String(base + index);
+      if (index === 0) return message(id, new Date(NOW - 1_000).toISOString());
+      return message(id, new Date(NOW - 1_000).toISOString(), {
+        author: { id: "other-bot", username: "other", bot: true },
+      });
+    });
+  for (let page = 0; page < 12; page += 1) {
+    reader.listResponses.push({ status: "ok", messages: pageOf(1_000 + page * 1_000) });
+  }
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+
+  const context = await service.build(input(message("100000", new Date(NOW).toISOString())));
+
+  expect(context).not.toBeNull();
+  expect(reader.listQueries).toHaveLength(12);
+});
+
+test("pages past a full raw page of other-bot messages to find an eligible human message", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({
     status: "ok",
     messages: Array.from({ length: 100 }, (_, index) =>
-      message(String(1_000 + index), new Date(NOW - 1_000).toISOString()),
+      message(String(900 + index), new Date(NOW - 1_000).toISOString(), {
+        author: { id: "other-bot", username: "other", bot: true },
+      }),
     ),
   });
-  reader.listResponses.push(
-    ...Array.from({ length: 12 }, () => ({
-      status: "ok" as const,
-      messages: Array.from({ length: 100 }, (_, index) =>
-        message(String(2_000 + index), new Date(NOW - 1_000).toISOString()),
-      ),
-    })),
-  );
+  reader.listResponses.push({ status: "ok", messages: [message("800")] });
   const service = new ConversationWindowService(reader, records(), () => NOW);
 
-  const context = await service.build(input(message("10000", new Date(NOW).toISOString())));
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
 
-  expect(context).not.toBeNull();
-  expect(reader.listQueries).toHaveLength(1);
+  expect(reader.listQueries).toHaveLength(2);
+  expect(context?.messages.map((entry) => entry.id)).toEqual(["800"]);
 });
 
 test("read_earlier_messages advances past an entirely ineligible page", async () => {
@@ -314,6 +330,49 @@ test("read_earlier_messages restores deferred large messages and reports has_mor
   expect(first.has_more).toBe(true);
   expect(second.messages[0]?.text).toBe("b".repeat(8_000));
   expect(third.messages[0]?.text).toBe("a".repeat(8_000));
+});
+
+test("recomputes stop_reason and has_more after byte-fitting instead of the pre-fit message-count guess", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("100000", new Date(NOW).toISOString())));
+
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 100 }, (_, index) =>
+      message(String(900 + index), undefined, {
+        ...(index >= 40 && {
+          author: { id: "other-bot", username: "other", bot: true },
+        }),
+      }),
+    ),
+  });
+  const first = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
+  ) as { messages: unknown[] };
+  const second = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
+  ) as { messages: unknown[] };
+  expect(first.messages).toHaveLength(20);
+  expect(second.messages).toHaveLength(20);
+
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 20 }, (_, index) =>
+      message(String(700 + index), new Date(NOW - 1_000).toISOString(), {
+        content: "x".repeat(8_000),
+      }),
+    ),
+  });
+  const third = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
+  ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
+
+  expect(third.messages.length).toBeGreaterThan(0);
+  expect(third.messages.length).toBeLessThan(20);
+  expect(third.has_more).toBe(true);
+  expect(third.stop_reason).toBeNull();
 });
 
 test("the reply target is already counted and does not appear twice while paging", async () => {
@@ -404,6 +463,40 @@ test("read_earlier_messages stops after three calls even when the message cap is
 
   expect(fourth.messages).toEqual([]);
   expect(fourth.stop_reason).toBe("call_limit");
+});
+
+test("read_earlier_messages checks the call limit before authorizing", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 20 }, (_, index) => message(String(900 + index))),
+  });
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 100 }, (_, index) => message(String(700 + index))),
+  });
+  const authorize = mock(async () => true);
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build({
+    ...input(message("1000", new Date(NOW).toISOString())),
+    authorize,
+  });
+
+  authorize.mockClear();
+  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
+  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
+  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
+  authorize.mockClear();
+  const fourth = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as {
+    messages: unknown[];
+    stop_reason: string;
+  };
+
+  expect(fourth.messages).toEqual([]);
+  expect(fourth.stop_reason).toBe("call_limit");
+  expect(authorize).not.toHaveBeenCalled();
 });
 
 test("memoizes a deleted exchange across raw pages and reply-target lookup", async () => {
@@ -590,6 +683,36 @@ test("a timed-out build cannot install a late window state", async () => {
   expect(reader.fetch).not.toHaveBeenCalled();
 });
 
+test("the authorization step is covered by the window-fetch deadline", async () => {
+  let releaseAuthorize: (() => void) | undefined;
+  const reader: IDiscordMessageReader = {
+    list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),
+    fetch: mock(async (): Promise<DiscordMessageFetchResult> => ({ status: "not-found" })),
+  };
+  const service = new ConversationWindowService(
+    reader,
+    records(),
+    () => NOW,
+    async () => true,
+    5,
+  );
+  const slowAuthorize = (): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      releaseAuthorize = () => resolve(true);
+    });
+  const result = await service.build({
+    ...input(message("1000", new Date(NOW).toISOString())),
+    authorize: slowAuthorize,
+  });
+
+  expect(result).toBeNull();
+  expect(reader.list).not.toHaveBeenCalled();
+  releaseAuthorize?.();
+  await Bun.sleep(20);
+  const states = (service as unknown as { states: Map<string, unknown> }).states;
+  expect(states.size).toBe(0);
+});
+
 test("a timeout during reply-target resolution cannot install a window state", async () => {
   let releaseTarget: (() => void) | undefined;
   const reader: IDiscordMessageReader = {
@@ -635,6 +758,62 @@ test("a timeout during reply-target resolution cannot install a window state", a
 
   const states = (service as unknown as { states: Map<string, unknown> }).states;
   expect(states.size).toBe(0);
+});
+
+test("a newer build wins when an older build for the same channel resolves after it", async () => {
+  const listQueries: Array<Record<string, string | number>> = [];
+  const fetchQueries: string[] = [];
+  let releaseOld: (() => void) | undefined;
+  const reader: IDiscordMessageReader = {
+    list: mock(
+      async (
+        _channelId: string,
+        query: { before?: string; after?: string; limit: number },
+        budget: DiscordRestBudget,
+      ): Promise<DiscordMessageListResult> => {
+        if (!budget.consume()) return { status: "failed", messages: [] };
+        listQueries.push(query);
+        if (query.before === "199") {
+          return new Promise((resolve) => {
+            releaseOld = () =>
+              resolve({
+                status: "ok",
+                messages: [message("100"), message("101"), message("102")],
+              });
+          });
+        }
+        return { status: "ok", messages: [message("900"), message("901")] };
+      },
+    ),
+    fetch: mock(
+      async (
+        _channelId: string,
+        id: string,
+        budget: DiscordRestBudget,
+      ): Promise<DiscordMessageFetchResult> => {
+        if (!budget.consume())
+          return { status: "failed", error: new Error("REST budget exhausted") };
+        fetchQueries.push(id);
+        return { status: "found", message: message(id) };
+      },
+    ),
+  };
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+
+  const older = service.build(input(message("199", new Date(NOW).toISOString())));
+  while (!releaseOld) await Bun.sleep(0);
+  const newer = await service.build(input(message("999", new Date(NOW).toISOString())));
+
+  expect(newer?.windowStartMessageId).toBe("900");
+  releaseOld?.();
+  const olderResult = await older;
+  expect(olderResult?.windowStartMessageId).toBe("100");
+
+  const third = await service.build(input(message("1000", new Date(NOW).toISOString())));
+  expect(third?.windowStartMessageId).toBe("900");
+  expect(fetchQueries).toContain("900");
+  expect(fetchQueries).not.toContain("100");
+  expect(listQueries).toHaveLength(3);
 });
 
 test("sweeps stale channel states on access", async () => {
