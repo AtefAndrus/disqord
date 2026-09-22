@@ -3,7 +3,7 @@ import type { FunctionTool, ResponsesInputContentPart } from "../../types";
 export type ToolLlmResult = string | ResponsesInputContentPart[];
 
 export interface ConversationToolContext {
-  readEarlierMessages(count: number): Promise<ToolLlmResult>;
+  readEarlierMessages(count: number, signal: AbortSignal): Promise<ToolLlmResult>;
   viewAttachment(
     messageRef: string,
     attachmentIndex: number,

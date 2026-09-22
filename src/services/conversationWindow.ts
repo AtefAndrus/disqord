@@ -19,7 +19,7 @@ import {
   type AuthorizationMessageLike,
   canReadConversation,
 } from "./messageAuthorization";
-import { MessageEligibilityService } from "./messageEligibility";
+import { type MessageEligibilityCache, MessageEligibilityService } from "./messageEligibility";
 
 export const WINDOW_RAW_TOKEN_LIMIT = 8_000;
 export const WINDOW_RAW_MESSAGE_LIMIT = 40;
@@ -80,6 +80,7 @@ interface ResponseState {
   reachedReplyTarget: boolean;
   openedAttachments: Set<string>;
   attachmentResults: Map<string, ToolLlmResult>;
+  verificationCache: MessageEligibilityCache;
 }
 
 export interface ConversationWindowContext {
@@ -163,7 +164,13 @@ function exchangeGroups(messages: readonly NormalizedMessage[]): NormalizedMessa
 function shrinkToLimits(messages: readonly NormalizedMessage[], now: number): NormalizedMessage[] {
   const groups = exchangeGroups(messages);
   let firstGroup = 0;
-  let candidate = groups.flat();
+  const candidateFor = (groupIndex: number): NormalizedMessage[] => {
+    const retainedExchangeIds = new Set(
+      groups.slice(groupIndex).map((group) => group[0]?.exchangeId),
+    );
+    return messages.filter((message) => retainedExchangeIds.has(message.exchangeId));
+  };
+  let candidate = candidateFor(firstGroup);
   const fits = (value: readonly NormalizedMessage[]): boolean => {
     const oldest = value[0];
     return (
@@ -178,9 +185,24 @@ function shrinkToLimits(messages: readonly NormalizedMessage[], now: number): No
   };
   while (candidate.length > 0 && !fits(candidate) && firstGroup < groups.length) {
     firstGroup += 1;
-    candidate = groups.slice(firstGroup).flat();
+    candidate = candidateFor(firstGroup);
   }
   return candidate;
+}
+
+function rawMessagesReachShrunkBoundary(
+  messages: readonly RawDiscordMessage[],
+  now: number,
+): boolean {
+  if (messages.length >= WINDOW_SHRUNK_MESSAGE_LIMIT) return true;
+  const oldest = messages[0];
+  if (oldest && now - messageTime(oldest) > WINDOW_SHRUNK_AGE_MS) return true;
+  const estimatedTokens = messages.reduce(
+    (total, message) =>
+      total + Math.ceil((message.content.length + message.author.username.length + 32) / 4),
+    0,
+  );
+  return estimatedTokens >= WINDOW_SHRUNK_TOKEN_LIMIT;
 }
 
 function truncateTextByBytes(text: string, maxBytes: number): string {
@@ -217,11 +239,14 @@ export class ConversationWindowService {
     records: IReplyRecordRepository,
     private readonly now: () => number = () => Date.now(),
     private readonly imageCapability: (model: string) => Promise<boolean | null> = async () => true,
+    private readonly windowFetchTimeoutMs = WINDOW_FETCH_TIMEOUT_MS,
   ) {
     this.eligibility = new MessageEligibilityService(reader, records);
   }
 
   async build(input: BuildConversationWindowInput): Promise<ConversationWindowContext | null> {
+    const now = this.now();
+    this.sweepStaleChannels(now);
     if (!input.historyEnabled) return null;
     const authorized = input.authorize
       ? await input.authorize()
@@ -230,18 +255,28 @@ export class ConversationWindowService {
         : false;
     if (!authorized) return null;
 
-    const currentTime = messageTime(input.current) || this.now();
-    const now = this.now();
+    const currentTime = messageTime(input.current) || now;
     const budget = new RestBudget(CONVERSATION_REST_LIMIT);
     const state = this.states.get(input.current.channel_id);
     const needsRebuild = state === undefined || now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS;
+    const verificationCache: MessageEligibilityCache = new Map();
+    const controller = new AbortController();
 
     try {
       const result = await this.withTimeout(
         needsRebuild
-          ? this.rebuild(input, currentTime, now, budget)
-          : this.extend(input, state, currentTime, now, budget),
-        WINDOW_FETCH_TIMEOUT_MS,
+          ? this.rebuild(input, currentTime, now, budget, verificationCache, controller.signal)
+          : this.extend(
+              input,
+              state,
+              currentTime,
+              now,
+              budget,
+              verificationCache,
+              controller.signal,
+            ),
+        this.windowFetchTimeoutMs,
+        controller,
       );
       if (!result) return null;
       const responseState: ResponseState = {
@@ -275,6 +310,7 @@ export class ConversationWindowService {
         reachedReplyTarget: false,
         openedAttachments: new Set(),
         attachmentResults: new Map(),
+        verificationCache,
       };
       const messages = result.messages.map((message) => this.addShown(responseState, message));
       const hasReplyTarget = result.replyTarget
@@ -291,7 +327,7 @@ export class ConversationWindowService {
         sessionId: result.sessionId,
         windowStartMessageId: result.startMessageId,
         toolContext: {
-          readEarlierMessages: (count) => this.readEarlier(responseState, count),
+          readEarlierMessages: (count, signal) => this.readEarlier(responseState, count, signal),
           viewAttachment: (messageRef, attachmentIndex, model, signal) =>
             this.viewAttachment(responseState, messageRef, attachmentIndex, model, signal),
         },
@@ -305,16 +341,36 @@ export class ConversationWindowService {
     }
   }
 
+  sweepStaleChannels(now = this.now()): number {
+    let removed = 0;
+    for (const [channelId, state] of this.states) {
+      if (now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS) {
+        this.states.delete(channelId);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   private async rebuild(
     input: BuildConversationWindowInput,
     currentTime: number,
     now: number,
     budget: DiscordRestBudget,
+    verificationCache: MessageEligibilityCache,
+    signal: AbortSignal,
   ): Promise<WindowBuildResult | null> {
     const collected: RawDiscordMessage[] = [];
     let before = input.current.id;
     while (true) {
-      const page = await this.reader.list(input.current.channel_id, { before, limit: 100 }, budget);
+      if (signal.aborted) return null;
+      const page = await this.reader.list(
+        input.current.channel_id,
+        { before, limit: 100 },
+        budget,
+        signal,
+      );
+      if (signal.aborted) return null;
       if (page.status !== "ok") return null;
       collected.push(
         ...page.messages.filter((message) => compareMessageIds(message.id, input.current.id) < 0),
@@ -323,19 +379,37 @@ export class ConversationWindowService {
       if (
         page.messages.length < 100 ||
         oldest === undefined ||
-        messageTime(oldest) <= now - WINDOW_SHRUNK_AGE_MS
+        messageTime(oldest) <= now - WINDOW_SHRUNK_AGE_MS ||
+        rawMessagesReachShrunkBoundary(collected, now)
       ) {
         break;
       }
       before = oldest.id;
     }
     const rawMessages = uniqueMessages(collected);
-    const messages = await this.eligibleEntries(rawMessages, input, currentTime, budget, true);
+    const messages = await this.eligibleEntries(
+      rawMessages,
+      input,
+      currentTime,
+      budget,
+      true,
+      verificationCache,
+      signal,
+    );
+    if (signal.aborted) return null;
     const shrunk = shrinkToLimits(messages, now);
     const startMessageId = shrunk[0]?.id ?? input.current.id;
     const sessionId = crypto.randomUUID();
+    const replyTarget = await this.findReplyTarget(
+      input,
+      rawMessages,
+      currentTime,
+      budget,
+      verificationCache,
+      signal,
+    );
+    if (signal.aborted) return null;
     this.states.set(input.current.channel_id, { startMessageId, sessionId, lastUsedAt: now });
-    const replyTarget = await this.findReplyTarget(input, rawMessages, currentTime, budget);
     return { messages: shrunk, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
@@ -345,10 +419,19 @@ export class ConversationWindowService {
     currentTime: number,
     now: number,
     budget: DiscordRestBudget,
+    verificationCache: MessageEligibilityCache,
+    signal: AbortSignal,
   ): Promise<WindowBuildResult | null> {
-    const anchor = await this.reader.fetch(input.current.channel_id, state.startMessageId, budget);
+    if (signal.aborted) return null;
+    const anchor = await this.reader.fetch(
+      input.current.channel_id,
+      state.startMessageId,
+      budget,
+      signal,
+    );
+    if (signal.aborted) return null;
     if (anchor.status === "not-found" || anchor.status === "failed") {
-      return this.rebuild(input, currentTime, now, budget);
+      return this.rebuild(input, currentTime, now, budget, verificationCache, signal);
     }
     const fetched: RawDiscordMessage[] =
       anchor.status === "found" && compareMessageIds(anchor.message.id, input.current.id) < 0
@@ -356,11 +439,14 @@ export class ConversationWindowService {
         : [];
     let after = state.startMessageId;
     while (true) {
+      if (signal.aborted) return null;
       const page = await this.reader.list(
         input.current.channel_id,
-        { after, before: input.current.id, limit: 100 },
+        { after, limit: 100 },
         budget,
+        signal,
       );
+      if (signal.aborted) return null;
       if (page.status !== "ok") return null;
       const eligibleRange = page.messages.filter(
         (message) => compareMessageIds(message.id, input.current.id) < 0,
@@ -372,7 +458,16 @@ export class ConversationWindowService {
       after = last.id;
     }
     const rawMessages = uniqueMessages(fetched);
-    const messages = await this.eligibleEntries(rawMessages, input, currentTime, budget, true);
+    const messages = await this.eligibleEntries(
+      rawMessages,
+      input,
+      currentTime,
+      budget,
+      true,
+      verificationCache,
+      signal,
+    );
+    if (signal.aborted) return null;
     let selected = messages;
     let startMessageId = state.startMessageId;
     let sessionId = state.sessionId;
@@ -381,8 +476,16 @@ export class ConversationWindowService {
       startMessageId = selected[0]?.id ?? input.current.id;
       sessionId = crypto.randomUUID();
     }
+    const replyTarget = await this.findReplyTarget(
+      input,
+      rawMessages,
+      currentTime,
+      budget,
+      verificationCache,
+      signal,
+    );
+    if (signal.aborted) return null;
     this.states.set(input.current.channel_id, { startMessageId, sessionId, lastUsedAt: now });
-    const replyTarget = await this.findReplyTarget(input, rawMessages, currentTime, budget);
     return { messages: selected, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
@@ -392,6 +495,8 @@ export class ConversationWindowService {
     currentTime: number,
     budget: DiscordRestBudget,
     requireCompleteExchange: boolean,
+    verificationCache: MessageEligibilityCache,
+    signal?: AbortSignal,
   ): Promise<NormalizedMessage[]> {
     const sorted = sortedMessages(rawMessages);
     const known = new Map(sorted.map((message) => [message.id, message]));
@@ -406,10 +511,14 @@ export class ConversationWindowService {
           e2eTesterBotId: input.e2eTesterBotId,
           nodeEnv: input.nodeEnv,
           channelId: input.current.channel_id,
+          maxAgeMs: CONVERSATION_MAX_AGE_MS,
         },
         budget,
         known,
+        verificationCache,
+        signal,
       );
+      if (signal?.aborted) return [];
       if (!result.eligible) continue;
       if (result.isHuman) {
         const normalized = normalizeHumanMessage(message);
@@ -438,6 +547,8 @@ export class ConversationWindowService {
     rawMessages: readonly RawDiscordMessage[],
     currentTime: number,
     budget: DiscordRestBudget,
+    verificationCache: MessageEligibilityCache,
+    signal: AbortSignal,
   ): Promise<NormalizedMessage | undefined> {
     const targetId = input.current.message_reference?.message_id;
     const targetChannelId = input.current.message_reference?.channel_id;
@@ -450,7 +561,8 @@ export class ConversationWindowService {
     const known = rawMessages.find((message) => message.id === targetId);
     const target = known
       ? ({ status: "found", message: known } satisfies DiscordMessageFetchResult)
-      : await this.reader.fetch(input.current.channel_id, targetId, budget);
+      : await this.reader.fetch(input.current.channel_id, targetId, budget, signal);
+    if (signal.aborted) return undefined;
     if (
       target.status !== "found" ||
       messageTime(target.message) < currentTime - CONVERSATION_MAX_AGE_MS
@@ -465,9 +577,12 @@ export class ConversationWindowService {
         e2eTesterBotId: input.e2eTesterBotId,
         nodeEnv: input.nodeEnv,
         channelId: input.current.channel_id,
+        maxAgeMs: CONVERSATION_MAX_AGE_MS,
       },
       budget,
       new Map(rawMessages.map((message) => [message.id, message])),
+      verificationCache,
+      signal,
     );
     if (!result.eligible) return undefined;
     if (result.isHuman) return normalizeHumanMessage(target.message);
@@ -488,102 +603,135 @@ export class ConversationWindowService {
     return withRef;
   }
 
-  private async readEarlier(state: ResponseState, requestedCount: number): Promise<ToolLlmResult> {
+  private async readEarlier(
+    state: ResponseState,
+    requestedCount: number,
+    signal: AbortSignal,
+  ): Promise<ToolLlmResult> {
+    const aborted = (): ToolLlmResult => asToolResult([], true, "fetch_failed");
+    if (signal.aborted) return aborted();
     if (!(await state.authorize())) {
       return asToolResult([], false, "no_permission");
     }
-    state.calls += 1;
-    if (state.calls > READ_EARLIER_MAX_CALLS) {
+    if (signal.aborted) return aborted();
+
+    const draft: ResponseState = {
+      ...state,
+      calls: state.calls + 1,
+      buffer: [...state.buffer],
+      shown: new Map(state.shown),
+      seenReplies: new Set(state.seenReplies),
+    };
+    if (draft.calls > READ_EARLIER_MAX_CALLS) {
       return asToolResult([], true, "call_limit");
     }
     const count = Math.max(1, Math.min(20, Math.trunc(requestedCount)));
-    const available = READ_EARLIER_MAX_MESSAGES - state.shownCount;
+    const available = READ_EARLIER_MAX_MESSAGES - draft.shownCount;
     if (available <= 0) return asToolResult([], true, "message_limit");
     const targetCount = Math.min(count, available);
     let cutoffReached = false;
     let stoppedReason: ConversationStopReason = null;
     const references: string[] = [];
-    while (this.eligibleBufferCount(state) < targetCount && !cutoffReached && !state.exhausted) {
+    while (this.eligibleBufferCount(draft) < targetCount && !cutoffReached && !draft.exhausted) {
+      if (signal.aborted) return aborted();
       const page = await this.reader.list(
-        state.current.channel_id,
-        { before: state.cursor, limit: 100 },
-        state.budget,
+        draft.current.channel_id,
+        { before: draft.cursor, limit: 100 },
+        draft.budget,
+        signal,
       );
+      if (signal.aborted) return aborted();
       if (page.status !== "ok") {
         stoppedReason = page.status === "forbidden" ? "no_permission" : "fetch_failed";
         break;
       }
       if (page.messages.length === 0) {
-        state.exhausted = true;
+        draft.exhausted = true;
         break;
       }
       const oldest = page.messages[0];
       if (oldest) {
-        state.cursor = oldest.id;
-        if (messageTime(oldest) < state.cutoffAt) cutoffReached = true;
+        draft.cursor = oldest.id;
+        if (messageTime(oldest) < draft.cutoffAt) cutoffReached = true;
       }
-      const inRange = page.messages.filter((message) => messageTime(message) >= state.cutoffAt);
+      const inRange = page.messages.filter((message) => messageTime(message) >= draft.cutoffAt);
       const entries = await this.eligibleEntries(
         inRange,
         {
-          current: state.current,
-          guildId: state.current.guild_id ?? "",
-          userId: state.userId,
-          botUserId: state.botUserId,
+          current: draft.current,
+          guildId: draft.current.guild_id ?? "",
+          userId: draft.userId,
+          botUserId: draft.botUserId,
           botUser: undefined,
-          channel: state.channel,
+          channel: draft.channel,
           historyEnabled: true,
-          e2eTesterBotId: state.e2eTesterBotId,
-          nodeEnv: state.nodeEnv,
+          e2eTesterBotId: draft.e2eTesterBotId,
+          nodeEnv: draft.nodeEnv,
         },
-        messageTime(state.current),
-        state.budget,
+        messageTime(draft.current),
+        draft.budget,
         false,
+        draft.verificationCache,
+        signal,
       );
+      if (signal.aborted) return aborted();
       for (const entry of entries) {
-        if (state.replyTarget?.id === entry.id) {
-          if (!state.reachedReplyTarget) {
-            state.reachedReplyTarget = true;
-            if (state.replyTarget.ref) references.push(state.replyTarget.ref);
+        if (draft.replyTarget?.id === entry.id) {
+          if (!draft.reachedReplyTarget) {
+            draft.reachedReplyTarget = true;
+            if (draft.replyTarget.ref) references.push(draft.replyTarget.ref);
           }
           continue;
         }
-        if (state.shown.has(entry.id) || state.buffer.some((item) => item.id === entry.id))
+        if (draft.shown.has(entry.id) || draft.buffer.some((item) => item.id === entry.id))
           continue;
-        state.buffer.push(entry);
+        draft.buffer.push(entry);
       }
-      state.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
+      draft.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
       if (page.messages.length < 100 || cutoffReached) {
-        state.exhausted = true;
+        draft.exhausted = true;
         break;
       }
     }
 
-    const selected = state.buffer.splice(
-      Math.max(0, state.buffer.length - targetCount),
+    const selected = draft.buffer.splice(
+      Math.max(0, draft.buffer.length - targetCount),
       targetCount,
     );
     const shown: NormalizedMessage[] = [];
     for (const message of selected) {
-      if (state.shown.has(message.id)) continue;
-      shown.push(this.addShown(state, message));
+      if (draft.shown.has(message.id)) continue;
+      shown.push(this.addShown(draft, message));
     }
     const reason = stoppedReason
       ? stoppedReason
-      : cutoffReached && state.buffer.length === 0
+      : cutoffReached && draft.buffer.length === 0
         ? "24h_cutoff"
         : available <= shown.length
           ? "message_limit"
           : null;
-    const hasMore = state.buffer.length > 0 || !state.exhausted;
-    const output = await this.fitToolResult(state, shown, hasMore, reason, references);
+    const provisionalHasMore = draft.buffer.length > 0 || !draft.exhausted;
+    const output = await this.fitToolResult(draft, shown, provisionalHasMore, reason, references);
+    if (signal.aborted) return aborted();
+    const hasMore = draft.buffer.length > 0 || !draft.exhausted;
     const outputIds = new Set(output.map((message) => message.id));
     for (const message of shown) {
       if (!outputIds.has(message.id)) {
-        state.shown.delete(message.id);
-        state.shownCount -= 1;
+        draft.shown.delete(message.id);
+        draft.shownCount -= 1;
       }
     }
+    if (signal.aborted) return aborted();
+
+    state.calls = draft.calls;
+    state.cursor = draft.cursor;
+    state.buffer = draft.buffer;
+    state.shown = draft.shown;
+    state.shownCount = draft.shownCount;
+    state.seenReplies = draft.seenReplies;
+    state.refCounter = draft.refCounter;
+    state.exhausted = draft.exhausted;
+    state.reachedReplyTarget = draft.reachedReplyTarget;
     return asToolResult(output, hasMore, reason, references);
   }
 
@@ -593,7 +741,7 @@ export class ConversationWindowService {
 
   private async fitToolResult(
     state: ResponseState,
-    messages: NormalizedMessage[],
+    messages: readonly NormalizedMessage[],
     hasMore: boolean,
     reason: ConversationStopReason,
     references: readonly string[] = [],
@@ -601,10 +749,11 @@ export class ConversationWindowService {
     const fits = (items: readonly NormalizedMessage[]): boolean =>
       new TextEncoder().encode(asToolResult(items, hasMore, reason, references)).length <=
       READ_EARLIER_MAX_RESULT_BYTES;
+    const items = [...messages];
     const deferred: NormalizedMessage[] = [];
-    while (messages.length > 0 && !fits(messages)) {
-      if (messages.length === 1) {
-        const message = messages[0];
+    while (items.length > 0 && !fits(items)) {
+      if (items.length === 1) {
+        const message = items[0];
         if (!message) break;
         let low = 0;
         let high = message.text.length;
@@ -623,15 +772,15 @@ export class ConversationWindowService {
             high = mid - 1;
           }
         }
-        messages[0] = { ...message, text: best, toolTruncated: true };
+        items[0] = { ...message, text: best, toolTruncated: true };
         break;
       }
-      const returned = messages.shift();
+      const returned = items.shift();
       if (returned) deferred.push(returned);
     }
     state.buffer.push(...deferred);
     state.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
-    return messages;
+    return items;
   }
 
   private async viewAttachment(
@@ -650,7 +799,7 @@ export class ConversationWindowService {
     }
     const cacheKey = `${state.current.id}:${attachment.id}`;
     const cached = state.attachmentResults.get(cacheKey);
-    if (cached) return cached;
+    if (cached) return Array.isArray(cached) ? '{"status":"already_loaded"}' : cached;
     if (!state.openedAttachments.has(cacheKey) && state.openedAttachments.size >= 2) {
       const result = '{"error":"attachment_limit"}';
       state.attachmentResults.set(cacheKey, result);
@@ -670,7 +819,12 @@ export class ConversationWindowService {
         return result;
       }
     }
-    const fetched = await this.reader.fetch(state.current.channel_id, message.id, state.budget);
+    const fetched = await this.reader.fetch(
+      state.current.channel_id,
+      message.id,
+      state.budget,
+      signal,
+    );
     if (fetched.status !== "found") {
       const result = '{"error":"attachment_unavailable"}';
       state.attachmentResults.set(cacheKey, result);
@@ -679,6 +833,12 @@ export class ConversationWindowService {
     const fresh = fetched.message.attachments?.find((candidate) => candidate.id === attachment.id);
     if (!fresh) {
       const result = '{"error":"attachment_unavailable"}';
+      state.attachmentResults.set(cacheKey, result);
+      return result;
+    }
+    const maxBytes = attachment.kind === "image" ? 8 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (fresh.size > maxBytes) {
+      const result = '{"error":"attachment_too_large"}';
       state.attachmentResults.set(cacheKey, result);
       return result;
     }
@@ -712,13 +872,18 @@ export class ConversationWindowService {
         state.attachmentResults.set(cacheKey, result);
         return result;
       }
-      const bytes = new Uint8Array(await fetched.response.arrayBuffer());
-      const maxBytes = attachment.kind === "image" ? 8 * 1024 * 1024 : 20 * 1024 * 1024;
-      if (bytes.length > maxBytes) {
+      const bytesResult = await this.readAttachmentBody(fetched.response, maxBytes, signal);
+      if (bytesResult === "too-large") {
         const result = '{"error":"attachment_too_large"}';
         state.attachmentResults.set(cacheKey, result);
         return result;
       }
+      if (!bytesResult) {
+        const result = '{"error":"attachment_unavailable"}';
+        state.attachmentResults.set(cacheKey, result);
+        return result;
+      }
+      const bytes = bytesResult;
       const mime = fetched.response.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase();
       const expected = attachment.mimeType?.toLowerCase() ?? mime;
       if (
@@ -781,6 +946,47 @@ export class ConversationWindowService {
     return null;
   }
 
+  private async readAttachmentBody(
+    response: Response,
+    maxBytes: number,
+    signal: AbortSignal,
+  ): Promise<Uint8Array | "too-large" | null> {
+    if (!response.body) return null;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (true) {
+        if (signal.aborted) {
+          await reader.cancel();
+          return null;
+        }
+        const next = await reader.read();
+        if (next.done) break;
+        const chunk = new Uint8Array(next.value);
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+          try {
+            await reader.cancel();
+          } catch {
+            // The size decision is already conclusive even if stream cancellation fails.
+          }
+          return "too-large";
+        }
+        chunks.push(chunk);
+      }
+    } catch {
+      return null;
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+
   private acceptedMime(mime: string | null | undefined, kind: "image" | "pdf"): boolean {
     if (kind === "pdf") return mime === "application/pdf";
     return (
@@ -788,10 +994,17 @@ export class ConversationWindowService {
     );
   }
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    controller: AbortController,
+  ): Promise<T | null> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), timeoutMs);
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve(null);
+      }, timeoutMs);
     });
     try {
       return await Promise.race([promise, timeout]);

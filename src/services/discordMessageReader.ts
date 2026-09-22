@@ -2,7 +2,10 @@ import { Routes } from "discord.js";
 import type { RawDiscordMessage } from "../utils/discordMessageNormalizer";
 
 export interface DiscordRestClient {
-  get(route: string, options?: { query?: Record<string, string | number> }): Promise<unknown>;
+  get(
+    route: string,
+    options?: { query?: Record<string, string | number>; signal?: AbortSignal },
+  ): Promise<unknown>;
 }
 
 export type DiscordMessageFetchResult =
@@ -21,11 +24,13 @@ export interface IDiscordMessageReader {
     channelId: string,
     query: { before?: string; after?: string; limit: number },
     budget: DiscordRestBudget,
+    signal?: AbortSignal,
   ): Promise<DiscordMessageListResult>;
   fetch(
     channelId: string,
     messageId: string,
     budget: DiscordRestBudget,
+    signal?: AbortSignal,
   ): Promise<DiscordMessageFetchResult>;
 }
 
@@ -89,10 +94,14 @@ export class DiscordMessageReader implements IDiscordMessageReader {
     channelId: string,
     query: { before?: string; after?: string; limit: number },
     budget: DiscordRestBudget,
+    signal?: AbortSignal,
   ): Promise<DiscordMessageListResult> {
     if (!budget.consume()) return { status: "failed", messages: [] };
     try {
-      const response = await this.rest.get(Routes.channelMessages(channelId), { query });
+      const response = await this.rest.get(Routes.channelMessages(channelId), {
+        query,
+        ...(signal && { signal }),
+      });
       if (!Array.isArray(response)) return { status: "failed", messages: [] };
       const messages = response.flatMap((value) => {
         const message = asRawMessage(value);
@@ -112,10 +121,13 @@ export class DiscordMessageReader implements IDiscordMessageReader {
     channelId: string,
     messageId: string,
     budget: DiscordRestBudget,
+    signal?: AbortSignal,
   ): Promise<DiscordMessageFetchResult> {
     if (!budget.consume()) return { status: "failed", error: new Error("REST budget exhausted") };
     try {
-      const response = await this.rest.get(Routes.channelMessage(channelId, messageId));
+      const response = await this.rest.get(Routes.channelMessage(channelId, messageId), {
+        ...(signal && { signal }),
+      });
       const message = asRawMessage(response);
       return message
         ? { status: "found", message }

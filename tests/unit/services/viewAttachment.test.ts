@@ -115,6 +115,200 @@ describe("view_attachment", () => {
         image_url: "data:image/png;base64,AQID",
       },
     ]);
+    const repeated = await context?.toolContext.viewAttachment(
+      "m1",
+      1,
+      "model",
+      new AbortController().signal,
+    );
+    expect(repeated).toBe('{"status":"already_loaded"}');
     expect(reader.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("rejects oversized metadata before fetching the CDN body", async () => {
+    const original = humanWithAttachments();
+    const firstAttachment = original.attachments?.[0];
+    if (!firstAttachment) throw new Error("fixture attachment missing");
+    const oversized = {
+      ...original,
+      attachments: [
+        {
+          ...firstAttachment,
+          size: 8 * 1024 * 1024 + 1,
+        },
+      ],
+    };
+    const reader: IDiscordMessageReader = {
+      list: mock(
+        async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [original] }),
+      ),
+      fetch: mock(
+        async (): Promise<DiscordMessageFetchResult> => ({ status: "found", message: oversized }),
+      ),
+    };
+    const service = new ConversationWindowService(
+      reader,
+      records(),
+      () => now,
+      async () => true,
+    );
+    const context = await service.build({
+      current: {
+        ...original,
+        id: "101",
+        content: "question",
+        timestamp: new Date(now + 1_000).toISOString(),
+      },
+      guildId: "guild",
+      userId: "user",
+      botUserId: "bot",
+      botUser: {},
+      channel: {},
+      historyEnabled: true,
+      authorize: async () => true,
+    });
+    const cdnFetch = mock(async () => new Response(new Uint8Array([1]), { status: 200 }));
+    globalThis.fetch = cdnFetch as unknown as typeof fetch;
+
+    const result = await context?.toolContext.viewAttachment(
+      "m1",
+      1,
+      "model",
+      new AbortController().signal,
+    );
+
+    expect(result).toBe('{"error":"attachment_too_large"}');
+    expect(cdnFetch).not.toHaveBeenCalled();
+  });
+
+  test("stops reading an attachment stream as soon as it exceeds the image limit", async () => {
+    const original = humanWithAttachments();
+    const firstAttachment = original.attachments?.[0];
+    if (!firstAttachment) throw new Error("fixture attachment missing");
+    const undersizedMetadata = {
+      ...original,
+      attachments: [{ ...firstAttachment, size: 1 }],
+    };
+    const reader: IDiscordMessageReader = {
+      list: mock(
+        async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [original] }),
+      ),
+      fetch: mock(
+        async (): Promise<DiscordMessageFetchResult> => ({
+          status: "found",
+          message: undersizedMetadata,
+        }),
+      ),
+    };
+    const service = new ConversationWindowService(
+      reader,
+      records(),
+      () => now,
+      async () => true,
+    );
+    const context = await service.build({
+      current: {
+        ...original,
+        id: "101",
+        content: "question",
+        timestamp: new Date(now + 1_000).toISOString(),
+      },
+      guildId: "guild",
+      userId: "user",
+      botUserId: "bot",
+      botUser: {},
+      channel: {},
+      historyEnabled: true,
+      authorize: async () => true,
+    });
+    let pulls = 0;
+    let chunksEnqueued = 0;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          chunksEnqueued += 1;
+          controller.enqueue(new Uint8Array(8 * 1024 * 1024));
+        } else if (pulls === 2) {
+          chunksEnqueued += 1;
+          controller.enqueue(new Uint8Array([1]));
+        } else {
+          return new Promise<void>(() => {});
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    globalThis.fetch = mock(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    ) as unknown as typeof fetch;
+
+    const result = await context?.toolContext.viewAttachment(
+      "m1",
+      1,
+      "model",
+      new AbortController().signal,
+    );
+
+    expect(result).toBe('{"error":"attachment_too_large"}');
+    expect(chunksEnqueued).toBe(2);
+    expect(cancelled).toBe(true);
+  });
+
+  test("returns a cached attachment error unchanged on repeat calls", async () => {
+    const original = humanWithAttachments();
+    const reader: IDiscordMessageReader = {
+      list: mock(
+        async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [original] }),
+      ),
+      fetch: mock(
+        async (): Promise<DiscordMessageFetchResult> => ({
+          status: "found",
+          message: { ...original, attachments: [] },
+        }),
+      ),
+    };
+    const service = new ConversationWindowService(
+      reader,
+      records(),
+      () => now,
+      async () => true,
+    );
+    const context = await service.build({
+      current: {
+        ...original,
+        id: "101",
+        content: "question",
+        timestamp: new Date(now + 1_000).toISOString(),
+      },
+      guildId: "guild",
+      userId: "user",
+      botUserId: "bot",
+      botUser: {},
+      channel: {},
+      historyEnabled: true,
+      authorize: async () => true,
+    });
+
+    const first = await context?.toolContext.viewAttachment(
+      "m1",
+      1,
+      "model",
+      new AbortController().signal,
+    );
+    const second = await context?.toolContext.viewAttachment(
+      "m1",
+      1,
+      "model",
+      new AbortController().signal,
+    );
+    expect(first).toBe('{"error":"attachment_unavailable"}');
+    expect(second).toBe(first);
   });
 });

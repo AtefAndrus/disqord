@@ -131,6 +131,9 @@ async function send(scenario: Scenario, deadline: number): Promise<string> {
       scenario.setup.files,
       deadline,
     );
+    for (let index = 0; index < (scenario.setup.fillerCount ?? 0); index++) {
+      await post(`[e2e] window filler ${index + 1}`, false, undefined, deadline);
+    }
     await Bun.sleep(250);
   }
   return post(scenario.prompt, scenario.mention ?? true, scenario.files, deadline);
@@ -228,6 +231,7 @@ async function main(): Promise<number> {
   let failures = 0;
   try {
     for (const [index, scenario] of selected.entries()) {
+      bot?.toolCalls.clear();
       const startedAt = Date.now();
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
@@ -238,10 +242,18 @@ async function main(): Promise<number> {
           pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
           log: console.log,
         });
+        const toolWasInvoked = scenario.toolName
+          ? spawn && bot?.toolCalls.has(scenario.toolName) === true
+          : true;
         const problems = scenario.check(reply);
-        if (scenario.toolName && spawn && !bot?.toolCalls.has(scenario.toolName)) {
+        if (scenario.toolName && !spawn) {
+          problems.push(
+            `cannot verify ${scenario.toolName} invocation without --spawn: bot log is unavailable under --no-spawn`,
+          );
+        } else if (scenario.toolName && !toolWasInvoked) {
           problems.push(`the bot log has no ${scenario.toolName} invocation`);
         }
+        bot?.toolCalls.clear();
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
         const cost = costOf(reply);
         costs.push({ name: scenario.name, cost });

@@ -44,7 +44,16 @@ export interface MessageEligibilityInput {
   e2eTesterBotId?: string;
   nodeEnv?: string;
   channelId: string;
+  maxAgeMs?: number;
 }
+
+export type MessageEligibilityVerification =
+  | { status: "verified"; value: VerifiedReply }
+  | { status: "deleted" }
+  | { status: "too-old" }
+  | { status: "failed" };
+
+export type MessageEligibilityCache = Map<string, Promise<MessageEligibilityVerification>>;
 
 export interface IReplyRecordLookup {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
@@ -90,6 +99,8 @@ export class MessageEligibilityService {
     input: MessageEligibilityInput,
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage> = new Map(),
+    verificationCache: MessageEligibilityCache = new Map(),
+    signal?: AbortSignal,
   ): Promise<MessageEligibilityResult> {
     if (isE2eTester(message, input)) {
       return { eligible: true, isHuman: true, externallyDeleted: false, reason: "e2e-human" };
@@ -117,7 +128,15 @@ export class MessageEligibilityService {
           reason: "finalized-after-current",
         };
       }
-      const verified = await this.verifyReply(record, message, input, budget, knownMessages);
+      const verified = await this.verifyReplyWithCache(
+        record,
+        message,
+        input,
+        budget,
+        knownMessages,
+        verificationCache,
+        signal,
+      );
       if (verified.status === "deleted") {
         return {
           eligible: false,
@@ -126,7 +145,7 @@ export class MessageEligibilityService {
           reason: "externally-deleted",
         };
       }
-      if (verified.status === "failed") {
+      if (verified.status === "failed" || verified.status === "too-old") {
         return { eligible: true, isHuman: true, externallyDeleted: false, reason: "unconfirmable" };
       }
       return {
@@ -163,7 +182,15 @@ export class MessageEligibilityService {
         reason: "finalized-after-current",
       };
     }
-    const verified = await this.verifyReply(record, undefined, input, budget, knownMessages);
+    const verified = await this.verifyReplyWithCache(
+      record,
+      undefined,
+      input,
+      budget,
+      knownMessages,
+      verificationCache,
+      signal,
+    );
     if (verified.status === "deleted") {
       return {
         eligible: false,
@@ -172,7 +199,7 @@ export class MessageEligibilityService {
         reason: "externally-deleted",
       };
     }
-    if (verified.status === "failed") {
+    if (verified.status === "failed" || verified.status === "too-old") {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason: "unconfirmable" };
     }
     if (!verified.value.pages.some((page) => sameMessageId(page, message))) {
@@ -192,23 +219,48 @@ export class MessageEligibilityService {
     };
   }
 
+  private verifyReplyWithCache(
+    record: ReplyRecord,
+    knownTrigger: RawDiscordMessage | undefined,
+    input: MessageEligibilityInput,
+    budget: DiscordRestBudget,
+    knownMessages: ReadonlyMap<string, RawDiscordMessage>,
+    verificationCache: MessageEligibilityCache,
+    signal: AbortSignal | undefined,
+  ): Promise<MessageEligibilityVerification> {
+    const cached = verificationCache.get(record.triggerMsgId);
+    if (cached) return cached;
+    const verification = this.verifyReply(
+      record,
+      knownTrigger,
+      input,
+      budget,
+      knownMessages,
+      signal,
+    );
+    verificationCache.set(record.triggerMsgId, verification);
+    return verification;
+  }
+
   private async verifyReply(
     record: ReplyRecord,
     knownTrigger: RawDiscordMessage | undefined,
     input: MessageEligibilityInput,
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage>,
-  ): Promise<
-    { status: "verified"; value: VerifiedReply } | { status: "deleted" } | { status: "failed" }
-  > {
+    signal: AbortSignal | undefined,
+  ): Promise<MessageEligibilityVerification> {
     const trigger = await this.fetchKnownOrRemote(
       input.channelId,
       record.triggerMsgId,
       knownTrigger ?? knownMessages.get(record.triggerMsgId),
       budget,
+      signal,
     );
     if (trigger.status === "not-found") return { status: "deleted" };
     if (trigger.status === "failed") return { status: "failed" };
+    const cutoffAt = input.currentTimestampMs - (input.maxAgeMs ?? 24 * 60 * 60 * 1000);
+    if (messageTime(trigger.message) < cutoffAt) return { status: "too-old" };
 
     const pages = this.records.listPages(record.triggerMsgId);
     if (record.pageCount === null || pages.length !== record.pageCount || pages.length === 0) {
@@ -221,9 +273,11 @@ export class MessageEligibilityService {
         page.pageMsgId,
         knownMessages.get(page.pageMsgId),
         budget,
+        signal,
       );
       if (fetched.status === "not-found") return { status: "deleted" };
       if (fetched.status === "failed") return { status: "failed" };
+      if (messageTime(fetched.message) < cutoffAt) return { status: "too-old" };
       fetchedPages.push({ ...fetched.message, page });
     }
     return {
@@ -237,10 +291,16 @@ export class MessageEligibilityService {
     messageId: string,
     known: RawDiscordMessage | undefined,
     budget: DiscordRestBudget,
+    signal: AbortSignal | undefined,
   ): Promise<DiscordMessageFetchResult> {
     if (known) return Promise.resolve({ status: "found", message: known });
-    return this.reader.fetch(channelId, messageId, budget);
+    return this.reader.fetch(channelId, messageId, budget, signal);
   }
+}
+
+function messageTime(message: RawDiscordMessage): number {
+  const parsed = Date.parse(message.timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function createMessageEligibilityService(

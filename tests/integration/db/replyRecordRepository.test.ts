@@ -2,6 +2,14 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ReplyRecordRepository } from "../../../src/db/repositories/replyRecord";
 import { applyMigrations } from "../../../src/db/schema";
+import type {
+  DiscordMessageFetchResult,
+  DiscordMessageListResult,
+  IDiscordMessageReader,
+} from "../../../src/services/discordMessageReader";
+import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
+import { MessageEligibilityService } from "../../../src/services/messageEligibility";
+import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 
 describe("ReplyRecordRepository", () => {
   let database: Database;
@@ -74,5 +82,67 @@ describe("ReplyRecordRepository", () => {
     expect(repository.findByTrigger("pending")).toBeNull();
     expect(repository.findByTrigger("completed-old")).toBeNull();
     expect(repository.findByTrigger("fresh")).not.toBeNull();
+  });
+
+  test("resolves a registered bot page through real SQLite eligibility", async () => {
+    const currentTimestampMs = 1_000_000;
+    const trigger: RawDiscordMessage = {
+      id: "trigger",
+      channel_id: "channel",
+      guild_id: "guild",
+      content: "question",
+      timestamp: new Date(currentTimestampMs - 2_000).toISOString(),
+      author: { id: "user", username: "user", bot: false },
+      components: [],
+      attachments: [],
+    };
+    const page: RawDiscordMessage = {
+      id: "page",
+      channel_id: "channel",
+      guild_id: "guild",
+      content: "answer",
+      timestamp: new Date(currentTimestampMs - 1_000).toISOString(),
+      author: { id: "bot", username: "bot", bot: true },
+      components: [],
+      attachments: [],
+    };
+    repository.createPending({
+      triggerMsgId: trigger.id,
+      channelId: trigger.channel_id,
+      guildId: trigger.guild_id ?? "guild",
+      createdAt: currentTimestampMs - 2_000,
+    });
+    repository.appendPage(trigger.id, page.id);
+    repository.finalize(trigger.id, "completed", 1, currentTimestampMs - 500);
+
+    const reader: IDiscordMessageReader = {
+      list: async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] }),
+      fetch: async (
+        _channelId: string,
+        messageId: string,
+        _budget: DiscordRestBudget,
+      ): Promise<DiscordMessageFetchResult> =>
+        messageId === trigger.id
+          ? { status: "found", message: trigger }
+          : { status: "found", message: page },
+    };
+    const service = new MessageEligibilityService(reader, repository);
+    const result = await service.evaluate(
+      page,
+      {
+        currentTimestampMs,
+        botUserId: "bot",
+        channelId: "channel",
+      },
+      new DiscordRestBudget(),
+      new Map([
+        [trigger.id, trigger],
+        [page.id, page],
+      ]),
+    );
+
+    expect(result.eligible).toBe(true);
+    expect(result.reply?.record.triggerMsgId).toBe(trigger.id);
+    expect(result.reply?.pages).toHaveLength(1);
   });
 });

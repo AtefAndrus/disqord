@@ -1,3 +1,4 @@
+import { WINDOW_RAW_MESSAGE_LIMIT } from "../../src/services/conversationWindow";
 import { EmbedColors } from "../../src/types/embed";
 import {
   extractComponentsV2Footer,
@@ -35,7 +36,12 @@ export interface Scenario {
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
   prompt: string;
-  setup?: { prompt: string; mention?: boolean; files?: Scenario["files"] };
+  setup?: {
+    prompt: string;
+    mention?: boolean;
+    files?: Scenario["files"];
+    fillerCount?: number;
+  };
   mention?: boolean;
   files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
   toolName?: "read_earlier_messages" | "view_attachment";
@@ -205,6 +211,7 @@ function checkPages(reply: Reply): string[] {
 
 /** Fresh per run so that history-recall can only pass through stored history. */
 const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
+const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -318,9 +325,16 @@ export const SCENARIOS: Scenario[] = [
     name: "read-earlier",
     manual: true,
     toolName: "read_earlier_messages",
-    prompt: "[e2e] 必ず read_earlier_messages を呼び出してから、取得した過去の発言に触れて答えて。",
+    setup: {
+      prompt: `[e2e] 過去の発言に含める確認用トークンは ${READ_EARLIER_TOKEN} です。`,
+      mention: false,
+      fillerCount: WINDOW_RAW_MESSAGE_LIMIT,
+    },
+    prompt: `[e2e] 必ず read_earlier_messages を呼び出してから、取得した発言に含まれる ${READ_EARLIER_TOKEN} をそのまま答えて。`,
     check: (reply) => [
-      ...(reply.body.includes("過去") ? [] : ["the reply does not mention the earlier history"]),
+      ...(reply.body.includes(READ_EARLIER_TOKEN)
+        ? []
+        : [`the reply does not contain the earlier-history token ${READ_EARLIER_TOKEN}`]),
       ...hasUsageFooter(reply),
     ],
   },
@@ -333,9 +347,12 @@ export const SCENARIOS: Scenario[] = [
       mention: false,
       files: [{ name: "attachment.png", type: "image/png", data: PNG_DATA }],
     },
-    prompt: "[e2e] 必ず view_attachment で直前の画像を開き、画像の色を答えて。",
+    // Made-up tokens make the answer deterministic and prove the image was opened.
+    prompt:
+      "[e2e] 必ず view_attachment で直前の画像を開き、画像が赤なら COLOR-RED、青なら COLOR-BLUE、見えなければ NO-IMAGE とだけ答えて。",
     check: (reply) => [
       ...(reply.body.includes("COLOR-RED") ? [] : ["the reply did not identify the attachment"]),
+      ...(/NO-IMAGE|COLOR-BLUE/.test(reply.body) ? ["the reply also names another answer"] : []),
       ...hasUsageFooter(reply),
     ],
   },

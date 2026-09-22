@@ -143,14 +143,17 @@ export function createReplyRecordCleanupRunner(
   service: IReplyRecordService,
   setIntervalFn: typeof setInterval = setInterval,
   clearIntervalFn: typeof clearInterval = clearInterval,
+  onCleanup?: () => void,
 ): ReplyRecordCleanupRunner {
   const timer = setIntervalFn(() => {
     void service.cleanupExpired();
+    onCleanup?.();
   }, REPLY_RECORD_CLEANUP_INTERVAL_MS);
   timer.unref();
   return {
     run: () => {
       void service.cleanupExpired();
+      onCleanup?.();
     },
     cancel: () => clearIntervalFn(timer),
   };

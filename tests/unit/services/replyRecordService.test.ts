@@ -1,7 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Message } from "discord.js";
 import { createDeleteOwnMessage } from "../../../src/bot/events/messageCreate";
-import type { IReplyRecordService } from "../../../src/services/replyRecordService";
+import {
+  createReplyRecordCleanupRunner,
+  type IReplyRecordService,
+} from "../../../src/services/replyRecordService";
 
 function service(events: string[]): IReplyRecordService {
   return {
@@ -35,5 +38,28 @@ describe("reply-record send/delete funnel", () => {
     await deleteOwnMessage(botMessage);
 
     expect(events).toEqual(["record-remove", "discord-delete"]);
+  });
+
+  test("runs the channel-state sweep with the hourly record cleanup", () => {
+    let scheduled: (() => void) | undefined;
+    const setIntervalFn = ((callback: () => void) => {
+      scheduled = callback;
+      return { unref: () => {} } as unknown as ReturnType<typeof setInterval>;
+    }) as typeof setInterval;
+    const clearIntervalFn = mock(() => {});
+    const sweep = mock(() => {});
+    const runner = createReplyRecordCleanupRunner(
+      service([]),
+      setIntervalFn,
+      clearIntervalFn,
+      sweep,
+    );
+
+    scheduled?.();
+    runner.run();
+    runner.cancel();
+
+    expect(sweep).toHaveBeenCalledTimes(2);
+    expect(clearIntervalFn).toHaveBeenCalledTimes(1);
   });
 });

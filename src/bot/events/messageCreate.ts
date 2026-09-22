@@ -389,7 +389,7 @@ export function createMessageCreateHandler(
         const elapsedSeconds = updater.elapsedSeconds;
         // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
         const receivedChars = Array.from(updater.text).length;
-        await updateStoppedMessages(
+        const renderedPageCount = await updateStoppedMessages(
           updater.messages,
           updater.text || "（応答なし）",
           modelName,
@@ -401,8 +401,7 @@ export function createMessageCreateHandler(
           deleteMessage,
         );
         if (replyRecordCreated) {
-          const recordedPageCount = options.replyRecordService?.listPages(message.id).length ?? 0;
-          await options.replyRecordService?.finalize(message.id, "stopped", recordedPageCount);
+          await options.replyRecordService?.finalize(message.id, "stopped", renderedPageCount);
         }
         return;
       }
@@ -488,8 +487,7 @@ export function createMessageCreateHandler(
         await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
       }
       if (replyRecordCreated) {
-        const recordedPageCount = options.replyRecordService?.listPages(message.id).length ?? 0;
-        await options.replyRecordService?.finalize(message.id, "completed", recordedPageCount);
+        await options.replyRecordService?.finalize(message.id, "completed", chunks.length);
       }
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
@@ -501,7 +499,7 @@ export function createMessageCreateHandler(
       updater?.markFinalized();
 
       // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
-      await cleanupBotMessagesOnFatalError(
+      const renderedPageCount = await cleanupBotMessagesOnFatalError(
         updater?.messages ?? [],
         updater?.text ?? "",
         modelName,
@@ -511,8 +509,7 @@ export function createMessageCreateHandler(
         deleteMessage,
       );
       if (replyRecordCreated) {
-        const recordedPageCount = options.replyRecordService?.listPages(message.id).length ?? 0;
-        await options.replyRecordService?.finalize(message.id, "failed", recordedPageCount);
+        await options.replyRecordService?.finalize(message.id, "failed", renderedPageCount);
       }
 
       const userMessage =

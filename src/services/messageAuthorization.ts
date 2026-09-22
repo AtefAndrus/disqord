@@ -5,8 +5,7 @@ export interface PermissionLike {
 }
 
 export interface ThreadMemberLike {
-  cache?: { has(userId: string): boolean };
-  fetch?: (userId: string) => Promise<unknown>;
+  fetch?: (options: { member: string; force: true }) => Promise<unknown>;
 }
 
 export interface AuthorizationChannelLike {
@@ -36,10 +35,9 @@ async function isPrivateThreadParticipant(
   userPermissions: PermissionLike | null,
 ): Promise<boolean> {
   if (userPermissions?.has(PermissionFlagsBits.ManageThreads)) return true;
-  if (channel.members?.cache?.has(userId)) return true;
   if (!channel.members?.fetch) return false;
   try {
-    await channel.members.fetch(userId);
+    await channel.members.fetch({ member: userId, force: true });
     return true;
   } catch {
     return false;

@@ -39,11 +39,13 @@ export class ReadEarlierMessagesTool implements IClientTool<ReadEarlierArguments
   async handler(
     args: ReadEarlierArguments,
     ctx: IToolContext,
-    _signal: AbortSignal,
+    signal: AbortSignal,
     _meta: IToolInvocationMeta,
   ): Promise<{ llmResult: ToolLlmResult }> {
     if (!ctx.conversation) return { llmResult: '{"error":"history_unavailable"}' };
-    return { llmResult: await ctx.conversation.readEarlierMessages(args.count ?? 5) };
+    return {
+      llmResult: await ctx.conversation.readEarlierMessages(args.count ?? 5, signal),
+    };
   }
 }
 

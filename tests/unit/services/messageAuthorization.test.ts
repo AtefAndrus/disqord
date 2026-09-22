@@ -40,7 +40,13 @@ describe("canReadConversation", () => {
     const participantChannel = {
       type: ChannelType.PrivateThread,
       permissionsFor: mock(() => permission(read)),
-      members: { cache: { has: (id: string) => id === "user" } },
+      members: {
+        cache: { has: () => false },
+        fetch: mock(async (options: { member: string; force: true }) => {
+          expect(options).toEqual({ member: "user", force: true });
+          return {};
+        }),
+      },
     };
     expect(await canReadConversation(message(participantChannel), {})).toBe(true);
 
@@ -51,8 +57,28 @@ describe("canReadConversation", () => {
           ? permission(read)
           : permission([...read, PermissionFlagsBits.ManageThreads]),
       ),
-      members: { cache: { has: () => false } },
+      members: {
+        cache: { has: () => false },
+        fetch: mock(async () => {
+          throw new Error("not called for ManageThreads");
+        }),
+      },
     };
     expect(await canReadConversation(message(manageThreads), {})).toBe(true);
+  });
+
+  test("does not trust a stale private-thread cache when a forced fetch rejects", async () => {
+    const channel = {
+      type: ChannelType.PrivateThread,
+      permissionsFor: mock(() => permission(read)),
+      members: {
+        cache: { has: () => true },
+        fetch: mock(async () => {
+          throw new Error("no longer a member");
+        }),
+      },
+    };
+
+    expect(await canReadConversation(message(channel), {})).toBe(false);
   });
 });

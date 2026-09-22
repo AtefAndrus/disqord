@@ -59,8 +59,13 @@ interface RawReplyPage {
 }
 
 const SELECT_RECORD = `
-  SELECT trigger_msg_id as triggerMsgId, channel_id as channelId, guild_id as guildId,
-         status, page_count as pageCount, finalized_at as finalizedAt, created_at as createdAt
+  SELECT reply_records.trigger_msg_id as triggerMsgId,
+         reply_records.channel_id as channelId,
+         reply_records.guild_id as guildId,
+         reply_records.status,
+         reply_records.page_count as pageCount,
+         reply_records.finalized_at as finalizedAt,
+         reply_records.created_at as createdAt
   FROM reply_records
 `;
 
@@ -147,7 +152,7 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
 
   findByTrigger(triggerMsgId: string): ReplyRecord | null {
     const row = this.db
-      .query<RawReplyRecord, [string]>(`${SELECT_RECORD} WHERE trigger_msg_id = ?`)
+      .query<RawReplyRecord, [string]>(`${SELECT_RECORD} WHERE reply_records.trigger_msg_id = ?`)
       .get(triggerMsgId);
     return row ? toReplyRecord(row) : null;
   }

@@ -82,7 +82,10 @@ async function bootstrap(): Promise<void> {
             Object.entries(options.query).map(([key, value]) => [key, String(value)]),
           )
         : undefined;
-      return client.rest.get(route as `/${string}`, { ...(query && { query }) });
+      return client.rest.get(route as `/${string}`, {
+        ...(query && { query }),
+        ...(options?.signal && { signal: options.signal }),
+      });
     },
   } satisfies DiscordRestClient);
   const conversationWindow = new ConversationWindowService(
@@ -130,7 +133,12 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
-  const ttlSweepRunner = createReplyRecordCleanupRunner(replyRecordService);
+  const ttlSweepRunner = createReplyRecordCleanupRunner(
+    replyRecordService,
+    setInterval,
+    clearInterval,
+    () => conversationWindow.sweepStaleChannels(),
+  );
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
