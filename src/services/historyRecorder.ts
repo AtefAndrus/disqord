@@ -204,6 +204,11 @@ export class HistoryRecorder implements IHistoryRecorder {
   }
 
   async deleteMessageMapping(discordMessageId: string): Promise<boolean> {
+    // A pending purge finds its exchange through this mapping. Removing it
+    // here would make the retry delete nothing and drop the target, so the
+    // deleted message would return to context; the purge's CASCADE removes
+    // the mapping instead.
+    if (this.isMessagePendingPurge(discordMessageId)) return false;
     try {
       return await this.repository.deleteMessageMapping(discordMessageId);
     } catch (error) {
@@ -274,6 +279,18 @@ export class HistoryRecorder implements IHistoryRecorder {
       logHistoryOperationFailure("sweepExpired", error);
       return false;
     }
+  }
+
+  private isMessagePendingPurge(discordMessageId: string): boolean {
+    for (const target of this.pendingPurgeTargets.values()) {
+      if (
+        (target.type === "message" || target.type === "assistant") &&
+        target.messageIds.includes(discordMessageId)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async purgeTarget(target: HistoryPurgeTarget): Promise<boolean> {

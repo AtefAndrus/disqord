@@ -151,6 +151,67 @@ describe("HistoryRecorder", () => {
     errorSpy.mockRestore();
   });
 
+  test("mapping failure purges the whole exchange when the purge itself succeeds", async () => {
+    const userTurnId = await createExchange("user-message", Date.now());
+    const assistantTurnId = db
+      .query<{ id: number }, [number]>(
+        "SELECT id FROM turns WHERE parent_user_turn_id = ? AND role = 'assistant'",
+      )
+      .get(userTurnId)?.id;
+    if (assistantTurnId === undefined) throw new Error("assistant turn was not created");
+    repository.onBotMessageSent = async (): Promise<boolean> => {
+      throw new Error("mapping failed");
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+    expect(await recorder.onBotMessageSent(assistantTurnId, "bot-message", Date.now())).toBe(false);
+
+    expect(
+      db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM turns").get()?.count,
+    ).toBe(0);
+    expect(
+      db.query<{ count: number }, []>("SELECT COUNT(*) as count FROM turn_messages").get()?.count,
+    ).toBe(0);
+    errorSpy.mockRestore();
+  });
+
+  test("an internal delete keeps the mapping a pending purge still needs", async () => {
+    const now = Date.now();
+    const oldUserTurnId = await createExchange("old-user", now);
+    const oldAssistantTurnId = db
+      .query<{ id: number }, [number]>(
+        "SELECT id FROM turns WHERE parent_user_turn_id = ? AND role = 'assistant'",
+      )
+      .get(oldUserTurnId)?.id;
+    if (oldAssistantTurnId === undefined) throw new Error("assistant turn was not created");
+    expect(await repository.onBotMessageSent(oldAssistantTurnId, "old-bot", now)).toBe(true);
+    const originalPurgeMessage = repository.purgeMessage.bind(repository);
+    let shouldFail = true;
+    repository.purgeMessage = async (messageId: string): Promise<boolean> => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("purge failed once");
+      }
+      return originalPurgeMessage(messageId);
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+    // The user deletes the bot message, the purge fails, then the bot's own
+    // cleanup tries to drop the same mapping before the purge is retried.
+    expect(await recorder.purgeMessage("old-bot", { channelId: "channel-1" })).toBe(false);
+    expect(await recorder.deleteMessageMapping("old-bot")).toBe(false);
+    const currentUserTurnId = await createExchange("current-user", now + 1);
+    const context = await recorder.getContext(currentUserTurnId);
+
+    expect(context?.exchanges).toEqual([]);
+    expect(
+      db
+        .query<{ count: number }, [number]>("SELECT COUNT(*) as count FROM turns WHERE id = ?")
+        .get(oldUserTurnId)?.count,
+    ).toBe(0);
+    errorSpy.mockRestore();
+  });
+
   test("context read failures return no context and do not reject", async () => {
     const userTurnId = await createExchange("user-message", Date.now());
     repository.getContext = async (): Promise<null> => {

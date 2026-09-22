@@ -362,4 +362,31 @@ describe("ConversationRepository", () => {
     expect(await repository.sweepExpired(NOW)).toBeGreaterThanOrEqual(1);
     expect(db.query("SELECT * FROM sessions WHERE id = ?").get(expiredSessionId)).toBeNull();
   });
+
+  test("TTL keeps an exchange whose latest turn is within retention", async () => {
+    const oldUser = NOW - HISTORY_RETENTION_MS - 1_000;
+    const recentReply = NOW - HISTORY_RETENTION_MS + 60_000;
+    const straddling = await repository.createUserAndAssistantTurn(
+      input("straddling", oldUser, { channelId: "straddling-channel" }),
+    );
+    const straddlingAssistantTurnId = required(straddling.assistantTurnId);
+    await repository.onBotMessageSent(straddlingAssistantTurnId, "straddling-bot", recentReply);
+    await repository.finalizeAssistantTurn(
+      straddlingAssistantTurnId,
+      "completed",
+      "reply",
+      recentReply + 1,
+    );
+    const fresh = await repository.createUserAndAssistantTurn(
+      input("fresh", NOW, { channelId: "fresh-channel" }),
+    );
+
+    expect(await repository.sweepExpired(NOW)).toBe(0);
+    expect(
+      db.query("SELECT id FROM turns WHERE id = ?").get(required(straddling.userTurnId)),
+    ).not.toBeNull();
+    expect(
+      db.query("SELECT id FROM turns WHERE id = ?").get(required(fresh.userTurnId)),
+    ).not.toBeNull();
+  });
 });
