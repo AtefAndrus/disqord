@@ -364,7 +364,7 @@ export const SCENARIOS: Scenario[] = [
         {
           name: "attachment.pdf",
           type: "application/pdf",
-          data: buildPdfData(VIEW_ATTACHMENT_TOKEN),
+          data: buildPdfData(VIEW_ATTACHMENT_TOKEN, undefined, 12),
         },
       ],
     },

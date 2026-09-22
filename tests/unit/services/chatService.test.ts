@@ -713,10 +713,20 @@ describe("ChatService", () => {
 
   test("cancelRequest 呼び出し後は status: cancelled になる（停止ボタン経路）", async () => {
     const fixture = createFixture();
+    const updater = createUpdater();
+    let resolvePartial: (() => void) | undefined;
+    const partialStaged = new Promise<void>((resolve) => {
+      resolvePartial = resolve;
+    });
+    updater.stageContent = mock((content: string) => {
+      if (content === "partial") resolvePartial?.();
+    });
+    let streamSignal: AbortSignal | undefined;
     fixture.llmClient.chatStream = mock(async function* (
       _request: ChatCompletionRequest,
       signal?: AbortSignal,
     ) {
+      streamSignal = signal;
       yield { content: "partial", done: false as const };
       await new Promise<never>((_resolve, reject) => {
         const onAbort = (): void => reject(new Error("aborted"));
@@ -728,15 +738,18 @@ describe("ChatService", () => {
       "guild-123",
       { text: "Hi" },
       "req-cancel",
-      createUpdater(),
+      updater,
       { channelId: "channel-1", userId: "user-1" },
     );
 
-    await Promise.resolve();
+    await partialStaged;
+    expect(fixture.llmClient.chatStream).toHaveBeenCalled();
+    expect(updater.stageContent).toHaveBeenCalledWith("partial");
     expect(fixture.chatService.cancelRequest("req-cancel")).toBe(true);
     const result = await resultPromise;
 
     expect(result.status).toBe("cancelled");
+    expect(streamSignal?.aborted).toBe(true);
   });
 
   test("cancelRequest は未知の requestId には false を返す", () => {

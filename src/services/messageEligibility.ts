@@ -62,6 +62,8 @@ interface CachedReplyVerification {
 
 export type MessageEligibilityCache = Map<string, Promise<CachedReplyVerification>>;
 
+export type MessageEligibilityExternalDeletionSet = Set<string>;
+
 export interface IReplyRecordLookup {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
   findByPage(pageMsgId: string): ReplyRecord | null;
@@ -107,15 +109,32 @@ export class MessageEligibilityService {
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage> = new Map(),
     verificationCache: MessageEligibilityCache = new Map(),
+    externalDeletions: MessageEligibilityExternalDeletionSet = new Set(),
     signal?: AbortSignal,
   ): Promise<MessageEligibilityResult> {
     if (message.webhook_id !== undefined) {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason: "webhook" };
     }
     if (isHumanMessage(message, input)) {
+      if (externalDeletions.has(message.id)) {
+        return {
+          eligible: false,
+          isHuman: true,
+          externallyDeleted: true,
+          reason: "externally-deleted",
+        };
+      }
       const record = this.records.findByTrigger(message.id);
       if (!record) {
         return { eligible: true, isHuman: true, externallyDeleted: false, reason: "human" };
+      }
+      if (externalDeletions.has(record.triggerMsgId)) {
+        return {
+          eligible: false,
+          isHuman: true,
+          externallyDeleted: true,
+          reason: "externally-deleted",
+        };
       }
       const checked = await this.checkReplyWithCache(
         record,
@@ -124,6 +143,7 @@ export class MessageEligibilityService {
         budget,
         knownMessages,
         verificationCache,
+        externalDeletions,
         signal,
       );
       if (checked.externallyDeleted) {
@@ -180,6 +200,14 @@ export class MessageEligibilityService {
         reason: "record-missing",
       };
     }
+    if (externalDeletions.has(record.triggerMsgId)) {
+      return {
+        eligible: false,
+        isHuman: false,
+        externallyDeleted: true,
+        reason: "externally-deleted",
+      };
+    }
     const checked = await this.checkReplyWithCache(
       record,
       undefined,
@@ -187,6 +215,7 @@ export class MessageEligibilityService {
       budget,
       knownMessages,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (checked.externallyDeleted) {
@@ -245,11 +274,20 @@ export class MessageEligibilityService {
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage>,
     verificationCache: MessageEligibilityCache,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal | undefined,
   ): Promise<CachedReplyVerification> {
     const cached = verificationCache.get(record.triggerMsgId);
     if (cached) return cached;
-    const pending = this.checkReply(record, knownTrigger, input, budget, knownMessages, signal);
+    const pending = this.checkReply(
+      record,
+      knownTrigger,
+      input,
+      budget,
+      knownMessages,
+      externalDeletions,
+      signal,
+    );
     let cachedVerification: Promise<CachedReplyVerification>;
     cachedVerification = pending.then(
       (checked) => {
@@ -293,6 +331,7 @@ export class MessageEligibilityService {
     input: MessageEligibilityInput,
     budget: DiscordRestBudget,
     knownMessages: ReadonlyMap<string, RawDiscordMessage>,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal | undefined,
   ): Promise<CachedReplyVerification> {
     const trigger = await this.fetchKnownOrRemote(
@@ -304,6 +343,7 @@ export class MessageEligibilityService {
     );
     const pages = this.records.listPages(record.triggerMsgId);
     if (trigger.status === "not-found") {
+      externalDeletions.add(record.triggerMsgId);
       return { externallyDeleted: true, trigger, pages: [] };
     }
     const fetchedPages: Array<{ page: ReplyPage; result: DiscordMessageFetchResult }> = [];
@@ -317,6 +357,7 @@ export class MessageEligibilityService {
       );
       fetchedPages.push({ page, result: fetched });
       if (fetched.status === "not-found") {
+        externalDeletions.add(record.triggerMsgId);
         return { externallyDeleted: true, trigger, pages: fetchedPages };
       }
     }

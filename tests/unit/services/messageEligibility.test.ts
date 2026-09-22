@@ -12,6 +12,7 @@ import type {
 import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
 import {
   type MessageEligibilityCache,
+  type MessageEligibilityExternalDeletionSet,
   MessageEligibilityService,
 } from "../../../src/services/messageEligibility";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
@@ -245,6 +246,39 @@ describe("MessageEligibilityService", () => {
     );
 
     expect(fetchCalls).toBe(1);
+  });
+
+  test("remembers a page 404 even when the same evaluation also had a failed fetch", async () => {
+    const trigger = human("trigger");
+    const page = botPage("page");
+    const { service, budget } = setup(
+      record(),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) =>
+        id === "trigger"
+          ? { status: "failed", error: new Error("temporary failure") }
+          : { status: "not-found" },
+    );
+    const cache: MessageEligibilityCache = new Map();
+    const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
+    const input = { currentTimestampMs, botUserId: "bot", channelId: "channel" };
+
+    const first = await service.evaluate(page, input, budget, new Map(), cache, externalDeletions);
+    const second = await service.evaluate(
+      trigger,
+      input,
+      budget,
+      new Map([["trigger", trigger]]),
+      cache,
+      externalDeletions,
+    );
+
+    expect(first.reason).toBe("externally-deleted");
+    expect(cache.has("trigger")).toBe(false);
+    expect(externalDeletions).toEqual(new Set(["trigger"]));
+    expect(second.eligible).toBe(false);
+    expect(second.externallyDeleted).toBe(true);
+    expect(second.reason).toBe("externally-deleted");
   });
 
   test("does not cache an aborted trigger fetch as an excluded reply", async () => {

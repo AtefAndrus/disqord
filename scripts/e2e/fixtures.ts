@@ -6,13 +6,17 @@ export const PNG_DATA: Uint8Array<ArrayBuffer> = new Uint8Array(
   ),
 );
 
-function buildPdfTextStream(text: string): string {
-  return `BT /F1 18 Tf 20 80 Td (${text.replace(/[\\()]/g, "\\$&")}) Tj ET`;
+function buildPdfTextStream(text: string, fontSize: number): string {
+  return `BT /F1 ${fontSize} Tf 20 80 Td (${text.replace(/[\\()]/g, "\\$&")}) Tj ET`;
 }
 
 /** Builds a one-page PDF whose only text is the supplied string. */
-export function buildPdfData(text: string, declaredLength?: number): Uint8Array<ArrayBuffer> {
-  const stream = buildPdfTextStream(text);
+export function buildPdfData(
+  text: string,
+  declaredLength?: number,
+  fontSize: number = 18,
+): Uint8Array<ArrayBuffer> {
+  const stream = buildPdfTextStream(text, fontSize);
   const length = declaredLength ?? new TextEncoder().encode(stream).byteLength;
   return new TextEncoder().encode(
     [

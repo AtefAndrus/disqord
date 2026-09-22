@@ -19,7 +19,11 @@ import {
   type AuthorizationMessageLike,
   canReadConversation,
 } from "./messageAuthorization";
-import { type MessageEligibilityCache, MessageEligibilityService } from "./messageEligibility";
+import {
+  type MessageEligibilityCache,
+  type MessageEligibilityExternalDeletionSet,
+  MessageEligibilityService,
+} from "./messageEligibility";
 
 export const WINDOW_RAW_TOKEN_LIMIT = 8_000;
 export const WINDOW_RAW_MESSAGE_LIMIT = 40;
@@ -82,6 +86,7 @@ interface ResponseState {
   openedAttachments: Set<string>;
   attachmentResults: Map<string, ToolLlmResult>;
   verificationCache: MessageEligibilityCache;
+  externalDeletions: MessageEligibilityExternalDeletionSet;
 }
 
 export interface ConversationWindowContext {
@@ -114,6 +119,10 @@ function compareMessageIds(left: string, right: string): number {
   } catch {
     return left.localeCompare(right);
   }
+}
+
+function minMessageId(left: string, right: string): string {
+  return compareMessageIds(left, right) <= 0 ? left : right;
 }
 
 function messageTime(message: RawDiscordMessage): number {
@@ -272,6 +281,7 @@ export class ConversationWindowService {
     const currentTime = messageTime(input.current) || now;
     const budget = new RestBudget(CONVERSATION_REST_LIMIT);
     const verificationCache: MessageEligibilityCache = new Map();
+    const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
     const controller = new AbortController();
     const authorize = input.authorize
       ? input.authorize
@@ -284,6 +294,7 @@ export class ConversationWindowService {
             )
         : async () => false;
     const generation = this.nextGeneration();
+    let staleCursor: string | undefined;
 
     try {
       const result = await this.withTimeout(
@@ -293,26 +304,45 @@ export class ConversationWindowService {
           const state = this.states.get(input.current.channel_id);
           const needsRebuild =
             state === undefined || now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS;
-          return needsRebuild
+          const stateIsAhead =
+            state !== undefined && compareMessageIds(state.startMessageId, input.current.id) >= 0;
+          if (stateIsAhead && state) {
+            staleCursor = minMessageId(state.startMessageId, input.current.id);
+          }
+          return stateIsAhead
             ? this.rebuild(
                 input,
                 currentTime,
                 now,
                 budget,
                 verificationCache,
+                externalDeletions,
                 controller.signal,
                 generation,
+                false,
               )
-            : this.extend(
-                input,
-                state,
-                currentTime,
-                now,
-                budget,
-                verificationCache,
-                controller.signal,
-                generation,
-              );
+            : needsRebuild
+              ? this.rebuild(
+                  input,
+                  currentTime,
+                  now,
+                  budget,
+                  verificationCache,
+                  externalDeletions,
+                  controller.signal,
+                  generation,
+                )
+              : this.extend(
+                  input,
+                  state,
+                  currentTime,
+                  now,
+                  budget,
+                  verificationCache,
+                  externalDeletions,
+                  controller.signal,
+                  generation,
+                );
         })(),
         this.windowFetchTimeoutMs,
         controller,
@@ -327,7 +357,7 @@ export class ConversationWindowService {
         channel: input.channel,
         authorize,
         budget,
-        cursor: result.startMessageId,
+        cursor: minMessageId(staleCursor ?? result.startMessageId, input.current.id),
         cutoffAt: currentTime - CONVERSATION_MAX_AGE_MS,
         replyTarget: result.replyTarget,
         buffer: [],
@@ -343,6 +373,7 @@ export class ConversationWindowService {
         openedAttachments: new Set(),
         attachmentResults: new Map(),
         verificationCache,
+        externalDeletions,
       };
       const messages = result.messages.map((message) => this.addShown(responseState, message));
       const hasReplyTarget = result.replyTarget
@@ -402,8 +433,10 @@ export class ConversationWindowService {
     now: number,
     budget: DiscordRestBudget,
     verificationCache: MessageEligibilityCache,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
     generation: number,
+    commitState = true,
   ): Promise<WindowBuildResult | null> {
     const collected: RawDiscordMessage[] = [];
     let before = input.current.id;
@@ -436,6 +469,7 @@ export class ConversationWindowService {
         budget,
         true,
         verificationCache,
+        externalDeletions,
         signal,
       );
       if (signal.aborted) return null;
@@ -450,6 +484,7 @@ export class ConversationWindowService {
       budget,
       true,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (signal.aborted) return null;
@@ -462,14 +497,17 @@ export class ConversationWindowService {
       currentTime,
       budget,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (signal.aborted) return null;
-    this.commitState(
-      input.current.channel_id,
-      { startMessageId, sessionId, lastUsedAt: now },
-      generation,
-    );
+    if (commitState) {
+      this.commitState(
+        input.current.channel_id,
+        { startMessageId, sessionId, lastUsedAt: now },
+        generation,
+      );
+    }
     return { messages: selected, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
@@ -480,6 +518,7 @@ export class ConversationWindowService {
     now: number,
     budget: DiscordRestBudget,
     verificationCache: MessageEligibilityCache,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
     generation: number,
   ): Promise<WindowBuildResult | null> {
@@ -492,7 +531,16 @@ export class ConversationWindowService {
     );
     if (signal.aborted) return null;
     if (anchor.status === "not-found" || anchor.status === "failed") {
-      return this.rebuild(input, currentTime, now, budget, verificationCache, signal, generation);
+      return this.rebuild(
+        input,
+        currentTime,
+        now,
+        budget,
+        verificationCache,
+        externalDeletions,
+        signal,
+        generation,
+      );
     }
     const fetched: RawDiscordMessage[] =
       anchor.status === "found" && compareMessageIds(anchor.message.id, input.current.id) < 0
@@ -526,6 +574,7 @@ export class ConversationWindowService {
       budget,
       true,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (signal.aborted) return null;
@@ -544,6 +593,7 @@ export class ConversationWindowService {
       currentTime,
       budget,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (signal.aborted) return null;
@@ -562,6 +612,7 @@ export class ConversationWindowService {
     budget: DiscordRestBudget,
     requireCompleteExchange: boolean,
     verificationCache: MessageEligibilityCache,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal?: AbortSignal,
   ): Promise<NormalizedMessage[]> {
     const sorted = sortedMessages(rawMessages);
@@ -582,6 +633,7 @@ export class ConversationWindowService {
         budget,
         known,
         verificationCache,
+        externalDeletions,
         signal,
       );
       if (signal?.aborted) return [];
@@ -601,10 +653,12 @@ export class ConversationWindowService {
       seenReplies.add(reply.record.triggerMsgId);
       entries.push(normalizeBotReply(reply.record.triggerMsgId, reply.pages));
     }
-    return entries.sort((left, right) => {
-      if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs;
-      return compareMessageIds(left.id, right.id);
-    });
+    return entries
+      .filter((entry) => !externalDeletions.has(entry.exchangeId))
+      .sort((left, right) => {
+        if (left.timestampMs !== right.timestampMs) return left.timestampMs - right.timestampMs;
+        return compareMessageIds(left.id, right.id);
+      });
   }
 
   private async findReplyTarget(
@@ -613,6 +667,7 @@ export class ConversationWindowService {
     currentTime: number,
     budget: DiscordRestBudget,
     verificationCache: MessageEligibilityCache,
+    externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
   ): Promise<NormalizedMessage | undefined> {
     const targetId = input.current.message_reference?.message_id;
@@ -634,6 +689,8 @@ export class ConversationWindowService {
     ) {
       return undefined;
     }
+    const knownMessages = new Map(rawMessages.map((message) => [message.id, message]));
+    knownMessages.set(target.message.id, target.message);
     const result = await this.eligibility.evaluate(
       target.message,
       {
@@ -645,15 +702,18 @@ export class ConversationWindowService {
         maxAgeMs: CONVERSATION_MAX_AGE_MS,
       },
       budget,
-      new Map(rawMessages.map((message) => [message.id, message])),
+      knownMessages,
       verificationCache,
+      externalDeletions,
       signal,
     );
     if (!result.eligible) return undefined;
-    if (result.isHuman) return normalizeHumanMessage(target.message);
-    return result.reply
-      ? normalizeBotReply(result.reply.record.triggerMsgId, result.reply.pages)
-      : undefined;
+    const resolved = result.isHuman
+      ? normalizeHumanMessage(target.message)
+      : result.reply
+        ? normalizeBotReply(result.reply.record.triggerMsgId, result.reply.pages)
+        : undefined;
+    return resolved && !externalDeletions.has(resolved.exchangeId) ? resolved : undefined;
   }
 
   private addShown(state: ResponseState, message: NormalizedMessage): NormalizedMessage {
@@ -718,12 +778,19 @@ export class ConversationWindowService {
         draft.exhausted = true;
         break;
       }
-      const oldest = page.messages[0];
+      const beforeCurrent = page.messages.filter(
+        (message) => compareMessageIds(message.id, draft.current.id) < 0,
+      );
+      if (beforeCurrent.length === 0) {
+        draft.exhausted = true;
+        break;
+      }
+      const oldest = beforeCurrent[0];
       if (oldest) {
         draft.cursor = oldest.id;
         if (messageTime(oldest) < draft.cutoffAt) draft.cutoffReached = true;
       }
-      const inRange = page.messages.filter((message) => messageTime(message) >= draft.cutoffAt);
+      const inRange = beforeCurrent.filter((message) => messageTime(message) >= draft.cutoffAt);
       const entries = await this.eligibleEntries(
         inRange,
         {
@@ -741,12 +808,22 @@ export class ConversationWindowService {
         draft.budget,
         false,
         draft.verificationCache,
+        draft.externalDeletions,
         signal,
       );
       if (signal.aborted) return aborted();
+      draft.buffer = draft.buffer.filter(
+        (message) =>
+          compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
+          !draft.externalDeletions.has(message.exchangeId),
+      );
       for (const entry of entries) {
+        if (compareMessageIds(entryPositionId(entry), draft.current.id) >= 0) continue;
         if (draft.replyTarget?.id === entry.id) {
-          if (!draft.reachedReplyTarget) {
+          if (
+            !draft.reachedReplyTarget &&
+            !draft.externalDeletions.has(draft.replyTarget.exchangeId)
+          ) {
             draft.reachedReplyTarget = true;
             if (draft.replyTarget.ref) references.push(draft.replyTarget.ref);
           }
@@ -762,6 +839,12 @@ export class ConversationWindowService {
         break;
       }
     }
+
+    draft.buffer = draft.buffer.filter(
+      (message) =>
+        compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
+        !draft.externalDeletions.has(message.exchangeId),
+    );
 
     const selected = draft.buffer.splice(
       Math.max(0, draft.buffer.length - targetCount),
@@ -788,15 +871,24 @@ export class ConversationWindowService {
       references,
     );
     if (signal.aborted) return aborted();
+    const filteredOutput = output.filter(
+      (message) =>
+        compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
+        !draft.externalDeletions.has(message.exchangeId),
+    );
+    const safeReferences =
+      draft.replyTarget && draft.externalDeletions.has(draft.replyTarget.exchangeId)
+        ? []
+        : references;
     const hasMore = draft.buffer.length > 0 || !draft.exhausted;
     const reason = stoppedReason
       ? stoppedReason
       : draft.cutoffReached && draft.buffer.length === 0
         ? "24h_cutoff"
-        : available <= output.length
+        : available <= filteredOutput.length
           ? "message_limit"
           : null;
-    const outputIds = new Set(output.map((message) => message.id));
+    const outputIds = new Set(filteredOutput.map((message) => message.id));
     for (const message of shown) {
       if (!outputIds.has(message.id)) {
         draft.shown.delete(message.id);
@@ -815,13 +907,15 @@ export class ConversationWindowService {
     state.exhausted = draft.exhausted;
     state.cutoffReached = draft.cutoffReached;
     state.reachedReplyTarget = draft.reachedReplyTarget;
-    return asToolResult(output, hasMore, reason, references);
+    return asToolResult(filteredOutput, hasMore, reason, safeReferences);
   }
 
   private eligibleBufferCount(state: ResponseState): number {
     return state.buffer.filter(
       (message) =>
         !state.shown.has(message.id) &&
+        compareMessageIds(entryPositionId(message), state.current.id) < 0 &&
+        !state.externalDeletions.has(message.exchangeId) &&
         compareMessageIds(entryPositionId(message), state.cursor) >= 0,
     ).length;
   }
@@ -847,9 +941,18 @@ export class ConversationWindowService {
         let best = "";
         while (low <= high) {
           const mid = Math.floor((low + high) / 2);
+          const end =
+            mid > 0 &&
+            mid < message.text.length &&
+            message.text.charCodeAt(mid - 1) >= 0xd800 &&
+            message.text.charCodeAt(mid - 1) <= 0xdbff &&
+            message.text.charCodeAt(mid) >= 0xdc00 &&
+            message.text.charCodeAt(mid) <= 0xdfff
+              ? mid - 1
+              : mid;
           const candidate = {
             ...message,
-            text: truncateTextByBytes(message.text.slice(0, mid), mid),
+            text: message.text.slice(0, end),
             toolTruncated: true,
           };
           if (fits([candidate])) {
@@ -871,6 +974,23 @@ export class ConversationWindowService {
   }
 
   private async viewAttachment(
+    state: ResponseState,
+    messageRef: string,
+    attachmentIndex: number,
+    model: string,
+    signal: AbortSignal,
+  ): Promise<ToolLlmResult> {
+    const shown = [...state.shown.values()].find((candidate) => candidate.ref === messageRef);
+    if (shown && state.externalDeletions.has(shown.exchangeId)) {
+      return '{"error":"attachment_unavailable"}';
+    }
+    const result = await this.loadAttachment(state, messageRef, attachmentIndex, model, signal);
+    return shown && state.externalDeletions.has(shown.exchangeId)
+      ? '{"error":"attachment_unavailable"}'
+      : result;
+  }
+
+  private async loadAttachment(
     state: ResponseState,
     messageRef: string,
     attachmentIndex: number,

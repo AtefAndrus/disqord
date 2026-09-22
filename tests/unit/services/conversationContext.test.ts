@@ -7,6 +7,7 @@ import type {
 import {
   type BuildConversationWindowInput,
   ConversationWindowService,
+  READ_EARLIER_MAX_RESULT_BYTES,
   truncateTextByBytes,
   WINDOW_RAW_MESSAGE_LIMIT,
   WINDOW_REBUILD_AFTER_MS,
@@ -160,6 +161,32 @@ test("extends from the same anchor with an after-only query and preserves chrono
   expect(reader.listQueries[1]).toEqual({ after: anchor, limit: 100 });
   expect(reader.listQueries[1]).not.toHaveProperty("before");
   expect(second?.messages.map((entry) => entry.id)).toEqual(["100", "101", "102", "103"]);
+});
+
+test("rebuilds a stale message below the stored start without clobbering the newer state", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [message("119")] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const states = (
+    service as unknown as {
+      states: Map<string, { startMessageId: string; sessionId: string; lastUsedAt: number }>;
+    }
+  ).states;
+  states.set("channel", { startMessageId: "180", sessionId: "newer", lastUsedAt: NOW });
+
+  const context = await service.build(input(message("120", new Date(NOW).toISOString())));
+  reader.listResponses.push({
+    status: "ok",
+    messages: [message("177"), message("178"), message("179")],
+  });
+  const result = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(3, new AbortController().signal)) as string,
+  ) as { messages: Array<{ text: string }> };
+
+  expect(result.messages).toEqual([]);
+  expect(reader.listQueries[0]).toEqual({ before: "120", limit: 100 });
+  expect(reader.listQueries[1]).toEqual({ before: "120", limit: 100 });
+  expect(states.get("channel")?.startMessageId).toBe("180");
 });
 
 test("shrinking filters the original order instead of flattening exchange groups", async () => {
@@ -358,6 +385,60 @@ test("includes a verified reply when its trigger is outside the fetched window",
   expect(reader.fetchQueries).toEqual(["800"]);
 });
 
+test("reuses a fetched reply target when only two REST calls remain", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "1000",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByPage = mock((id: string) => (id === "2000" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "2000", triggerMsgId: "1000", seq: 0 }]);
+  for (let page = 0; page < 9; page += 1) {
+    reader.listResponses.push({
+      status: "ok",
+      messages: Array.from({ length: 100 }, (_, index) =>
+        message(String(10_000 + page * 100 + index), undefined, {
+          author: { id: "other-bot", username: "other", bot: true },
+        }),
+      ),
+    });
+  }
+  reader.listResponses.push({
+    status: "ok",
+    messages: [
+      message("20000", undefined, {
+        author: { id: "other-bot", username: "other", bot: true },
+      }),
+    ],
+  });
+  const target = message("2000", new Date(NOW - 10 * 60 * 1000).toISOString(), {
+    author: { id: "bot", username: "bot", bot: true },
+    content: "",
+  });
+  const trigger = message("1000", new Date(NOW - 20 * 60 * 1000).toISOString());
+  reader.fetchResponses.push({ status: "found", message: target });
+  reader.fetchResponses.push({ status: "found", message: trigger });
+
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(
+    input(
+      message("30000", new Date(NOW).toISOString(), {
+        message_reference: { channel_id: "channel", message_id: "2000" },
+      }),
+    ),
+  );
+
+  expect(reader.listQueries).toHaveLength(10);
+  expect(context?.replyTarget?.kind).toBe("assistant");
+  expect(reader.fetchQueries).toEqual(["2000", "1000"]);
+});
+
 test("read_earlier_messages scans past a split reply positioned before the cursor", async () => {
   const reader = new FakeReader();
   const replyRecord: ReplyRecord = {
@@ -418,6 +499,30 @@ test("truncateTextByBytes backs off at a multibyte UTF-8 boundary", () => {
   expect(new TextDecoder().decode(resultBytes)).toBe(result);
   expect(new TextDecoder().decode(encoded.slice(0, resultBytes.byteLength + 1))).toContain("�");
   expect(new TextEncoder().encode(`${result}😀`).byteLength).toBeGreaterThan(maxBytes);
+});
+
+test("fitToolResult keeps a large Japanese message close to its byte budget", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+  reader.listResponses.push({
+    status: "ok",
+    messages: [message("900", undefined, { content: "日".repeat(5_000) })],
+  });
+
+  const raw = (await context?.toolContext.readEarlierMessages(
+    1,
+    new AbortController().signal,
+  )) as string;
+  const result = JSON.parse(raw) as {
+    messages: Array<{ text: string; truncated: boolean }>;
+  };
+  const byteLength = new TextEncoder().encode(raw).byteLength;
+
+  expect(byteLength).toBeGreaterThan(11 * 1024);
+  expect(byteLength).toBeLessThanOrEqual(READ_EARLIER_MAX_RESULT_BYTES);
+  expect(result.messages[0]?.truncated).toBe(true);
 });
 
 test("read_earlier_messages advances past an entirely ineligible page", async () => {
@@ -743,6 +848,43 @@ test("memoizes a deleted exchange across raw pages and reply-target lookup", asy
   expect(context?.messages).toEqual([]);
   expect(context?.replyTarget).toBeUndefined();
   expect(reader.fetchQueries).toEqual(["9999"]);
+});
+
+test("removes an earlier trigger when a later page evaluation confirms its deletion", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "pending",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "100" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "101" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "999", triggerMsgId: "100", seq: 0 }]);
+  reader.listResponses.push({
+    status: "ok",
+    messages: [
+      message("100"),
+      message("101", undefined, {
+        author: { id: "bot", username: "bot", bot: true },
+        content: "",
+      }),
+    ],
+  });
+  reader.fetchResponses.push(
+    { status: "failed", error: new Error("temporary failure") },
+    { status: "not-found" },
+  );
+
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("200", new Date(NOW).toISOString())));
+
+  expect(context?.messages).toEqual([]);
+  expect(reader.fetchQueries).toEqual(["999", "999"]);
 });
 
 test("excludes a split reply when a reconstructed page crosses the 24-hour cutoff", async () => {
