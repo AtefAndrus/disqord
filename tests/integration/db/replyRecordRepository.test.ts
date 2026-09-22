@@ -38,6 +38,8 @@ describe("ReplyRecordRepository", () => {
     expect(repository.appendPage("trigger", "page-1")).toBe(true);
     expect(repository.appendPage("trigger", "page-2")).toBe(true);
     expect(repository.removePage("page-1")).toBe(true);
+    // 登録の無いページも「記録に残っていない」ので成功とし、呼び出し側は Discord の削除へ進める。
+    expect(repository.removePage("never-registered")).toBe(true);
     expect(repository.finalize("trigger", "completed", 1, 200)).toBe(true);
 
     expect(repository.listPages("trigger")).toEqual([

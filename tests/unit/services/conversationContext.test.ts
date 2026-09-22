@@ -163,6 +163,28 @@ test("extends from the same anchor with an after-only query and preserves chrono
   expect(second?.messages.map((entry) => entry.id)).toEqual(["100", "101", "102", "103"]);
 });
 
+for (const anchorStatus of ["not-found", "failed"] as const) {
+  test(`keeps the stored anchor boundary when the anchor is ${anchorStatus}`, async () => {
+    const reader = new FakeReader();
+    reader.listResponses.push({ status: "ok", messages: [message("100")] });
+    const service = new ConversationWindowService(reader, records(), () => NOW);
+    const first = await service.build(input(message("101", new Date(NOW).toISOString())));
+
+    reader.fetchResponses.push(
+      anchorStatus === "not-found"
+        ? { status: "not-found" }
+        : { status: "failed", error: new Error("temporary failure") },
+    );
+    reader.listResponses.push({ status: "ok", messages: [message("101"), message("102")] });
+    const second = await service.build(input(message("103", new Date(NOW).toISOString())));
+
+    expect(second?.windowStartMessageId).toBe(first?.windowStartMessageId);
+    expect(second?.sessionId).toBe(first?.sessionId);
+    expect(second?.messages.map((entry) => entry.id)).toEqual(["101", "102"]);
+    expect(reader.listQueries[1]).toEqual({ after: "100", limit: 100 });
+  });
+}
+
 test("rebuilds a stale message below the stored start without clobbering the newer state", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [message("119")] });
@@ -273,9 +295,15 @@ test("keeps a reply selected by page position stable when its trigger falls befo
 
   reader.fetchResponses.push({
     status: "found",
-    message: message(first?.windowStartMessageId ?? "0"),
+    message:
+      history.find((candidate) => candidate.id === first?.windowStartMessageId) ??
+      message(first?.windowStartMessageId ?? "0"),
   });
-  reader.listResponses.push({ status: "ok", messages: history });
+  reader.fetchResponses.push({ status: "found", message: message("100") });
+  reader.listResponses.push({
+    status: "ok",
+    messages: history.filter((candidate) => BigInt(candidate.id) > start),
+  });
   const second = await service.build(input(message("143", new Date(NOW).toISOString())));
 
   expect(second?.windowStartMessageId).toBe(first?.windowStartMessageId);
@@ -283,6 +311,7 @@ test("keeps a reply selected by page position stable when its trigger falls befo
   expect(second?.messages.map(({ id, ref }) => ({ id, ref }))).toEqual(
     first?.messages.map(({ id, ref }) => ({ id, ref })),
   );
+  expect(reader.fetchQueries).toContain("100");
 });
 
 test("shrinks one extend directly to all compact limits and renews the session once", async () => {
@@ -850,7 +879,7 @@ test("memoizes a deleted exchange across raw pages and reply-target lookup", asy
   expect(reader.fetchQueries).toEqual(["9999"]);
 });
 
-test("removes an earlier trigger when a later page evaluation confirms its deletion", async () => {
+test("removes a trigger when reply-target lookup confirms its deletion", async () => {
   const reader = new FakeReader();
   const replyRecord: ReplyRecord = {
     triggerMsgId: "100",
@@ -864,27 +893,25 @@ test("removes an earlier trigger when a later page evaluation confirms its delet
   const repository = records();
   repository.findByTrigger = mock((id: string) => (id === "100" ? replyRecord : null));
   repository.findByPage = mock((id: string) => (id === "101" ? replyRecord : null));
-  repository.listPages = mock(() => [{ pageMsgId: "999", triggerMsgId: "100", seq: 0 }]);
-  reader.listResponses.push({
-    status: "ok",
-    messages: [
-      message("100"),
-      message("101", undefined, {
-        author: { id: "bot", username: "bot", bot: true },
-        content: "",
-      }),
-    ],
-  });
+  repository.listPages = mock(() => [{ pageMsgId: "101", triggerMsgId: "100", seq: 0 }]);
+  reader.listResponses.push({ status: "ok", messages: [message("100")] });
   reader.fetchResponses.push(
     { status: "failed", error: new Error("temporary failure") },
     { status: "not-found" },
   );
 
   const service = new ConversationWindowService(reader, repository, () => NOW);
-  const context = await service.build(input(message("200", new Date(NOW).toISOString())));
+  const context = await service.build(
+    input(
+      message("200", new Date(NOW).toISOString(), {
+        message_reference: { channel_id: "channel", message_id: "101" },
+      }),
+    ),
+  );
 
   expect(context?.messages).toEqual([]);
-  expect(reader.fetchQueries).toEqual(["999", "999"]);
+  expect(context?.replyTarget).toBeUndefined();
+  expect(reader.fetchQueries).toEqual(["101", "101"]);
 });
 
 test("excludes a split reply when a reconstructed page crosses the 24-hour cutoff", async () => {

@@ -149,14 +149,7 @@ export function createDeleteOwnMessage(
   color: number,
 ): DeleteOwnMessage {
   return async (botMessage: Message): Promise<void> => {
-    if (replyRecordService && triggerMessageId) await replyRecordService.removePage(botMessage.id);
-    try {
-      await botMessage.delete();
-    } catch (deleteError) {
-      logger.warn("Failed to delete bot message, attempting to neutralize instead", {
-        error: operationError(deleteError),
-        messageId: botMessage.id,
-      });
+    const neutralize = async (): Promise<void> => {
       try {
         const neutralContainer = buildFinalContainer({
           text: "（このメッセージは不要になりました）",
@@ -173,6 +166,29 @@ export function createDeleteOwnMessage(
           messageId: botMessage.id,
         });
       }
+    };
+
+    if (replyRecordService && triggerMessageId) {
+      try {
+        const removed = await replyRecordService.removePage(botMessage.id);
+        if (!removed) throw new Error("removePage returned false");
+      } catch (removePageError) {
+        logger.warn("Failed to remove reply record, attempting to neutralize instead", {
+          error: operationError(removePageError),
+          messageId: botMessage.id,
+        });
+        await neutralize();
+        return;
+      }
+    }
+    try {
+      await botMessage.delete();
+    } catch (deleteError) {
+      logger.warn("Failed to delete bot message, attempting to neutralize instead", {
+        error: operationError(deleteError),
+        messageId: botMessage.id,
+      });
+      await neutralize();
     }
   };
 }

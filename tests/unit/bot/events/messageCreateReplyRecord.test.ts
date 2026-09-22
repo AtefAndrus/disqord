@@ -47,6 +47,33 @@ describe("message create reply-record funnel", () => {
     expect(events).toEqual(["record-remove", "discord-delete"]);
   });
 
+  test("neutralizes instead of deleting when page-record removal fails", async () => {
+    const warnLines: string[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation(((line: string) => {
+      warnLines.push(line);
+    }) as typeof console.warn);
+    try {
+      const botMessage = {
+        id: "page-1",
+        delete: mock(async () => {}),
+        edit: mock(async () => {}),
+      } as unknown as Message;
+      const replyRecordService = createReplyRecordService([]);
+      replyRecordService.removePage = mock(async () => {
+        throw new Error("record failure with message content");
+      });
+
+      await createDeleteOwnMessage(replyRecordService, "trigger", "model", 0)(botMessage);
+
+      expect(botMessage.delete).not.toHaveBeenCalled();
+      expect(botMessage.edit).toHaveBeenCalledTimes(1);
+      expect(warnLines.join("\n")).toContain('"error":"Error"');
+      expect(warnLines.join("\n")).not.toContain("record failure with message content");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   test("finalizes with rendered pages when a middle page registration fails", async () => {
     const pageMessages = ["page-1", "page-2", "page-3"].map((id) => ({
       id,

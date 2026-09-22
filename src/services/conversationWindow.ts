@@ -263,6 +263,7 @@ export class ConversationWindowService {
   private generationCounter = 0;
   private readonly committedGenerations = new Map<string, number>();
   private readonly eligibility: MessageEligibilityService;
+  private readonly records: IReplyRecordRepository;
 
   constructor(
     private readonly reader: IDiscordMessageReader,
@@ -271,6 +272,7 @@ export class ConversationWindowService {
     private readonly imageCapability: (model: string) => Promise<boolean | null> = async () => true,
     private readonly windowFetchTimeoutMs = WINDOW_FETCH_TIMEOUT_MS,
   ) {
+    this.records = records;
     this.eligibility = new MessageEligibilityService(reader, records);
   }
 
@@ -375,13 +377,19 @@ export class ConversationWindowService {
         verificationCache,
         externalDeletions,
       };
-      const messages = result.messages.map((message) => this.addShown(responseState, message));
-      const hasReplyTarget = result.replyTarget
-        ? messages.some((message) => message.id === result.replyTarget?.id)
+      const messages = result.messages
+        .filter((message) => !externalDeletions.has(message.exchangeId))
+        .map((message) => this.addShown(responseState, message));
+      const replyTargetResult =
+        result.replyTarget && !externalDeletions.has(result.replyTarget.exchangeId)
+          ? result.replyTarget
+          : undefined;
+      const hasReplyTarget = replyTargetResult
+        ? messages.some((message) => message.id === replyTargetResult.id)
         : false;
       const replyTarget =
-        result.replyTarget && !hasReplyTarget
-          ? this.addShown(responseState, result.replyTarget)
+        replyTargetResult && !hasReplyTarget
+          ? this.addShown(responseState, replyTargetResult)
           : undefined;
       responseState.replyTarget = replyTarget;
       return {
@@ -530,18 +538,6 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    if (anchor.status === "not-found" || anchor.status === "failed") {
-      return this.rebuild(
-        input,
-        currentTime,
-        now,
-        budget,
-        verificationCache,
-        externalDeletions,
-        signal,
-        generation,
-      );
-    }
     const fetched: RawDiscordMessage[] =
       anchor.status === "found" && compareMessageIds(anchor.message.id, input.current.id) < 0
         ? [anchor.message]
@@ -683,6 +679,11 @@ export class ConversationWindowService {
       ? ({ status: "found", message: known } satisfies DiscordMessageFetchResult)
       : await this.reader.fetch(input.current.channel_id, targetId, budget, signal);
     if (signal.aborted) return undefined;
+    if (target.status === "not-found") {
+      const record = this.records.findByTrigger(targetId) ?? this.records.findByPage(targetId);
+      if (record) externalDeletions.add(record.triggerMsgId);
+      return undefined;
+    }
     if (
       target.status !== "found" ||
       messageTime(target.message) < currentTime - CONVERSATION_MAX_AGE_MS

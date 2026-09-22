@@ -117,10 +117,12 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
       .immediate(triggerMsgId, pageMsgId);
   }
 
+  // 返り値は「このページが記録に残っていないこと」であり、消した件数ではない。
+  // 呼び出し側は Discord の削除を進めてよいかを判断するので、もともと登録が無いページも成功とする。
+  // 書き込みに失敗したときだけ false になり、その場合は Discord から消さずに残す。
   removePage(pageMsgId: string): boolean {
-    return (
-      this.db.query("DELETE FROM reply_pages WHERE page_msg_id = ?").run(pageMsgId).changes > 0
-    );
+    this.db.query("DELETE FROM reply_pages WHERE page_msg_id = ?").run(pageMsgId);
+    return true;
   }
 
   finalize(
