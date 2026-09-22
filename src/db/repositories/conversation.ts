@@ -236,10 +236,13 @@ export function buildPersistedContent(
   return parts;
 }
 
-function containsMedia(content: readonly PersistedContentPart[]): boolean {
-  return content.some((part) => part.type === "image-ref" || part.type === "file-ref");
-}
-
+/**
+ * Replaces the media of every turn but the last (the current one) with a
+ * short note. A past attachment is sent only with the message it came with:
+ * re-sending the latest one on every later turn kept a large PDF in every
+ * request until another attachment arrived, and the reply to that message
+ * already describes it.
+ */
 export function stripHistoricalMedia(
   turns: readonly HistoricalUserContent[],
 ): HistoricalUserContent[];
@@ -256,24 +259,17 @@ export function stripHistoricalMedia(
         id: turn.id,
         content: [...turn.content],
       }));
-  let latestMediaIndex = -1;
-  for (let index = normalized.length - 1; index >= 0; index--) {
-    if (containsMedia(normalized[index]?.content ?? [])) {
-      latestMediaIndex = index;
-      break;
-    }
-  }
-
+  const currentIndex = normalized.length - 1;
   const stripped = normalized.map((turn, index) => ({
     ...turn,
     content:
-      index < latestMediaIndex
+      index < currentIndex
         ? turn.content.flatMap((part) => {
             if (part.type === "image-ref") {
               return [{ type: "text" as const, text: "[earlier image omitted]" }];
             }
             if (part.type === "file-ref") {
-              return [{ type: "text" as const, text: "[earlier file omitted]" }];
+              return [{ type: "text" as const, text: `[earlier file omitted: ${part.filename}]` }];
             }
             return [part];
           })

@@ -332,7 +332,7 @@ describe("ChatService", () => {
       };
     }
 
-    test("history places static systems first, hydrates prior media, prefixes authors, and sends session_id", async () => {
+    test("history places static systems first, replaces prior media with a note, prefixes authors, and sends session_id", async () => {
       (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true, webSearchEnabled: true }),
       );
@@ -392,7 +392,8 @@ describe("ChatService", () => {
         AbortSignal,
       ];
       expect(request.session_id).toBe("opaque-session-id");
-      expect(request.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
+      // A past PDF is not sent again, so the parser plugin is not needed.
+      expect(request.plugins).toBeUndefined();
       expect(request.messages.map((message) => message.role)).toEqual([
         "system",
         "user",
@@ -404,16 +405,11 @@ describe("ChatService", () => {
       expect(request.messages[0]?.content).not.toContain("現在日時");
       expect(request.messages[1]?.content).toEqual([
         { type: "text", text: "[Prior]: before" },
-        {
-          type: "file",
-          file: { filename: "history.pdf", file_data: "data:application/pdf;base64,UERG" },
-        },
+        { type: "text", text: "[earlier file omitted: history.pdf]" },
       ]);
       expect(request.messages[3]?.content).toContain("現在日時");
       expect(request.messages[4]?.content).toBe("[Current]: now");
-      expect(fetcher).toHaveBeenCalledWith("https://cdn.test/history.pdf", {
-        signal: expect.any(AbortSignal),
-      });
+      expect(fetcher).not.toHaveBeenCalled();
     });
 
     test("history turned off after the context was read sends neither history nor session_id", async () => {
@@ -470,7 +466,7 @@ describe("ChatService", () => {
 
     test.each([
       ["before the history is built", [false], false],
-      ["after the history is built", [true, false], true],
+      ["after the history is built", [true, false], false],
     ] as const)(
       "a snapshot that stops being current %s is not sent",
       async (_when, checks, historyFetched) => {
@@ -605,10 +601,10 @@ describe("ChatService", () => {
         role: "user",
         content: [
           { type: "text", text: "[Old]: old" },
-          { type: "text", text: "[earlier file omitted]" },
+          { type: "text", text: "[earlier file omitted: old.pdf]" },
         ],
       });
-      expect(JSON.stringify(request.messages)).not.toContain("old.pdf");
+      expect(JSON.stringify(request.messages)).not.toContain("cdn.test/old.pdf");
     });
 
     test("cancel races the model-details lookup", async () => {
@@ -639,80 +635,6 @@ describe("ChatService", () => {
 
       expect(result.status).toBe("cancelled");
       expect(mockLLMClient.chatStream).not.toHaveBeenCalled();
-    });
-
-    test("cancel races historical PDF hydration and passes the generation signal", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
-        createMockGuildSettings({ historyEnabled: true }),
-      );
-      mockLLMClient.listModelsWithPricing = mock(() =>
-        Promise.resolve([
-          {
-            id: "test-model:fixture",
-            name: "Fixture",
-            created: 0,
-            contextLength: 20_000,
-            pricing: { prompt: "0", completion: "0" },
-            inputModalities: ["text", "file"],
-            outputModalities: ["text"],
-          },
-        ]),
-      );
-      const base = conversationContext();
-      const baseExchange = base.exchanges[0];
-      if (!baseExchange) throw new Error("base exchange was not created");
-      const context = conversationContext({
-        exchanges: [
-          {
-            ...baseExchange,
-            user: {
-              ...baseExchange.user,
-              content: [
-                { type: "text", text: "old" },
-                {
-                  type: "file-ref",
-                  url: "https://cdn.test/pending.pdf",
-                  filename: "pending.pdf",
-                  mime: "application/pdf",
-                },
-              ],
-            },
-          },
-        ],
-      });
-      const originalFetch = globalThis.fetch;
-      const pendingFetch = new Promise<Response>(() => {});
-      const fetcher = mock(() => pendingFetch);
-      globalThis.fetch = fetcher as unknown as typeof fetch;
-
-      try {
-        const { updater } = createSpyUpdater();
-        const resultPromise = chatService.generateChatResponse(
-          "guild-123",
-          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
-          "req-hydration-cancel",
-          updater,
-          { channelId: "channel-1", userId: "user-1" },
-        );
-        for (let attempt = 0; attempt < 5 && fetcher.mock.calls.length === 0; attempt++) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        }
-        expect(fetcher).toHaveBeenCalled();
-        expect(chatService.cancelRequest("req-hydration-cancel")).toBe(true);
-        const result = await resultPromise;
-
-        expect(result.status).toBe("cancelled");
-        const fetchCalls = fetcher.mock.calls as unknown as Array<
-          [string, { signal: AbortSignal }]
-        >;
-        const fetchOptions = fetchCalls[0]?.[1];
-        if (!fetchOptions) throw new Error("historical PDF fetch was not captured");
-        expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
-        expect(fetchOptions.signal.aborted).toBe(true);
-        expect(mockLLMClient.chatStream).not.toHaveBeenCalled();
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
     });
 
     test("history budget counts author prefixes and keeps whole exchanges", async () => {
@@ -1285,7 +1207,7 @@ describe("ChatService", () => {
       expect(result.usage?.cost).toBeCloseTo(0.03);
     });
 
-    test("現在の入力に画像が無ければ、履歴画像を保持する", async () => {
+    test("現在の入力に画像が無くても、履歴画像は送らず表記にする", async () => {
       (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
@@ -1322,7 +1244,7 @@ describe("ChatService", () => {
       ][];
       expect(calls[0]?.[0].messages[0]?.content).toEqual([
         { type: "text", text: "[Prior]: history" },
-        { type: "image_url", image_url: { url: "https://cdn.test/history.png" } },
+        { type: "text", text: "[earlier image omitted]" },
       ]);
     });
 
