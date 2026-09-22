@@ -85,6 +85,10 @@ export interface IConversationRepository {
     userTurnId: number,
     pendingPurgeTargets?: readonly HistoryPurgeTarget[],
   ): Promise<ConversationContext | null>;
+  isContextCurrent(
+    context: ConversationContext,
+    pendingPurgeTargets?: readonly HistoryPurgeTarget[],
+  ): Promise<boolean>;
   createAssistantTurn(
     sessionId: number,
     parentUserTurnId: number,
@@ -875,6 +879,50 @@ export class ConversationRepository implements IConversationRepository {
           `SELECT discord_msg_id as discordMessageId FROM turn_messages WHERE turn_id = ? ORDER BY seq LIMIT 1`,
         )
         .get(turnId)?.discordMessageId ?? null
+    );
+  }
+
+  /**
+   * Whether a context read earlier may still be sent: history is on for the
+   * guild, the session still exists, and every turn in the snapshot is still
+   * stored, active, and not deleted or awaiting a purge. A snapshot outlives
+   * the awaits between reading and sending, and `/config history off` (even
+   * followed by `on`) or a deletion in that window must keep it from reaching
+   * the model.
+   */
+  async isContextCurrent(
+    context: ConversationContext,
+    pendingPurgeTargets: readonly HistoryPurgeTarget[] = [],
+  ): Promise<boolean> {
+    const session = this.db
+      .query<RawSession, [number, string]>(
+        `SELECT id, openrouter_session_id as openrouterSessionId, guild_id as guildId,
+                channel_id as channelId, parent_channel_id as parentChannelId,
+                started_at as startedAt, last_activity_at as lastActivityAt
+         FROM sessions WHERE id = ? AND openrouter_session_id = ?`,
+      )
+      .get(context.current.sessionId, context.openrouterSessionId);
+    if (!session) return false;
+    const enabled = this.db
+      .query<{ historyEnabled: number }, [string]>(
+        "SELECT history_enabled as historyEnabled FROM guild_settings WHERE guild_id = ?",
+      )
+      .get(session.guildId);
+    if (!enabled?.historyEnabled) return false;
+    const turnIds = [
+      context.current.id,
+      ...context.exchanges.flatMap((exchange) =>
+        exchange.assistant ? [exchange.user.id, exchange.assistant.id] : [exchange.user.id],
+      ),
+    ];
+    const lookup = this.db.query<{ id: number }, [number, number]>(
+      "SELECT id FROM turns WHERE id = ? AND session_id = ? AND active = 1",
+    );
+    return turnIds.every(
+      (turnId) =>
+        lookup.get(turnId, session.id) !== null &&
+        !this.isTurnDeleted(turnId, session) &&
+        !this.isTurnPendingPurge(turnId, session, pendingPurgeTargets),
     );
   }
 

@@ -416,6 +416,54 @@ describe("ConversationRepository", () => {
     expect(db.query("SELECT * FROM sessions WHERE id = ?").get(expiredSessionId)).toBeNull();
   });
 
+  test("a context stops being current when history is turned off, even if turned on again", async () => {
+    const first = await repository.createUserAndAssistantTurn(input("first", NOW - 2));
+    await repository.finalizeAssistantTurn(
+      required(first.assistantTurnId),
+      "completed",
+      "answer",
+      NOW - 1,
+    );
+    const current = await repository.createUserAndAssistantTurn(input("current", NOW));
+    const context = await repository.getContext(required(current.userTurnId));
+    if (!context) throw new Error("context was not built");
+    expect(context.exchanges).toHaveLength(1);
+    expect(await repository.isContextCurrent(context)).toBe(true);
+
+    // The setting alone, with the session still stored, is enough to stop it.
+    db.run("UPDATE guild_settings SET history_enabled = 0 WHERE guild_id = 'guild-1'");
+    expect(await repository.isContextCurrent(context)).toBe(false);
+    db.run("UPDATE guild_settings SET history_enabled = 1 WHERE guild_id = 'guild-1'");
+    expect(await repository.isContextCurrent(context)).toBe(true);
+
+    await settings.setHistoryEnabled("guild-1", false);
+    expect(await repository.isContextCurrent(context)).toBe(false);
+    await settings.setHistoryEnabled("guild-1", true);
+    expect(await repository.isContextCurrent(context)).toBe(false);
+  });
+
+  test("a context stops being current when one of its turns is purged or pending purge", async () => {
+    const first = await repository.createUserAndAssistantTurn(input("first", NOW - 2));
+    await repository.finalizeAssistantTurn(
+      required(first.assistantTurnId),
+      "completed",
+      "answer",
+      NOW - 1,
+    );
+    const current = await repository.createUserAndAssistantTurn(input("current", NOW));
+    const context = await repository.getContext(required(current.userTurnId));
+    if (!context) throw new Error("context was not built");
+
+    expect(
+      await repository.isContextCurrent(context, [
+        { type: "message", messageIds: ["first"], scope: {} },
+      ]),
+    ).toBe(false);
+    expect(await repository.isContextCurrent(context)).toBe(true);
+    await repository.purgeMessage("first");
+    expect(await repository.isContextCurrent(context)).toBe(false);
+  });
+
   test("TTL keeps an exchange whose latest turn is within retention", async () => {
     const oldUser = NOW - HISTORY_RETENTION_MS - 1_000;
     const recentReply = NOW - HISTORY_RETENTION_MS + 60_000;

@@ -52,6 +52,7 @@ function createSpyUpdater(): {
 }
 
 describe("ChatService", () => {
+  const alwaysCurrent = (): Promise<boolean> => Promise.resolve(true);
   let chatService: ChatService;
   let mockLLMClient: ILLMClient;
   let mockSettingsService: ISettingsService;
@@ -377,7 +378,7 @@ describe("ChatService", () => {
         const { updater } = createSpyUpdater();
         await chatService.generateChatResponse(
           "guild-123",
-          { text: "now", conversation: context },
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
           "req-history",
           updater,
           { channelId: "channel-1", userId: "user-1" },
@@ -448,7 +449,7 @@ describe("ChatService", () => {
         const { updater } = createSpyUpdater();
         await chatService.generateChatResponse(
           "guild-123",
-          { text: "now", conversation: context },
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
           "req-history-off",
           updater,
           { channelId: "channel-1", userId: "user-1" },
@@ -468,15 +469,16 @@ describe("ChatService", () => {
     });
 
     test.each([
-      ["before the history is built", [true, false], false],
-      ["after the history is built", [true, true, false], true],
+      ["before the history is built", [false], false],
+      ["after the history is built", [true, false], true],
     ] as const)(
-      "history turned off %s drops history and session_id from the request",
-      async (_when, reads, historyFetched) => {
-        const getGuildSettings = mockSettingsService.getGuildSettings as ReturnType<typeof mock>;
-        for (const historyEnabled of reads) {
-          getGuildSettings.mockResolvedValueOnce(createMockGuildSettings({ historyEnabled }));
-        }
+      "a snapshot that stops being current %s is not sent",
+      async (_when, checks, historyFetched) => {
+        (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+          createMockGuildSettings({ historyEnabled: true }),
+        );
+        const remaining = [...checks];
+        const isConversationCurrent = mock(() => Promise.resolve(remaining.shift() ?? false));
         const originalFetch = globalThis.fetch;
         const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50]))));
         globalThis.fetch = fetcher as unknown as typeof fetch;
@@ -506,7 +508,7 @@ describe("ChatService", () => {
           const { updater } = createSpyUpdater();
           await chatService.generateChatResponse(
             "guild-123",
-            { text: "now", conversation: context },
+            { text: "now", conversation: context, isConversationCurrent },
             "req-history-race",
             updater,
             { channelId: "channel-1", userId: "user-1" },
@@ -586,7 +588,7 @@ describe("ChatService", () => {
         const { updater } = createSpyUpdater();
         await chatService.generateChatResponse(
           "guild-123",
-          { text: "now", conversation: context },
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
           "req-no-old-pdf",
           updater,
           { channelId: "channel-1", userId: "user-1" },
@@ -617,7 +619,7 @@ describe("ChatService", () => {
       const { updater } = createSpyUpdater();
       const resultPromise = chatService.generateChatResponse(
         "guild-123",
-        { text: "now", conversation: conversationContext() },
+        { text: "now", conversation: conversationContext(), isConversationCurrent: alwaysCurrent },
         "req-model-details-cancel",
         updater,
         { channelId: "channel-1", userId: "user-1" },
@@ -687,7 +689,7 @@ describe("ChatService", () => {
         const { updater } = createSpyUpdater();
         const resultPromise = chatService.generateChatResponse(
           "guild-123",
-          { text: "now", conversation: context },
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
           "req-hydration-cancel",
           updater,
           { channelId: "channel-1", userId: "user-1" },
@@ -768,7 +770,11 @@ describe("ChatService", () => {
       const { updater } = createSpyUpdater();
       await chatService.generateChatResponse(
         "guild-123",
-        { text: "now", conversation: { ...base, exchanges: [older, newest] } },
+        {
+          text: "now",
+          conversation: { ...base, exchanges: [older, newest] },
+          isConversationCurrent: alwaysCurrent,
+        },
         "req-budget",
         updater,
         { channelId: "channel-1", userId: "user-1" },
@@ -1237,7 +1243,12 @@ describe("ChatService", () => {
 
       const result = await imageChat.generateChatResponse(
         "guild-123",
-        { text: "read", parts: [directImagePart], conversation: context },
+        {
+          text: "read",
+          parts: [directImagePart],
+          conversation: context,
+          isConversationCurrent: alwaysCurrent,
+        },
         "req-retry",
         updater,
         {
@@ -1299,7 +1310,7 @@ describe("ChatService", () => {
 
       await chatService.generateChatResponse(
         "guild-123",
-        { text: "read", conversation: context },
+        { text: "read", conversation: context, isConversationCurrent: alwaysCurrent },
         "req-history-media-kept",
         updater,
         { channelId: "channel-1", userId: "user-1" },
@@ -1313,6 +1324,74 @@ describe("ChatService", () => {
         { type: "text", text: "[Prior]: history" },
         { type: "image_url", image_url: { url: "https://cdn.test/history.png" } },
       ]);
+    });
+
+    test("a snapshot that stops being current before the image-free retry is not resent", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValue([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 20_000,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
+        async function* () {
+          yield* [];
+          throw new BadRequestError("image rejected");
+        },
+      );
+      // Current before building and before the first request, then purged.
+      const checks = [true, true, false];
+      const isConversationCurrent = mock(() => Promise.resolve(checks.shift() ?? false));
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read", conversation: conversationContext(), isConversationCurrent },
+        "req-retry-history-gone",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[0].session_id).toBe("opaque-session-id");
+      expect(JSON.stringify(calls[0]?.[0].messages)).toContain("[Prior]");
+      expect(calls[1]?.[0].session_id).toBeUndefined();
+      expect(JSON.stringify(calls[1]?.[0].messages)).not.toContain("[Prior]");
+      expect(JSON.stringify(calls[1]?.[0].messages)).toContain("tweet");
+      expect(JSON.stringify(calls[1]?.[0].messages)).not.toContain("pbs.twimg.com");
     });
 
     test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {

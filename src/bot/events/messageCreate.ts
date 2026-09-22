@@ -328,7 +328,12 @@ export function createMessageCreateHandler(
         {
           text: content,
           parts: attachmentResult.parts,
-          ...(historyContext && { conversation: historyContext }),
+          ...(historyContext &&
+            historyRecorder && {
+              conversation: historyContext,
+              isConversationCurrent: (context: ConversationContext) =>
+                historyRecorder.isContextCurrent(context),
+            }),
         },
         message.id,
         updater,

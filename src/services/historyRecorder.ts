@@ -42,6 +42,7 @@ export interface IHistoryRecorder {
     input: CreateConversationTurnInput,
   ): Promise<CreateConversationTurnResult>;
   getContext(userTurnId: number): Promise<ConversationContext | null>;
+  isContextCurrent(context: ConversationContext): Promise<boolean>;
   createAssistantTurn(
     sessionId: number,
     parentUserTurnId: number,
@@ -156,6 +157,15 @@ export class HistoryRecorder implements IHistoryRecorder {
     } catch (error) {
       logHistoryOperationFailure("getContext", error);
       return null;
+    }
+  }
+
+  async isContextCurrent(context: ConversationContext): Promise<boolean> {
+    try {
+      return await this.repository.isContextCurrent(context, this.pendingTargets());
+    } catch (error) {
+      logHistoryOperationFailure("isContextCurrent", error);
+      return false;
     }
   }
 

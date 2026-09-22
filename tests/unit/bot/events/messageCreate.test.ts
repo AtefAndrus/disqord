@@ -159,6 +159,7 @@ function createMockConversationRepository(
   return {
     createUserAndAssistantTurn,
     getContext: mock(() => Promise.resolve(null)),
+    isContextCurrent: mock(() => Promise.resolve(true)),
     createAssistantTurn: mock(() => Promise.resolve(null)),
     onBotMessageSent,
     deleteMessageMapping,

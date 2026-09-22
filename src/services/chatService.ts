@@ -38,6 +38,11 @@ export interface ChatUserInput {
   text: string;
   parts?: ChatMessageContent[];
   conversation?: ConversationContext;
+  /**
+   * Checked right before each model request that would carry
+   * `conversation`; `false` sends the request without history.
+   */
+  isConversationCurrent?: (context: ConversationContext) => Promise<boolean>;
 }
 
 /** Non-guild context the tool loop needs (guildId is threaded in separately). */
@@ -489,9 +494,9 @@ export class ChatService implements IChatService {
       // between the last read and the request.
       let historyEnabled = Boolean(settings.historyEnabled && input.conversation);
       if (historyEnabled) {
-        const stillEnabled = await this.readHistoryEnabled(guildId, controller.signal);
-        if (stillEnabled === null) return { status: "cancelled", history: initialMessages };
-        historyEnabled = stillEnabled;
+        const usable = await this.isHistoryUsable(input, controller.signal);
+        if (usable === null) return { status: "cancelled", history: initialMessages };
+        historyEnabled = usable;
       }
       let request: ChatCompletionRequest;
       if (historyEnabled && input.conversation) {
@@ -525,9 +530,9 @@ export class ChatService implements IChatService {
           return { status: "cancelled", history: initialMessages };
         }
         const built = builtResult.value;
-        const stillEnabled = await this.readHistoryEnabled(guildId, controller.signal);
-        if (stillEnabled === null) return { status: "cancelled", history: initialMessages };
-        historyEnabled = stillEnabled;
+        const usable = await this.isHistoryUsable(input, controller.signal);
+        if (usable === null) return { status: "cancelled", history: initialMessages };
+        historyEnabled = usable;
         request = historyEnabled
           ? buildChatRequest(settings.defaultModel, input, tweetParts, built)
           : buildWithoutHistory();
@@ -553,11 +558,17 @@ export class ChatService implements IChatService {
         !tracked.stagedNonEmpty
       ) {
         console.warn("[chatService] retrying after removing tweet images");
+        if (historyEnabled) {
+          const usable = await this.isHistoryUsable(input, controller.signal);
+          if (usable === null) return { status: "cancelled", history: initialMessages };
+          historyEnabled = usable;
+        }
+        const retryBase = historyEnabled ? request : buildWithoutHistory();
         const retryRequest = buildChatRequest(
           settings.defaultModel,
           input,
           expansion?.textParts ?? [],
-          request.messages.map((message) =>
+          retryBase.messages.map((message) =>
             message.role === "user" && Array.isArray(message.content)
               ? {
                   ...message,
@@ -590,11 +601,20 @@ export class ChatService implements IChatService {
     }
   }
 
-  /** `null` when the request was cancelled; a failed read counts as disabled. */
-  private async readHistoryEnabled(guildId: GuildId, signal: AbortSignal): Promise<boolean | null> {
+  /**
+   * `null` when the request was cancelled. Without a validator, or when the
+   * check fails, the snapshot is treated as unusable: sending history that
+   * may have been deleted is worse than answering without it.
+   */
+  private async isHistoryUsable(
+    input: ChatUserInput,
+    signal: AbortSignal,
+  ): Promise<boolean | null> {
+    const { conversation, isConversationCurrent } = input;
+    if (!conversation || !isConversationCurrent) return false;
     try {
-      const result = await raceWithAbort(this.settingsService.getGuildSettings(guildId), signal);
-      return result.ok ? result.value.historyEnabled : null;
+      const result = await raceWithAbort(isConversationCurrent(conversation), signal);
+      return result.ok ? result.value : null;
     } catch {
       return false;
     }
