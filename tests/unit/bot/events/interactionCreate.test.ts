@@ -116,6 +116,7 @@ describe("interactionCreate: 無料モデル限定ボタン", () => {
 
   beforeEach(async () => {
     db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
     applyMigrations(db);
     settingsService = new SettingsService(new GuildSettingsRepository(db, FREE_MODEL));
     pendingChecks = [];

@@ -12,6 +12,9 @@ import {
 } from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
 
+export type DeleteOwnMessage = (message: Message) => Promise<void>;
+export type OnBotMessageSent = (message: Message) => Promise<void>;
+
 const STREAM_UPDATE_INTERVAL = 2000; // 2秒
 
 /**
@@ -89,6 +92,8 @@ async function updateStreamingMessages(
   color: number,
   originalMessage: Message,
   isFinalized: () => boolean,
+  deleteOwnMessage: DeleteOwnMessage,
+  onBotMessageSent: OnBotMessageSent,
 ): Promise<boolean> {
   if (isFinalized()) return false;
 
@@ -128,7 +133,7 @@ async function updateStreamingMessages(
           // （最終描画側の管理下に置かない）、Discord 上にも停止ボタン付きメッセージとして
           // 残らないよう best-effort で削除する。削除失敗はここでは復旧不能なため warn のみ。
           try {
-            await newMessage.delete();
+            await deleteOwnMessage(newMessage);
           } catch (deleteError) {
             logger.warn("Failed to delete a message sent after finalize", {
               deleteError,
@@ -138,6 +143,7 @@ async function updateStreamingMessages(
           return false;
         }
         botMessages.push(newMessage);
+        await onBotMessageSent(newMessage);
       }
 
       if (i >= oldLastIndex) {
@@ -233,6 +239,10 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
     initialBotMessage: Message,
     private readonly modelName: string,
     private readonly color: number,
+    private readonly deleteOwnMessage: DeleteOwnMessage = async (message) => {
+      await message.delete();
+    },
+    private readonly onBotMessageSent: OnBotMessageSent = async () => {},
   ) {
     this.botMessages = [initialBotMessage];
   }
@@ -319,6 +329,8 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
           this.color,
           this.originalMessage,
           () => this.finalized,
+          this.deleteOwnMessage,
+          this.onBotMessageSent,
         );
         // Only recorded when `updateStreamingMessages()` actually finished
         // rendering `snapshotText` (see its own doc comment): a failed/partial

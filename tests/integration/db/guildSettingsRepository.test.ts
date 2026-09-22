@@ -11,6 +11,7 @@ describe("GuildSettingsRepository", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
     applyMigrations(db);
     repo = new GuildSettingsRepository(db, TEST_DEFAULT_MODEL);
   });
@@ -63,6 +64,7 @@ describe("GuildSettingsRepository", () => {
         autoReplyChannels: [],
         webSearchEnabled: false,
         twitterExpandEnabled: true,
+        historyEnabled: false,
       });
       expect(await repo.findByGuildId("new-guild")).toEqual(result);
     });
@@ -113,6 +115,64 @@ describe("GuildSettingsRepository", () => {
       expect((await repo.findByGuildId("guild-twitter"))?.twitterExpandEnabled).toBe(true);
     });
 
+    test("会話履歴を切り替え、無効化と同じtransactionで保存済みsessionを削除する", async () => {
+      expect((await repo.findByGuildId("guild-history"))?.historyEnabled).toBeUndefined();
+
+      await repo.setHistoryEnabled("guild-history", true);
+      db.query(
+        `INSERT INTO sessions (openrouter_session_id, guild_id, channel_id, started_at, last_activity_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run("session-history", "guild-history", "channel-1", 1, 1);
+      expect((await repo.findByGuildId("guild-history"))?.historyEnabled).toBe(true);
+
+      await repo.setHistoryEnabled("guild-history", false);
+
+      expect((await repo.findByGuildId("guild-history"))?.historyEnabled).toBe(false);
+      expect(db.query("SELECT * FROM sessions WHERE guild_id = ?").all("guild-history")).toEqual(
+        [],
+      );
+    });
+
+    test("会話履歴の無効化は保存済みの turn と写像まで消し、設定の更新が失敗したら削除も戻す", async () => {
+      await repo.setHistoryEnabled("guild-atomic", true);
+      db.query(
+        `INSERT INTO sessions (openrouter_session_id, guild_id, channel_id, started_at, last_activity_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run("session-atomic", "guild-atomic", "channel-1", 1, 1);
+      const sessionId = (
+        db
+          .query("SELECT id FROM sessions WHERE openrouter_session_id = ?")
+          .get("session-atomic") as {
+          id: number;
+        }
+      ).id;
+      db.query(
+        `INSERT INTO turns (session_id, role, author_id, author_label, status, content_json, discord_created_at)
+         VALUES (?, 'user', 'user-1', 'User', 'completed', '[]', 1)`,
+      ).run(sessionId);
+      const userTurnId = (db.query("SELECT last_insert_rowid() as id").get() as { id: number }).id;
+      db.query("INSERT INTO turn_messages (turn_id, discord_msg_id, seq) VALUES (?, ?, 0)").run(
+        userTurnId,
+        "user-message",
+      );
+      const count = (table: string): number =>
+        (db.query(`SELECT COUNT(*) as count FROM ${table}`).get() as { count: number }).count;
+
+      db.run(
+        "CREATE TRIGGER fail_settings_update BEFORE UPDATE ON guild_settings BEGIN SELECT RAISE(ABORT, 'update failed'); END",
+      );
+      await expect(repo.setHistoryEnabled("guild-atomic", false)).rejects.toThrow();
+      expect(count("sessions")).toBe(1);
+      expect(count("turns")).toBe(1);
+      expect(count("turn_messages")).toBe(1);
+
+      db.run("DROP TRIGGER fail_settings_update");
+      await repo.setHistoryEnabled("guild-atomic", false);
+      expect(count("sessions")).toBe(0);
+      expect(count("turns")).toBe(0);
+      expect(count("turn_messages")).toBe(0);
+    });
+
     test("createdAt は変えず、書いたときだけ updatedAt を進める", async () => {
       const original = await repo.update("guild-time", () => ({ defaultModel: "v1" }));
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -156,6 +216,7 @@ describe("GuildSettingsRepository", () => {
 
     test("既存のrelease_channel_idカラムを保持したまま他の設定を読み書きできる", async () => {
       const legacyDb = new Database(":memory:");
+      legacyDb.run("PRAGMA foreign_keys = ON");
       try {
         legacyDb.run(`
           CREATE TABLE guild_settings (

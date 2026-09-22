@@ -1,6 +1,6 @@
 ---
 title: "対話UX改善（会話履歴ストア）"
-status: planned
+status: in-progress
 priority: high
 summary: "DB 永続の会話履歴、無活動ギャップとトークン予算による文脈構築、OpenRouter session routing、削除への追従"
 ---
@@ -65,7 +65,8 @@ Responses API は会話状態をサーバ側へ保存せず（`store` は `false
 | OpenRouter Responses API | 会話状態の保存先として採用しない | Responses API は stateless であり、`store` は `false` 固定、`previous_response_id` は 400 で拒否される |
 | addressing の範囲 | 現在の `shouldRespond()`（`src/bot/events/messageCreate.ts`）が応答する発言、つまり bot へのメンションを含む発言と autoReply チャンネル（およびその配下のスレッド）の発言を addressed turn とする。`message.mentions.has()` は返信通知によるメンションも数えるので、返信通知を付けた bot のメッセージへのリプライは本文に `<@bot>` が無くても addressed turn になる。返信通知を切ったリプライは addressed turn にならない | 本 change は応答する条件を変えない。返信通知を切ったリプライにも応答させるかは Open Questions |
 | 変動する system 情報の位置 | 現在日時のように毎回変わる system 情報は、履歴の後ろ、今回の user turn の直前に置く。先頭の system メッセージには変わらない内容だけを置く | prompt cache は先頭からの一致でしか効かない。Web 検索 ON 時の system メッセージは分単位の現在日時を含み、先頭に置くと毎分 prefix が変わって履歴全体が cache miss になる |
-| FK 強制 | 接続時 `PRAGMA foreign_keys = ON`（現状 WAL のみ）+ 子に `ON DELETE CASCADE` | SQLite は FK 既定 off |
+| FK 強制 | 接続時に `PRAGMA foreign_keys = ON`（WAL と `busy_timeout = 5000` と並べて `src/db/index.ts` で設定）+ 子に `ON DELETE CASCADE`。外部キーの子側の列にはすべて、その列を先頭に持つ index を置く | SQLite は FK 既定 off。子側の index が無いと、親の削除のたびに子の表を全件走査し、大量の purge がイベントループを止める |
+| 送信直前の履歴の確認 | 取得した履歴のスナップショットは、履歴を組み立てる前、最初のリクエストの前、画像を外したやり直しの前に、`isContextCurrent()` で確かめる。履歴が ON で、session が残り、スナップショットの各 exchange（今回の exchange を含み、取得後に付いた assistant も DB から引く）が削除記録にも purge 待ちにも当たらないときだけ、そのまま送る。確かめられなければ、今回の発言だけを `session_id` なしで送る | 取得から送信までの間には、ツイート展開、モデル情報の取得、PDF の再取得などの待ちがある。その間の `/config history off`（続けて `on` にされても）や削除を、送る直前の 1 か所で反映するため |
 | 冪等性 | user turn の作成は `turn_messages.discord_msg_id` の UNIQUE で冪等にする。同じ Discord メッセージの 2 回目の `messageCreate` は、写像があれば何もしない | gateway の再送で同じ発言に 2 回答えないため |
 | bot turn の確定 | 生成の前に assistant turn を `pending` で作り、送信・追加送信のたびに写像を足し、最終描画（追加送信と余ったメッセージの削除）を終えてから `completed` / `stopped` / `failed` と `finalized_at` を書く。起動時に残っている `pending` はすべて `failed` にする | 応答の途中で bot が落ちた turn を、次の起動後に文脈へ入れないため。落ちた時点で送信済みだったメッセージは写像ごと残し、削除は後続 change に回す |
 | assistant turn を文脈に入れる時刻 | `finalized_at`（確定した時刻）が今回の user 発言の Discord 生成時刻以下のものだけを入れる | 最初の bot メッセージは「生成中」の placeholder で、その時刻は回答が完成した時刻ではない。利用者が前の回答の完成前に次の発言を書いた場合、その発言の文脈に後から完成した回答を入れない |
@@ -77,6 +78,7 @@ Responses API は会話状態をサーバ側へ保存せず（`store` は `false
 | 境界の予算選択 | 依存閉じた exchange（user + その assistant）単位で新しい順に採用 | 行単位だと role 整合が壊れる |
 | 共有チャンネル | user turn に `author_label`（表示名スナップショット）+ 安定 `author_id` | 表示名は変わりうるので再現性のためスナップショット |
 | オプトイン | guild 設定 `history_enabled`（既定 0）。0 の guild では turn を保存せず、現行どおり今回の発言だけを送る。1 → 0 に変えたらその guild の履歴を物理削除する。turn を作る transaction の中で `history_enabled` を読み直し、0 なら何も作らない | 発言を DB に残すことを guild の管理者が明示的に選ぶ。無効化後に古い履歴が残ると、再度有効化したときに意図しない文脈が戻る |
+| 履歴の DB 操作の失敗 | `historyRecorder` を履歴の全 write と context 構築に使い、各操作の失敗を捕捉して回答経路へ例外を渡さない。context の read に失敗した場合は履歴と `session_id` なしで回答する。history off の発言では履歴の DB 操作を行わない。送信済み bot message の写像保存に失敗したら親 user turn を削除し、purge にも失敗した対象はメッセージ ID と channel / thread / guild の scope を持つプロセス内の非期限付き集合に残して context から除外し、context 構築時と TTL sweep 時に再試行する。purge に成功した対象は集合から取り除く。 | 履歴は回答より二次的であり、削除を追従できない内容を残すより fail closed（purge）を優先するため |
 | 保持/purge | 容量 TTL は exchange 単位（最後の turn から 30 日を過ぎた後の、次の sweep で消す）。Discord メッセージ削除（写像のあるもの）、チャンネル削除、スレッド削除、guild 退出は該当範囲を CASCADE で物理削除する | 消したものは DB からも消す。TTL を turn 単位にすると exchange の片側だけが残る |
 | 削除イベントの受け方 | discord.js のイベントではなく、`Events.Raw` で gateway の `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE` を受け、payload の ID で DB を引く | discord.js 14.26.5 の `threadDelete` はスレッドが channel cache にある場合だけ発火し、`messageDelete` もチャンネルの解決に依存する。再起動後の archived thread のように、DB に履歴があってキャッシュに無い対象の削除を取りこぼす。gateway の payload はキャッシュに関係なく ID を持つ |
 
@@ -131,6 +133,8 @@ CREATE TABLE turns (
 CREATE INDEX idx_turns_session ON turns(session_id, discord_created_at, id);
 CREATE UNIQUE INDEX idx_turns_one_assistant ON turns(parent_user_turn_id) WHERE role='assistant' AND status != 'failed';
 CREATE INDEX idx_turns_created ON turns(discord_created_at); -- TTL sweep
+CREATE INDEX idx_turns_parent ON turns(parent_user_turn_id); -- user turn から assistant を引く（上の部分 UNIQUE index は条件付きなので使えない）
+CREATE INDEX idx_turns_reply_to ON turns(reply_to_turn_id); -- turn の削除で ON DELETE SET NULL が参照元を引く
 
 CREATE TABLE turn_messages (
   turn_id        INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
@@ -224,28 +228,29 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 - `GUILD_DELETE`: payload に `unavailable: true` が無い場合（bot の退出・キック）だけ、その guild の session をすべて消す。`unavailable: true` は Discord 側の障害による一時的な利用不能なので消さない。
 - TTL: 起動時と 24 時間ごとに、最後の turn の `discord_created_at` が 30 日より前の exchange を消し、空になった session も消す。
 - `/config history <on|off>`: 暫定で `ManageGuild` を handler 内で確認する（[権限管理](../permissions/design.md) の機構ができたらそれに従う）。`off` にしたら同じ transaction でその guild の session をすべて消す。応答には、発言を DB に保存すること、Bot がオフラインの間に消したメッセージは DB に残りうることを書く。
-- **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。
+- **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。purge が失敗し続ける場合はプロセスが稼働している間だけ再試行し、再起動後は TTL または `/config history off` まで exchange が残る。
 - `/status` に履歴の ON/OFF を出す。README に保存する内容、保持期間（最後の発言から 30 日を過ぎた後の次の sweep で消える）、削除への追従の範囲と上の限界を書く。
 - `messageUpdate`（user 編集）は無視し、保存した内容を保つ。編集に追従した再生成は [conversation-regeneration](../conversation-regeneration/design.md) の範囲。
 
 ## Tasks
 
-- [ ] `PRAGMA foreign_keys = ON` を `src/db/index.ts` に追加し、テストが独自に開く `:memory:` の接続にも同じ PRAGMA を掛けてから、既存テストが通ることを確かめる
-- [ ] `sessions` / `turns` / `turn_messages` と `guild_settings.history_enabled` のマイグレーション
-- [ ] `ConversationRepository`: session の割り当て、user turn と pending assistant turn の作成（冪等）、写像の追加、確定、写像の削除、purge（メッセージ・チャンネル・スレッド・guild）、TTL sweep、起動時の pending の失敗化
-- [ ] `PersistedContentPart` 型と、入力からの変換・hydration
-- [ ] 文脈の構築（cutoff、exchange 単位の予算、並び）と `stripHistoricalMedia()`
-- [ ] トークン予算の推定
-- [ ] `author_label` の正規化と接頭辞の描画
-- [ ] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
-- [ ] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
-- [ ] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
-- [ ] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す
-- [ ] `file-parser` plugin の付与条件を履歴全体へ広げる
-- [ ] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
-- [ ] `/config history` と `/status`、README
-- [ ] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
-- [ ] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加
+- [x] `PRAGMA foreign_keys = ON` を `src/db/index.ts` に追加し、テストが独自に開く `:memory:` の接続にも同じ PRAGMA を掛けてから、既存テストが通ることを確かめる
+- [x] `sessions` / `turns` / `turn_messages` と `guild_settings.history_enabled` のマイグレーション
+- [x] `ConversationRepository`: session の割り当て、user turn と pending assistant turn の作成（冪等）、写像の追加、確定、写像の削除、purge（メッセージ・チャンネル・スレッド・guild）、TTL sweep、起動時の pending の失敗化
+- [x] `PersistedContentPart` 型と、入力からの変換・hydration
+- [x] 文脈の構築（cutoff、exchange 単位の予算、並び）と `stripHistoricalMedia()`
+- [x] トークン予算の推定
+- [x] `author_label` の正規化と接頭辞の描画
+- [x] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
+- [x] 履歴の DB 操作を `src/services/historyRecorder.ts` に集約し、失敗時の fail closed、pending purge の再試行、履歴 context の除外を実装する
+- [x] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
+- [x] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
+- [x] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す
+- [x] `file-parser` plugin の付与条件を履歴全体へ広げる
+- [x] `Events.Raw` による `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE`（`unavailable` を除く）の handler
+- [x] `/config history` と `/status`、README
+- [x] テスト（冪等性、`history_enabled` の transaction 内での再確認、保存前・写像追加前に届いた削除、送信 5 経路の写像、finalize 後の遅延送信を写像せず消すこと、`finalized_at` による cutoff、キャッシュに無いスレッドの削除、`GUILD_DELETE` の `unavailable`、session の割り当て、親の検証、exchange 単位の予算、剥がし、hydration の失敗時、発話者の正規化、各削除イベントの purge、内部削除で purge しないこと、起動時の pending、TTL、`session_id` が全ターンに載ること）
+- [x] e2e に 2 往復の会話で前の発言を覚えているかを確かめるシナリオを追加（`history-set` / `history-recall`、名前指定時のみ）
 - [ ] prompt caching 対応モデルで同一 session の連続 request を実測し、返却された cache usage と provider routing を記録。top-level `cache_control` を付けるかをこの結果で決める
 - [ ] 手動確認: 実クライアントで `/config history on` にして 2 往復会話し、bot の返答メッセージを削除すると次の返答がその exchange を覚えていないこと、`/config history off` の後は前の会話を覚えていないことを確かめる
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）

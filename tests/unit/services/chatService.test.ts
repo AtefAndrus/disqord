@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
+import type { ConversationContext } from "../../../src/db/repositories/conversation";
 import { BadRequestError } from "../../../src/errors";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
@@ -51,6 +52,7 @@ function createSpyUpdater(): {
 }
 
 describe("ChatService", () => {
+  const alwaysCurrent = (): Promise<boolean> => Promise.resolve(true);
   let chatService: ChatService;
   let mockLLMClient: ILLMClient;
   let mockSettingsService: ISettingsService;
@@ -278,6 +280,523 @@ describe("ChatService", () => {
   });
 
   describe("generateChatResponse", () => {
+    function conversationContext(
+      overrides: Partial<ConversationContext> = {},
+    ): ConversationContext {
+      return {
+        current: {
+          id: 3,
+          sessionId: 1,
+          role: "user",
+          authorId: "current-id",
+          authorLabel: "Current",
+          status: "completed",
+          active: true,
+          discordCreatedAt: 3,
+          finalizedAt: null,
+          discordMessageId: "3",
+          content: [{ type: "text", text: "now" }],
+        },
+        exchanges: [
+          {
+            user: {
+              id: 1,
+              sessionId: 1,
+              role: "user",
+              authorId: "prior-id",
+              authorLabel: "Prior",
+              status: "completed",
+              active: true,
+              discordCreatedAt: 1,
+              finalizedAt: null,
+              discordMessageId: "1",
+              content: [{ type: "text", text: "before" }],
+            },
+            assistant: {
+              id: 2,
+              sessionId: 1,
+              role: "assistant",
+              authorId: null,
+              authorLabel: null,
+              status: "completed",
+              active: true,
+              discordCreatedAt: 2,
+              finalizedAt: 2,
+              discordMessageId: "2",
+              content: [{ type: "text", text: "answer" }],
+            },
+          },
+        ],
+        openrouterSessionId: "opaque-session-id",
+        ...overrides,
+      };
+    }
+
+    test("history places static systems first, hydrates prior media, prefixes authors, and sends session_id", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true, webSearchEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "file"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const originalFetch = globalThis.fetch;
+      const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50, 0x44, 0x46]))));
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+      const defaultExchange = conversationContext().exchanges[0];
+      if (!defaultExchange) throw new Error("default exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            user: {
+              ...defaultExchange.user,
+              content: [
+                { type: "text", text: "before" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/history.pdf",
+                  filename: "history.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+            assistant: defaultExchange.assistant,
+          },
+        ],
+      });
+
+      try {
+        const { updater } = createSpyUpdater();
+        await chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
+          "req-history",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.session_id).toBe("opaque-session-id");
+      expect(request.plugins).toEqual([{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]);
+      expect(request.messages.map((message) => message.role)).toEqual([
+        "system",
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ]);
+      expect(request.messages[0]?.content).toContain("非信頼データ");
+      expect(request.messages[0]?.content).not.toContain("現在日時");
+      expect(request.messages[1]?.content).toEqual([
+        { type: "text", text: "[Prior]: before" },
+        {
+          type: "file",
+          file: { filename: "history.pdf", file_data: "data:application/pdf;base64,UERG" },
+        },
+      ]);
+      expect(request.messages[3]?.content).toContain("現在日時");
+      expect(request.messages[4]?.content).toBe("[Current]: now");
+      expect(fetcher).toHaveBeenCalledWith("https://cdn.test/history.pdf", {
+        signal: expect.any(AbortSignal),
+      });
+    });
+
+    test("history turned off after the context was read sends neither history nor session_id", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ historyEnabled: false }),
+      );
+      const originalFetch = globalThis.fetch;
+      const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50]))));
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+      const defaultExchange = conversationContext().exchanges[0];
+      if (!defaultExchange) throw new Error("default exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            user: {
+              ...defaultExchange.user,
+              content: [
+                { type: "text", text: "before" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/history.pdf",
+                  filename: "history.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+            assistant: defaultExchange.assistant,
+          },
+        ],
+      });
+
+      try {
+        const { updater } = createSpyUpdater();
+        await chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
+          "req-history-off",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ];
+      expect(request.session_id).toBeUndefined();
+      expect(request.messages.filter((message) => message.role === "assistant")).toEqual([]);
+      expect(JSON.stringify(request.messages)).not.toContain("before");
+      expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    test.each([
+      ["before the history is built", [false], false],
+      ["after the history is built", [true, false], true],
+    ] as const)(
+      "a snapshot that stops being current %s is not sent",
+      async (_when, checks, historyFetched) => {
+        (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+          createMockGuildSettings({ historyEnabled: true }),
+        );
+        const remaining = [...checks];
+        const isConversationCurrent = mock(() => Promise.resolve(remaining.shift() ?? false));
+        const originalFetch = globalThis.fetch;
+        const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50]))));
+        globalThis.fetch = fetcher as unknown as typeof fetch;
+        const defaultExchange = conversationContext().exchanges[0];
+        if (!defaultExchange) throw new Error("default exchange was not created");
+        const context = conversationContext({
+          exchanges: [
+            {
+              user: {
+                ...defaultExchange.user,
+                content: [
+                  { type: "text", text: "before" },
+                  {
+                    type: "file-ref",
+                    url: "https://cdn.test/history.pdf",
+                    filename: "history.pdf",
+                    mime: "application/pdf",
+                  },
+                ],
+              },
+              assistant: defaultExchange.assistant,
+            },
+          ],
+        });
+
+        try {
+          const { updater } = createSpyUpdater();
+          await chatService.generateChatResponse(
+            "guild-123",
+            { text: "now", conversation: context, isConversationCurrent },
+            "req-history-race",
+            updater,
+            { channelId: "channel-1", userId: "user-1" },
+          );
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+          AbortSignal,
+        ];
+        expect(request.session_id).toBeUndefined();
+        expect(JSON.stringify(request.messages)).not.toContain("before");
+        expect(fetcher).toHaveBeenCalledTimes(historyFetched ? 1 : 0);
+      },
+    );
+
+    test("does not re-fetch a historical PDF after it has been stripped", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "image"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange) throw new Error("base exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              id: 10,
+              authorLabel: "Old",
+              content: [
+                { type: "text", text: "old" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/old.pdf",
+                  filename: "old.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+          },
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              id: 11,
+              authorLabel: "New",
+              content: [
+                { type: "text", text: "new" },
+                { type: "image-ref", url: "https://cdn.test/new.png", mime: "image/png" },
+              ],
+            },
+          },
+        ],
+      });
+      const originalFetch = globalThis.fetch;
+      const fetcher = mock(() => Promise.resolve(new Response("should not fetch")));
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+
+      try {
+        const { updater } = createSpyUpdater();
+        await chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
+          "req-no-old-pdf",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+
+      expect(fetcher).not.toHaveBeenCalled();
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+      ];
+      expect(request.messages).toContainEqual({
+        role: "user",
+        content: [
+          { type: "text", text: "[Old]: old" },
+          { type: "text", text: "[earlier file omitted]" },
+        ],
+      });
+      expect(JSON.stringify(request.messages)).not.toContain("old.pdf");
+    });
+
+    test("cancel races the model-details lookup", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() => new Promise<never>(() => {}));
+      const { updater } = createSpyUpdater();
+      const resultPromise = chatService.generateChatResponse(
+        "guild-123",
+        { text: "now", conversation: conversationContext(), isConversationCurrent: alwaysCurrent },
+        "req-model-details-cancel",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      for (
+        let attempt = 0;
+        attempt < 5 &&
+        (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mock.calls.length === 0;
+        attempt++
+      ) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      expect(mockLLMClient.listModelsWithPricing).toHaveBeenCalled();
+      expect(chatService.cancelRequest("req-model-details-cancel")).toBe(true);
+      const result = await resultPromise;
+
+      expect(result.status).toBe("cancelled");
+      expect(mockLLMClient.chatStream).not.toHaveBeenCalled();
+    });
+
+    test("cancel races historical PDF hydration and passes the generation signal", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text", "file"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange) throw new Error("base exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              content: [
+                { type: "text", text: "old" },
+                {
+                  type: "file-ref",
+                  url: "https://cdn.test/pending.pdf",
+                  filename: "pending.pdf",
+                  mime: "application/pdf",
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const originalFetch = globalThis.fetch;
+      const pendingFetch = new Promise<Response>(() => {});
+      const fetcher = mock(() => pendingFetch);
+      globalThis.fetch = fetcher as unknown as typeof fetch;
+
+      try {
+        const { updater } = createSpyUpdater();
+        const resultPromise = chatService.generateChatResponse(
+          "guild-123",
+          { text: "now", conversation: context, isConversationCurrent: alwaysCurrent },
+          "req-hydration-cancel",
+          updater,
+          { channelId: "channel-1", userId: "user-1" },
+        );
+        for (let attempt = 0; attempt < 5 && fetcher.mock.calls.length === 0; attempt++) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        }
+        expect(fetcher).toHaveBeenCalled();
+        expect(chatService.cancelRequest("req-hydration-cancel")).toBe(true);
+        const result = await resultPromise;
+
+        expect(result.status).toBe("cancelled");
+        const fetchCalls = fetcher.mock.calls as unknown as Array<
+          [string, { signal: AbortSignal }]
+        >;
+        const fetchOptions = fetchCalls[0]?.[1];
+        if (!fetchOptions) throw new Error("historical PDF fetch was not captured");
+        expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+        expect(fetchOptions.signal.aborted).toBe(true);
+        expect(mockLLMClient.chatStream).not.toHaveBeenCalled();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    test("history budget counts author prefixes and keeps whole exchanges", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockLLMClient.listModelsWithPricing = mock(() =>
+        Promise.resolve([
+          {
+            id: "test-model:fixture",
+            name: "Fixture",
+            created: 0,
+            contextLength: 20_000,
+            pricing: { prompt: "0", completion: "0" },
+            inputModalities: ["text"],
+            outputModalities: ["text"],
+          },
+        ]),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange?.assistant) throw new Error("base exchange was not created");
+      const newestUserText = "n".repeat(1_980);
+      const newestAssistantText = "a".repeat(2_008);
+      const newest = {
+        ...baseExchange,
+        user: {
+          ...baseExchange.user,
+          id: 5,
+          authorLabel: "Newest",
+          content: [{ type: "text" as const, text: newestUserText }],
+        },
+        assistant: {
+          ...baseExchange.assistant,
+          id: 6,
+          content: [{ type: "text" as const, text: newestAssistantText }],
+        },
+      };
+      const olderUserText = "o".repeat(10_000);
+      const olderAssistantText = "r".repeat(9_980);
+      const older = {
+        ...baseExchange,
+        user: {
+          ...baseExchange.user,
+          id: 7,
+          authorLabel: "Old",
+          content: [{ type: "text" as const, text: olderUserText }],
+        },
+        assistant: {
+          ...baseExchange.assistant,
+          id: 8,
+          content: [{ type: "text" as const, text: olderAssistantText }],
+        },
+      };
+      const { updater } = createSpyUpdater();
+      await chatService.generateChatResponse(
+        "guild-123",
+        {
+          text: "now",
+          conversation: { ...base, exchanges: [older, newest] },
+          isConversationCurrent: alwaysCurrent,
+        },
+        "req-budget",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+        ChatCompletionRequest,
+      ];
+      expect(request.messages).toHaveLength(3);
+      expect(request.messages[0]).toEqual({
+        role: "user",
+        content: [{ type: "text", text: `[Newest]: ${newestUserText}` }],
+      });
+      expect(request.messages[1]).toEqual({
+        role: "assistant",
+        content: newestAssistantText,
+      });
+      expect(request.messages[2]).toEqual({ role: "user", content: "[Current]: now" });
+      expect(JSON.stringify(request.messages)).not.toContain(olderUserText);
+      expect(JSON.stringify(request.messages)).not.toContain(olderAssistantText);
+    });
+
     test("multimodal request (content 配列 + plugins) を chatStream に渡す", async () => {
       const { updater } = createSpyUpdater();
 
@@ -380,12 +899,13 @@ describe("ChatService", () => {
           },
         ]);
         expect(request.tool_choice).toBe("auto");
-        expect(request.messages).toHaveLength(2);
-        expect(request.messages[1]).toEqual({ role: "user", content: "Hello" });
-        const system = request.messages[0];
-        expect(system?.role).toBe("system");
-        expect(system?.content).toContain("2026/09/22(火) 14:00 (JST)");
-        expect(system?.content).toContain("非信頼データ");
+        expect(request.messages).toHaveLength(3);
+        expect(request.messages[2]).toEqual({ role: "user", content: "Hello" });
+        const staticSystem = request.messages[0];
+        expect(staticSystem?.role).toBe("system");
+        expect(staticSystem?.content).toContain("非信頼データ");
+        expect(staticSystem?.content).not.toContain("2026/09/22(火) 14:00 (JST)");
+        expect(request.messages[1]?.content).toContain("2026/09/22(火) 14:00 (JST)");
       } finally {
         setSystemTime();
       }
@@ -423,9 +943,16 @@ describe("ChatService", () => {
         ChatCompletionRequest,
         AbortSignal,
       ];
-      expect(request.messages.map((message) => message.role)).toEqual(["system", "system", "user"]);
-      expect(request.messages[1]?.content).toContain("非信頼データ");
-      expect(request.messages[2]?.content).toEqual([
+      expect(request.messages.map((message) => message.role)).toEqual([
+        "system",
+        "system",
+        "system",
+        "user",
+      ]);
+      expect(request.messages[0]?.content).toContain("非信頼データ");
+      expect(request.messages[1]?.content).toContain("untrusted-tweet");
+      expect(request.messages[2]?.content).toContain("現在日時");
+      expect(request.messages[3]?.content).toEqual([
         { type: "text", text: "read this" },
         { type: "text", text: "<untrusted-tweet>tweet</untrusted-tweet>" },
       ]);
@@ -636,18 +1163,25 @@ describe("ChatService", () => {
       expect(request.messages).toEqual([{ role: "user", content: "通常の質問" }]);
     });
 
-    test("画像付きリクエストのBadRequestErrorは本文未表示時だけ画像を外して一度再試行する", async () => {
+    test("現在の画像があるとき、BadRequestErrorの再試行でも履歴画像を剥がす", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
       mockTweetService.extractTweetIds = mock(() => ["20"]);
-      const imagePart = {
+      const tweetImagePart = {
         type: "image_url" as const,
         image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      const directImagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://cdn.discord.test/direct.png" },
       };
       mockTweetService.expandTweets = mock(() =>
         Promise.resolve({
           status: "expanded" as const,
-          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          parts: [{ type: "text" as const, text: "tweet" }, tweetImagePart],
           textParts: [{ type: "text" as const, text: "tweet" }],
-          imageParts: [imagePart],
+          imageParts: [tweetImagePart],
         }),
       );
       const imageModelService = new ModelService(mockLLMClient);
@@ -656,7 +1190,7 @@ describe("ChatService", () => {
           id: "test-model:fixture",
           name: "fixture",
           created: 0,
-          contextLength: 4096,
+          contextLength: 20_000,
           pricing: { prompt: "0", completion: "0" },
           inputModalities: ["text", "image"],
           outputModalities: ["text"],
@@ -689,10 +1223,32 @@ describe("ChatService", () => {
         mockTweetService,
         imageModelService,
       );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange) throw new Error("base exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              content: [
+                { type: "text", text: "history" },
+                { type: "image-ref", url: "https://cdn.test/history.png", mime: "image/png" },
+              ],
+            },
+          },
+        ],
+      });
 
       const result = await imageChat.generateChatResponse(
         "guild-123",
-        { text: "read" },
+        {
+          text: "read",
+          parts: [directImagePart],
+          conversation: context,
+          isConversationCurrent: alwaysCurrent,
+        },
         "req-retry",
         updater,
         {
@@ -707,19 +1263,135 @@ describe("ChatService", () => {
         ChatCompletionRequest,
         AbortSignal,
       ][];
-      expect(calls[0]?.[0].messages[1]?.content).toEqual([
-        { type: "text", text: "read" },
-        { type: "text", text: "tweet" },
-        imagePart,
+      expect(calls[0]?.[0].messages[0]?.content).toEqual([
+        { type: "text", text: "[Prior]: history" },
+        { type: "text", text: "[earlier image omitted]" },
       ]);
-      expect(calls[1]?.[0].messages[1]?.content).toEqual([
-        { type: "text", text: "read" },
+      expect(calls[1]?.[0].messages[0]?.content).toEqual(calls[0]?.[0].messages[0]?.content);
+      expect(calls[0]?.[0].messages.at(-1)?.content).toEqual([
+        { type: "text", text: "[Current]: read" },
+        directImagePart,
+        { type: "text", text: "tweet" },
+        tweetImagePart,
+      ]);
+      expect(calls[1]?.[0].messages.at(-1)?.content).toEqual([
+        { type: "text", text: "[Current]: read" },
+        directImagePart,
         { type: "text", text: "tweet" },
       ]);
       // The rejected attempt's usage is kept alongside the retry's.
       expect(result.usage?.prompt_tokens).toBe(33);
       expect(result.usage?.total_tokens).toBe(36);
       expect(result.usage?.cost).toBeCloseTo(0.03);
+    });
+
+    test("現在の入力に画像が無ければ、履歴画像を保持する", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange) throw new Error("base exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              content: [
+                { type: "text", text: "history" },
+                { type: "image-ref", url: "https://cdn.test/history.png", mime: "image/png" },
+              ],
+            },
+          },
+        ],
+      });
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "read", conversation: context, isConversationCurrent: alwaysCurrent },
+        "req-history-media-kept",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls[0]?.[0].messages[0]?.content).toEqual([
+        { type: "text", text: "[Prior]: history" },
+        { type: "image_url", image_url: { url: "https://cdn.test/history.png" } },
+      ]);
+    });
+
+    test("a snapshot that stops being current before the image-free retry is not resent", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      mockTweetService.extractTweetIds = mock(() => ["20"]);
+      const imagePart = {
+        type: "image_url" as const,
+        image_url: { url: "https://pbs.twimg.com/a" },
+      };
+      mockTweetService.expandTweets = mock(() =>
+        Promise.resolve({
+          status: "expanded" as const,
+          parts: [{ type: "text" as const, text: "tweet" }, imagePart],
+          textParts: [{ type: "text" as const, text: "tweet" }],
+          imageParts: [imagePart],
+        }),
+      );
+      (mockLLMClient.listModelsWithPricing as ReturnType<typeof mock>).mockResolvedValue([
+        {
+          id: "test-model:fixture",
+          name: "fixture",
+          created: 0,
+          contextLength: 20_000,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text", "image"],
+          outputModalities: ["text"],
+        },
+      ]);
+      (mockLLMClient.chatStream as ReturnType<typeof mock>).mockImplementationOnce(
+        async function* () {
+          yield* [];
+          throw new BadRequestError("image rejected");
+        },
+      );
+      // Current before building and before the first request, then purged.
+      const checks = [true, true, false];
+      const isConversationCurrent = mock(() => Promise.resolve(checks.shift() ?? false));
+      const imageChat = new ChatService(
+        mockLLMClient,
+        mockSettingsService,
+        toolRegistry,
+        "perplexity",
+        mockTweetService,
+        new ModelService(mockLLMClient),
+      );
+      const { updater } = createSpyUpdater();
+
+      await imageChat.generateChatResponse(
+        "guild-123",
+        { text: "read", conversation: conversationContext(), isConversationCurrent },
+        "req-retry-history-gone",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[0].session_id).toBe("opaque-session-id");
+      expect(JSON.stringify(calls[0]?.[0].messages)).toContain("[Prior]");
+      expect(calls[1]?.[0].session_id).toBeUndefined();
+      expect(JSON.stringify(calls[1]?.[0].messages)).not.toContain("[Prior]");
+      expect(JSON.stringify(calls[1]?.[0].messages)).toContain("tweet");
+      expect(JSON.stringify(calls[1]?.[0].messages)).not.toContain("pbs.twimg.com");
     });
 
     test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {

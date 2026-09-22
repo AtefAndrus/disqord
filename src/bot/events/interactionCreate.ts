@@ -41,6 +41,7 @@ export interface CommandHandlers {
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configWebSearch: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configTwitterExpand: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configHistory: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -139,6 +140,9 @@ export function createInteractionCreateHandler(
                 break;
               case "twitter-expand":
                 await handlers.configTwitterExpand(interaction);
+                break;
+              case "history":
+                await handlers.configHistory(interaction);
                 break;
             }
           }

@@ -250,9 +250,82 @@ describe("config twitter-expand handler", () => {
   });
 });
 
+describe("config history handler", () => {
+  function createHistoryInteraction(
+    value: "on" | "off",
+    hasManageGuild: boolean,
+  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
+    const { interaction, reply } = createInteraction(value);
+    Object.assign(interaction, {
+      memberPermissions: {
+        has: mock((permission: bigint) =>
+          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
+        ),
+      },
+    });
+    return { interaction, reply };
+  }
+
+  test("on stores the setting and explains storage, retention, and online deletion limits", async () => {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const { interaction, reply } = createHistoryInteraction("on", true);
+
+    await handlers.configHistory(interaction);
+
+    expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", true);
+    const description = repliedEmbed(reply).description ?? "";
+    expect(description).toContain("データベースに保存");
+    expect(description).toContain("30日");
+    expect(description).toContain("オンライン");
+  });
+
+  test("off purges through the service and explains that saved history is removed", async () => {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const { interaction, reply } = createHistoryInteraction("off", true);
+
+    await handlers.configHistory(interaction);
+
+    expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", false);
+    expect(repliedEmbed(reply).description).toContain("保存済みの会話履歴を削除");
+  });
+
+  test("without ManageGuild it replies ephemerally and does not change the setting", async () => {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const { interaction, reply } = createHistoryInteraction("on", false);
+
+    await handlers.configHistory(interaction);
+
+    expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
+    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
+    expect(payload.flags).toBe(MessageFlags.Ephemeral);
+  });
+});
+
 describe("model set と無料モデル限定の競合", () => {
   test("有料モデルの確認中に限定が ON になったら、モデルは保存されず規則違反になる", async () => {
     const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
     applyMigrations(db);
     const settingsService = new SettingsService(new GuildSettingsRepository(db, "free/model:free"));
     let releaseCheck: (() => void) | undefined;

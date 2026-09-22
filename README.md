@@ -59,6 +59,14 @@ docker run -d \
 ギルド単位で `/config twitter-expand off` を実行すると無効にできる。
 `FXTWITTER_API_BASE` を変更すれば、自ホストした fxtwitter インスタンスを取得先に指定できる。
 
+`/config history on` を有効にすると、Botが応答した発言の本文、添付ファイルのURLとメタデータ、発話者ラベル、およびBotの返答をSQLiteに保存して会話履歴として利用する。
+保存された会話履歴は、最後の発言から30日を過ぎた後の定期 sweep でexchange単位に削除される。
+`/config history off` にすると、そのギルドの保存済み履歴を削除し、以後の発言を保存しない。
+削除への追従はBotがオンライン中に受け取ったDiscordの削除イベントに限られるため、Botの停止中に削除されたメッセージはデータベースに残る場合がある。
+送信直後の削除、Botが内部削除すると決めたメッセージ、削除処理と中立化編集の両方に失敗したメッセージも、削除イベントとの競合や写像のない状態によって履歴に残る場合がある。
+生成中に元の発言が削除されても、回答の生成と送信は続くが、その発言はデータベースに残らない。
+削除イベントを受け取ってもデータベースの削除に失敗した場合、その履歴はBotが動いている間は文脈から外したまま削除を再試行するが、再試行の対象はメモリにしか持たないため、再起動するとTTLか `/config history off` まで残る。
+
 ## コマンド一覧
 
 <!-- AUTO:COMMANDS:START -->
@@ -74,6 +82,7 @@ docker run -d \
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
 | `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
 | `/config twitter-expand <enabled>` | ツイート展開の切り替え（投稿内容を外部ホストへ送信） |
+| `/config history <enabled>` | 会話履歴保存の切り替え（発言をデータベースに保存） |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
 | `/config auto-reply list` | 自動応答チャンネル一覧を表示 |

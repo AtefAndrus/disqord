@@ -51,6 +51,18 @@ export const configCommand = new SlashCommandBuilder()
           .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
       ),
   )
+  .addSubcommand((sub) =>
+    sub
+      .setName("history")
+      .setDescription("会話履歴保存の切り替え（発言をデータベースに保存）")
+      .addStringOption((option) =>
+        option
+          .setName("enabled")
+          .setDescription("有効/無効")
+          .setRequired(true)
+          .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+      ),
+  )
   .addSubcommandGroup((group) =>
     group
       .setName("auto-reply")

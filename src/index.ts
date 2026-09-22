@@ -5,14 +5,17 @@ import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
 import { createInteractionCreateHandler } from "./bot/events/interactionCreate";
 import { createMessageCreateHandler } from "./bot/events/messageCreate";
+import { createRawEventHandler } from "./bot/events/raw";
 import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
+import { ConversationRepository, DeletedBeforeSaveRecord } from "./db/repositories/conversation";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { ToolRegistry } from "./llm/tools/registry";
 import { ChatService } from "./services/chatService";
+import { createHistorySweepRunner, HistoryRecorder } from "./services/historyRecorder";
 import { ModelService } from "./services/modelService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
@@ -40,6 +43,11 @@ async function bootstrap(): Promise<void> {
   logger.info("Database initialized");
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
+  const deletedBeforeSave = new DeletedBeforeSaveRecord();
+  const conversationRepository = new ConversationRepository(db, deletedBeforeSave);
+  const historyRecorder = new HistoryRecorder(conversationRepository);
+  await historyRecorder.failPendingTurns();
+  const initialSweepSucceeded = await historyRecorder.sweepExpired();
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
@@ -70,7 +78,11 @@ async function bootstrap(): Promise<void> {
     chatService,
     settingsService,
     modelService,
-    { e2eTesterBotId: config.e2eTesterBotId, webSearchEngine: config.webSearchEngine },
+    {
+      e2eTesterBotId: config.e2eTesterBotId,
+      webSearchEngine: config.webSearchEngine,
+      historyRecorder,
+    },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
     commandHandlers,
@@ -83,9 +95,15 @@ async function bootstrap(): Promise<void> {
   );
 
   const client = await createBotClient();
+  const rawEventHandler = createRawEventHandler(historyRecorder, deletedBeforeSave);
   client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
+  client.on(Events.Raw, (packet) => {
+    void rawEventHandler(packet).catch(() => {
+      console.error("Failed to handle raw Discord event");
+    });
+  });
 
   metrics.attach({ client });
 
@@ -101,9 +119,15 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
+  const ttlSweepRunner = createHistorySweepRunner(historyRecorder);
+  if (!initialSweepSucceeded) ttlSweepRunner.scheduleRetry();
+  const ttlTimer = setInterval(ttlSweepRunner.run, 24 * 60 * 60 * 1000);
+  ttlTimer.unref();
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+    clearInterval(ttlTimer);
+    ttlSweepRunner.cancel();
     httpServer.stop();
     client.destroy();
     db.close();

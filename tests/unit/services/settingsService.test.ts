@@ -19,6 +19,7 @@ describe("SettingsService", () => {
 
   beforeEach(() => {
     db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
     applyMigrations(db);
     repo = new GuildSettingsRepository(db, DEFAULT_MODEL);
     service = new SettingsService(repo);

@@ -40,6 +40,7 @@ export function createCommandHandlers(
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
 - \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
+- \`/config history <on|off>\` - 会話履歴保存の切り替え（サーバーの管理権限が必要）
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;
@@ -277,6 +278,36 @@ export function createCommandHandlers(
           ? "ツイート展開を **有効** にしました。投稿内のツイート ID を外部ホストへ送信します。"
           : "ツイート展開を **無効** にしました。",
         "ツイート展開設定",
+      );
+      await interaction.reply({ embeds: [embed] });
+    },
+
+    async configHistory(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        const embed = createErrorEmbed(
+          "会話履歴の設定には「サーバーの管理」権限が必要です。",
+          "会話履歴設定",
+        );
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const enabled = interaction.options.getString("enabled", true) === "on";
+      await settingsService.setHistoryEnabled(interaction.guildId, enabled);
+      const retention = "保持期間は最後の発言から30日で、次の定期 sweep で削除されます";
+      const deletionLimit =
+        "削除の追従はBotがオンライン中に受け取ったDiscordの削除イベントに限られ、オフライン中の削除、送信直後の競合、Botが内部削除すると決めたメッセージ、削除と中立化編集の両方に失敗したメッセージはDBに残る場合があります。生成中に元の発言が削除されても、回答の生成と送信は続きますが、DBには残りません";
+      const embed = createSuccessEmbed(
+        enabled
+          ? `会話履歴を **有効** にしました。Botへのメンションなど、応答対象になった発言とBotの返答をデータベースに保存します。${retention}。${deletionLimit}。`
+          : `会話履歴を **無効** にし、保存済みの会話履歴を削除しました。今後の応答対象の発言とBotの返答はデータベースに保存しません。${retention}。${deletionLimit}。`,
+        "会話履歴設定",
       );
       await interaction.reply({ embeds: [embed] });
     },

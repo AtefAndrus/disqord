@@ -30,6 +30,7 @@ export interface ISettingsService {
   removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
   setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings>;
   setTwitterExpandEnabled(guildId: string, twitterExpandEnabled: boolean): Promise<GuildSettings>;
+  setHistoryEnabled(guildId: string, historyEnabled: boolean): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {
@@ -129,5 +130,9 @@ export class SettingsService implements ISettingsService {
     twitterExpandEnabled: boolean,
   ): Promise<GuildSettings> {
     return this.repo.update(guildId, () => ({ twitterExpandEnabled }));
+  }
+
+  async setHistoryEnabled(guildId: string, historyEnabled: boolean): Promise<GuildSettings> {
+    return this.repo.setHistoryEnabled(guildId, historyEnabled);
   }
 }

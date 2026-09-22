@@ -91,7 +91,16 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
         channel: { id: "chan-1", send: sendMock },
       } as unknown as Message;
 
-      const updater = new DiscordStreamingUpdater(originalMessage, initialMessage, "Model", 0);
+      const deleteOwnMessage = mock(() => Promise.resolve());
+      const onBotMessageSent = mock(() => Promise.resolve());
+      const updater = new DiscordStreamingUpdater(
+        originalMessage,
+        initialMessage,
+        "Model",
+        0,
+        deleteOwnMessage,
+        onBotMessageSent,
+      );
 
       setSystemTime(new Date(2020, 0, 1, 0, 0, 2, 100));
       const stagePromise = updater.stageContent(bigChunk);
@@ -115,9 +124,45 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
 
       // 解決後に届いたメッセージは botMessages に加わらず、Discord 上からも削除される。
       expect(updater.messages).toEqual([initialMessage]);
-      expect(deleteMock).toHaveBeenCalledTimes(1);
+      expect(deleteOwnMessage).toHaveBeenCalledWith(newMessage);
+      expect(onBotMessageSent).not.toHaveBeenCalled();
     },
   );
+
+  test("追加送信後のmapping失敗でもstreamingのchat pathをrejectしない", async () => {
+    setSystemTime(new Date(2020, 0, 1, 0, 0, 0));
+    const bigChunk = "x".repeat(4000);
+    const initialMessage = {
+      id: "bot-1",
+      edit: mock(() => Promise.resolve()),
+    } as unknown as Message;
+    const extraMessage = {
+      id: "bot-2",
+      edit: mock(() => Promise.resolve()),
+    } as unknown as Message;
+    const sendMock = mock(() => Promise.resolve(extraMessage));
+    const onBotMessageSent = mock(() => Promise.reject(new Error("mapping failure")));
+    const originalMessage = {
+      id: "trigger-1",
+      channel: { id: "chan-1", send: sendMock },
+    } as unknown as Message;
+    const updater = new DiscordStreamingUpdater(
+      originalMessage,
+      initialMessage,
+      "Model",
+      0,
+      mock(() => Promise.resolve()),
+      onBotMessageSent,
+    );
+
+    setSystemTime(new Date(2020, 0, 1, 0, 0, 2, 100));
+
+    await expect(updater.stageContent(bigChunk)).resolves.toBeUndefined();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(onBotMessageSent).toHaveBeenCalledWith(extraMessage);
+    expect(updater.messages).toEqual([initialMessage, extraMessage]);
+  });
 
   test(
     "1回目の edit が pending のまま、スロットル間隔経過後に呼んだ2回目の stageContent は " +
