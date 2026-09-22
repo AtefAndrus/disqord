@@ -1761,29 +1761,53 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
     WINDOW_SHRUNK_TOKEN_LIMIT,
     WINDOW_SHRUNK_TOKEN_LIMIT + 1,
   ]) {
-    const content = `exchange=${HEALTHY_EXCHANGE}|${"x".repeat(targetTokens * 2)}`;
-    const tokenMessages = [
-      message("400", HEALTHY_EXCHANGE, undefined, { content }),
-      message("401", HEALTHY_EXCHANGE, undefined, { content }),
+    const buildPair = (fillerLength: number): RawDiscordMessage[] => [
+      message("400", HEALTHY_EXCHANGE, undefined, {
+        content: `exchange=${HEALTHY_EXCHANGE}|short`,
+      }),
+      message("401", HEALTHY_EXCHANGE, undefined, {
+        content: `exchange=${HEALTHY_EXCHANGE}|${"x".repeat(fillerLength)}`,
+      }),
     ];
-    const actualTokens = tokenMessages.reduce(
-      (total, candidate, index) =>
-        total +
-        estimateNormalizedMessageTokens(
-          {
-            id: candidate.id,
-            channelId: candidate.channel_id,
-            kind: "user",
-            author: candidate.author.username,
-            time: candidate.timestamp,
-            timestampMs: Date.parse(candidate.timestamp),
-            text: candidate.content,
-            attachments: [],
-            exchangeId: candidate.id,
-          },
-          `m${index + 1}`,
-        ),
-      0,
+    const tokensOf = (candidates: RawDiscordMessage[]): number =>
+      candidates.reduce(
+        (total, candidate, index) =>
+          total +
+          estimateNormalizedMessageTokens(
+            {
+              id: candidate.id,
+              channelId: candidate.channel_id,
+              kind: "user",
+              author: candidate.author.username,
+              time: candidate.timestamp,
+              timestampMs: Date.parse(candidate.timestamp),
+              text: candidate.content,
+              attachments: [],
+              exchangeId: candidate.id,
+            },
+            `m${index + 1}`,
+          ),
+        0,
+      );
+    // 概算は ASCII 4 文字で 1 トークンなので、詰め物の長さを二分探索して狙った合計に一致させる。
+    let low = 0;
+    let high = targetTokens * 4 + 64;
+    let fillerLength = 0;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const tokens = tokensOf(buildPair(mid));
+      if (tokens <= targetTokens) {
+        fillerLength = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    const tokenMessages = buildPair(fillerLength);
+    const actualTokens = tokensOf(tokenMessages);
+    ensure(
+      actualTokens === targetTokens,
+      `token boundary ${targetTokens} could not be hit exactly (got ${actualTokens})`,
     );
     const harness = createHarness({
       name: `token-limit-${targetTokens}`,
@@ -1797,9 +1821,20 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
       await buildAndTrack(harness, tracker, `token-limit-${targetTokens}`),
       `token limit ${targetTokens} returned no context`,
     );
+    const keptTokens = tokensOf(
+      tokenMessages.filter((candidate) =>
+        context.messages.some((kept) => kept.id === candidate.id),
+      ),
+    );
     ensure(
-      Math.abs(actualTokens - targetTokens) < 32,
-      `token boundary ${targetTokens} was not near the requested boundary`,
+      keptTokens <= WINDOW_SHRUNK_TOKEN_LIMIT,
+      `token limit ${targetTokens} kept ${keptTokens} tokens, over the compact limit`,
+    );
+    ensure(
+      actualTokens > WINDOW_SHRUNK_TOKEN_LIMIT
+        ? context.messages.length < tokenMessages.length
+        : context.messages.length === tokenMessages.length,
+      `token limit ${targetTokens} shrank the window incorrectly (kept ${context.messages.length} of ${tokenMessages.length})`,
     );
     ensure(
       context.messages.length <= WINDOW_SHRUNK_MESSAGE_LIMIT,

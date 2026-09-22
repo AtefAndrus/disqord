@@ -873,10 +873,16 @@ export class ConversationWindowService {
         !draft.externalDeletions.has(message.exchangeId),
     );
 
-    const selected = draft.buffer.splice(
-      Math.max(0, draft.buffer.length - targetCount),
-      targetCount,
-    );
+    // 走査がまだ追いついていない範囲より古い発言は、いま返すと「新しい方から count 件」に反する。
+    // 分割した返答は後半のページから先に見つかるので、走査が終わるまでバッファに残す。
+    const selectable = draft.exhausted
+      ? draft.buffer
+      : draft.buffer.filter(
+          (message) => compareMessageIds(entryPositionId(message), draft.cursor) >= 0,
+        );
+    const selected = selectable.slice(Math.max(0, selectable.length - targetCount));
+    const selectedIds = new Set(selected.map((message) => message.id));
+    draft.buffer = draft.buffer.filter((message) => !selectedIds.has(message.id));
     const shown: NormalizedMessage[] = [];
     for (const message of selected) {
       if (draft.shown.has(message.id)) continue;

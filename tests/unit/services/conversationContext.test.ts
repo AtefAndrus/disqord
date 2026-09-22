@@ -604,6 +604,55 @@ test("read_earlier_messages scans past a split reply positioned before the curso
   expect(reader.listQueries.at(-1)).toEqual({ before: "801", limit: 100 });
 });
 
+test("read_earlier_messages holds back a split reply when paging fails mid-scan", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 2,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByPage = mock((id: string) => (id === "900" ? replyRecord : null));
+  repository.listPages = mock(() => [
+    { pageMsgId: "110", triggerMsgId: "100", seq: 0 },
+    { pageMsgId: "900", triggerMsgId: "100", seq: 1 },
+  ]);
+  reader.listResponses.push({ status: "ok", messages: [] });
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 100 }, (_, index) =>
+      message(String(801 + index), undefined, {
+        author: { id: "other-bot", username: "other-bot", bot: true },
+        ...(index === 99 && { author: { id: "bot", username: "bot", bot: true }, content: "" }),
+      }),
+    ),
+  });
+  reader.listResponses.push({ status: "failed", messages: [], error: new Error("boom") });
+  reader.fetchResponses.push({ status: "found", message: message("100") });
+  reader.fetchResponses.push({
+    status: "found",
+    message: message("110", undefined, {
+      author: { id: "bot", username: "bot", bot: true },
+      content: "",
+    }),
+  });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  const result = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: Array<{ text: string }>; has_more: boolean; stop_reason: string | null };
+
+  // 801 より前は走査できていないので、位置 110 の返答を先に返すと「新しい方から」に反する。
+  expect(result.messages).toHaveLength(0);
+  expect(result.has_more).toBe(true);
+  expect(result.stop_reason).toBe("fetch_failed");
+});
+
 test("truncateTextByBytes backs off at a multibyte UTF-8 boundary", () => {
   const text = "日本語😀abc";
   const maxBytes = 10;
