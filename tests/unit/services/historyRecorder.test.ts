@@ -212,6 +212,47 @@ describe("HistoryRecorder", () => {
     errorSpy.mockRestore();
   });
 
+  test("an internal delete during an in-flight purge keeps the mapping", async () => {
+    const now = Date.now();
+    const oldUserTurnId = await createExchange("old-user", now);
+    const oldAssistantTurnId = db
+      .query<{ id: number }, [number]>(
+        "SELECT id FROM turns WHERE parent_user_turn_id = ? AND role = 'assistant'",
+      )
+      .get(oldUserTurnId)?.id;
+    if (oldAssistantTurnId === undefined) throw new Error("assistant turn was not created");
+    expect(await repository.onBotMessageSent(oldAssistantTurnId, "old-bot", now)).toBe(true);
+    const originalPurgeMessage = repository.purgeMessage.bind(repository);
+    let failInFlight!: (error: Error) => void;
+    let calls = 0;
+    repository.purgeMessage = (messageId: string): Promise<boolean> => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise<boolean>((_resolve, reject) => {
+          failInFlight = reject;
+        });
+      }
+      return originalPurgeMessage(messageId);
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+
+    const purge = recorder.purgeMessage("old-bot", { channelId: "channel-1" });
+    // The internal delete runs while the first purge has not settled yet.
+    expect(await recorder.deleteMessageMapping("old-bot")).toBe(false);
+    failInFlight(new Error("purge failed"));
+    expect(await purge).toBe(false);
+    const currentUserTurnId = await createExchange("current-user", now + 1);
+    const context = await recorder.getContext(currentUserTurnId);
+
+    expect(context?.exchanges).toEqual([]);
+    expect(
+      db
+        .query<{ count: number }, [number]>("SELECT COUNT(*) as count FROM turns WHERE id = ?")
+        .get(oldUserTurnId)?.count,
+    ).toBe(0);
+    errorSpy.mockRestore();
+  });
+
   test("context read failures return no context and do not reject", async () => {
     const userTurnId = await createExchange("user-message", Date.now());
     repository.getContext = async (): Promise<null> => {

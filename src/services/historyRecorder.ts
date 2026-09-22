@@ -294,13 +294,17 @@ export class HistoryRecorder implements IHistoryRecorder {
   }
 
   private async purgeTarget(target: HistoryPurgeTarget): Promise<boolean> {
+    // Registered before the first await: anything that runs while the purge
+    // is in flight (an internal delete dropping the mapping, a context build)
+    // must already see the target as pending.
+    const key = this.targetKey(target);
+    this.pendingPurgeTargets.set(key, target);
     try {
       const result = await this.executePurge(target);
-      this.pendingPurgeTargets.delete(this.targetKey(target));
+      this.pendingPurgeTargets.delete(key);
       return result;
     } catch (error) {
       logHistoryOperationFailure(this.operationName(target), error);
-      this.pendingPurgeTargets.set(this.targetKey(target), target);
       return false;
     }
   }
