@@ -227,7 +227,7 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 - `THREAD_DELETE`: `channel_id` がそのスレッドの session を消す。
 - `GUILD_DELETE`: payload に `unavailable: true` が無い場合（bot の退出・キック）だけ、その guild の session をすべて消す。`unavailable: true` は Discord 側の障害による一時的な利用不能なので消さない。
 - TTL: 起動時と 24 時間ごとに、最後の turn の `discord_created_at` が 30 日より前の exchange を消し、空になった session も消す。
-- `/config history <on|off>`: 暫定で `ManageGuild` を handler 内で確認する（[権限管理](../permissions/design.md) の機構ができたらそれに従う）。`off` にしたら同じ transaction でその guild の session をすべて消す。応答には、発言を DB に保存すること、Bot がオフラインの間に消したメッセージは DB に残りうることを書く。
+- `/config history <on|off>`: 暫定で `ManageGuild` を handler 内で確認する（[権限管理](../permissions/design.md) の機構ができたらそれに従う）。`off` にしたら同じ transaction でその guild の session をすべて消す。応答は ON/OFF と、OFF で保存済みの履歴を消したことだけを伝える。保存する内容と削除への追従の限界は、運用者向けに README に書く。
 - **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。purge が失敗し続ける場合はプロセスが稼働している間だけ再試行し、再起動後は TTL または `/config history off` まで exchange が残る。
 - `/status` に履歴の ON/OFF を出す。README に保存する内容、保持期間（最後の発言から 30 日を過ぎた後の次の sweep で消える）、削除への追従の範囲と上の限界を書く。
 - `messageUpdate`（user 編集）は無視し、保存した内容を保つ。編集に追従した再生成は [conversation-regeneration](../conversation-regeneration/design.md) の範囲。

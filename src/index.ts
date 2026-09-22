@@ -71,7 +71,6 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     config.webSearchEngine,
-    config.fxtwitterApiBase,
   );
 
   const messageCreateHandler = createMessageCreateHandler(
@@ -91,7 +90,6 @@ async function bootstrap(): Promise<void> {
     llmClient,
     chatService,
     config.webSearchEngine,
-    config.fxtwitterApiBase,
   );
 
   const client = await createBotClient();

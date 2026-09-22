@@ -9,7 +9,6 @@ interface StatusMessageData {
   cacheStatus: { lastUpdatedAt: Date | null; modelCount: number };
   settings?: GuildSettings;
   webSearchEngine: string;
-  fxtwitterHostname: string;
   version: string;
 }
 
@@ -54,7 +53,7 @@ export function buildStatusMessage(data: StatusMessageData): {
       },
       {
         name: "ツイート展開",
-        value: data.settings.twitterExpandEnabled ? `有効（${data.fxtwitterHostname}）` : "無効",
+        value: data.settings.twitterExpandEnabled ? "有効" : "無効",
         inline: true,
       },
       {

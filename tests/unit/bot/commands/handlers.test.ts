@@ -202,19 +202,18 @@ describe("config twitter-expand handler", () => {
       settingsService,
       new ModelService(llmClient),
       "perplexity",
-      "https://tweets.example.test/fxtwitter",
     );
     return { handlers, settingsService };
   }
 
-  test("サーバーの管理権限があれば有効化し、外部送信を伝える", async () => {
+  test("サーバーの管理権限があれば有効化する", async () => {
     const { handlers, settingsService } = createHandlers();
     const { interaction, reply } = createTwitterExpandInteraction("on", true);
 
     await handlers.configTwitterExpand(interaction);
 
     expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", true);
-    expect(repliedEmbed(reply).description).toContain("外部ホスト");
+    expect(repliedEmbed(reply).description).toBe("ツイート展開を **有効** にしました。");
   });
 
   test("サーバーの管理権限があれば無効化する", async () => {
@@ -281,9 +280,7 @@ describe("config history handler", () => {
 
     expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", true);
     const description = repliedEmbed(reply).description ?? "";
-    expect(description).toContain("データベースに保存");
-    expect(description).toContain("30日");
-    expect(description).toContain("オンライン");
+    expect(description).toBe("会話履歴を **有効** にしました。");
   });
 
   test("off purges through the service and explains that saved history is removed", async () => {

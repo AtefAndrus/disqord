@@ -131,7 +131,6 @@ export function buildFixtures(): IFixture[] {
     cacheStatus: { lastUpdatedAt: new Date(Date.now() - 42 * 60 * 1000), modelCount: 327 },
     settings,
     webSearchEngine: "perplexity",
-    fxtwitterHostname: "api.fxtwitter.com",
     version: "1.4.0",
   });
   fixtures.push({
@@ -147,7 +146,6 @@ export function buildFixtures(): IFixture[] {
     rateLimited: true,
     cacheStatus: { lastUpdatedAt: null, modelCount: 0 },
     webSearchEngine: "perplexity",
-    fxtwitterHostname: "api.fxtwitter.com",
     version: "1.4.0",
   });
   fixtures.push({
