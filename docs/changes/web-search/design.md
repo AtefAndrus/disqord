@@ -61,7 +61,7 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 | fxtwitter のホスティング | 当面 hosted（`api.fxtwitter.com`）、リクエスト増で Cloudflare Workers に self-host | self-host も無料枠（10万req/日）+ Xアカウント不要（guest token方式）で移行コストが低い。エンドポイントは環境変数で切替 |
 | 外部取得テキストの扱い | 「非信頼データ」として隔離注入 | ツイート本文・検索結果は任意のプロンプトインジェクションを含みうる。命令として解釈させないガードを必須とする |
 | Web検索のデフォルト | OFF | 追加費用が発生するため明示的な有効化が必要 |
-| ツイート展開のデフォルト | ON（外部送信する旨を明示） | fxtwitter は無料。投稿内URLを第三者へ送る挙動は README・`/status` で明示し、サーバー単位でOFF可能。self-host で外部送信も解消できる |
+| ツイート展開のデフォルト | ON | fxtwitter は無料。投稿内のポスト ID を第三者のホストへ送ることは運用者向けに README に書き、サーバー単位で OFF にできる。self-host で外部送信も解消できる |
 | 設定コマンドの権限 | [権限管理](../permissions/design.md) の `admin_role_id` 機構に一本化 | 権限は専用changeで横断的に設計する。web-search単体で独自権限を作らない |
 | 権限の暫定措置 | 権限管理 change 未実装で先行する場合は `ManageGuild` を handler 内で確認 | 課金が絡む `/config web-search` を無権限で叩かせないための保険 |
 | 設定スコープ | Guild単位 | チャンネル/ユーザ単位は [settings-hierarchy](../settings-hierarchy/design.md) で対応 |

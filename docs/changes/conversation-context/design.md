@@ -73,8 +73,8 @@ Responses API は会話状態をサーバ側へ保存せず（`store` は `false
 | 内部削除と外部削除の区別 | bot が自分のメッセージを消すときは、Discord の削除を呼ぶ前に写像を DB から消す。内部削除すると決めたメッセージは、その時点から削除への追従の対象外とする。削除イベントの処理は写像のあるメッセージだけを扱う | 写像を先に消せば、自分の削除で届く削除イベントは写像が無いので何もしない。代わりに、写像を消した後に利用者が同じメッセージを消しても exchange は purge されず、Discord の削除と中立化の編集が両方失敗したメッセージも写像なしで残る。内部削除の対象は、最終描画で余ったメッセージ、停止後に届いた遅延送信、失敗した応答の後始末に限られ、どれも exchange の保存内容（`content_json`）の一部ではない。削除中のマーカーやリースを持つ方式は、この限界を閉じられる一方で DB 側の状態と起動時の回復処理が増えるため、本 change では使わない |
 | 保存前に届いた削除 | 削除イベントで受け取ったメッセージ ID と、削除されたチャンネル・スレッド・guild の ID を、写像の有無にかかわらずプロセス内に 15 分間覚える。user turn の作成時には、発言のメッセージ ID・チャンネル ID・親チャンネル ID・guild ID をこれと照合し、どれかが記録にあれば turn を作らない。写像の追加時にはメッセージ ID を照合し、記録にあれば exchange を purge する。`messageCreate` の開始から user turn の作成までが 10 分を超えた発言は、照合の結果にかかわらず保存せず、履歴なしで応答する | 添付の取得など保存前の非同期処理の間や、送信が成功してから写像を足すまでの間に届いた削除は、その時点では写像や session が無いので削除イベントの処理だけでは拾えない。範囲の削除は payload に個々のメッセージ ID を持たないので、範囲の ID も覚える。10 分の打ち切りは、記録の寿命（15 分）より長く保存を待った処理が、失効した記録を見て削除済みの発言を保存することを防ぐ。プロセス内の記録なので再起動をまたがない。削除を受け取った直後に落ちた場合、後続 change が扱えるのは永続化済みの写像から確かめられる範囲に限られる |
 | コンテンツ表現 | **`PersistedContentPart`（text / image-ref{url,mime} / file-ref{url,filename,mime}）の versioned JSON**。`CHECK(json_valid)`。hydration 時に `ChatMessageContent` へ変換 | 永続形（URL/メタ）と OpenRouter DTO（`file_data` は base64 必須）は**非同形**。base64 を保存しない決定とも一致 |
-| メディア再取得 | ベストエフォート（画像=URL をそのまま渡す、PDF=再 fetch + base64 化）。PDF を取得できなければ `[file unavailable: <filename>]` に置き換える。画像の URL の失効は provider 側の失敗になる | Discord CDN URL は署名付きで失効する。剥がし（下記）で古いメディアは送らないので、再取得が必要になるのは同じ session の直近のターンに限られる |
-| メディア剥がし | 最新のメディアを含む user turn の画像・ファイルだけを残し、それより前は `[earlier image omitted]` / `[earlier file omitted]`。リクエスト配列のみ・保存不変 | コスト/ボディサイズ。直前応答が画像内容を言語化済みという前提 |
+| メディア再取得 | 過去の添付は送らないので取り直さない（`hydratePersistedContent()` の PDF 再取得の経路は、履歴からは呼ばれない） | 過去の添付を見直す手段は、Discord から添付を取り直す tool として別途用意する |
+| メディア剥がし | 過去の turn の画像・ファイルはすべて `[earlier image omitted]` / `[earlier file omitted: <filename>]` に置き換え、今回の user turn の添付だけを送る。リクエスト配列のみ・保存不変 | 添付を含む最新の turn を残して毎回送り直すと、大きな PDF がその後の添付の無い発言のたびに送られ続ける。添付を送った発言への返答が、その内容を言語化している |
 | 境界の予算選択 | 依存閉じた exchange（user + その assistant）単位で新しい順に採用 | 行単位だと role 整合が壊れる |
 | 共有チャンネル | user turn に `author_label`（表示名スナップショット）+ 安定 `author_id` | 表示名は変わりうるので再現性のためスナップショット |
 | オプトイン | guild 設定 `history_enabled`（既定 0）。0 の guild では turn を保存せず、現行どおり今回の発言だけを送る。1 → 0 に変えたらその guild の履歴を物理削除する。turn を作る transaction の中で `history_enabled` を読み直し、0 なら何も作らない | 発言を DB に残すことを guild の管理者が明示的に選ぶ。無効化後に古い履歴が残ると、再度有効化したときに意図しない文脈が戻る |
@@ -192,8 +192,8 @@ CREATE UNIQUE INDEX idx_turn_messages_msg ON turn_messages(discord_msg_id);
 ### 5. メディア剥がし
 
 永続参照（`PersistedContentPart[]`）の段階で適用する純関数 `stripHistoricalMedia()`。
-今回の user turn を含めて、画像かファイルを含む最新の user turn を基準とし、それより前の turn の image-ref / file-ref を `[earlier image omitted]` / `[earlier file omitted]` の text part に置き換える。
-残った参照だけを hydrate するので、剥がした PDF を再 fetch しない。
+今回の user turn（列の最後）以外の turn の image-ref / file-ref を、`[earlier image omitted]` / `[earlier file omitted: <filename>]` の text part に置き換える。
+過去の添付は hydrate しないので、PDF を再 fetch しない。予算の見積もりも置き換えた後の内容で数える。
 保存している `content_json` は変えない。
 
 ### 6. トークン予算

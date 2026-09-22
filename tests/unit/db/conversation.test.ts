@@ -42,7 +42,7 @@ describe("conversation content helpers", () => {
     ]);
   });
 
-  test("strips only media from turns before the newest media-bearing user turn", () => {
+  test("replaces the media of every turn but the current one, whichever turn has media", () => {
     const original: PersistedContentPart[][] = [
       [{ type: "image-ref", url: "https://cdn.test/old.png", mime: "image/png" }],
       [{ type: "text", text: "middle" }],
@@ -61,16 +61,14 @@ describe("conversation content helpers", () => {
     expect(stripHistoricalMedia(original)).toEqual([
       [{ type: "text", text: "[earlier image omitted]" }],
       [{ type: "text", text: "middle" }],
-      [
-        {
-          type: "file-ref",
-          url: "https://cdn.test/new.pdf",
-          filename: "new.pdf",
-          mime: "application/pdf",
-        },
-      ],
+      [{ type: "text", text: "[earlier file omitted: new.pdf]" }],
       [{ type: "text", text: "current" }],
     ]);
+    const withCurrentImage: PersistedContentPart[][] = [
+      [{ type: "text", text: "before" }],
+      [{ type: "image-ref", url: "https://cdn.test/now.png", mime: "image/png" }],
+    ];
+    expect(stripHistoricalMedia(withCurrentImage)).toEqual(withCurrentImage);
     expect(original).toEqual(copy);
   });
 
