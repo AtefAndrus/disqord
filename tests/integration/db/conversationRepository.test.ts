@@ -464,6 +464,28 @@ describe("ConversationRepository", () => {
     expect(await repository.isContextCurrent(context)).toBe(false);
   });
 
+  test("a snapshot taken while an answer was pending stops being current when that answer is deleted", async () => {
+    const earlier = await repository.createUserAndAssistantTurn(input("earlier", NOW - 2));
+    const current = await repository.createUserAndAssistantTurn(input("current", NOW));
+    const context = await repository.getContext(required(current.userTurnId));
+    if (!context) throw new Error("context was not built");
+    // The earlier answer is still pending, so the snapshot holds only its user turn.
+    expect(context.exchanges).toHaveLength(1);
+    expect(context.exchanges[0]?.assistant).toBeUndefined();
+    expect(
+      await repository.onBotMessageSent(required(earlier.assistantTurnId), "earlier-bot", NOW + 1),
+    ).toBe(true);
+    expect(await repository.isContextCurrent(context)).toBe(true);
+
+    expect(
+      await repository.isContextCurrent(context, [
+        { type: "message", messageIds: ["earlier-bot"], scope: {} },
+      ]),
+    ).toBe(false);
+    deletedBeforeSave.recordMessage("earlier-bot");
+    expect(await repository.isContextCurrent(context)).toBe(false);
+  });
+
   test("TTL keeps an exchange whose latest turn is within retention", async () => {
     const oldUser = NOW - HISTORY_RETENTION_MS - 1_000;
     const recentReply = NOW - HISTORY_RETENTION_MS + 60_000;

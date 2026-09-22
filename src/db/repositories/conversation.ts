@@ -918,12 +918,31 @@ export class ConversationRepository implements IConversationRepository {
     const lookup = this.db.query<{ id: number }, [number, number]>(
       "SELECT id FROM turns WHERE id = ? AND session_id = ? AND active = 1",
     );
-    return turnIds.every(
-      (turnId) =>
-        lookup.get(turnId, session.id) !== null &&
-        !this.isTurnDeleted(turnId, session) &&
-        !this.isTurnPendingPurge(turnId, session, pendingPurgeTargets),
+    if (!turnIds.every((turnId) => lookup.get(turnId, session.id) !== null)) return false;
+    if (
+      this.isTurnDeleted(context.current.id, session) ||
+      this.isTurnPendingPurge(context.current.id, session, pendingPurgeTargets)
+    ) {
+      return false;
+    }
+    // Checked per exchange, children included: a snapshot taken while an
+    // answer was still pending holds only the user turn, yet a later
+    // deletion of that answer must still keep the user turn out.
+    return context.exchanges.every(
+      ({ user }) =>
+        !this.isExchangeDeleted(user.id, session) &&
+        !this.isExchangePendingPurge(user.id, session, pendingPurgeTargets),
     );
+  }
+
+  private isExchangeDeleted(userTurnId: number, session: RawSession): boolean {
+    if (this.isTurnDeleted(userTurnId, session)) return true;
+    return this.db
+      .query<{ id: number }, [number]>(
+        "SELECT id FROM turns WHERE parent_user_turn_id = ? AND role = 'assistant'",
+      )
+      .all(userTurnId)
+      .some(({ id }) => this.isTurnDeleted(id, session));
   }
 
   private isTurnDeleted(turnId: number, session: RawSession): boolean {
