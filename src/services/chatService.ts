@@ -294,6 +294,25 @@ export class ChatService implements IChatService {
           )
         : buildWithoutHistory();
 
+      let clientToolInvoked = false;
+      const firstAttemptToolContext: ConversationWindowContext["toolContext"] | undefined =
+        conversation
+          ? {
+              readEarlierMessages: (count, signal) => {
+                clientToolInvoked = true;
+                return conversation.toolContext.readEarlierMessages(count, signal);
+              },
+              viewAttachment: (messageRef, attachmentIndex, model, signal) => {
+                clientToolInvoked = true;
+                return conversation.toolContext.viewAttachment(
+                  messageRef,
+                  attachmentIndex,
+                  model,
+                  signal,
+                );
+              },
+            }
+          : undefined;
       const tracked = createTrackingUpdater(updater);
       const result = await this.runChatLoop(
         request,
@@ -304,7 +323,7 @@ export class ChatService implements IChatService {
         controller.signal,
         requestId,
         conversation?.sessionId,
-        conversation?.toolContext,
+        firstAttemptToolContext,
         settings.defaultModel,
         supportsTools,
       );
@@ -313,7 +332,8 @@ export class ChatService implements IChatService {
         result.status === "error" &&
         result.error instanceof BadRequestError &&
         (expansion?.imageParts.length ?? 0) > 0 &&
-        !tracked.stagedNonEmpty
+        !tracked.stagedNonEmpty &&
+        !clientToolInvoked
       ) {
         console.warn("[chatService] retrying after removing tweet images");
         const retryBase = conversation ? request : buildWithoutHistory();

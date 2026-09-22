@@ -307,6 +307,19 @@ export const SCENARIOS: Scenario[] = [
     check: (reply) => hasUsageFooter(reply),
   },
   {
+    name: "history-recall",
+    manual: true,
+    prompt: "[e2e] さっき伝えた合言葉を、「合言葉: 」に続けて1行で答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(HISTORY_PASSPHRASE)
+        ? []
+        : [
+            `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config history on?)`,
+          ]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
     name: "history-window",
     manual: true,
     setup: {
@@ -354,19 +367,6 @@ export const SCENARIOS: Scenario[] = [
     check: (reply) => [
       ...(reply.body.includes("COLOR-RED") ? [] : ["the reply did not identify the attachment"]),
       ...(/NO-IMAGE|COLOR-BLUE/.test(reply.body) ? ["the reply also names another answer"] : []),
-      ...hasUsageFooter(reply),
-    ],
-  },
-  {
-    name: "history-recall",
-    manual: true,
-    prompt: "[e2e] さっき伝えた合言葉を、「合言葉: 」に続けて1行で答えて。",
-    check: (reply) => [
-      ...(reply.body.includes(HISTORY_PASSPHRASE)
-        ? []
-        : [
-            `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config history on?)`,
-          ]),
       ...hasUsageFooter(reply),
     ],
   },

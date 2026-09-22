@@ -77,6 +77,7 @@ interface ResponseState {
   knownMessages: Map<string, RawDiscordMessage>;
   refCounter: number;
   exhausted: boolean;
+  cutoffReached: boolean;
   reachedReplyTarget: boolean;
   openedAttachments: Set<string>;
   attachmentResults: Map<string, ToolLlmResult>;
@@ -244,7 +245,7 @@ function asToolResult(
 
 export class ConversationWindowService {
   private readonly states = new Map<string, WindowState>();
-  private readonly generations = new Map<string, number>();
+  private generationCounter = 0;
   private readonly committedGenerations = new Map<string, number>();
   private readonly eligibility: MessageEligibilityService;
 
@@ -276,7 +277,7 @@ export class ConversationWindowService {
               budget,
             )
         : async () => false;
-    const generation = this.nextGeneration(input.current.channel_id);
+    const generation = this.nextGeneration();
 
     try {
       const result = await this.withTimeout(
@@ -331,6 +332,7 @@ export class ConversationWindowService {
         knownMessages: new Map(result.rawMessages.map((message) => [message.id, message])),
         refCounter: 0,
         exhausted: false,
+        cutoffReached: false,
         reachedReplyTarget: false,
         openedAttachments: new Set(),
         attachmentResults: new Map(),
@@ -370,16 +372,16 @@ export class ConversationWindowService {
     for (const [channelId, state] of this.states) {
       if (now - state.lastUsedAt > WINDOW_REBUILD_AFTER_MS) {
         this.states.delete(channelId);
+        this.committedGenerations.delete(channelId);
         removed += 1;
       }
     }
     return removed;
   }
 
-  private nextGeneration(channelId: string): number {
-    const generation = (this.generations.get(channelId) ?? 0) + 1;
-    this.generations.set(channelId, generation);
-    return generation;
+  private nextGeneration(): number {
+    this.generationCounter += 1;
+    return this.generationCounter;
   }
 
   private commitState(channelId: string, state: WindowState, generation: number): void {
@@ -586,8 +588,7 @@ export class ConversationWindowService {
       const reply = result.reply;
       if (!reply || seenReplies.has(reply.record.triggerMsgId)) continue;
       if (requireCompleteExchange) {
-        const complete =
-          known.has(reply.trigger.id) && reply.pages.every((page) => known.has(page.id));
+        const complete = reply.pages.every((page) => known.has(page.id));
         if (!complete) continue;
       }
       seenReplies.add(reply.record.triggerMsgId);
@@ -670,6 +671,7 @@ export class ConversationWindowService {
     if (state.calls >= READ_EARLIER_MAX_CALLS) {
       return asToolResult([], true, "call_limit");
     }
+    state.calls += 1;
     if (!(await state.authorize())) {
       return asToolResult([], false, "no_permission");
     }
@@ -677,7 +679,7 @@ export class ConversationWindowService {
 
     const draft: ResponseState = {
       ...state,
-      calls: state.calls + 1,
+      calls: state.calls,
       buffer: [...state.buffer],
       shown: new Map(state.shown),
       seenReplies: new Set(state.seenReplies),
@@ -686,10 +688,13 @@ export class ConversationWindowService {
     const available = READ_EARLIER_MAX_MESSAGES - draft.shownCount;
     if (available <= 0) return asToolResult([], true, "message_limit");
     const targetCount = Math.min(count, available);
-    let cutoffReached = false;
     let stoppedReason: ConversationStopReason = null;
     const references: string[] = [];
-    while (this.eligibleBufferCount(draft) < targetCount && !cutoffReached && !draft.exhausted) {
+    while (
+      this.eligibleBufferCount(draft) < targetCount &&
+      !draft.cutoffReached &&
+      !draft.exhausted
+    ) {
       if (signal.aborted) return aborted();
       const page = await this.reader.list(
         draft.current.channel_id,
@@ -709,7 +714,7 @@ export class ConversationWindowService {
       const oldest = page.messages[0];
       if (oldest) {
         draft.cursor = oldest.id;
-        if (messageTime(oldest) < draft.cutoffAt) cutoffReached = true;
+        if (messageTime(oldest) < draft.cutoffAt) draft.cutoffReached = true;
       }
       const inRange = page.messages.filter((message) => messageTime(message) >= draft.cutoffAt);
       const entries = await this.eligibleEntries(
@@ -745,7 +750,7 @@ export class ConversationWindowService {
         draft.buffer.push(entry);
       }
       draft.buffer.sort((left, right) => left.timestampMs - right.timestampMs);
-      if (page.messages.length < 100 || cutoffReached) {
+      if (page.messages.length < 100 || draft.cutoffReached) {
         draft.exhausted = true;
         break;
       }
@@ -762,7 +767,7 @@ export class ConversationWindowService {
     }
     const provisionalReason = stoppedReason
       ? stoppedReason
-      : cutoffReached && draft.buffer.length === 0
+      : draft.cutoffReached && draft.buffer.length === 0
         ? "24h_cutoff"
         : available <= shown.length
           ? "message_limit"
@@ -779,7 +784,7 @@ export class ConversationWindowService {
     const hasMore = draft.buffer.length > 0 || !draft.exhausted;
     const reason = stoppedReason
       ? stoppedReason
-      : cutoffReached && draft.buffer.length === 0
+      : draft.cutoffReached && draft.buffer.length === 0
         ? "24h_cutoff"
         : available <= output.length
           ? "message_limit"
@@ -801,6 +806,7 @@ export class ConversationWindowService {
     state.seenReplies = draft.seenReplies;
     state.refCounter = draft.refCounter;
     state.exhausted = draft.exhausted;
+    state.cutoffReached = draft.cutoffReached;
     state.reachedReplyTarget = draft.reachedReplyTarget;
     return asToolResult(output, hasMore, reason, references);
   }

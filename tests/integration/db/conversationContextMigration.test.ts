@@ -71,6 +71,12 @@ describe("conversation-context migration", () => {
     expect(
       database.query("SELECT name FROM sqlite_master WHERE name = 'reply_records'").get(),
     ).not.toBeNull();
+
+    database.query("UPDATE guild_settings SET history_enabled = 1").run();
+    applyMigrations(database);
+    expect(database.query("SELECT history_enabled FROM guild_settings").get()).toEqual({
+      history_enabled: 1,
+    });
   });
 
   test("leaves a fresh database unchanged by the old-store migration and is a no-op on the second startup", () => {
@@ -89,11 +95,15 @@ describe("conversation-context migration", () => {
     database
       .query("INSERT INTO guild_settings (guild_id, default_model) VALUES ('guild', 'model')")
       .run();
+    database.query("UPDATE guild_settings SET history_enabled = 1").run();
     applyMigrations(database);
 
     expect(database.query("SELECT COUNT(*) as count FROM reply_records").get()).toEqual({
       count: 1,
     });
     expect(database.query("SELECT name FROM sqlite_master WHERE name = 'turns'").get()).toBeNull();
+    expect(database.query("SELECT history_enabled FROM guild_settings").get()).toEqual({
+      history_enabled: 1,
+    });
   });
 });

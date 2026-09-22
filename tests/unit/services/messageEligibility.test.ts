@@ -126,6 +126,37 @@ describe("MessageEligibilityService", () => {
     expect(result.externallyDeleted).toBe(true);
   });
 
+  test("applies external-deletion checks to tester-bot triggers", async () => {
+    const trigger = {
+      ...human("trigger"),
+      author: { id: "tester", username: "tester", bot: true },
+    };
+    const { service, budget } = setup(
+      record(),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) =>
+        id === "page" ? { status: "not-found" } : { status: "found", message: trigger },
+    );
+
+    const result = await service.evaluate(
+      trigger,
+      {
+        currentTimestampMs,
+        botUserId: "bot",
+        e2eTesterBotId: "tester",
+        nodeEnv: "development",
+        channelId: "channel",
+      },
+      budget,
+      new Map([["trigger", trigger]]),
+    );
+
+    expect(result.eligible).toBe(false);
+    expect(result.isHuman).toBe(true);
+    expect(result.externallyDeleted).toBe(true);
+    expect(result.reason).toBe("externally-deleted");
+  });
+
   test("keeps the trigger eligible when the reply record is pending", async () => {
     const trigger = human("trigger");
     const { service, budget } = setup(record("pending"), [], async () => ({ status: "not-found" }));

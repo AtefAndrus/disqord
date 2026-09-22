@@ -109,16 +109,10 @@ export class MessageEligibilityService {
     verificationCache: MessageEligibilityCache = new Map(),
     signal?: AbortSignal,
   ): Promise<MessageEligibilityResult> {
-    if (isE2eTester(message, input)) {
-      return { eligible: true, isHuman: true, externallyDeleted: false, reason: "e2e-human" };
-    }
     if (message.webhook_id !== undefined) {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason: "webhook" };
     }
-    if (message.author.bot !== true) {
-      if (!isHumanMessage(message, input)) {
-        return { eligible: false, isHuman: false, externallyDeleted: false, reason: "system" };
-      }
+    if (isHumanMessage(message, input)) {
       const record = this.records.findByTrigger(message.id);
       if (!record) {
         return { eligible: true, isHuman: true, externallyDeleted: false, reason: "human" };

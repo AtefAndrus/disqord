@@ -279,6 +279,36 @@ test("pages past a full raw page of other-bot messages to find an eligible human
   expect(context?.messages.map((entry) => entry.id)).toEqual(["800"]);
 });
 
+test("includes a verified reply when its trigger is outside the fetched window", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "800",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByPage = mock((id: string) => (id === "900" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "900", triggerMsgId: "800", seq: 0 }]);
+  const trigger = message("800", new Date(NOW - 20 * 60 * 1000).toISOString());
+  const page = message("900", new Date(NOW - 10 * 60 * 1000).toISOString(), {
+    author: { id: "bot", username: "bot", bot: true },
+    content: "",
+  });
+  reader.listResponses.push({ status: "ok", messages: [page] });
+  reader.fetchResponses.push({ status: "found", message: trigger });
+
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  expect(context?.messages).toHaveLength(1);
+  expect(context?.messages[0]?.kind).toBe("assistant");
+  expect(reader.fetchQueries).toEqual(["800"]);
+});
+
 test("read_earlier_messages advances past an entirely ineligible page", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });
@@ -497,6 +527,68 @@ test("read_earlier_messages checks the call limit before authorizing", async () 
   expect(fourth.messages).toEqual([]);
   expect(fourth.stop_reason).toBe("call_limit");
   expect(authorize).not.toHaveBeenCalled();
+});
+
+test("read_earlier_messages counts unauthorized attempts toward the call cap", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  let allowBuild = true;
+  const authorize = mock(async () => allowBuild);
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build({
+    ...input(message("1000", new Date(NOW).toISOString())),
+    authorize,
+  });
+
+  allowBuild = false;
+  authorize.mockClear();
+  const first = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { stop_reason: string };
+  const second = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { stop_reason: string };
+  const third = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { stop_reason: string };
+  const fourth = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { stop_reason: string };
+
+  expect(first.stop_reason).toBe("no_permission");
+  expect(second.stop_reason).toBe("no_permission");
+  expect(third.stop_reason).toBe("no_permission");
+  expect(fourth.stop_reason).toBe("call_limit");
+  expect(authorize).toHaveBeenCalledTimes(3);
+});
+
+test("read_earlier_messages keeps the 24-hour cutoff reason while draining its buffer", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+  reader.listResponses.push({
+    status: "ok",
+    messages: [
+      message("800", new Date(NOW - 25 * 60 * 60 * 1000).toISOString()),
+      message("900", new Date(NOW - 2 * 60 * 60 * 1000).toISOString()),
+      message("901", new Date(NOW - 1 * 60 * 60 * 1000).toISOString()),
+    ],
+  });
+
+  const first = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
+  const second = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
+
+  expect(first.messages).toHaveLength(1);
+  expect(first.has_more).toBe(true);
+  expect(first.stop_reason).toBeNull();
+  expect(second.messages).toHaveLength(1);
+  expect(second.has_more).toBe(false);
+  expect(second.stop_reason).toBe("24h_cutoff");
 });
 
 test("memoizes a deleted exchange across raw pages and reply-target lookup", async () => {
@@ -833,4 +925,10 @@ test("sweeps stale channel states on access", async () => {
   const states = (service as unknown as { states: Map<string, unknown> }).states;
   expect(states.size).toBe(1);
   expect(states.has("three")).toBe(true);
+
+  reader.listResponses.push({ status: "ok", messages: [] });
+  await service.build(input(message("1003", new Date(now).toISOString(), { channel_id: "one" })));
+
+  expect(reader.fetchQueries).toEqual([]);
+  expect(reader.listQueries.at(-1)).toEqual({ before: "1003", limit: 100 });
 });
