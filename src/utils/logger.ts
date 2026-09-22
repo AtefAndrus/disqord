@@ -8,18 +8,20 @@ export function setLogFileWriter(w: LogFileWriter | null): void {
   writer = w;
 }
 
-function serializeError(_key: string, value: unknown): unknown {
-  if (!(value instanceof Error)) return value;
-  const error = value as Error & { code?: unknown; status?: unknown };
+function serializeError(this: Record<string, unknown>, key: string, value: unknown): unknown {
+  const original = this[key];
+  if (!(original instanceof Error)) return value;
+  const error = original as Error & { code?: unknown; status?: unknown };
+  const isJsonPrimitive = (property: unknown): property is string | number | boolean | null =>
+    property === null ||
+    typeof property === "string" ||
+    typeof property === "number" ||
+    typeof property === "boolean";
   return {
     name: error.name,
     message: error.message,
-    ...(typeof error.code === "string" || typeof error.code === "number"
-      ? { code: error.code }
-      : {}),
-    ...(typeof error.status === "string" || typeof error.status === "number"
-      ? { status: error.status }
-      : {}),
+    ...(isJsonPrimitive(error.code) ? { code: error.code } : {}),
+    ...(isJsonPrimitive(error.status) ? { status: error.status } : {}),
   };
 }
 

@@ -146,14 +146,7 @@ export class MessageEligibilityService {
           reason: "finalized-after-current",
         };
       }
-      const verified = await this.verifyReplyWithCache(
-        record,
-        input,
-        budget,
-        knownMessages,
-        verificationCache,
-        signal,
-      );
+      const verified = this.verifyReplyWithCache(record, input, checked);
       if (verified.status === "deleted") {
         return {
           eligible: false,
@@ -216,14 +209,7 @@ export class MessageEligibilityService {
         reason: "finalized-after-current",
       };
     }
-    const verified = await this.verifyReplyWithCache(
-      record,
-      input,
-      budget,
-      knownMessages,
-      verificationCache,
-      signal,
-    );
+    const verified = this.verifyReplyWithCache(record, input, checked);
     if (verified.status === "deleted") {
       return {
         eligible: false,
@@ -263,40 +249,42 @@ export class MessageEligibilityService {
   ): Promise<CachedReplyVerification> {
     const cached = verificationCache.get(record.triggerMsgId);
     if (cached) return cached;
-    const verification = this.checkReply(
-      record,
-      knownTrigger,
-      input,
-      budget,
-      knownMessages,
-      signal,
+    const pending = this.checkReply(record, knownTrigger, input, budget, knownMessages, signal);
+    let cachedVerification: Promise<CachedReplyVerification>;
+    cachedVerification = pending.then(
+      (checked) => {
+        if (
+          (checked.trigger.status !== "found" && checked.trigger.status !== "not-found") ||
+          checked.pages.some(
+            ({ result }) => result.status !== "found" && result.status !== "not-found",
+          )
+        ) {
+          if (verificationCache.get(record.triggerMsgId) === cachedVerification) {
+            verificationCache.delete(record.triggerMsgId);
+          }
+        }
+        return checked;
+      },
+      (error: unknown) => {
+        if (verificationCache.get(record.triggerMsgId) === cachedVerification) {
+          verificationCache.delete(record.triggerMsgId);
+        }
+        throw error;
+      },
     );
-    verificationCache.set(record.triggerMsgId, verification);
-    return verification;
+    verificationCache.set(record.triggerMsgId, cachedVerification);
+    return cachedVerification;
   }
 
   private verifyReplyWithCache(
     record: ReplyRecord,
     input: MessageEligibilityInput,
-    budget: DiscordRestBudget,
-    knownMessages: ReadonlyMap<string, RawDiscordMessage>,
-    verificationCache: MessageEligibilityCache,
-    signal: AbortSignal | undefined,
-  ): Promise<MessageEligibilityVerification> {
-    return this.checkReplyWithCache(
-      record,
-      undefined,
-      input,
-      budget,
-      knownMessages,
-      verificationCache,
-      signal,
-    ).then((checked) => {
-      if (checked.verification) return checked.verification;
-      const verification = this.verifyReply(record, input, checked);
-      checked.verification = verification;
-      return verification;
-    });
+    checked: CachedReplyVerification,
+  ): MessageEligibilityVerification {
+    if (checked.verification) return checked.verification;
+    const verification = this.verifyReply(record, input, checked);
+    checked.verification = verification;
+    return verification;
   }
 
   private async checkReply(

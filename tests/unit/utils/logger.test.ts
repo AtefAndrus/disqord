@@ -17,6 +17,24 @@ class DiscordApiError extends Error {
   }
 }
 
+class ErrorWithToJson extends Error {
+  readonly code = "E_SECRET";
+  readonly status = 400;
+
+  constructor() {
+    super("safe error message");
+    this.name = "ExpectedConstraintError";
+  }
+
+  toJSON(): object {
+    return {
+      name: this.name,
+      message: this.message,
+      given: "SECRET-REPLY-TEXT",
+    };
+  }
+}
+
 describe("logger", () => {
   let debugSpy: ReturnType<typeof spyOn>;
   let infoSpy: ReturnType<typeof spyOn>;
@@ -93,6 +111,34 @@ describe("logger", () => {
       logger.error("An error occurred", error);
 
       expect(errorSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test("toJSONを持つErrorをトップレベルで安全にシリアライズする", () => {
+      logger.error("Error with custom JSON", new ErrorWithToJson());
+
+      const output = errorSpy.mock.calls[0]?.[0] as string;
+      expect(output).toContain("ExpectedConstraintError");
+      expect(output).toContain("safe error message");
+      expect(output).toContain("E_SECRET");
+      expect(output).not.toContain("SECRET-REPLY-TEXT");
+    });
+
+    test("toJSONを持つErrorをネストしたメタデータでも安全にシリアライズする", () => {
+      logger.error("Nested custom JSON error", { details: { error: new ErrorWithToJson() } });
+
+      const output = errorSpy.mock.calls[0]?.[0] as string;
+      expect(output).toContain("ExpectedConstraintError");
+      expect(output).toContain("safe error message");
+      expect(output).not.toContain("SECRET-REPLY-TEXT");
+    });
+
+    test("toJSONを持つErrorをログ値として直接渡しても安全にシリアライズする", () => {
+      logger.warn("Direct custom JSON error", new ErrorWithToJson());
+
+      const output = warnSpy.mock.calls[0]?.[0] as string;
+      expect(output).toContain("ExpectedConstraintError");
+      expect(output).toContain("safe error message");
+      expect(output).not.toContain("SECRET-REPLY-TEXT");
     });
 
     test("Errorのメタデータは安全なフィールドだけをトップレベルとネスト先で出力する", () => {

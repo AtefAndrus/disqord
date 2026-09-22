@@ -4,7 +4,7 @@ import {
   extractComponentsV2Footer,
   type RawDiscordMessage,
 } from "../../src/utils/discordMessageNormalizer";
-import { PDF_DATA, PNG_DATA } from "./fixtures";
+import { buildPdfData, PDF_DATA, PNG_DATA } from "./fixtures";
 
 export interface DiscordMessage {
   id: string;
@@ -212,6 +212,7 @@ function checkPages(reply: Reply): string[] {
 /** Fresh per run so that history-recall can only pass through stored history. */
 const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
 const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
+const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -357,16 +358,23 @@ export const SCENARIOS: Scenario[] = [
     manual: true,
     toolName: "view_attachment",
     setup: {
-      prompt: "[e2e] この画像を後で参照するために覚えておいて。",
+      prompt: "[e2e] この添付ファイルを後で参照できるようにしておいて。",
       mention: false,
-      files: [{ name: "attachment.png", type: "image/png", data: PNG_DATA }],
+      files: [
+        {
+          name: "attachment.pdf",
+          type: "application/pdf",
+          data: buildPdfData(VIEW_ATTACHMENT_TOKEN),
+        },
+      ],
     },
-    // Made-up tokens make the answer deterministic and prove the image was opened.
+    // The token is generated per run and is absent from the prompt, so only a successful PDF tool read can reveal it.
     prompt:
-      "[e2e] 必ず view_attachment で直前の画像を開き、画像が赤なら COLOR-RED、青なら COLOR-BLUE、見えなければ NO-IMAGE とだけ答えて。",
+      "[e2e] 必ず view_attachment で直前の添付ファイルを開き、添付ファイル内のトークンをそのまま答えて。",
     check: (reply) => [
-      ...(reply.body.includes("COLOR-RED") ? [] : ["the reply did not identify the attachment"]),
-      ...(/NO-IMAGE|COLOR-BLUE/.test(reply.body) ? ["the reply also names another answer"] : []),
+      ...(reply.body.includes(VIEW_ATTACHMENT_TOKEN)
+        ? []
+        : ["the reply did not report the token from the attachment"]),
       ...hasUsageFooter(reply),
     ],
   },

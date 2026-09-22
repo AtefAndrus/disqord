@@ -7,6 +7,7 @@ import type {
 import {
   type BuildConversationWindowInput,
   ConversationWindowService,
+  truncateTextByBytes,
   WINDOW_RAW_MESSAGE_LIMIT,
   WINDOW_REBUILD_AFTER_MS,
   WINDOW_SHRUNK_AGE_MS,
@@ -209,6 +210,54 @@ test("shrinking filters the original order instead of flattening exchange groups
   expect(second?.messages.map((entry) => entry.id).slice(-4)).toEqual(["100", "101", "102", "103"]);
 });
 
+test("keeps a reply selected by page position stable when its trigger falls before the start", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 1,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByTrigger = mock((id: string) => (id === "100" ? replyRecord : null));
+  repository.findByPage = mock((id: string) => (id === "131" ? replyRecord : null));
+  repository.listPages = mock(() => [{ pageMsgId: "131", triggerMsgId: "100", seq: 0 }]);
+  const history = [
+    message("100"),
+    ...Array.from({ length: 29 }, (_, index) => message(String(101 + index))),
+    message("131", undefined, {
+      author: { id: "bot", username: "bot", bot: true },
+      content: "",
+    }),
+    ...Array.from({ length: 10 }, (_, index) => message(String(132 + index))),
+  ];
+  reader.listResponses.push({ status: "ok", messages: history });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+
+  const first = await service.build(input(message("142", new Date(NOW).toISOString())));
+  const start = BigInt(first?.windowStartMessageId ?? "0");
+  expect(start).toBeGreaterThan(100n);
+  expect(start).toBeLessThanOrEqual(131n);
+  expect(first?.messages.map((entry) => entry.id)).toContain("131");
+  expect(first?.messages.map((entry) => entry.id)).not.toContain("100");
+
+  reader.fetchResponses.push({
+    status: "found",
+    message: message(first?.windowStartMessageId ?? "0"),
+  });
+  reader.listResponses.push({ status: "ok", messages: history });
+  const second = await service.build(input(message("143", new Date(NOW).toISOString())));
+
+  expect(second?.windowStartMessageId).toBe(first?.windowStartMessageId);
+  expect(second?.sessionId).toBe(first?.sessionId);
+  expect(second?.messages.map(({ id, ref }) => ({ id, ref }))).toEqual(
+    first?.messages.map(({ id, ref }) => ({ id, ref })),
+  );
+});
+
 test("shrinks one extend directly to all compact limits and renews the session once", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [message("100")] });
@@ -307,6 +356,68 @@ test("includes a verified reply when its trigger is outside the fetched window",
   expect(context?.messages).toHaveLength(1);
   expect(context?.messages[0]?.kind).toBe("assistant");
   expect(reader.fetchQueries).toEqual(["800"]);
+});
+
+test("read_earlier_messages scans past a split reply positioned before the cursor", async () => {
+  const reader = new FakeReader();
+  const replyRecord: ReplyRecord = {
+    triggerMsgId: "100",
+    channelId: "channel",
+    guildId: "guild",
+    status: "completed",
+    pageCount: 2,
+    finalizedAt: NOW - 1_000,
+    createdAt: NOW - 2_000,
+  };
+  const repository = records();
+  repository.findByPage = mock((id: string) => (id === "900" ? replyRecord : null));
+  repository.listPages = mock(() => [
+    { pageMsgId: "110", triggerMsgId: "100", seq: 0 },
+    { pageMsgId: "900", triggerMsgId: "100", seq: 1 },
+  ]);
+  reader.listResponses.push({ status: "ok", messages: [] });
+  reader.listResponses.push({
+    status: "ok",
+    messages: Array.from({ length: 100 }, (_, index) =>
+      message(String(801 + index), undefined, {
+        author: { id: "other-bot", username: "other-bot", bot: true },
+        ...(index === 99 && { author: { id: "bot", username: "bot", bot: true }, content: "" }),
+      }),
+    ),
+  });
+  reader.listResponses.push({ status: "ok", messages: [message("799")] });
+  reader.fetchResponses.push({ status: "found", message: message("100") });
+  reader.fetchResponses.push({
+    status: "found",
+    message: message("110", undefined, {
+      author: { id: "bot", username: "bot", bot: true },
+      content: "",
+    }),
+  });
+  const service = new ConversationWindowService(reader, repository, () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  const result = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: Array<{ text: string }> };
+
+  expect(result.messages).toHaveLength(1);
+  expect(result.messages[0]?.text).toBe("message-799");
+  expect(reader.listQueries.at(-1)).toEqual({ before: "801", limit: 100 });
+});
+
+test("truncateTextByBytes backs off at a multibyte UTF-8 boundary", () => {
+  const text = "日本語😀abc";
+  const maxBytes = 10;
+  const encoded = new TextEncoder().encode(text);
+  const result = truncateTextByBytes(text, maxBytes);
+  const resultBytes = new TextEncoder().encode(result);
+
+  expect(result).toBe("日本語");
+  expect(resultBytes.byteLength).toBeLessThanOrEqual(maxBytes);
+  expect(new TextDecoder().decode(resultBytes)).toBe(result);
+  expect(new TextDecoder().decode(encoded.slice(0, resultBytes.byteLength + 1))).toContain("�");
+  expect(new TextEncoder().encode(`${result}😀`).byteLength).toBeGreaterThan(maxBytes);
 });
 
 test("read_earlier_messages advances past an entirely ineligible page", async () => {

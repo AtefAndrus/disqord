@@ -246,4 +246,40 @@ describe("MessageEligibilityService", () => {
 
     expect(fetchCalls).toBe(1);
   });
+
+  test("does not cache an aborted trigger fetch as an excluded reply", async () => {
+    const trigger = human("trigger");
+    const page = botPage("page");
+    let triggerFetches = 0;
+    const { service, budget } = setup(
+      record(),
+      [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }],
+      async (id) => {
+        if (id === "trigger") {
+          triggerFetches += 1;
+          if (triggerFetches === 1) {
+            return {
+              status: "failed",
+              error: new DOMException("The operation was aborted", "AbortError"),
+            };
+          }
+          return { status: "found", message: trigger };
+        }
+        return { status: "found", message: page };
+      },
+    );
+    const cache: MessageEligibilityCache = new Map();
+    const input = { currentTimestampMs, botUserId: "bot", channelId: "channel" };
+    const known = new Map([["page", page]]);
+
+    const first = await service.evaluate(page, input, budget, known, cache);
+    expect(first.eligible).toBe(false);
+    expect(first.reason).toBe("unconfirmable");
+    expect(cache.has("trigger")).toBe(false);
+
+    const second = await service.evaluate(page, input, budget, known, cache);
+    expect(second.eligible).toBe(true);
+    expect(second.reason).toBe("human");
+    expect(triggerFetches).toBe(2);
+  });
 });

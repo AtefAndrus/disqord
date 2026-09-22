@@ -147,21 +147,6 @@ function rawLimitExceeded(messages: readonly NormalizedMessage[], now: number): 
   );
 }
 
-function exchangeGroups(messages: readonly NormalizedMessage[]): NormalizedMessage[][] {
-  const groups: NormalizedMessage[][] = [];
-  const byExchange = new Map<string, NormalizedMessage[]>();
-  for (const message of messages) {
-    const group = byExchange.get(message.exchangeId);
-    if (group) group.push(message);
-    else byExchange.set(message.exchangeId, [message]);
-  }
-  for (const message of messages) {
-    const group = byExchange.get(message.exchangeId);
-    if (group && !groups.includes(group)) groups.push(group);
-  }
-  return groups;
-}
-
 interface ShrunkMeasurements {
   count: number;
   tokens: number;
@@ -201,29 +186,50 @@ function reachesShrunkBoundary(messages: readonly NormalizedMessage[], now: numb
   );
 }
 
-function shrinkToLimits(messages: readonly NormalizedMessage[], now: number): NormalizedMessage[] {
-  const groups = exchangeGroups(messages);
-  let firstGroup = 0;
-  const candidateFor = (groupIndex: number): NormalizedMessage[] => {
-    const retainedExchangeIds = new Set(
-      groups.slice(groupIndex).map((group) => group[0]?.exchangeId),
-    );
-    return messages.filter((message) => retainedExchangeIds.has(message.exchangeId));
-  };
-  let candidate = candidateFor(firstGroup);
-  while (candidate.length > 0 && !fitsShrunkLimits(candidate, now) && firstGroup < groups.length) {
-    firstGroup += 1;
-    candidate = candidateFor(firstGroup);
-  }
-  return candidate;
+function entryPositionId(message: NormalizedMessage): string {
+  return message.kind === "assistant" ? (message.pageIds?.[0] ?? message.id) : message.id;
 }
 
-function truncateTextByBytes(text: string, maxBytes: number): string {
-  const encoder = new TextEncoder();
-  if (encoder.encode(text).length <= maxBytes) return text;
-  let end = text.length;
-  while (end > 0 && encoder.encode(text.slice(0, end)).length > maxBytes) end -= 1;
-  return text.slice(0, end);
+function selectEntries(
+  messages: readonly NormalizedMessage[],
+  startMessageId: string,
+): NormalizedMessage[] {
+  return messages.filter((message) => {
+    if (message.kind === "assistant") {
+      return (message.pageIds ?? [message.id]).every(
+        (pageId) => compareMessageIds(pageId, startMessageId) >= 0,
+      );
+    }
+    return compareMessageIds(message.id, startMessageId) >= 0;
+  });
+}
+
+interface ShrinkResult {
+  messages: NormalizedMessage[];
+  startMessageId: string;
+}
+
+function shrinkToLimits(
+  messages: readonly NormalizedMessage[],
+  now: number,
+  fallbackStartMessageId: string,
+): ShrinkResult {
+  const candidates = [...new Set(messages.map(entryPositionId))].sort(compareMessageIds);
+  for (const candidate of candidates) {
+    const selected = selectEntries(messages, candidate);
+    if (fitsShrunkLimits(selected, now)) {
+      return { messages: selected, startMessageId: candidate };
+    }
+  }
+  return { messages: [], startMessageId: fallbackStartMessageId };
+}
+
+export function truncateTextByBytes(text: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength <= maxBytes) return text;
+  let end = Math.max(0, Math.min(bytes.byteLength, Math.trunc(maxBytes)));
+  while (end > 0 && end < bytes.byteLength && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return new TextDecoder().decode(bytes.slice(0, end));
 }
 
 function asToolResult(
@@ -447,8 +453,8 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    const shrunk = shrinkToLimits(messages, now);
-    const startMessageId = shrunk[0]?.id ?? input.current.id;
+    const shrunk = shrinkToLimits(messages, now, input.current.id);
+    const { messages: selected, startMessageId } = shrunk;
     const sessionId = crypto.randomUUID();
     const replyTarget = await this.findReplyTarget(
       input,
@@ -464,7 +470,7 @@ export class ConversationWindowService {
       { startMessageId, sessionId, lastUsedAt: now },
       generation,
     );
-    return { messages: shrunk, rawMessages, startMessageId, sessionId, replyTarget };
+    return { messages: selected, rawMessages, startMessageId, sessionId, replyTarget };
   }
 
   private async extend(
@@ -523,12 +529,13 @@ export class ConversationWindowService {
       signal,
     );
     if (signal.aborted) return null;
-    let selected = messages;
+    let selected = selectEntries(messages, state.startMessageId);
     let startMessageId = state.startMessageId;
     let sessionId = state.sessionId;
-    if (rawLimitExceeded(messages, now)) {
-      selected = shrinkToLimits(messages, now);
-      startMessageId = selected[0]?.id ?? input.current.id;
+    if (rawLimitExceeded(selected, now)) {
+      const shrunk = shrinkToLimits(selected, now, input.current.id);
+      selected = shrunk.messages;
+      startMessageId = shrunk.startMessageId;
       sessionId = crypto.randomUUID();
     }
     const replyTarget = await this.findReplyTarget(
@@ -812,7 +819,11 @@ export class ConversationWindowService {
   }
 
   private eligibleBufferCount(state: ResponseState): number {
-    return state.buffer.filter((message) => !state.shown.has(message.id)).length;
+    return state.buffer.filter(
+      (message) =>
+        !state.shown.has(message.id) &&
+        compareMessageIds(entryPositionId(message), state.cursor) >= 0,
+    ).length;
   }
 
   private async fitToolResult(
