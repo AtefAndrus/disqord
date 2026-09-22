@@ -1,7 +1,5 @@
-import type {
-  DeletedBeforeSaveRecord,
-  IConversationRepository,
-} from "../../db/repositories/conversation";
+import type { DeletedBeforeSaveRecord } from "../../db/repositories/conversation";
+import type { HistoryPurgeScope, IHistoryRecorder } from "../../services/historyRecorder";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -19,8 +17,17 @@ function stringArrayField(data: Record<string, unknown>, name: string): string[]
     : [];
 }
 
+function purgeScope(data: Record<string, unknown>): HistoryPurgeScope {
+  const channelId = stringField(data, "channel_id");
+  const guildId = stringField(data, "guild_id");
+  return {
+    ...(channelId && { channelId }),
+    ...(guildId && { guildId }),
+  };
+}
+
 export function createRawEventHandler(
-  conversationRepository: IConversationRepository,
+  historyRecorder: IHistoryRecorder,
   deletedBeforeSave: DeletedBeforeSaveRecord,
 ): (packet: unknown) => Promise<void> {
   return async (packet: unknown): Promise<void> => {
@@ -35,34 +42,34 @@ export function createRawEventHandler(
           const messageId = stringField(data, "id");
           if (!messageId) return;
           deletedBeforeSave.recordMessage(messageId);
-          await conversationRepository.purgeMessage(messageId);
+          await historyRecorder.purgeMessage(messageId, purgeScope(data));
           return;
         }
         case "MESSAGE_DELETE_BULK": {
           const messageIds = stringArrayField(data, "ids");
           for (const messageId of messageIds) deletedBeforeSave.recordMessage(messageId);
-          await conversationRepository.purgeMessages(messageIds);
+          await historyRecorder.purgeMessages(messageIds, purgeScope(data));
           return;
         }
         case "CHANNEL_DELETE": {
           const channelId = stringField(data, "id");
           if (!channelId) return;
           deletedBeforeSave.recordChannel(channelId);
-          await conversationRepository.purgeChannel(channelId);
+          await historyRecorder.purgeChannel(channelId, purgeScope(data));
           return;
         }
         case "THREAD_DELETE": {
           const channelId = stringField(data, "id");
           if (!channelId) return;
           deletedBeforeSave.recordChannel(channelId);
-          await conversationRepository.purgeThread(channelId);
+          await historyRecorder.purgeThread(channelId, purgeScope(data));
           return;
         }
         case "GUILD_DELETE": {
           const guildId = stringField(data, "id");
           if (!guildId || data.unavailable === true) return;
           deletedBeforeSave.recordGuild(guildId);
-          await conversationRepository.purgeGuild(guildId);
+          await historyRecorder.purgeGuild(guildId);
           return;
         }
         default:

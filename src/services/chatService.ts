@@ -268,6 +268,25 @@ function buildHistoricalUserContent(
   return result;
 }
 
+function currentMediaMarkers(parts: readonly ChatMessageContent[]): PersistedContentPart[] {
+  return parts.flatMap((part): PersistedContentPart[] => {
+    if (part.type === "image_url") {
+      return [{ type: "image-ref" as const, url: part.image_url.url, mime: "image/*" }];
+    }
+    if (part.type === "file") {
+      return [
+        {
+          type: "file-ref" as const,
+          url: "",
+          filename: part.file.filename,
+          mime: "application/pdf",
+        },
+      ];
+    }
+    return [];
+  });
+}
+
 async function buildConversationMessages(
   input: ChatUserInput,
   tweetParts: ChatMessageContent[],
@@ -314,7 +333,10 @@ async function buildConversationMessages(
 
   const userTurnsForStripping: Array<{ id: number; content: PersistedContentPart[] }> = [
     ...selected.map((exchange) => ({ id: exchange.user.id, content: exchange.user.content })),
-    { id: context.current.id, content: currentPersisted },
+    {
+      id: context.current.id,
+      content: [...currentPersisted, ...currentMediaMarkers(currentParts)],
+    },
   ];
   const stripped = stripHistoricalMedia(userTurnsForStripping);
   const strippedById = new Map(stripped.map((turn) => [turn.id, turn.content]));

@@ -15,6 +15,7 @@ import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { ToolRegistry } from "./llm/tools/registry";
 import { ChatService } from "./services/chatService";
+import { createHistorySweepRunner, HistoryRecorder } from "./services/historyRecorder";
 import { ModelService } from "./services/modelService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
@@ -44,8 +45,9 @@ async function bootstrap(): Promise<void> {
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
   const deletedBeforeSave = new DeletedBeforeSaveRecord();
   const conversationRepository = new ConversationRepository(db, deletedBeforeSave);
-  await conversationRepository.failPendingTurns();
-  await conversationRepository.sweepExpired();
+  const historyRecorder = new HistoryRecorder(conversationRepository);
+  await historyRecorder.failPendingTurns();
+  const initialSweepSucceeded = await historyRecorder.sweepExpired();
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
@@ -79,7 +81,7 @@ async function bootstrap(): Promise<void> {
     {
       e2eTesterBotId: config.e2eTesterBotId,
       webSearchEngine: config.webSearchEngine,
-      conversationRepository,
+      historyRecorder,
     },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
@@ -93,7 +95,7 @@ async function bootstrap(): Promise<void> {
   );
 
   const client = await createBotClient();
-  const rawEventHandler = createRawEventHandler(conversationRepository, deletedBeforeSave);
+  const rawEventHandler = createRawEventHandler(historyRecorder, deletedBeforeSave);
   client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
@@ -117,17 +119,15 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
-  const ttlTimer = setInterval(
-    () => {
-      void conversationRepository.sweepExpired();
-    },
-    24 * 60 * 60 * 1000,
-  );
+  const ttlSweepRunner = createHistorySweepRunner(historyRecorder);
+  if (!initialSweepSucceeded) ttlSweepRunner.scheduleRetry();
+  const ttlTimer = setInterval(ttlSweepRunner.run, 24 * 60 * 60 * 1000);
   ttlTimer.unref();
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
     clearInterval(ttlTimer);
+    ttlSweepRunner.cancel();
     httpServer.stop();
     client.destroy();
     db.close();

@@ -1047,7 +1047,7 @@ describe("ChatService", () => {
       expect(request.messages).toEqual([{ role: "user", content: "通常の質問" }]);
     });
 
-    test("画像付きリクエストのBadRequestErrorは本文未表示時だけ画像を外して一度再試行する", async () => {
+    test("現在の画像があるとき、BadRequestErrorの再試行でも履歴画像を剥がす", async () => {
       (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
         createMockGuildSettings({ historyEnabled: true }),
       );
@@ -1144,7 +1144,7 @@ describe("ChatService", () => {
       ][];
       expect(calls[0]?.[0].messages[0]?.content).toEqual([
         { type: "text", text: "[Prior]: history" },
-        { type: "image_url", image_url: { url: "https://cdn.test/history.png" } },
+        { type: "text", text: "[earlier image omitted]" },
       ]);
       expect(calls[1]?.[0].messages[0]?.content).toEqual(calls[0]?.[0].messages[0]?.content);
       expect(calls[0]?.[0].messages.at(-1)?.content).toEqual([
@@ -1162,6 +1162,47 @@ describe("ChatService", () => {
       expect(result.usage?.prompt_tokens).toBe(33);
       expect(result.usage?.total_tokens).toBe(36);
       expect(result.usage?.cost).toBeCloseTo(0.03);
+    });
+
+    test("現在の入力に画像が無ければ、履歴画像を保持する", async () => {
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+        createMockGuildSettings({ historyEnabled: true }),
+      );
+      const base = conversationContext();
+      const baseExchange = base.exchanges[0];
+      if (!baseExchange) throw new Error("base exchange was not created");
+      const context = conversationContext({
+        exchanges: [
+          {
+            ...baseExchange,
+            user: {
+              ...baseExchange.user,
+              content: [
+                { type: "text", text: "history" },
+                { type: "image-ref", url: "https://cdn.test/history.png", mime: "image/png" },
+              ],
+            },
+          },
+        ],
+      });
+      const { updater } = createSpyUpdater();
+
+      await chatService.generateChatResponse(
+        "guild-123",
+        { text: "read", conversation: context },
+        "req-history-media-kept",
+        updater,
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const calls = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls as [
+        ChatCompletionRequest,
+        AbortSignal,
+      ][];
+      expect(calls[0]?.[0].messages[0]?.content).toEqual([
+        { type: "text", text: "[Prior]: history" },
+        { type: "image_url", image_url: { url: "https://cdn.test/history.png" } },
+      ]);
     });
 
     test("BadRequestErrorの前に本文をstageした場合は画像を外して再試行しない", async () => {

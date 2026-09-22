@@ -77,6 +77,7 @@ Responses API は会話状態をサーバ側へ保存せず（`store` は `false
 | 境界の予算選択 | 依存閉じた exchange（user + その assistant）単位で新しい順に採用 | 行単位だと role 整合が壊れる |
 | 共有チャンネル | user turn に `author_label`（表示名スナップショット）+ 安定 `author_id` | 表示名は変わりうるので再現性のためスナップショット |
 | オプトイン | guild 設定 `history_enabled`（既定 0）。0 の guild では turn を保存せず、現行どおり今回の発言だけを送る。1 → 0 に変えたらその guild の履歴を物理削除する。turn を作る transaction の中で `history_enabled` を読み直し、0 なら何も作らない | 発言を DB に残すことを guild の管理者が明示的に選ぶ。無効化後に古い履歴が残ると、再度有効化したときに意図しない文脈が戻る |
+| 履歴の DB 操作の失敗 | `historyRecorder` を履歴の全 write と context 構築に使い、各操作の失敗を捕捉して回答経路へ例外を渡さない。context の read に失敗した場合は履歴と `session_id` なしで回答する。history off の発言では履歴の DB 操作を行わない。送信済み bot message の写像保存に失敗したら親 user turn を削除し、purge にも失敗した対象はメッセージ ID と channel / thread / guild の scope を持つプロセス内の非期限付き集合に残して context から除外し、context 構築時と TTL sweep 時に再試行する。purge に成功した対象は集合から取り除く。 | 履歴は回答より二次的であり、削除を追従できない内容を残すより fail closed（purge）を優先するため |
 | 保持/purge | 容量 TTL は exchange 単位（最後の turn から 30 日を過ぎた後の、次の sweep で消す）。Discord メッセージ削除（写像のあるもの）、チャンネル削除、スレッド削除、guild 退出は該当範囲を CASCADE で物理削除する | 消したものは DB からも消す。TTL を turn 単位にすると exchange の片側だけが残る |
 | 削除イベントの受け方 | discord.js のイベントではなく、`Events.Raw` で gateway の `MESSAGE_DELETE` / `MESSAGE_DELETE_BULK` / `CHANNEL_DELETE` / `THREAD_DELETE` / `GUILD_DELETE` を受け、payload の ID で DB を引く | discord.js 14.26.5 の `threadDelete` はスレッドが channel cache にある場合だけ発火し、`messageDelete` もチャンネルの解決に依存する。再起動後の archived thread のように、DB に履歴があってキャッシュに無い対象の削除を取りこぼす。gateway の payload はキャッシュに関係なく ID を持つ |
 
@@ -224,7 +225,7 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 - `GUILD_DELETE`: payload に `unavailable: true` が無い場合（bot の退出・キック）だけ、その guild の session をすべて消す。`unavailable: true` は Discord 側の障害による一時的な利用不能なので消さない。
 - TTL: 起動時と 24 時間ごとに、最後の turn の `discord_created_at` が 30 日より前の exchange を消し、空になった session も消す。
 - `/config history <on|off>`: 暫定で `ManageGuild` を handler 内で確認する（[権限管理](../permissions/design.md) の機構ができたらそれに従う）。`off` にしたら同じ transaction でその guild の session をすべて消す。応答には、発言を DB に保存すること、Bot がオフラインの間に消したメッセージは DB に残りうることを書く。
-- **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。
+- **追従の限界**: 次の場合、利用者が消したメッセージの exchange が DB に残る。Bot の停止中に消された場合、bot のメッセージが送信されてから写像を足すまでの間に消され、その直後に Bot が落ちた場合、Bot が内部削除すると決めた後のメッセージ（余ったメッセージ、停止後の遅延送信、失敗した応答の後始末）が消された場合、Discord の削除と中立化の編集が両方失敗して残ったメッセージが消された場合。また、生成中に元の発言が消されても、回答の生成と送信は続く（DB には残らない）。purge が失敗し続ける場合はプロセスが稼働している間だけ再試行し、再起動後は TTL または `/config history off` まで exchange が残る。
 - `/status` に履歴の ON/OFF を出す。README に保存する内容、保持期間（最後の発言から 30 日を過ぎた後の次の sweep で消える）、削除への追従の範囲と上の限界を書く。
 - `messageUpdate`（user 編集）は無視し、保存した内容を保つ。編集に追従した再生成は [conversation-regeneration](../conversation-regeneration/design.md) の範囲。
 
@@ -238,6 +239,7 @@ OpenAI 形式の `name` フィールドは provider 差があり、Responses API
 - [x] トークン予算の推定
 - [x] `author_label` の正規化と接頭辞の描画
 - [x] 送信 5 経路を `onBotMessageSent()` に、内部削除 3 経路を `deleteOwnMessage()` に集約し、`messageCreate` と `DiscordStreamingUpdater` に保存経路を組み込む
+- [x] 履歴の DB 操作を `src/services/historyRecorder.ts` に集約し、失敗時の fail closed、pending purge の再試行、履歴 context の除外を実装する
 - [x] 「保存前に届いた削除」のプロセス内記録（メッセージ・チャンネル・スレッド・guild の ID、15 分）と、user turn 作成時・写像追加時の照合、開始から 10 分を超えた発言を保存しないこと
 - [x] `ChatCompletionRequest.session_id` の追加と `requestFields` 経由の付与
 - [x] Web 検索の system メッセージを不変部分と現在日時に分け、現在日時を今回の user turn の直前へ移す

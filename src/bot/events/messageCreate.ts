@@ -2,13 +2,17 @@ import { type Message, MessageType, type ThreadChannel } from "discord.js";
 import type {
   ConversationContext,
   CreateConversationTurnInput,
-  IConversationRepository,
 } from "../../db/repositories/conversation";
 import { buildPersistedContent, normalizeAuthorLabel } from "../../db/repositories/conversation";
 import { AppError } from "../../errors";
 import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
+import {
+  type HistoryPurgeScope,
+  type IHistoryRecorder,
+  logHistoryOperationFailure,
+} from "../../services/historyRecorder";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import {
@@ -97,12 +101,19 @@ function authorLabel(message: Message): string {
 }
 
 export function createDeleteOwnMessage(
-  conversationRepository: IConversationRepository | undefined,
+  historyRecorder: IHistoryRecorder | undefined,
   modelName: string,
   color: number,
+  shouldRecord: () => boolean = () => true,
 ): DeleteOwnMessage {
   return async (botMessage: Message): Promise<void> => {
-    await conversationRepository?.deleteMessageMapping(botMessage.id);
+    if (shouldRecord()) {
+      try {
+        await historyRecorder?.deleteMessageMapping(botMessage.id);
+      } catch (error) {
+        logHistoryOperationFailure("deleteMessageMapping", error);
+      }
+    }
     try {
       await botMessage.delete();
     } catch (deleteError) {
@@ -137,7 +148,7 @@ export function createMessageCreateHandler(
   options: {
     e2eTesterBotId?: string;
     webSearchEngine?: string;
-    conversationRepository?: IConversationRepository;
+    historyRecorder?: IHistoryRecorder;
   } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
@@ -247,16 +258,24 @@ export function createMessageCreateHandler(
     // （初期メッセージ送信前に例外が起きた場合は undefined のまま — cleanupBotMessagesOnFatalError は
     // 空配列を渡されると何もしない）
     let updater: DiscordStreamingUpdater | undefined;
-    const conversationRepository = options.conversationRepository;
+    const historyRecorder = options.historyRecorder;
+    const guildId = message.guild.id;
     let assistantTurnId: number | undefined;
     let historyContext: ConversationContext | undefined;
-    const deleteMessage = createDeleteOwnMessage(conversationRepository, modelName, color);
+    const hasHistoryTurn = (): boolean => assistantTurnId !== undefined;
+    const deleteMessage = createDeleteOwnMessage(historyRecorder, modelName, color, hasHistoryTurn);
     const botMessageCreated = async (botMessage: Message): Promise<void> => {
-      if (!conversationRepository || assistantTurnId === undefined) return;
-      await conversationRepository.onBotMessageSent(
+      if (!historyRecorder || assistantTurnId === undefined) return;
+      const scope: HistoryPurgeScope = {
+        channelId: message.channel.id,
+        parentChannelId: parentChannelId(message),
+        guildId,
+      };
+      await historyRecorder.onBotMessageSent(
         assistantTurnId,
         botMessage.id,
         messageCreatedAt(botMessage),
+        scope,
       );
     };
 
@@ -273,14 +292,13 @@ export function createMessageCreateHandler(
       handlingStartedAt,
     };
     try {
-      if (conversationRepository) {
-        const turnResult = await conversationRepository.createUserAndAssistantTurn(createInput);
+      if (historyRecorder && settings.historyEnabled) {
+        const turnResult = await historyRecorder.createUserAndAssistantTurn(createInput);
         if (turnResult.duplicate) return;
         if (turnResult.skipResponse) return;
         assistantTurnId = turnResult.assistantTurnId;
         if (turnResult.created && turnResult.userTurnId !== undefined) {
-          historyContext =
-            (await conversationRepository.getContext(turnResult.userTurnId)) ?? undefined;
+          historyContext = (await historyRecorder.getContext(turnResult.userTurnId)) ?? undefined;
         }
       }
 
@@ -337,11 +355,7 @@ export function createMessageCreateHandler(
           botMessageCreated,
         );
         if (assistantTurnId !== undefined) {
-          await conversationRepository?.finalizeAssistantTurn(
-            assistantTurnId,
-            "stopped",
-            updater.text,
-          );
+          await historyRecorder?.finalizeAssistantTurn(assistantTurnId, "stopped", updater.text);
         }
         return;
       }
@@ -427,11 +441,7 @@ export function createMessageCreateHandler(
         await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
       }
       if (assistantTurnId !== undefined) {
-        await conversationRepository?.finalizeAssistantTurn(
-          assistantTurnId,
-          "completed",
-          updater.text,
-        );
+        await historyRecorder?.finalizeAssistantTurn(assistantTurnId, "completed", updater.text);
       }
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
@@ -453,11 +463,15 @@ export function createMessageCreateHandler(
         deleteMessage,
       );
       if (assistantTurnId !== undefined) {
-        await conversationRepository?.finalizeAssistantTurn(
-          assistantTurnId,
-          "failed",
-          updater?.text ?? "",
-        );
+        try {
+          await historyRecorder?.finalizeAssistantTurn(
+            assistantTurnId,
+            "failed",
+            updater?.text ?? "",
+          );
+        } catch (finalizeError) {
+          logHistoryOperationFailure("finalizeAssistantTurn", finalizeError);
+        }
       }
 
       const userMessage =
@@ -516,7 +530,11 @@ async function cleanupBotMessagesOnFatalError(
 
   if (!fullText) {
     for (const botMessage of botMessages) {
-      await deleteOrNeutralize(botMessage, modelName, color, deleteMessage);
+      try {
+        await deleteOrNeutralize(botMessage, modelName, color, deleteMessage);
+      } catch (error) {
+        logHistoryOperationFailure("fatalCleanup.deleteOwnMessage", error);
+      }
     }
     return;
   }
@@ -550,10 +568,14 @@ async function cleanupBotMessagesOnFatalError(
           await botMessageCreated(newMessage);
         }
       } catch (error) {
-        logger.warn("Failed to clean up bot message after fatal error", { error, index: i });
+        logHistoryOperationFailure("fatalCleanup.message", error);
       }
     } else {
-      await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
+      try {
+        await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
+      } catch (error) {
+        logHistoryOperationFailure("fatalCleanup.deleteOwnMessage", error);
+      }
     }
   }
 }

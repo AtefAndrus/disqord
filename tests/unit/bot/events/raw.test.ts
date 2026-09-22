@@ -4,15 +4,19 @@ import { createRawEventHandler } from "../../../../src/bot/events/raw";
 import {
   ConversationRepository,
   type CreateConversationTurnInput,
+  DELETED_RECORD_TTL_MS,
   DeletedBeforeSaveRecord,
 } from "../../../../src/db/repositories/conversation";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
+import { HistoryRecorder } from "../../../../src/services/historyRecorder";
 
 describe("raw conversation deletion events", () => {
   let db: Database;
   let repository: ConversationRepository;
+  let historyRecorder: HistoryRecorder;
   let deletedBeforeSave: DeletedBeforeSaveRecord;
+  let currentTime: number;
 
   beforeEach(async () => {
     db = new Database(":memory:");
@@ -20,8 +24,10 @@ describe("raw conversation deletion events", () => {
     applyMigrations(db);
     const settings = new GuildSettingsRepository(db, "test-model");
     await settings.setHistoryEnabled("guild-1", true);
-    deletedBeforeSave = new DeletedBeforeSaveRecord();
+    currentTime = Date.now();
+    deletedBeforeSave = new DeletedBeforeSaveRecord(DELETED_RECORD_TTL_MS, () => currentTime);
     repository = new ConversationRepository(db, deletedBeforeSave);
+    historyRecorder = new HistoryRecorder(repository);
   });
 
   afterEach(() => db.close());
@@ -67,7 +73,7 @@ describe("raw conversation deletion events", () => {
 
   test("MESSAGE_DELETE purges the mapped exchange and remembers the message id", async () => {
     await exchange("user-delete", "channel-1");
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await handle({ t: "MESSAGE_DELETE", d: { id: "user-delete" } });
 
@@ -80,22 +86,84 @@ describe("raw conversation deletion events", () => {
       throw new Error("message content must not be logged");
     };
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await expect(handle({ t: "MESSAGE_DELETE", d: { id: "deleted-message" } })).resolves.toBe(
       undefined,
     );
 
-    expect(errorSpy).toHaveBeenCalledWith("Failed to handle raw Discord event", "Error");
+    expect(errorSpy).toHaveBeenCalledWith("[history] purgeMessage failed", "Error");
     expect(errorSpy.mock.calls.flat()).not.toContain("message content must not be logged");
     expect(deletedBeforeSave.hasMessage("deleted-message")).toBe(true);
+    errorSpy.mockRestore();
+  });
+
+  test("MESSAGE_DELETEの失敗を保持し、次のcontext構築でpurgeを再試行する", async () => {
+    const old = await repository.createUserAndAssistantTurn(
+      input("old-message", "channel-1", "guild-1"),
+    );
+    const current = await repository.createUserAndAssistantTurn(
+      input("current-message", "channel-1", "guild-1"),
+    );
+    if (old.userTurnId === undefined || current.userTurnId === undefined) {
+      throw new Error("exchange was not created");
+    }
+    const originalPurgeMessage = repository.purgeMessage.bind(repository);
+    let shouldFail = true;
+    repository.purgeMessage = async (messageId: string): Promise<boolean> => {
+      if (shouldFail) {
+        shouldFail = false;
+        throw new Error("purge message content must not be logged");
+      }
+      return originalPurgeMessage(messageId);
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
+
+    await handle({
+      t: "MESSAGE_DELETE",
+      d: { id: "old-message", channel_id: "channel-1", guild_id: "guild-1" },
+    });
+    const context = await historyRecorder.getContext(current.userTurnId);
+
+    expect(context?.exchanges).toEqual([]);
+    expect(turnCount()).toBe(2);
+    expect(errorSpy.mock.calls.flat()).not.toContain("purge message content must not be logged");
+    errorSpy.mockRestore();
+  });
+
+  test("MESSAGE_DELETEのpurge失敗は15分後もcontextから除外する", async () => {
+    const old = await repository.createUserAndAssistantTurn(
+      input("expired-delete", "channel-1", "guild-1"),
+    );
+    const current = await repository.createUserAndAssistantTurn(
+      input("still-current", "channel-1", "guild-1"),
+    );
+    if (current.userTurnId === undefined || old.userTurnId === undefined) {
+      throw new Error("exchange was not created");
+    }
+    repository.purgeMessage = async (): Promise<boolean> => {
+      throw new Error("expired purge content must not be logged");
+    };
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
+
+    await handle({
+      t: "MESSAGE_DELETE",
+      d: { id: "expired-delete", channel_id: "channel-1", guild_id: "guild-1" },
+    });
+    currentTime += DELETED_RECORD_TTL_MS + 1;
+    const context = await historyRecorder.getContext(current.userTurnId);
+
+    expect(context?.exchanges).toEqual([]);
+    expect(errorSpy.mock.calls.flat()).not.toContain("expired purge content must not be logged");
     errorSpy.mockRestore();
   });
 
   test("MESSAGE_DELETE_BULK purges all mapped exchanges and remembers every id", async () => {
     await exchange("bulk-a", "channel-1");
     await exchange("bulk-b", "channel-1");
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await handle({ t: "MESSAGE_DELETE_BULK", d: { ids: ["bulk-a", "bulk-b"] } });
 
@@ -108,7 +176,7 @@ describe("raw conversation deletion events", () => {
     await exchange("parent-message", "parent-channel");
     await exchange("thread-message", "thread-channel", "guild-1", "parent-channel");
     await exchange("other-message", "other-channel");
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await handle({ t: "CHANNEL_DELETE", d: { id: "parent-channel" } });
 
@@ -119,7 +187,7 @@ describe("raw conversation deletion events", () => {
   test("THREAD_DELETE purges an uncached thread without purging its parent", async () => {
     await exchange("parent-message", "parent-channel");
     await exchange("thread-message", "thread-channel", "guild-1", "parent-channel");
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await handle({ t: "THREAD_DELETE", d: { id: "thread-channel" } });
 
@@ -132,7 +200,7 @@ describe("raw conversation deletion events", () => {
 
   test("GUILD_DELETE with unavailable true keeps history, while a real leave purges it", async () => {
     await exchange("guild-message", "channel-1");
-    const handle = createRawEventHandler(repository, deletedBeforeSave);
+    const handle = createRawEventHandler(historyRecorder, deletedBeforeSave);
 
     await handle({ t: "GUILD_DELETE", d: { id: "guild-1", unavailable: true } });
     expect(turnCount()).toBe(2);

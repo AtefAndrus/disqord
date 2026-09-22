@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { HistoryPurgeTarget } from "../../services/historyRecorder";
 import type { ChatMessageContent, GuildId } from "../../types";
 
 export const SESSION_GAP_MS = 60 * 60 * 1000;
@@ -80,7 +81,10 @@ export interface IConversationRepository {
   createUserAndAssistantTurn(
     input: CreateConversationTurnInput,
   ): Promise<CreateConversationTurnResult>;
-  getContext(userTurnId: number): Promise<ConversationContext | null>;
+  getContext(
+    userTurnId: number,
+    pendingPurgeTargets?: readonly HistoryPurgeTarget[],
+  ): Promise<ConversationContext | null>;
   createAssistantTurn(
     sessionId: number,
     parentUserTurnId: number,
@@ -91,6 +95,7 @@ export interface IConversationRepository {
     discordMessageId: string,
     discordCreatedAt: number,
   ): Promise<boolean>;
+  purgeAssistantExchange(assistantTurnId: number): Promise<boolean>;
   deleteMessageMapping(discordMessageId: string): Promise<boolean>;
   finalizeAssistantTurn(
     assistantTurnId: number,
@@ -407,7 +412,10 @@ export class ConversationRepository implements IConversationRepository {
     return this.createTurnInTransaction.immediate(input);
   }
 
-  async getContext(userTurnId: number): Promise<ConversationContext | null> {
+  async getContext(
+    userTurnId: number,
+    pendingPurgeTargets: readonly HistoryPurgeTarget[] = [],
+  ): Promise<ConversationContext | null> {
     const currentRow = this.db
       .query<RawTurn, [number]>(
         `SELECT id, session_id as sessionId, role, author_id as authorId, author_label as authorLabel,
@@ -431,7 +439,12 @@ export class ConversationRepository implements IConversationRepository {
       )
       .get(currentRow.sessionId);
     if (!session) return null;
-    if (this.isTurnDeleted(userTurnId, session)) return null;
+    if (
+      this.isTurnDeleted(userTurnId, session) ||
+      this.isExchangePendingPurge(userTurnId, session, pendingPurgeTargets)
+    ) {
+      return null;
+    }
 
     const userRows = this.db
       .query<RawTurn, [number]>(
@@ -442,7 +455,11 @@ export class ConversationRepository implements IConversationRepository {
       )
       .all(currentRow.sessionId)
       .filter((row) => row.id !== userTurnId)
-      .filter((row) => !this.isTurnDeleted(row.id, session))
+      .filter(
+        (row) =>
+          !this.isTurnDeleted(row.id, session) &&
+          !this.isExchangePendingPurge(row.id, session, pendingPurgeTargets),
+      )
       .filter((row) => {
         if (row.discordCreatedAt < currentRow.discordCreatedAt) return true;
         if (row.discordCreatedAt > currentRow.discordCreatedAt) return false;
@@ -472,7 +489,13 @@ export class ConversationRepository implements IConversationRepository {
            ORDER BY id DESC LIMIT 1`,
         )
         .get(userRow.id);
-      if (assistantRow && this.isTurnDeleted(assistantRow.id, session)) continue;
+      if (
+        assistantRow &&
+        (this.isTurnDeleted(assistantRow.id, session) ||
+          this.isTurnPendingPurge(assistantRow.id, session, pendingPurgeTargets))
+      ) {
+        continue;
+      }
       const assistant =
         assistantRow &&
         (assistantRow.status === "completed" || assistantRow.status === "stopped") &&
@@ -567,6 +590,22 @@ export class ConversationRepository implements IConversationRepository {
         return result.changes > 0;
       })
       .immediate(discordMessageId);
+  }
+
+  async purgeAssistantExchange(assistantTurnId: number): Promise<boolean> {
+    return this.db
+      .transaction((turnId: number) => {
+        const result = this.db
+          .query(
+            `DELETE FROM turns WHERE id = (
+              SELECT parent_user_turn_id FROM turns WHERE id = ? AND role = 'assistant'
+            )`,
+          )
+          .run(turnId);
+        deleteEmptySessions(this.db);
+        return result.changes > 0;
+      })
+      .immediate(assistantTurnId);
   }
 
   async finalizeAssistantTurn(
@@ -851,6 +890,61 @@ export class ConversationRepository implements IConversationRepository {
       )
       .all(turnId)
       .some(({ discordMessageId }) => this.deletedBeforeSave.hasMessage(discordMessageId));
+  }
+
+  private isExchangePendingPurge(
+    userTurnId: number,
+    session: RawSession,
+    pendingPurgeTargets: readonly HistoryPurgeTarget[],
+  ): boolean {
+    if (this.isTurnPendingPurge(userTurnId, session, pendingPurgeTargets)) return true;
+    const assistants = this.db
+      .query<{ assistantTurnId: number }, [number]>(
+        `SELECT id as assistantTurnId FROM turns
+         WHERE parent_user_turn_id = ? AND role = 'assistant'
+         ORDER BY id DESC`,
+      )
+      .all(userTurnId);
+    return assistants.some(({ assistantTurnId }) =>
+      this.isTurnPendingPurge(assistantTurnId, session, pendingPurgeTargets),
+    );
+  }
+
+  private isTurnPendingPurge(
+    turnId: number,
+    session: RawSession,
+    pendingPurgeTargets: readonly HistoryPurgeTarget[],
+  ): boolean {
+    return pendingPurgeTargets.some((target) => {
+      switch (target.type) {
+        case "message":
+          return this.turnHasMessage(turnId, target.messageIds);
+        case "channel":
+          return (
+            session.channelId === target.channelId || session.parentChannelId === target.channelId
+          );
+        case "thread":
+          return session.channelId === target.channelId;
+        case "guild":
+          return session.guildId === target.guildId;
+        case "assistant":
+          return (
+            target.assistantTurnId === turnId || this.turnHasMessage(turnId, target.messageIds)
+          );
+      }
+      return false;
+    });
+  }
+
+  private turnHasMessage(turnId: number, messageIds: readonly string[]): boolean {
+    if (messageIds.length === 0) return false;
+    const expected = new Set(messageIds);
+    return this.db
+      .query<{ discordMessageId: string }, [number]>(
+        "SELECT discord_msg_id as discordMessageId FROM turn_messages WHERE turn_id = ?",
+      )
+      .all(turnId)
+      .some(({ discordMessageId }) => expected.has(discordMessageId));
   }
 
   private toPersistedTurn(row: RawTurn): PersistedTurn | null {
