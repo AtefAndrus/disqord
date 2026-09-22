@@ -15,6 +15,7 @@ OpenRouter の reasoning response はモデルとプロバイダによって tex
 
 ## 依存 / 関連 change
 
+- 要見直し: [conversation-context](../conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
 - 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — Responses では reasoning が専用イベントで流れる。本文は `response.reasoning_text.delta`、要約は `response.reasoning_summary_text.delta` で届き（`openai/gpt-5-nano` は後者だけを流す。2026-09-19 実測）、完成形は `type: "reasoning"` の output item に `summary` と `encrypted_content` として載る。このため、本 change の**受信 adapter は移行後に設計する**。ただし移行で単純になるのは受信時の振り分けだけで、text / summary / encrypted data の区別、tool 後の継続用データ再送、永続化と削除、表示設定と描画はそのまま本 change の責務として残る
 - 先行: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — reasoning 表示にも文字数・バイト数・fenced code block 対応済みの分割 primitive を使う。
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — reasoning request の effort / token 上限を scope ごとの LLM parameter として解決する。

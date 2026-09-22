@@ -17,7 +17,8 @@ summary: "会話履歴の途中から新しいセッションへ分岐する /fo
 
 ## 依存 / 関連 change
 
-- 先行（**確定済み前提**）: [conversation-context](../conversation-context/design.md) — turn/session/turn_messages モデル、gap 区切りの session、**`session_id` を「fork/sandbox 用の安定 ID」として不変に保つ方針**（同 change Decisions「セッション同一性」+ Design §2「セッション解決・保存経路」で物理マージしないと明記）。本 change はこの安定 ID を分岐の親参照に使う。
+- 要見直し: [conversation-context](../conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
+- 先行（旧前提。上の「要見直し」を参照）: [conversation-context](../conversation-context/design.md) — turn/session/turn_messages モデル、gap 区切りの session、**`session_id` を「fork/sandbox 用の安定 ID」として不変に保つ方針**（同 change Decisions「セッション同一性」+ Design §2「セッション解決・保存経路」で物理マージしないと明記）。本 change はこの安定 ID を分岐の親参照に使う。
 - 関連: [code-execution](../code-execution/design.md) — persistent sandbox は `session_id` をキーにできる（所有・ライフサイクルは code-execution 側）。fork で新 `session_id` が生まれたとき、新セッションの sandbox を**親から継承するか新規にするか**は両 change 間で決める必要がある（本 doc Open Questions）。
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — 分岐先セッションに適用する system prompt 等の設定 scope（チャンネル/スレッド/ユーザ）の解決。
 

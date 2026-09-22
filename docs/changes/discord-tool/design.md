@@ -19,6 +19,7 @@ DisQord はチャット bot として既に Discord 上で動いており、ユ�
 
 ## 依存 / 関連 change
 
+- 要見直し: [conversation-context](../conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
 - 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `IClientTool`（`name`/`description`/`parameters`/`timeoutMs?`/`isEnabled`/`validate`/`handler`）・`ToolRegistry`・`runToolLoop()` が前提。本 change はここに tool を登録するだけで、protocol ループは持たない
 - 連携: [conversation-context](../conversation-context/design.md) — `fetch_more_context` は履歴ストアの session/exchange モデルと予算境界を使う。本 change の他 action（履歴取得等）は live な Discord API を叩く
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — foundation は `ToolRenderPayload` を V2 updater へ透過するが、現在の tool block hook は描画しない。本 change が Discord tool の結果描画を実装し、tool 自体の可否は `isEnabled` で別管理する
