@@ -332,7 +332,7 @@ describe("ChatService", () => {
     }
 
     test("history places static systems first, hydrates prior media, prefixes authors, and sends session_id", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true, webSearchEnabled: true }),
       );
       mockLLMClient.listModelsWithPricing = mock(() =>
@@ -467,8 +467,66 @@ describe("ChatService", () => {
       expect(fetcher).not.toHaveBeenCalled();
     });
 
+    test.each([
+      ["before the history is built", [true, false], false],
+      ["after the history is built", [true, true, false], true],
+    ] as const)(
+      "history turned off %s drops history and session_id from the request",
+      async (_when, reads, historyFetched) => {
+        const getGuildSettings = mockSettingsService.getGuildSettings as ReturnType<typeof mock>;
+        for (const historyEnabled of reads) {
+          getGuildSettings.mockResolvedValueOnce(createMockGuildSettings({ historyEnabled }));
+        }
+        const originalFetch = globalThis.fetch;
+        const fetcher = mock(() => Promise.resolve(new Response(new Uint8Array([0x50]))));
+        globalThis.fetch = fetcher as unknown as typeof fetch;
+        const defaultExchange = conversationContext().exchanges[0];
+        if (!defaultExchange) throw new Error("default exchange was not created");
+        const context = conversationContext({
+          exchanges: [
+            {
+              user: {
+                ...defaultExchange.user,
+                content: [
+                  { type: "text", text: "before" },
+                  {
+                    type: "file-ref",
+                    url: "https://cdn.test/history.pdf",
+                    filename: "history.pdf",
+                    mime: "application/pdf",
+                  },
+                ],
+              },
+              assistant: defaultExchange.assistant,
+            },
+          ],
+        });
+
+        try {
+          const { updater } = createSpyUpdater();
+          await chatService.generateChatResponse(
+            "guild-123",
+            { text: "now", conversation: context },
+            "req-history-race",
+            updater,
+            { channelId: "channel-1", userId: "user-1" },
+          );
+        } finally {
+          globalThis.fetch = originalFetch;
+        }
+
+        const [request] = (mockLLMClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+          ChatCompletionRequest,
+          AbortSignal,
+        ];
+        expect(request.session_id).toBeUndefined();
+        expect(JSON.stringify(request.messages)).not.toContain("before");
+        expect(fetcher).toHaveBeenCalledTimes(historyFetched ? 1 : 0);
+      },
+    );
+
     test("does not re-fetch a historical PDF after it has been stripped", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       mockLLMClient.listModelsWithPricing = mock(() =>
@@ -552,7 +610,7 @@ describe("ChatService", () => {
     });
 
     test("cancel races the model-details lookup", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       mockLLMClient.listModelsWithPricing = mock(() => new Promise<never>(() => {}));
@@ -582,7 +640,7 @@ describe("ChatService", () => {
     });
 
     test("cancel races historical PDF hydration and passes the generation signal", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       mockLLMClient.listModelsWithPricing = mock(() =>
@@ -656,7 +714,7 @@ describe("ChatService", () => {
     });
 
     test("history budget counts author prefixes and keeps whole exchanges", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       mockLLMClient.listModelsWithPricing = mock(() =>
@@ -1100,7 +1158,7 @@ describe("ChatService", () => {
     });
 
     test("現在の画像があるとき、BadRequestErrorの再試行でも履歴画像を剥がす", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       mockTweetService.extractTweetIds = mock(() => ["20"]);
@@ -1217,7 +1275,7 @@ describe("ChatService", () => {
     });
 
     test("現在の入力に画像が無ければ、履歴画像を保持する", async () => {
-      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValueOnce(
+      (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue(
         createMockGuildSettings({ historyEnabled: true }),
       );
       const base = conversationContext();

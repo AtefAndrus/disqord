@@ -477,7 +477,22 @@ export class ChatService implements IChatService {
         ...(expansion && expansion.textParts.length > 0 ? [buildTweetSystemMessage()] : []),
         ...(settings.webSearchEnabled ? [buildWebSearchDateTimeSystemMessage(new Date())] : []),
       ];
-      const historyEnabled = Boolean(settings.historyEnabled && input.conversation);
+      const buildWithoutHistory = (): ChatCompletionRequest =>
+        buildChatRequest(settings.defaultModel, input, tweetParts, [
+          ...leadingSystemMessages,
+          ...volatileSystemMessages,
+          ...buildChatMessages(input, tweetParts),
+        ]);
+      // `/config history off` can land while tweet expansion, the model
+      // lookup, or hydration is awaited, so the setting is read again before
+      // building the history and once more after it; nothing is awaited
+      // between the last read and the request.
+      let historyEnabled = Boolean(settings.historyEnabled && input.conversation);
+      if (historyEnabled) {
+        const stillEnabled = await this.readHistoryEnabled(guildId, controller.signal);
+        if (stillEnabled === null) return { status: "cancelled", history: initialMessages };
+        historyEnabled = stillEnabled;
+      }
       let request: ChatCompletionRequest;
       if (historyEnabled && input.conversation) {
         let contextLength: number | null = null;
@@ -510,14 +525,14 @@ export class ChatService implements IChatService {
           return { status: "cancelled", history: initialMessages };
         }
         const built = builtResult.value;
-        request = buildChatRequest(settings.defaultModel, input, tweetParts, built);
+        const stillEnabled = await this.readHistoryEnabled(guildId, controller.signal);
+        if (stillEnabled === null) return { status: "cancelled", history: initialMessages };
+        historyEnabled = stillEnabled;
+        request = historyEnabled
+          ? buildChatRequest(settings.defaultModel, input, tweetParts, built)
+          : buildWithoutHistory();
       } else {
-        const currentMessages = buildChatMessages(input, tweetParts);
-        request = buildChatRequest(settings.defaultModel, input, tweetParts, [
-          ...leadingSystemMessages,
-          ...volatileSystemMessages,
-          ...currentMessages,
-        ]);
+        request = buildWithoutHistory();
       }
       const tracked = createTrackingUpdater(updater);
       const result = await this.runChatLoop(
@@ -572,6 +587,16 @@ export class ChatService implements IChatService {
       return result;
     } finally {
       this.activeRequests.delete(requestId);
+    }
+  }
+
+  /** `null` when the request was cancelled; a failed read counts as disabled. */
+  private async readHistoryEnabled(guildId: GuildId, signal: AbortSignal): Promise<boolean | null> {
+    try {
+      const result = await raceWithAbort(this.settingsService.getGuildSettings(guildId), signal);
+      return result.ok ? result.value.historyEnabled : null;
+    } catch {
+      return false;
     }
   }
 

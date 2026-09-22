@@ -140,6 +140,9 @@ export function applyMigrations(db: Database) {
   // assistant of a user turn cannot use it; without this one, building a
   // context scans every turn once per exchange and blocks the event loop.
   db.run("CREATE INDEX IF NOT EXISTS idx_turns_parent ON turns(parent_user_turn_id)");
+  // `reply_to_turn_id ... ON DELETE SET NULL` looks up referencing rows on
+  // every turn delete; without an index a large purge scans the table per row.
+  db.run("CREATE INDEX IF NOT EXISTS idx_turns_reply_to ON turns(reply_to_turn_id)");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS turn_messages (

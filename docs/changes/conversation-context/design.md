@@ -133,6 +133,7 @@ CREATE INDEX idx_turns_session ON turns(session_id, discord_created_at, id);
 CREATE UNIQUE INDEX idx_turns_one_assistant ON turns(parent_user_turn_id) WHERE role='assistant' AND status != 'failed';
 CREATE INDEX idx_turns_created ON turns(discord_created_at); -- TTL sweep
 CREATE INDEX idx_turns_parent ON turns(parent_user_turn_id); -- user turn から assistant を引く（上の部分 UNIQUE index は条件付きなので使えない）
+CREATE INDEX idx_turns_reply_to ON turns(reply_to_turn_id); -- turn の削除で ON DELETE SET NULL が参照元を引く
 
 CREATE TABLE turn_messages (
   turn_id        INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
