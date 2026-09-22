@@ -1,5 +1,10 @@
+import { WINDOW_RAW_MESSAGE_LIMIT } from "../../src/services/conversationWindow";
 import { EmbedColors } from "../../src/types/embed";
-import { PDF_DATA, PNG_DATA } from "./fixtures";
+import {
+  extractComponentsV2Footer,
+  type RawDiscordMessage,
+} from "../../src/utils/discordMessageNormalizer";
+import { buildPdfData, PDF_DATA, PNG_DATA } from "./fixtures";
 
 export interface DiscordMessage {
   id: string;
@@ -31,7 +36,15 @@ export interface Scenario {
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
   prompt: string;
+  setup?: {
+    prompt: string;
+    mention?: boolean;
+    files?: Scenario["files"];
+    fillerCount?: number;
+  };
+  mention?: boolean;
   files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
+  toolName?: "read_earlier_messages" | "view_attachment";
   timeoutMs?: number;
   /** Returns the reasons the reply is wrong; empty means it passed. */
   check: (reply: Reply) => string[];
@@ -39,7 +52,6 @@ export interface Scenario {
 
 // Discord component types.
 const TEXT_DISPLAY = 10;
-const SEPARATOR = 14;
 const CONTAINER = 17;
 const STOP_BUTTON_ID_PREFIX = "stop_response_";
 
@@ -63,13 +75,15 @@ function childrenOf(container: Component | undefined): Component[] {
  * produce a Separator, so that position identifies the footer.
  */
 function footerOf(message: DiscordMessage): string | undefined {
-  const children = childrenOf(containerOf(message));
-  const last = children.at(-1);
-  const beforeLast = children.at(-2);
-  if (last?.type === TEXT_DISPLAY && beforeLast?.type === SEPARATOR) {
-    return typeof last.content === "string" ? last.content : undefined;
-  }
-  return undefined;
+  const raw: RawDiscordMessage = {
+    id: message.id,
+    channel_id: "",
+    content: message.content,
+    timestamp: "",
+    author: message.author,
+    components: message.components,
+  };
+  return extractComponentsV2Footer(raw);
 }
 
 function collectText(node: unknown, out: string[]): void {
@@ -197,6 +211,10 @@ function checkPages(reply: Reply): string[] {
 
 /** Fresh per run so that history-recall can only pass through stored history. */
 const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
+const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
+// 実行ごとに変える: 固定値だと、窓に残った前回の回答から答えても通ってしまう。
+const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
+const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -301,6 +319,64 @@ export const SCENARIOS: Scenario[] = [
         : [
             `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config history on?)`,
           ]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    name: "history-window",
+    manual: true,
+    setup: {
+      prompt: `[e2e] 窓の確認用の合言葉は ${WINDOW_TOKEN} です。`,
+      mention: false,
+    },
+    prompt: "[e2e] メンションなしで直前に投稿された合言葉を答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(WINDOW_TOKEN)
+        ? []
+        : ["the reply does not include the unmentioned message"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    name: "read-earlier",
+    manual: true,
+    toolName: "read_earlier_messages",
+    setup: {
+      prompt: `[e2e] 過去の発言に含める確認用トークンは ${READ_EARLIER_TOKEN} です。`,
+      mention: false,
+      fillerCount: WINDOW_RAW_MESSAGE_LIMIT,
+    },
+    prompt:
+      "[e2e] 必ず read_earlier_messages を呼び出してから、取得した発言に含まれていた確認用トークンをそのまま答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(READ_EARLIER_TOKEN)
+        ? []
+        : [`the reply does not contain the earlier-history token ${READ_EARLIER_TOKEN}`]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    name: "view-attachment",
+    manual: true,
+    toolName: "view_attachment",
+    setup: {
+      prompt: "[e2e] この添付ファイルを後で参照できるようにしておいて。",
+      mention: false,
+      files: [
+        {
+          name: "attachment.pdf",
+          type: "application/pdf",
+          data: buildPdfData(VIEW_ATTACHMENT_TOKEN, undefined, 12),
+        },
+      ],
+    },
+    // The token is generated per run and is absent from the prompt, so only a successful PDF tool read can reveal it.
+    prompt:
+      "[e2e] 必ず view_attachment で直前の添付ファイルを開き、添付ファイル内のトークンをそのまま答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(VIEW_ATTACHMENT_TOKEN)
+        ? []
+        : ["the reply did not report the token from the attachment"]),
       ...hasUsageFooter(reply),
     ],
   },

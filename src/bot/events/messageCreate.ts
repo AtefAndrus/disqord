@@ -1,19 +1,18 @@
 import { type Message, MessageType, type ThreadChannel } from "discord.js";
-import type {
-  ConversationContext,
-  CreateConversationTurnInput,
-} from "../../db/repositories/conversation";
-import { buildPersistedContent, normalizeAuthorLabel } from "../../db/repositories/conversation";
 import { AppError } from "../../errors";
 import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
-import {
-  type HistoryPurgeScope,
-  type IHistoryRecorder,
-  logHistoryOperationFailure,
-} from "../../services/historyRecorder";
+import type {
+  ConversationWindowContext,
+  ConversationWindowService,
+} from "../../services/conversationWindow";
+import type {
+  AuthorizationChannelLike,
+  AuthorizationMessageLike,
+} from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
+import type { IReplyRecordService } from "../../services/replyRecordService";
 import type { ISettingsService } from "../../services/settingsService";
 import {
   badgeText,
@@ -31,9 +30,14 @@ import {
   toComponentsV2ReplyPayload,
   ZERO_TEXT_BUDGET,
 } from "../../utils/chatContainerBuilder";
+import { normalizeAuthorLabel, type RawDiscordMessage } from "../../utils/discordMessageNormalizer";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
+
+function operationError(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
 
 function shouldRespond(
   message: Message,
@@ -89,38 +93,63 @@ function messageCreatedAt(message: Message): number {
   return Number.isFinite(message.createdTimestamp) ? message.createdTimestamp : Date.now();
 }
 
-function parentChannelId(message: Message): string | null {
-  if (!message.channel.isThread()) return null;
-  return (message.channel as ThreadChannel).parentId;
+function asJson(value: unknown): unknown {
+  if (typeof value === "object" && value !== null && "toJSON" in value) {
+    const toJson = (value as { toJSON?: unknown }).toJSON;
+    if (typeof toJson === "function") return toJson.call(value);
+  }
+  return value;
 }
 
-function authorLabel(message: Message): string {
-  const memberLabel = message.member?.displayName;
-  if (memberLabel) return memberLabel;
-  return message.author.username ?? message.author.id;
+function toRawDiscordMessage(message: Message): RawDiscordMessage {
+  const attachments = [...message.attachments.values()].map((attachment) => ({
+    id: attachment.id,
+    filename: attachment.name,
+    url: attachment.url,
+    content_type: attachment.contentType,
+    size: attachment.size,
+  }));
+  const reference = message.reference
+    ? {
+        ...(message.reference.channelId !== undefined && {
+          channel_id: message.reference.channelId,
+        }),
+        ...(message.reference.messageId !== undefined && {
+          message_id: message.reference.messageId,
+        }),
+      }
+    : null;
+  return {
+    id: message.id,
+    channel_id: message.channel.id,
+    guild_id: message.guild?.id ?? null,
+    content: message.content,
+    timestamp: new Date(messageCreatedAt(message)).toISOString(),
+    author: {
+      id: message.author.id,
+      username: message.author.username ?? message.author.id,
+      global_name: message.author.globalName,
+      bot: message.author.bot,
+    },
+    member: message.member ? { nick: message.member.nickname } : null,
+    webhook_id: message.webhookId ?? undefined,
+    type: message.type,
+    components: Array.isArray(message.components)
+      ? message.components.map((component) => asJson(component))
+      : [],
+    attachments,
+    message_reference: reference,
+  };
 }
 
 export function createDeleteOwnMessage(
-  historyRecorder: IHistoryRecorder | undefined,
+  replyRecordService: IReplyRecordService | undefined,
+  triggerMessageId: string | undefined,
   modelName: string,
   color: number,
-  shouldRecord: () => boolean = () => true,
 ): DeleteOwnMessage {
   return async (botMessage: Message): Promise<void> => {
-    if (shouldRecord()) {
-      try {
-        await historyRecorder?.deleteMessageMapping(botMessage.id);
-      } catch (error) {
-        logHistoryOperationFailure("deleteMessageMapping", error);
-      }
-    }
-    try {
-      await botMessage.delete();
-    } catch (deleteError) {
-      logger.warn("Failed to delete bot message, attempting to neutralize instead", {
-        deleteError,
-        messageId: botMessage.id,
-      });
+    const neutralize = async (): Promise<void> => {
       try {
         const neutralContainer = buildFinalContainer({
           text: "（このメッセージは不要になりました）",
@@ -133,10 +162,33 @@ export function createDeleteOwnMessage(
         await botMessage.edit(toComponentsV2EditPayload(neutralContainer));
       } catch (neutralizeError) {
         logger.warn("Failed to neutralize bot message", {
-          neutralizeError,
+          error: operationError(neutralizeError),
           messageId: botMessage.id,
         });
       }
+    };
+
+    if (replyRecordService && triggerMessageId) {
+      try {
+        const removed = await replyRecordService.removePage(botMessage.id);
+        if (!removed) throw new Error("removePage returned false");
+      } catch (removePageError) {
+        logger.warn("Failed to remove reply record, attempting to neutralize instead", {
+          error: operationError(removePageError),
+          messageId: botMessage.id,
+        });
+        await neutralize();
+        return;
+      }
+    }
+    try {
+      await botMessage.delete();
+    } catch (deleteError) {
+      logger.warn("Failed to delete bot message, attempting to neutralize instead", {
+        error: operationError(deleteError),
+        messageId: botMessage.id,
+      });
+      await neutralize();
     }
   };
 }
@@ -148,11 +200,11 @@ export function createMessageCreateHandler(
   options: {
     e2eTesterBotId?: string;
     webSearchEngine?: string;
-    historyRecorder?: IHistoryRecorder;
+    conversationWindow?: ConversationWindowService;
+    replyRecordService?: IReplyRecordService;
   } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
-    const handlingStartedAt = Date.now();
     // Bots are ignored, with one exception: the e2e tester bot, so that
     // `bun run e2e` can drive the real message path. This bot's own messages
     // stay ignored even if the tester id is misconfigured to its own id,
@@ -258,50 +310,62 @@ export function createMessageCreateHandler(
     // （初期メッセージ送信前に例外が起きた場合は undefined のまま — cleanupBotMessagesOnFatalError は
     // 空配列を渡されると何もしない）
     let updater: DiscordStreamingUpdater | undefined;
-    const historyRecorder = options.historyRecorder;
     const guildId = message.guild.id;
-    let assistantTurnId: number | undefined;
-    let historyContext: ConversationContext | undefined;
-    const hasHistoryTurn = (): boolean => assistantTurnId !== undefined;
-    const deleteMessage = createDeleteOwnMessage(historyRecorder, modelName, color, hasHistoryTurn);
-    const botMessageCreated = async (botMessage: Message): Promise<void> => {
-      if (!historyRecorder || assistantTurnId === undefined) return;
-      const scope: HistoryPurgeScope = {
+    const rawMessage = toRawDiscordMessage(message);
+    let replyRecordCreated = false;
+    if (settings.historyEnabled && options.replyRecordService) {
+      replyRecordCreated = await options.replyRecordService.createPending({
+        triggerMsgId: message.id,
         channelId: message.channel.id,
-        parentChannelId: parentChannelId(message),
         guildId,
-      };
-      await historyRecorder.onBotMessageSent(
-        assistantTurnId,
-        botMessage.id,
-        messageCreatedAt(botMessage),
-        scope,
-      );
-    };
+        createdAt: messageCreatedAt(message),
+      });
+      if (!replyRecordCreated && options.replyRecordService.findByTrigger(message.id)) return;
+    }
 
-    const createInput: CreateConversationTurnInput = {
-      guildId: message.guild.id,
-      channelId: message.channel.id,
-      parentChannelId: parentChannelId(message),
-      discordMessageId: message.id,
-      authorId: message.author.id,
-      authorLabel: normalizeAuthorLabel(authorLabel(message), message.author.id),
-      content: buildPersistedContent(content, attachmentResult.storageRefs),
-      replyToDiscordMessageId: message.reference?.messageId ?? null,
-      discordCreatedAt: messageCreatedAt(message),
-      handlingStartedAt,
+    const authorizationMessage: AuthorizationMessageLike = {
+      channel: message.channel as unknown as AuthorizationChannelLike,
+      author: message.author,
+      member: message.member,
+      client: { user: message.client.user },
+    };
+    let conversation: ConversationWindowContext | null | undefined;
+    if (settings.historyEnabled && options.conversationWindow) {
+      try {
+        conversation = await options.conversationWindow.build({
+          current: rawMessage,
+          guildId,
+          userId: message.author.id,
+          botUserId: botId,
+          botUser: message.client.user,
+          channel: message.channel as unknown as AuthorizationChannelLike,
+          authorizationMessage,
+          historyEnabled: true,
+          e2eTesterBotId: options.e2eTesterBotId,
+          nodeEnv: process.env.NODE_ENV,
+        });
+      } catch (error) {
+        logger.warn("Failed to build the conversation window", {
+          error: operationError(error),
+          messageId: message.id,
+        });
+      }
+    }
+
+    // Keep all reply-page writes behind this callback so sends from the initial,
+    // streaming, final, stopped, and fatal-cleanup paths have identical ordering.
+    const deleteMessage = createDeleteOwnMessage(
+      options.replyRecordService,
+      replyRecordCreated ? message.id : undefined,
+      modelName,
+      color,
+    );
+    const botMessageCreated = async (botMessage: Message): Promise<void> => {
+      if (!replyRecordCreated || !options.replyRecordService) return;
+      const result = await options.replyRecordService.appendPage(message.id, botMessage.id);
+      if (result.finalized) await deleteMessage(botMessage);
     };
     try {
-      if (historyRecorder && settings.historyEnabled) {
-        const turnResult = await historyRecorder.createUserAndAssistantTurn(createInput);
-        if (turnResult.duplicate) return;
-        if (turnResult.skipResponse) return;
-        assistantTurnId = turnResult.assistantTurnId;
-        if (turnResult.created && turnResult.userTurnId !== undefined) {
-          historyContext = (await historyRecorder.getContext(turnResult.userTurnId)) ?? undefined;
-        }
-      }
-
       // 初期メッセージ送信（Components V2、停止ボタン付き Section）
       const initialContainer = buildStreamingContainer({
         text: "生成中...",
@@ -328,12 +392,14 @@ export function createMessageCreateHandler(
         {
           text: content,
           parts: attachmentResult.parts,
-          ...(historyContext &&
-            historyRecorder && {
-              conversation: historyContext,
-              isConversationCurrent: (context: ConversationContext) =>
-                historyRecorder.isContextCurrent(context),
-            }),
+          authorLabel: normalizeAuthorLabel(
+            message.member?.nickname ??
+              message.author.globalName ??
+              message.author.username ??
+              message.author.id,
+            message.author.id,
+          ),
+          ...(conversation && { conversation }),
         },
         message.id,
         updater,
@@ -349,7 +415,7 @@ export function createMessageCreateHandler(
         const elapsedSeconds = updater.elapsedSeconds;
         // コードポイント数（UTF-16 コードユニット数だと絵文字等が 2 字以上に数えられる）
         const receivedChars = Array.from(updater.text).length;
-        await updateStoppedMessages(
+        const renderedPageCount = await updateStoppedMessages(
           updater.messages,
           updater.text || "（応答なし）",
           modelName,
@@ -358,9 +424,10 @@ export function createMessageCreateHandler(
           receivedChars,
           message,
           botMessageCreated,
+          deleteMessage,
         );
-        if (assistantTurnId !== undefined) {
-          await historyRecorder?.finalizeAssistantTurn(assistantTurnId, "stopped", updater.text);
+        if (replyRecordCreated) {
+          await options.replyRecordService?.finalize(message.id, "stopped", renderedPageCount);
         }
         return;
       }
@@ -445,20 +512,24 @@ export function createMessageCreateHandler(
       for (let i = chunks.length; i < botMessages.length; i++) {
         await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
       }
-      if (assistantTurnId !== undefined) {
-        await historyRecorder?.finalizeAssistantTurn(assistantTurnId, "completed", updater.text);
+      if (replyRecordCreated) {
+        await options.replyRecordService?.finalize(message.id, "completed", chunks.length);
       }
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
       const errorId = crypto.randomUUID().slice(0, 8);
-      logger.error("Failed to generate response", { errorId, error, guildId: message.guild.id });
+      logger.error("Failed to generate response", {
+        errorId,
+        error: operationError(error),
+        guildId: message.guild.id,
+      });
 
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから行うクリーンアップ表示を停止ボタン付きの stale な内容で上書きさせない。
       updater?.markFinalized();
 
       // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
-      await cleanupBotMessagesOnFatalError(
+      const renderedPageCount = await cleanupBotMessagesOnFatalError(
         updater?.messages ?? [],
         updater?.text ?? "",
         modelName,
@@ -467,16 +538,8 @@ export function createMessageCreateHandler(
         botMessageCreated,
         deleteMessage,
       );
-      if (assistantTurnId !== undefined) {
-        try {
-          await historyRecorder?.finalizeAssistantTurn(
-            assistantTurnId,
-            "failed",
-            updater?.text ?? "",
-          );
-        } catch (finalizeError) {
-          logHistoryOperationFailure("finalizeAssistantTurn", finalizeError);
-        }
+      if (replyRecordCreated) {
+        await options.replyRecordService?.finalize(message.id, "failed", renderedPageCount);
       }
 
       const userMessage =
@@ -489,7 +552,7 @@ export function createMessageCreateHandler(
         await message.reply(toComponentsV2ReplyPayload(errorContainer));
       } catch (replyError) {
         logger.error("Failed to send error message", {
-          replyError,
+          error: operationError(replyError),
           errorId,
           guildId: message.guild.id,
         });
@@ -528,9 +591,9 @@ async function cleanupBotMessagesOnFatalError(
   originalMessage: Message,
   botMessageCreated: (message: Message) => Promise<void>,
   deleteMessage: DeleteOwnMessage,
-): Promise<void> {
+): Promise<number> {
   if (botMessages.length === 0) {
-    return;
+    return 0;
   }
 
   if (!fullText) {
@@ -538,10 +601,12 @@ async function cleanupBotMessagesOnFatalError(
       try {
         await deleteOrNeutralize(botMessage, modelName, color, deleteMessage);
       } catch (error) {
-        logHistoryOperationFailure("fatalCleanup.deleteOwnMessage", error);
+        logger.warn("Failed to clean up a bot message after a fatal error", {
+          error: operationError(error),
+        });
       }
     }
-    return;
+    return 0;
   }
 
   const metadata: FinalMetadata = { showDetails: false };
@@ -573,16 +638,17 @@ async function cleanupBotMessagesOnFatalError(
           await botMessageCreated(newMessage);
         }
       } catch (error) {
-        logHistoryOperationFailure("fatalCleanup.message", error);
+        logger.warn("Failed to clean up a bot message", { error: operationError(error) });
       }
     } else {
       try {
         await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
       } catch (error) {
-        logHistoryOperationFailure("fatalCleanup.deleteOwnMessage", error);
+        logger.warn("Failed to delete an excess bot message", { error: operationError(error) });
       }
     }
   }
+  return chunks.length;
 }
 
 /**
@@ -598,7 +664,8 @@ async function updateStoppedMessages(
   receivedChars: number,
   originalMessage: Message,
   botMessageCreated: (message: Message) => Promise<void>,
-): Promise<void> {
+  deleteMessage: DeleteOwnMessage,
+): Promise<number> {
   const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
   const chunks = splitTextIntoMessages(
     fullText,
@@ -627,4 +694,8 @@ async function updateStoppedMessages(
       await botMessageCreated(newMessage);
     }
   }
+  for (let i = chunks.length; i < botMessages.length; i++) {
+    await deleteOrNeutralize(botMessages[i], modelName, color, deleteMessage);
+  }
+  return chunks.length;
 }

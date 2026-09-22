@@ -1019,7 +1019,9 @@ describe("runToolLoop: normalization", () => {
     expect(toolMsgs).toHaveLength(total);
     const overflowMsgs = toolMsgs.slice(MAX_TOOL_CALLS_PER_TURN);
     for (const msg of overflowMsgs) {
-      expect("content" in msg && msg.content.toLowerCase()).toContain("too many tool calls");
+      expect(
+        "content" in msg && typeof msg.content === "string" && msg.content.toLowerCase(),
+      ).toContain("too many tool calls");
     }
   });
 

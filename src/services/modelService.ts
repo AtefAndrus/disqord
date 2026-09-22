@@ -23,6 +23,8 @@ export interface ModelDetails {
   isFree: boolean;
   inputModalities: string[];
   outputModalities: string[];
+  supportedParameters: string[];
+  supportsTools: boolean;
 }
 
 export type Modality = "image" | "file";
@@ -35,6 +37,7 @@ export interface IModelService {
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
   getModelName(modelId: string): Promise<string | null>;
   getModelDetails(modelId: string): Promise<ModelDetails | null>;
+  supportsTools(modelId: string): Promise<boolean>;
   isMultimodalCapable(modelId: string, kind: Modality): Promise<boolean | null>;
   refreshCache(): Promise<void>;
   getCacheStatus(): CacheStatus;
@@ -133,7 +136,14 @@ export class ModelService implements IModelService {
       isFree,
       inputModalities: model.inputModalities,
       outputModalities: model.outputModalities,
+      supportedParameters: model.supportedParameters ?? [],
+      supportsTools: (model.supportedParameters ?? []).includes("tools"),
     };
+  }
+
+  async supportsTools(modelId: string): Promise<boolean> {
+    const details = await this.getModelDetails(modelId);
+    return details?.supportsTools ?? false;
   }
 
   async isMultimodalCapable(modelId: string, kind: Modality): Promise<boolean | null> {

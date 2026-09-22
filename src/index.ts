@@ -5,18 +5,21 @@ import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
 import { createInteractionCreateHandler } from "./bot/events/interactionCreate";
 import { createMessageCreateHandler } from "./bot/events/messageCreate";
-import { createRawEventHandler } from "./bot/events/raw";
 import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
-import { ConversationRepository, DeletedBeforeSaveRecord } from "./db/repositories/conversation";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
+import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
+import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { ToolRegistry } from "./llm/tools/registry";
+import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
 import { ChatService } from "./services/chatService";
-import { createHistorySweepRunner, HistoryRecorder } from "./services/historyRecorder";
+import { ConversationWindowService } from "./services/conversationWindow";
+import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
+import { createReplyRecordCleanupRunner, ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
 import { createLogFileWriter } from "./utils/logFile";
@@ -43,20 +46,18 @@ async function bootstrap(): Promise<void> {
   logger.info("Database initialized");
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
-  const deletedBeforeSave = new DeletedBeforeSaveRecord();
-  const conversationRepository = new ConversationRepository(db, deletedBeforeSave);
-  const historyRecorder = new HistoryRecorder(conversationRepository);
-  await historyRecorder.failPendingTurns();
-  const initialSweepSucceeded = await historyRecorder.sweepExpired();
+  const replyRecordRepository = new ReplyRecordRepository(db);
+  const replyRecordService = new ReplyRecordService(replyRecordRepository);
+  await replyRecordService.markPendingFailed();
+  await replyRecordService.cleanupExpired();
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
   const modelService = new ModelService(llmClient);
   const tweetService = new TweetService(config.fxtwitterApiBase, packageJson.version);
-  // Empty for now — tool-calling-foundation Phase 4 wires the registry into
-  // ChatService/runToolLoop; future changes (code-execution, discord-tool,
-  // web-search, ...) register their tools here.
   const toolRegistry = new ToolRegistry();
+  toolRegistry.register(createReadEarlierMessagesTool());
+  toolRegistry.register(createViewAttachmentTool());
   const chatService = new ChatService(
     llmClient,
     settingsService,
@@ -73,6 +74,27 @@ async function bootstrap(): Promise<void> {
     config.webSearchEngine,
   );
 
+  const client = await createBotClient();
+  const messageReader = new DiscordMessageReader({
+    get: (route, options) => {
+      const query = options?.query
+        ? new URLSearchParams(
+            Object.entries(options.query).map(([key, value]) => [key, String(value)]),
+          )
+        : undefined;
+      return client.rest.get(route as `/${string}`, {
+        ...(query && { query }),
+        ...(options?.signal && { signal: options.signal }),
+      });
+    },
+  } satisfies DiscordRestClient);
+  const conversationWindow = new ConversationWindowService(
+    messageReader,
+    replyRecordRepository,
+    () => Date.now(),
+    async (model) => (await modelService.isMultimodalCapable(model, "image")) === true,
+  );
+
   const messageCreateHandler = createMessageCreateHandler(
     chatService,
     settingsService,
@@ -80,7 +102,8 @@ async function bootstrap(): Promise<void> {
     {
       e2eTesterBotId: config.e2eTesterBotId,
       webSearchEngine: config.webSearchEngine,
-      historyRecorder,
+      conversationWindow,
+      replyRecordService,
     },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
@@ -92,16 +115,9 @@ async function bootstrap(): Promise<void> {
     config.webSearchEngine,
   );
 
-  const client = await createBotClient();
-  const rawEventHandler = createRawEventHandler(historyRecorder, deletedBeforeSave);
   client.once(Events.ClientReady, () => onReady(client));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
-  client.on(Events.Raw, (packet) => {
-    void rawEventHandler(packet).catch(() => {
-      console.error("Failed to handle raw Discord event");
-    });
-  });
 
   metrics.attach({ client });
 
@@ -117,14 +133,15 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
-  const ttlSweepRunner = createHistorySweepRunner(historyRecorder);
-  if (!initialSweepSucceeded) ttlSweepRunner.scheduleRetry();
-  const ttlTimer = setInterval(ttlSweepRunner.run, 24 * 60 * 60 * 1000);
-  ttlTimer.unref();
+  const ttlSweepRunner = createReplyRecordCleanupRunner(
+    replyRecordService,
+    setInterval,
+    clearInterval,
+    () => conversationWindow.sweepStaleChannels(),
+  );
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
-    clearInterval(ttlTimer);
     ttlSweepRunner.cancel();
     httpServer.stop();
     client.destroy();

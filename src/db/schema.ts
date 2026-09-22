@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-export function applyMigrations(db: Database) {
+export function applyMigrations(db: Database): void {
   db.run(`
     CREATE TABLE IF NOT EXISTS guild_settings (
       guild_id TEXT PRIMARY KEY,
@@ -82,78 +82,40 @@ export function applyMigrations(db: Database) {
     `);
   }
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      openrouter_session_id TEXT NOT NULL UNIQUE,
-      guild_id TEXT NOT NULL,
-      channel_id TEXT NOT NULL,
-      parent_channel_id TEXT,
-      started_at INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL
+  const turnsTable = db
+    .query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turns'",
     )
-  `);
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id, last_activity_at)",
-  );
-  db.run("CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_channel_id)");
-  db.run("CREATE INDEX IF NOT EXISTS idx_sessions_guild ON sessions(guild_id)");
+    .get();
+  const hasTurns = turnsTable !== null && turnsTable !== undefined;
+  if (hasTurns) {
+    const migrateConversationStore = db.transaction(() => {
+      db.run("DROP TABLE IF EXISTS turn_messages");
+      db.run("DROP TABLE IF EXISTS turns");
+      db.run("DROP TABLE IF EXISTS sessions");
+      db.run("UPDATE guild_settings SET history_enabled = 0");
+    });
+    migrateConversationStore.immediate();
+  }
 
   db.run(`
-    CREATE TABLE IF NOT EXISTS turns (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-      role TEXT NOT NULL CHECK(role IN ('user','assistant')),
-      author_id TEXT,
-      author_label TEXT,
-      parent_user_turn_id INTEGER REFERENCES turns(id) ON DELETE CASCADE,
-      reply_to_turn_id INTEGER REFERENCES turns(id) ON DELETE SET NULL,
-      reply_to_discord_msg_id TEXT,
-      status TEXT NOT NULL,
-      content_schema_version INTEGER NOT NULL DEFAULT 1 CHECK(content_schema_version >= 1),
-      content_json TEXT NOT NULL CHECK(json_valid(content_json)),
-      active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
-      discord_created_at INTEGER NOT NULL,
-      finalized_at INTEGER,
-      CHECK (
-        (role='user'
-          AND author_id IS NOT NULL AND author_label IS NOT NULL
-          AND parent_user_turn_id IS NULL
-          AND status IN ('completed','abandoned'))
-        OR
-        (role='assistant'
-          AND author_id IS NULL AND author_label IS NULL
-          AND parent_user_turn_id IS NOT NULL
-          AND reply_to_turn_id IS NULL AND reply_to_discord_msg_id IS NULL
-          AND status IN ('pending','completed','stopped','failed'))
-      )
+    CREATE TABLE IF NOT EXISTS reply_records (
+      trigger_msg_id  TEXT PRIMARY KEY,         -- 返答した発言の message ID
+      channel_id      TEXT NOT NULL,
+      guild_id        TEXT NOT NULL,
+      status          TEXT NOT NULL CHECK(status IN ('pending','completed','stopped','failed')),
+      page_count      INTEGER,                  -- 確定時の総ページ数。pending の間は NULL
+      finalized_at    INTEGER,                  -- 確定時刻（ms）。pending の間は NULL
+      created_at      INTEGER NOT NULL
     )
   `);
-  db.run(
-    "CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, discord_created_at, id)",
-  );
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_turns_one_assistant ON turns(parent_user_turn_id) WHERE role='assistant' AND status != 'failed'",
-  );
-  db.run("CREATE INDEX IF NOT EXISTS idx_turns_created ON turns(discord_created_at)");
-  // The unique index above is partial (role and status), so looking up the
-  // assistant of a user turn cannot use it; without this one, building a
-  // context scans every turn once per exchange and blocks the event loop.
-  db.run("CREATE INDEX IF NOT EXISTS idx_turns_parent ON turns(parent_user_turn_id)");
-  // `reply_to_turn_id ... ON DELETE SET NULL` looks up referencing rows on
-  // every turn delete; without an index a large purge scans the table per row.
-  db.run("CREATE INDEX IF NOT EXISTS idx_turns_reply_to ON turns(reply_to_turn_id)");
-
   db.run(`
-    CREATE TABLE IF NOT EXISTS turn_messages (
-      turn_id INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
-      discord_msg_id TEXT NOT NULL,
-      seq INTEGER NOT NULL CHECK(seq >= 0),
-      PRIMARY KEY (turn_id, discord_msg_id),
-      UNIQUE (turn_id, seq)
+    CREATE TABLE IF NOT EXISTS reply_pages (
+      page_msg_id     TEXT PRIMARY KEY,
+      trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
+      seq             INTEGER NOT NULL,
+      UNIQUE (trigger_msg_id, seq)
     )
   `);
-  db.run(
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_turn_messages_msg ON turn_messages(discord_msg_id)",
-  );
+  db.run("CREATE INDEX IF NOT EXISTS idx_reply_records_finalized ON reply_records(finalized_at)");
 }

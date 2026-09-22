@@ -189,7 +189,9 @@ describe("ToolDispatcher.dispatch", () => {
       requestId: "req-1",
     });
     expect(outcome.status).toBe("error");
-    expect(outcome.toolMessage.content.toLowerCase()).toContain("json");
+    expect(
+      typeof outcome.toolMessage.content === "string" && outcome.toolMessage.content.toLowerCase(),
+    ).toContain("json");
   });
 
   test("validate() rejection produces an error result including the validator's message", async () => {
@@ -513,8 +515,10 @@ describe("clipToolResultBytes", () => {
       requestId: "req-1",
     });
     expect(outcome.status).toBe("ok");
-    expect(utf8Encoder.encode(outcome.toolMessage.content).length).toBeLessThanOrEqual(
-      MAX_TOOL_RESULT_BYTES,
-    );
+    expect(
+      utf8Encoder.encode(
+        typeof outcome.toolMessage.content === "string" ? outcome.toolMessage.content : "",
+      ).length,
+    ).toBeLessThanOrEqual(MAX_TOOL_RESULT_BYTES);
   });
 });

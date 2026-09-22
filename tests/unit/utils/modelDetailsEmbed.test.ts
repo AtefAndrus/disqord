@@ -13,6 +13,8 @@ const details: ModelDetails = {
   isFree: true,
   inputModalities: ["text", "image"],
   outputModalities: ["text"],
+  supportedParameters: [],
+  supportsTools: false,
 };
 
 describe("modelDetailsEmbed", () => {

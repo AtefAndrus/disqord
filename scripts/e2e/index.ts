@@ -97,15 +97,20 @@ async function discord(path: string, deadline: number, init: RequestInit = {}): 
   }
 }
 
-async function send(scenario: Scenario, deadline: number): Promise<string> {
+async function post(
+  prompt: string,
+  mention: boolean,
+  files: Scenario["files"],
+  deadline: number,
+): Promise<string> {
   const payload = {
-    content: `<@${botId}> ${scenario.prompt}`,
-    allowed_mentions: { users: [botId] },
-    attachments: (scenario.files ?? []).map((file, id) => ({ id, filename: file.name })),
+    content: mention ? `<@${botId}> ${prompt}` : prompt,
+    ...(mention && { allowed_mentions: { users: [botId] } }),
+    attachments: (files ?? []).map((file, id) => ({ id, filename: file.name })),
   };
   const form = new FormData();
   form.set("payload_json", JSON.stringify(payload));
-  for (const [index, file] of (scenario.files ?? []).entries()) {
+  for (const [index, file] of (files ?? []).entries()) {
     form.set(`files[${index}]`, new Blob([file.data], { type: file.type }), file.name);
   }
   const response = await discord(`/channels/${channelId}/messages`, deadline, {
@@ -116,6 +121,22 @@ async function send(scenario: Scenario, deadline: number): Promise<string> {
     throw new Error(`send failed: HTTP ${response.status} ${await response.text()}`);
   }
   return ((await response.json()) as DiscordMessage).id;
+}
+
+async function send(scenario: Scenario, deadline: number): Promise<string> {
+  if (scenario.setup) {
+    await post(
+      scenario.setup.prompt,
+      scenario.setup.mention ?? true,
+      scenario.setup.files,
+      deadline,
+    );
+    for (let index = 0; index < (scenario.setup.fillerCount ?? 0); index++) {
+      await post(`[e2e] window filler ${index + 1}`, false, undefined, deadline);
+    }
+    await Bun.sleep(250);
+  }
+  return post(scenario.prompt, scenario.mention ?? true, scenario.files, deadline);
 }
 
 async function repliesAfter(messageId: string, deadline: number): Promise<Reply> {
@@ -132,6 +153,7 @@ async function repliesAfter(messageId: string, deadline: number): Promise<Reply>
 
 interface RunningBot {
   stop: () => Promise<void>;
+  toolCalls: Set<string>;
 }
 
 async function startBot(): Promise<RunningBot> {
@@ -147,12 +169,26 @@ async function startBot(): Promise<RunningBot> {
 
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
+  const toolCalls = new Set<string>();
+  let pending = "";
   let output = "";
+  const inspect = (chunk: string): void => {
+    const lines = (pending + chunk).split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      for (const match of line.matchAll(/client tool invoked.*?name["']?[:=]\s*["']?([\w-]+)/g)) {
+        const name = match[1];
+        if (name) toolCalls.add(name);
+      }
+    }
+  };
   const loggedIn = (async (): Promise<boolean> => {
     while (true) {
       const { done, value } = await reader.read();
       if (done) return false;
-      output += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      output += chunk;
+      inspect(chunk);
       if (output.includes("logged in")) return true;
     }
   })();
@@ -169,11 +205,13 @@ async function startBot(): Promise<RunningBot> {
   }
   // Keep draining so the child never blocks on a full stdout pipe.
   void loggedIn.then(async () => {
-    while (!(await reader.read()).done) {
-      // discard
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      inspect(decoder.decode(value, { stream: true }));
     }
   });
-  return { stop };
+  return { stop, toolCalls };
 }
 
 async function main(): Promise<number> {
@@ -198,6 +236,7 @@ async function main(): Promise<number> {
   let failures = 0;
   try {
     for (const [index, scenario] of selected.entries()) {
+      bot?.toolCalls.clear();
       const startedAt = Date.now();
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
@@ -208,7 +247,18 @@ async function main(): Promise<number> {
           pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
           log: console.log,
         });
+        const toolWasInvoked = scenario.toolName
+          ? spawn && bot?.toolCalls.has(scenario.toolName) === true
+          : true;
         const problems = scenario.check(reply);
+        if (scenario.toolName && !spawn) {
+          problems.push(
+            `cannot verify ${scenario.toolName} invocation without --spawn: bot log is unavailable under --no-spawn`,
+          );
+        } else if (scenario.toolName && !toolWasInvoked) {
+          problems.push(`the bot log has no ${scenario.toolName} invocation`);
+        }
+        bot?.toolCalls.clear();
         const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
         const cost = costOf(reply);
         costs.push({ name: scenario.name, cost });

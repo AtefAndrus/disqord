@@ -1,6 +1,6 @@
 ---
 title: "対話UX改善（会話履歴）"
-status: planned
+status: in-progress
 priority: high
 summary: "直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く"
 ---
@@ -70,6 +70,7 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 | Bot 自身の削除 | 最終描画で余ったページや、失敗した応答の後始末のページは、Discord の削除を呼ぶ前に記録から外し、総ページ数に数えない | 自分で消したページを「欠けたページ」と数えて、正常な返答を渡さなくなることを防ぐ |
 | 同意 | ギルド単位の 1 つのスイッチ `history_enabled`（既定 0）。意味は「Bot をメンションしていない発言を含む直近の会話を LLM に送る」 | 身内向けの bot で、管理者 1 人の判断で足りる。チャンネル単位の同意は設けない。Discord 上の設定の応答には注意書きを出さず、送る範囲は運用者向けに README に書く |
 | 認可 | 窓と tool の読み取りの前に、Bot と呼び出した利用者の両方が、そのチャンネルで `ViewChannel` と `ReadMessageHistory` を持つことを確かめる。private thread では、さらに呼び出した利用者がそのスレッドの参加者であるか `ManageThreads` を持つことを確かめる | Bot の権限で読むので、呼び出した利用者が読めない履歴を Bot 経由で読ませない |
+| 認可に使う所属ロール | 今回の発言に付いてきた所属ロールを、その応答の間は使う。応答の途中で利用者のロール所属が変わっても、反映は次の応答からになる | ロールの権限変更とチャンネルの上書き変更は gateway のイベントで反映されるので、tool の呼び出しごとの判定に効く。反映されないのは利用者のロール所属の変更だけで、これを追うには `GuildMembers` intent か、tool の呼び出しごとのメンバーの強制取得が要る。後者は 1 応答 12 回の REST 予算を最大 5 回消費する。露出は 1 応答の間に限られ、応答の途中の削除やスイッチの OFF と同じ扱いにする |
 | 非信頼データ | 過去の発言、表示名、添付の中身、Bot 自身の過去の返答を、引用資料として渡す。system の指示には昇格させず、過去の発言を今回の依頼として扱わせない | 他人の発言や添付にはプロンプトインジェクションが含まれうる |
 | session_id | 窓と同じくチャンネルごとにメモリで UUID を持ち、窓を作り直すときに作り直す。Responses API の top-level `session_id` として送る。永続化しない | OpenRouter はキャッシュが効いたプロバイダに後続のリクエストを寄せる（sticky routing、10 分使われなければ解除）。窓と同じ区切りにすることで、同じ窓の間は同じプロバイダに寄る |
 | 明示的なキャッシュ | `cache_control` などは送らず、暗黙のキャッシュだけを使う | Gemini の明示的なキャッシュは書き込みと 5 分間の保存に料金が掛かる。窓の先頭を固定すれば、暗黙のキャッシュで足りるかを先に測る |
@@ -87,7 +88,8 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 4. チャンネルの状態が無いか、最後に使ってから 60 分を過ぎていれば、今回の発言の直前から遡って、縮めた後の上限（概算 4,000 トークン、20 件、30 分）に収まる所を新しい開始位置にし、`session_id` を作り直す。
 5. 開始位置から今回の発言の直前までを、`after = 開始位置の 1 つ前` から古い順に取得する（1 回 100 件まで、ページが続く限り、REST の上限まで）。
 6. 適格性の判定（下記 3）を通った発言だけを残す。
-7. 残した発言が上限（Decisions「窓の上限」）のどれかを超えていたら、開始位置を、縮めた後の 3 つの条件をすべて満たす所まで進める（先頭から exchange 単位で落とす）。
+7. 残した発言が上限（Decisions「窓の上限」）のどれかを超えていたら、開始位置を、縮めた後の 3 つの条件をすべて満たす所まで進める。候補の開始位置は発言の位置（分割した返答は 1 ページ目）で、古い方から順に試す。
+   窓の中身は開始位置だけで決まる: 開始位置以降の人の発言と、全ページが開始位置以降にある Bot の返答である。トリガーが開始位置より前にある返答も、全ページが開始位置以降にあれば含める。縮めるときと、次の応答で同じ窓を延長するときで同じ規則を使うので、縮めて外した発言が次の応答で窓の途中に戻ることはない。
 8. reply 先を足す（Decisions「reply 先」）。
 
 並びは「不変の system メッセージ → tool の定義 → 窓の引用（古い順）→ reply 先 → 変動する system 情報（現在日時など）→ 今回の発言」とする。
@@ -102,7 +104,7 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 
 ### 2. Discord のメッセージの正規化
 
-- 人の発言: `content` を本文とし、表示名（サーバーのニックネーム、無ければユーザ名）を発話者ラベルにする。ラベルは改行と制御文字を除き 32 字で切る。
+- 人の発言: `content` を本文とし、発話者ラベルには表示名を使う。サーバーのニックネーム、無ければ表示名（`global_name`）、それも無ければユーザ名の順に選ぶ。REST で読んだ履歴の Message には `member` が付かないので、ニックネームが使えるのは今回の発言だけである。履歴のためにメンバーを取り直すことはしない（1 応答 12 回の REST 予算を発言ごとに消費するため）。ラベルは改行と制御文字を除き 32 字で切る。
 - Bot の返答: Components V2 で送っているので `content` は空である。各ページの Container の中の TextDisplay から回答本文を取り出し、Separator の後ろのフッター（トークン数、費用、ページ番号など）を除く。先頭のモデル名の表示は、記録で 1 ページ目と分かるページからだけ除く。フッターの判定は `scripts/e2e/scenarios.ts` の `footerOf()` と同じ構造の判断で、本体のコードに共通の関数として置き、e2e からも使う。
 - 分割した返答は、記録のページ順でつなげて 1 つの返答として渡す。
 - 添付は、1 始まりの番号、種別（画像、PDF、その他）、ファイル名、サイズだけを表記する。元の CDN URL はモデルに見せない。
@@ -166,7 +168,9 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 - dispatcher（`src/llm/tools/toolHandler.ts`）の 16 KiB の切り詰めは文字列の結果にだけ適用し、part の配列にはバイト数の上限を別に適用する。
 - `toResponsesInput()`（`src/llm/openrouter.ts`）の `function_call_output` の変換を、part の配列に対応させる。
 - `file-parser` plugin は、今は最初の入力に file part があるときだけ付く。tool の結果で PDF を返しうる応答（`view_attachment` を提示する応答）では最初から付ける。
-- tool の結果に入れた PDF を `file-parser` が扱えるかは、この基盤の変更の最初に実機で確かめる。扱えない場合は、PDF だけ文字列の tool エラーにして進めるか、別の経路を実装するかをその時点で決める。
+- Responses API の `function_call_output` の `output` に `[{ type: "input_file", filename, file_data: "data:application/pdf;base64,..." }]` を入れた PDF は、`plugins: [{ id: "file-parser", pdf: { engine: "cloudflare-ai" } }]` をリクエストに付けた場合だけモデルに読み取られることを、2026-09-22 に `google/gemini-3.8-flash` で確認した（plugin ありでは正しく回答し、なしでは PDF がモデルに届かなかった）。
+- したがって `view_attachment` を提示する応答では、最初のリクエストから `file-parser` plugin を付ける。
+- `function_call_output` の `output` に `[{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,..." }]` を入れた画像は、同日同モデルで plugin なしでも正しく読み取られることを確認した。
 
 ### 6. 返答の管理記録
 
@@ -219,17 +223,17 @@ main には、会話の本文を DB に保存する実装がリリース前の�
 
 ## Tasks
 
-- [ ] tool 基盤: マルチモーダルの tool 結果、dispatcher の上限、`function_call_output` の変換、`file-parser` の付与条件
-- [ ] tool の結果に入れた PDF を `file-parser` が扱えるかの実機確認
-- [ ] Discord のメッセージの正規化（Bot の返答の本文の取り出しを共通の関数にし、e2e からも使う）
-- [ ] 返答の管理記録と、送信・Bot 自身の削除の経路の集約
-- [ ] 窓（開始位置の固定、上限でのまとめ進め、60 分での作り直し）、reply 先、認可、適格性の判定
-- [ ] `read_earlier_messages`（カーソルとバッファ）と `view_attachment`
-- [ ] `session_id` と、Web 検索の system メッセージの分割
-- [ ] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
-- [ ] README と AGENTS.md の書き換え
-- [ ] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
-- [ ] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
+- [x] tool 基盤: マルチモーダルの tool 結果、dispatcher の上限、`function_call_output` の変換、`file-parser` の付与条件
+- [x] tool の結果に入れた PDF を `file-parser` が扱えるかの実機確認
+- [x] Discord のメッセージの正規化（Bot の返答の本文の取り出しを共通の関数にし、e2e からも使う）
+- [x] 返答の管理記録と、送信・Bot 自身の削除の経路の集約
+- [x] 窓（開始位置の固定、上限でのまとめ進め、60 分での作り直し）、reply 先、認可、適格性の判定
+- [x] `read_earlier_messages`（カーソルとバッファ）と `view_attachment`
+- [x] `session_id` と、Web 検索の system メッセージの分割
+- [x] 本文ストアの撤去と、1 回だけの移行（DROP と `history_enabled` の 0 化）
+- [x] README と AGENTS.md の書き換え
+- [x] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
+- [x] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
 - [ ] prompt cache の効き具合の実測（同じ窓で続けて尋ね、`Cached: N` と費用を記録する）
 - [ ] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF を見直す質問、自分の発言を消した後にそれを指す質問を試す
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）

@@ -1,5 +1,4 @@
 import type { Attachment, Collection } from "discord.js";
-import type { PersistedAttachmentRef } from "../db/repositories/conversation";
 import type { ChatMessageContent, ChatPlugin } from "../types";
 import { logger } from "../utils/logger";
 
@@ -11,7 +10,6 @@ export type AttachmentRejectReason =
 
 export interface AttachmentParseResult {
   parts: ChatMessageContent[];
-  storageRefs: PersistedAttachmentRef[];
   hasImage: boolean;
   hasPdf: boolean;
   rejected: Array<{ filename: string; reason: AttachmentRejectReason }>;
@@ -57,7 +55,6 @@ export async function parseAttachments(
   attachments: Collection<string, Attachment>,
 ): Promise<AttachmentParseResult> {
   const parts: ChatMessageContent[] = [];
-  const storageRefs: PersistedAttachmentRef[] = [];
   const rejected: AttachmentParseResult["rejected"] = [];
   let hasImage = false;
   let hasPdf = false;
@@ -73,7 +70,6 @@ export async function parseAttachments(
 
     if (SUPPORTED_IMAGE_MIME.has(contentType)) {
       parts.push({ type: "image_url", image_url: { url: attachment.url } });
-      storageRefs.push({ type: "image-ref", url: attachment.url, mime: contentType });
       hasImage = true;
       continue;
     }
@@ -93,12 +89,6 @@ export async function parseAttachments(
           type: "file",
           file: { filename: attachment.name, file_data: dataUrl },
         });
-        storageRefs.push({
-          type: "file-ref",
-          url: attachment.url,
-          filename: attachment.name,
-          mime: contentType,
-        });
         hasPdf = true;
         totalPdfBytes += attachment.size;
       } catch (err) {
@@ -115,5 +105,5 @@ export async function parseAttachments(
     rejected.push({ filename: attachment.name, reason: "UNSUPPORTED_MIME" });
   }
 
-  return { parts, storageRefs, hasImage, hasPdf, rejected };
+  return { parts, hasImage, hasPdf, rejected };
 }

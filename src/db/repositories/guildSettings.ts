@@ -130,12 +130,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
   }
 
   async setHistoryEnabled(guildId: GuildId, enabled: boolean): Promise<GuildSettings> {
-    return this.updateInTransaction.immediate(guildId, () => {
-      if (!enabled) {
-        this.db.query("DELETE FROM sessions WHERE guild_id = ?").run(guildId);
-      }
-      return { historyEnabled: enabled };
-    });
+    return this.updateInTransaction.immediate(guildId, () => ({ historyEnabled: enabled }));
   }
 
   private readRow(guildId: GuildId): GuildSettings | null {
