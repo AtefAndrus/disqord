@@ -624,8 +624,19 @@ describe("chatContainerBuilder", () => {
       expect(segments.at(-1)).toContain("---");
       expect(split(`${"---\n".repeat(8)}a\n---\nb`)).toEqual(["a", "b"]);
       const stars = split(Array.from({ length: 10 }, (_, i) => `s${i}`).join("\n***\n"));
-      expect(stars.at(-1)).toContain("***");
-      expect(stars.join("")).not.toContain("---");
+      expect(stars.at(-1)).toBe("s8\n---\ns9");
+    });
+
+    test("ページの境目で区切り線の行が切れても、前後の本文を失わず、印の文字も残さない", () => {
+      const text = `${"a".repeat(1800)}\n${"-".repeat(600)}\n${"b".repeat(10)}`;
+      const pages = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET, {
+        chars: 1995,
+        bytes: 0,
+      });
+      const rendered = pages.flatMap((page) => splitAtThematicBreaks(page)).join("\n");
+      expect(rendered).toContain("a".repeat(1800));
+      expect(rendered).toContain("b".repeat(10));
+      expect(rendered).not.toContain("\uE000");
     });
 
     test("上限を超えた区切りを文字に戻しても、ページの本文は分割で測った字数を超えない", () => {
