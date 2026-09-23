@@ -535,9 +535,16 @@ export function buildStoppedContainer(params: StoppedContainerParams): Container
 
 /** エラー表示用の Container を構築する（accent: RED、単一 TextDisplay） */
 export function buildErrorContainer(message: string, title = "エラー"): ContainerBuilder {
+  // The message can quote user input (an unknown model ID can be up to 6000
+  // characters), and a TextDisplay over 4000 characters throws while building.
+  const content = `## ⚠️ ${title}\n\n${message}`;
   return new ContainerBuilder()
     .setAccentColor(EmbedColors.RED)
-    .addTextDisplayComponents((td) => td.setContent(`## ⚠️ ${title}\n\n${message}`));
+    .addTextDisplayComponents((td) =>
+      td.setContent(
+        content.length > 4000 ? `${Array.from(content).slice(0, 3998).join("")}…` : content,
+      ),
+    );
 }
 
 /** 成功通知用の Container を構築する（accent: BLURPLE、単一 TextDisplay） */

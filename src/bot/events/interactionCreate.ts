@@ -240,6 +240,29 @@ async function handleButtonInteraction(
     }
 
     const statusChange = parseStatusSetCustomId(customId);
+    if (
+      (statusChange?.key === "web_search" ||
+        statusChange?.key === "twitter_expand" ||
+        statusChange?.key === "history") &&
+      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+    ) {
+      const notice = permissionDeniedNotice(statusChange.key);
+      await interaction.reply(
+        toNoticePayload(buildErrorContainer(notice.message, notice.title), true),
+      );
+      return;
+    }
+    // Every branch that re-renders /status waits on OpenRouter (model checks,
+    // credits) before it can update, which can pass Discord's 3-second
+    // deadline; acknowledging first keeps the interaction valid.
+    if (
+      statusChange ||
+      customId === "status_toggle_free_only" ||
+      customId === "status_toggle_llm_details" ||
+      customId === "status_model_refresh"
+    ) {
+      await interaction.deferUpdate();
+    }
     if (statusChange) {
       const { key, enabled } = statusChange;
       switch (key) {
@@ -261,13 +284,6 @@ async function handleButtonInteraction(
         case "web_search":
         case "twitter_expand":
         case "history": {
-          if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-            const notice = permissionDeniedNotice(key);
-            await interaction.reply(
-              toNoticePayload(buildErrorContainer(notice.message, notice.title), true),
-            );
-            return;
-          }
           if (key === "web_search") {
             await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
           } else if (key === "twitter_expand") {
@@ -336,7 +352,7 @@ async function handleButtonInteraction(
       version: packageJson.version,
     });
 
-    await interaction.update(message);
+    await interaction.editReply(message);
   } catch (error) {
     logger.error("Button interaction failed", { error, customId: interaction.customId });
     try {

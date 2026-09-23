@@ -671,6 +671,13 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildErrorContainer", () => {
+    test("ユーザ入力を含む長いメッセージでも 4000 字に収めて構築できる", () => {
+      const json = toJSON(buildErrorContainer(`モデル \`${"x".repeat(6000)}\` は見つかりません。`));
+      const text = (json.components[0] as { content: string }).content;
+      expect(Array.from(text).length).toBeLessThanOrEqual(4000);
+      expect(text.startsWith("## ⚠️ エラー")).toBe(true);
+    });
+
     test("accent color が RED で、タイトル+メッセージのTextDisplayを持つ", () => {
       const json = toJSON(buildErrorContainer("何か問題が発生しました。", "カスタムエラー"));
       expect(json.accent_color).toBe(EmbedColors.RED);

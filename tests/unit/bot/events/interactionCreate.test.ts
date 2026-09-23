@@ -28,6 +28,7 @@ interface ButtonInteractionFixture {
   deferUpdate: ReturnType<typeof mock>;
   reply: ReturnType<typeof mock>;
   update: ReturnType<typeof mock>;
+  editReply: ReturnType<typeof mock>;
   followUp: ReturnType<typeof mock>;
   replied: boolean;
   deferred: boolean;
@@ -52,6 +53,7 @@ function buttonInteraction(
     deferUpdate: mock(() => Promise.resolve()),
     reply: mock(() => Promise.resolve()),
     update: mock(() => Promise.resolve()),
+    editReply: mock(() => Promise.resolve()),
     followUp: mock(() => Promise.resolve()),
     replied: false,
     deferred: false,
@@ -79,7 +81,7 @@ function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
     {} as IChatService,
     "perplexity",
   );
-  return { handler, settingsService, modelService };
+  return { handler, settingsService, modelService, llmClient };
 }
 
 function payloadOf(callable: ReturnType<typeof mock>): {
@@ -192,6 +194,24 @@ describe("interactionCreate: status_set buttons", () => {
     spyOn(console, "error").mockImplementation(() => {});
   });
 
+  test("OpenRouter の応答を待つ前に deferUpdate で interaction を受け付ける", async () => {
+    const { handler, llmClient } = createStatusHarness();
+    let resolveCredits: (value: { remaining: number }) => void = () => {};
+    (llmClient.getCredits as ReturnType<typeof mock>).mockImplementation(
+      () => new Promise((resolve) => (resolveCredits = resolve)),
+    );
+    const interaction = buttonInteraction("status_set:llm_details:on");
+
+    const pending = handler(interaction as never);
+    await Bun.sleep(0);
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).not.toHaveBeenCalled();
+
+    resolveCredits({ remaining: 1 });
+    await pending;
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+  });
+
   test.each(STATUS_SWITCHES.flatMap((key) => [[key, true] as const, [key, false] as const]))(
     "%s を %s に設定し、status message を更新する",
     async (key, enabled) => {
@@ -206,9 +226,10 @@ describe("interactionCreate: status_set buttons", () => {
       await handler(interaction as never);
 
       expect(interaction.reply).not.toHaveBeenCalled();
-      expect(interaction.update).toHaveBeenCalledTimes(1);
-      expectComponentsV2(interaction.update);
-      expect(payloadOf(interaction.update).embeds).toEqual([]);
+      expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+      expect(interaction.editReply).toHaveBeenCalledTimes(1);
+      expectComponentsV2(interaction.editReply);
+      expect(payloadOf(interaction.editReply).embeds).toEqual([]);
       if (key === "free_only") {
         if (enabled) {
           expect(modelService.isFreeModel).toHaveBeenCalledWith("free/model:free");
@@ -241,6 +262,7 @@ describe("interactionCreate: status_set buttons", () => {
       await handler(interaction as never);
 
       expect(interaction.update).not.toHaveBeenCalled();
+      expect(interaction.editReply).not.toHaveBeenCalled();
       expectComponentsV2(interaction.reply, true);
       if (key === "web_search") {
         expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
@@ -268,8 +290,8 @@ describe("interactionCreate: status_set buttons", () => {
     await handler(interaction as never);
 
     expect(modelService.refreshCache).toHaveBeenCalledTimes(1);
-    expectComponentsV2(interaction.update);
-    expect(payloadOf(interaction.update).embeds).toEqual([]);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
   });
 
   test("status_auto_reply_list はComponents V2通知を返す", async () => {
@@ -305,6 +327,7 @@ describe("interactionCreate: status_set buttons", () => {
 
     expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
     expect(interaction.update).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
     expectComponentsV2(interaction.reply);
     expect(responseText(interaction.reply)).toContain("## ⚠️ 設定エラー");
     expect(responseText(interaction.reply)).toContain(
@@ -345,8 +368,8 @@ describe("interactionCreate: status の旧ボタン", () => {
     await handler(interaction as never);
 
     expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(true);
-    expectComponentsV2(interaction.update);
-    expect(payloadOf(interaction.update).embeds).toEqual([]);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
   });
 
   test("status_toggle_llm_details は従来どおり反転し、更新後は新しいレイアウトになる", async () => {
@@ -355,8 +378,8 @@ describe("interactionCreate: status の旧ボタン", () => {
     await handler(interaction as never);
 
     expect((await settingsService.getGuildSettings("guild-1")).showLlmDetails).toBe(false);
-    expectComponentsV2(interaction.update);
-    expect(payloadOf(interaction.update).embeds).toEqual([]);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
   });
 });
 
