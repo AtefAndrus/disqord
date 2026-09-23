@@ -1,112 +1,144 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, type EmbedBuilder } from "discord.js";
+import {
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ContainerBuilder,
+  MessageFlags,
+  SeparatorSpacingSize,
+} from "discord.js";
 import type { GuildSettings } from "../types";
 import { EmbedColors } from "../types/embed";
-import { createEmbed } from "./embedBuilder";
 
 interface StatusMessageData {
   credits: { remaining: number };
-  rateLimited: boolean;
   cacheStatus: { lastUpdatedAt: Date | null; modelCount: number };
   settings?: GuildSettings;
   webSearchEngine: string;
   version: string;
 }
 
+/** The on/off settings `/status` can switch. The key is part of the button's custom ID. */
+export const STATUS_SWITCHES = [
+  "free_only",
+  "llm_details",
+  "web_search",
+  "twitter_expand",
+  "history",
+] as const;
+export type StatusSwitch = (typeof STATUS_SWITCHES)[number];
+
+const STATUS_SET_PREFIX = "status_set:";
+
+/**
+ * The button names the value it sets rather than "toggle", so two quick
+ * presses both land on that value instead of flipping it back.
+ */
+export function statusSetCustomId(key: StatusSwitch, enabled: boolean): string {
+  return `${STATUS_SET_PREFIX}${key}:${enabled ? "on" : "off"}`;
+}
+
+export function parseStatusSetCustomId(
+  customId: string,
+): { key: StatusSwitch; enabled: boolean } | undefined {
+  if (!customId.startsWith(STATUS_SET_PREFIX)) return undefined;
+  const [key, value] = customId.slice(STATUS_SET_PREFIX.length).split(":");
+  if (!STATUS_SWITCHES.includes(key as StatusSwitch)) return undefined;
+  if (value !== "on" && value !== "off") return undefined;
+  return { key: key as StatusSwitch, enabled: value === "on" };
+}
+
+interface SwitchRow {
+  key: StatusSwitch;
+  label: string;
+  enabled: boolean;
+  /** Shown after 有効 when the setting is on. */
+  detail?: string;
+}
+
+function switchRows(settings: GuildSettings, webSearchEngine: string): SwitchRow[] {
+  return [
+    { key: "free_only", label: "無料モデル限定", enabled: settings.freeModelsOnly },
+    { key: "llm_details", label: "LLM詳細表示", enabled: settings.showLlmDetails },
+    {
+      key: "web_search",
+      label: "Web検索",
+      enabled: settings.webSearchEnabled,
+      detail: webSearchEngine,
+    },
+    { key: "twitter_expand", label: "ツイート展開", enabled: settings.twitterExpandEnabled },
+    { key: "history", label: "会話履歴", enabled: settings.historyEnabled },
+  ];
+}
+
+function formatCache(cacheStatus: StatusMessageData["cacheStatus"]): string {
+  if (!cacheStatus.lastUpdatedAt) return "未取得";
+  const unixSeconds = Math.floor(cacheStatus.lastUpdatedAt.getTime() / 1000);
+  return `<t:${unixSeconds}:R> (${cacheStatus.modelCount}件)`;
+}
+
 export function buildStatusMessage(data: StatusMessageData): {
-  embeds: EmbedBuilder[];
-  components: ActionRowBuilder<ButtonBuilder>[];
+  components: ContainerBuilder[];
+  flags: MessageFlags.IsComponentsV2;
+  embeds: [];
+  allowedMentions: { parse: [] };
 } {
-  // Embed構築
   const remainingText =
     data.credits.remaining === Number.POSITIVE_INFINITY
       ? "無制限"
       : `$${data.credits.remaining.toFixed(4)}`;
 
-  let cacheText: string;
-  if (data.cacheStatus.lastUpdatedAt) {
-    const unixSeconds = Math.floor(data.cacheStatus.lastUpdatedAt.getTime() / 1000);
-    cacheText = `<t:${unixSeconds}:R> (${data.cacheStatus.modelCount}件)`;
-  } else {
-    cacheText = "未取得";
-  }
-
-  const fields: Array<{ name: string; value: string; inline?: boolean }> = [
-    { name: "バージョン", value: `v${data.version}`, inline: true },
-    { name: "OpenRouter残高", value: remainingText, inline: true },
-    { name: "レート制限", value: data.rateLimited ? "制限中" : "正常", inline: true },
-    { name: "モデルキャッシュ", value: cacheText, inline: true },
-  ];
+  const container = new ContainerBuilder().setAccentColor(EmbedColors.BLURPLE);
+  container.addTextDisplayComponents((td) =>
+    td.setContent(
+      [
+        "## ステータス",
+        `**バージョン** v${data.version}`,
+        `**OpenRouter残高** ${remainingText}`,
+        `**モデルキャッシュ** ${formatCache(data.cacheStatus)}`,
+      ].join("\n"),
+    ),
+  );
 
   if (data.settings) {
-    fields.push(
-      { name: "デフォルトモデル", value: `\`${data.settings.defaultModel}\``, inline: true },
-      {
-        name: "無料モデル限定",
-        value: data.settings.freeModelsOnly ? "有効" : "無効",
-        inline: true,
-      },
-      { name: "LLM詳細表示", value: data.settings.showLlmDetails ? "有効" : "無効", inline: true },
-      {
-        name: "Web検索",
-        value: data.settings.webSearchEnabled ? `有効（${data.webSearchEngine}）` : "無効",
-        inline: true,
-      },
-      {
-        name: "ツイート展開",
-        value: data.settings.twitterExpandEnabled ? "有効" : "無効",
-        inline: true,
-      },
-      {
-        name: "会話履歴",
-        value: data.settings.historyEnabled ? "有効" : "無効",
-        inline: true,
-      },
+    const settings = data.settings;
+    container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
+    container.addTextDisplayComponents((td) =>
+      td.setContent(`**デフォルトモデル** \`${settings.defaultModel}\``),
+    );
+    for (const row of switchRows(settings, data.webSearchEngine)) {
+      const state = row.enabled ? `有効${row.detail ? `（${row.detail}）` : ""}` : "無効";
+      container.addSectionComponents((section) =>
+        section
+          .addTextDisplayComponents((td) => td.setContent(`**${row.label}** ${state}`))
+          .setButtonAccessory(
+            new ButtonBuilder()
+              .setCustomId(statusSetCustomId(row.key, !row.enabled))
+              .setLabel(row.enabled ? "無効にする" : "有効にする")
+              .setStyle(row.enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
+          ),
+      );
+    }
+    container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
+    container.addActionRowComponents(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId("status_model_refresh")
+          .setLabel("モデルキャッシュ更新")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("status_auto_reply_list")
+          .setLabel("自動応答チャンネル一覧")
+          .setStyle(ButtonStyle.Secondary),
+      ),
     );
   }
 
-  const embed = createEmbed({
-    color: EmbedColors.BLURPLE,
-    title: "ステータス",
-    fields,
-    timestamp: null,
-  });
-
-  // ボタン構築（Guild内のみ）
-  const components: ActionRowBuilder<ButtonBuilder>[] = [];
-  if (data.settings) {
-    const freeOnlyButton = new ButtonBuilder()
-      .setCustomId("status_toggle_free_only")
-      .setLabel(
-        `無料モデル限定: ${data.settings.freeModelsOnly ? "有効" : "無効"} → ${data.settings.freeModelsOnly ? "無効" : "有効"}`,
-      )
-      .setStyle(data.settings.freeModelsOnly ? ButtonStyle.Success : ButtonStyle.Secondary);
-
-    const llmDetailsButton = new ButtonBuilder()
-      .setCustomId("status_toggle_llm_details")
-      .setLabel(
-        `LLM詳細表示: ${data.settings.showLlmDetails ? "有効" : "無効"} → ${data.settings.showLlmDetails ? "無効" : "有効"}`,
-      )
-      .setStyle(data.settings.showLlmDetails ? ButtonStyle.Success : ButtonStyle.Secondary);
-
-    const refreshButton = new ButtonBuilder()
-      .setCustomId("status_model_refresh")
-      .setLabel("モデルキャッシュ更新")
-      .setStyle(ButtonStyle.Primary);
-
-    const autoReplyListButton = new ButtonBuilder()
-      .setCustomId("status_auto_reply_list")
-      .setLabel("自動応答チャンネル一覧")
-      .setStyle(ButtonStyle.Secondary);
-
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      freeOnlyButton,
-      llmDetailsButton,
-      refreshButton,
-      autoReplyListButton,
-    );
-
-    components.push(row);
-  }
-
-  return { embeds: [embed], components };
+  // `embeds: []` clears the embed of a `/status` message posted before this
+  // layout, which Discord requires when an edit turns a message into Components V2.
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2,
+    embeds: [],
+    allowedMentions: { parse: [] },
+  };
 }

@@ -38,7 +38,7 @@ describe("プレビュー fixture", () => {
 
       // message の個数だけでは、中身の描画が丸ごと空になる回帰を検出できない。
       // payload にある Embed / Container の個数ぶん、対応する要素が出ていることまで見る。
-      const embeds = fixture.messages.reduce((n, m) => n + m.embeds.length, 0);
+      const embeds = fixture.messages.reduce((n, m) => n + (m.embeds?.length ?? 0), 0);
       const containers = fixture.messages.reduce(
         (n, m) => n + m.components.filter((c) => c.type === ComponentType.Container).length,
         0,
@@ -82,5 +82,62 @@ describe("プレビュー fixture", () => {
     expect(section).toBeDefined();
     if (section?.type !== ComponentType.Section) throw new Error("not a Section");
     expect(section.accessory.type).toBe(ComponentType.Button);
+  });
+
+  test("/status が V2 Container と設定ボタンを描画する", () => {
+    const fixture = findFixture("status-guild");
+    const component = fixture.messages[0]?.components[0];
+    if (component?.type !== ComponentType.Container) throw new Error("not a Container");
+    const sections = component.components.filter((child) => child.type === ComponentType.Section);
+
+    expect(textsOf(fixture, 0)[0]).toContain("## ステータス");
+    expect(sections).toHaveLength(5);
+    expect(
+      sections.some(
+        (section) =>
+          section.accessory.type === ComponentType.Button &&
+          "custom_id" in section.accessory &&
+          section.accessory.custom_id === "status_set:web_search:off",
+      ),
+    ).toBe(true);
+  });
+
+  test("/help と /model list の TextDisplay は4,000文字以内で描画される", () => {
+    for (const id of ["help", "model-list"]) {
+      const fixture = findFixture(id);
+      const text = textsOf(fixture, 0)[0];
+      expect(text?.length).toBeLessThanOrEqual(4000);
+      expect(messagesToMarkup(fixture.messages)).toContain('class="dq-container"');
+    }
+  });
+
+  test("model details のタイトルリンクと全フィールドを描画する", () => {
+    const fixture = findFixture("model-set");
+    const text = textsOf(fixture, 0)[0] ?? "";
+    const markup = messagesToMarkup(fixture.messages);
+
+    expect(text).toContain(
+      "## [モデル変更](https://openrouter.ai/demo/preview-model%3Aplaceholder)",
+    );
+    expect(text).toContain("**モデル名** Demo Preview Model");
+    expect(text).toContain("**対応モダリティ** 入力: text, image / 出力: text");
+    expect(markup).toContain(
+      '<discord-link href="https://openrouter.ai/demo/preview-model%3Aplaceholder">モデル変更</discord-link>',
+    );
+  });
+
+  test("error and success notices use Containers with their expected content", () => {
+    const errorMarkup = messagesToMarkup(findFixture("error").messages);
+    const successMarkup = messagesToMarkup(findFixture("config-confirm").messages);
+
+    expect(errorMarkup).toContain('<discord-header level="2">');
+    expect(errorMarkup).toContain("エラー</discord-header>");
+    expect(errorMarkup).toContain("OpenRouter API がタイムアウトしました。");
+    expect(successMarkup).toContain(
+      '<discord-header level="2">無料モデル限定設定</discord-header>',
+    );
+    expect(successMarkup).toContain(
+      "無料モデル限定を <discord-bold>有効</discord-bold> にしました。",
+    );
   });
 });

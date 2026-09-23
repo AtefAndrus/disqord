@@ -30,7 +30,7 @@ import { ButtonStyle, ComponentType, SeparatorSpacingSize } from "discord.js";
 
 export interface IRenderMessage {
   content?: string;
-  embeds: APIEmbed[];
+  embeds?: APIEmbed[];
   /** message の最上位コンポーネント。ActionRow（従来）と Container（Components V2）の両方を含む */
   components: APIMessageTopLevelComponent[];
 }
@@ -135,6 +135,11 @@ function linkMarkup(escapedUrl: string): string {
   return `<discord-link href="${href}">${escapedUrl}</discord-link>`;
 }
 
+function markdownLinkMarkup(escapedLabel: string, escapedUrl: string): string {
+  const href = escapedUrl.replace(/"/g, "&quot;");
+  return `<discord-link href="${href}">${escapedLabel}</discord-link>`;
+}
+
 /**
  * Discord マークダウン（Bot が使う範囲）を discord-components のマークアップへ。
  * @param opts.headings - 見出し(# )を描画するか。Discord は embed description でのみ
@@ -184,7 +189,12 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     hold(`<img class="dq-emoji" src="${escapeAttr(twemojiUrl(m))}" alt="${escapeAttr(m)}">`),
   );
 
-  // 4. リンク → 退避（抑制リンク <url> + 素の URL の自動リンク。SENTINEL/空白で停止）
+  // 4. Markdown link → 退避（URL を後続の自動リンク処理に拾わせない）
+  text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, label: string, url: string) =>
+    hold(markdownLinkMarkup(label, url)),
+  );
+
+  // 5. リンク → 退避（抑制リンク <url> + 素の URL の自動リンク。SENTINEL/空白で停止）
   text = text.replace(/&lt;(https?:\/\/[^\s|]+?)&gt;/g, (_m, url: string) =>
     hold(linkMarkup(url)),
   );
@@ -196,7 +206,7 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     return hold(linkMarkup(url)) + rest;
   });
 
-  // 5. 見出し（description / TextDisplay のみ。H1-H3）→ 退避。
+  // 6. 見出し（description / TextDisplay のみ。H1-H3）→ 退避。
   // 見出し行を終端する改行はここで消費しない。消費すると後続行が行頭でなくなり、連続する見出しや
   // 見出し直後の箇条書きが検出されなくなる（改行そのものの処理は 7.5 で行う）。
   if (opts.headings) {
@@ -207,7 +217,7 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     );
   }
 
-  // 6. 太字 / 斜体（退避済みタグには SENTINEL しか残っていないため安全）
+  // 7. 太字 / 斜体（退避済みタグには SENTINEL しか残っていないため安全）
   text = text.replace(/\*\*([^*]+)\*\*/g, "<discord-bold>$1</discord-bold>");
   text = text.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<discord-italic>$1</discord-italic>");
   text = text.replace(
@@ -215,17 +225,17 @@ function markdownToHtml(input: string, opts: { headings?: boolean } = {}): strin
     "<discord-italic>$1</discord-italic>",
   );
 
-  // 7. 行頭 "- " 箇条書き → 中黒、改行
+  // 8. 行頭 "- " 箇条書き → 中黒、改行
   text = text.replace(/(^|\n)- /g, "$1• ");
   text = text.replace(/\n/g, "<br>");
 
-  // 7.5. ブロック要素（見出し）の直後の <br> を落とす。<discord-header> は上下マージンを自前で
+  // 8.5. ブロック要素（見出し）の直後の <br> を落とす。<discord-header> は上下マージンを自前で
   // 持つため、行の改行をそのまま <br> にすると Discord より 1-2 行分間延びする。
   text = text.replace(/\uE000(\d+)\uE000(?:<br>)+/g, (m, id: string) =>
     blockIds.has(Number(id)) ? `${SENTINEL}${id}${SENTINEL}` : m,
   );
 
-  // 8. 退避を復元。見出しの退避内容はその行にある絵文字・コード等の退避を入れ子に持つため、
+  // 9. 退避を復元。見出しの退避内容はその行にある絵文字・コード等の退避を入れ子に持つため、
   // 展開した中身をさらに展開する。展開結果そのものは再走査しないので、入力由来の SENTINEL が
   // 戻って偶然プレースホルダの形になっても、それが退避として解釈されることはない。
   const restore = (value: string, depth: number): string => {

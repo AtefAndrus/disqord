@@ -1,8 +1,9 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   type ChatInputCommandInteraction,
-  type EmbedBuilder,
+  ComponentType,
+  type ContainerBuilder,
   MessageFlags,
   PermissionFlagsBits,
 } from "discord.js";
@@ -39,12 +40,117 @@ function createInteraction(model?: string): {
   return { interaction, reply, deferReply, editReply };
 }
 
-function repliedEmbed(reply: ReturnType<typeof mock>): ReturnType<EmbedBuilder["toJSON"]> {
-  const payload = reply.mock.calls[0]?.[0] as { embeds?: EmbedBuilder[] } | undefined;
-  const embed = payload?.embeds?.[0];
-  if (!embed) throw new Error("Expected an embed reply");
-  return embed.toJSON();
+function repliedText(reply: ReturnType<typeof mock>): string {
+  const payload = reply.mock.calls[0]?.[0] as
+    | {
+        components?: ContainerBuilder[];
+        flags?: number;
+        allowedMentions?: { parse: [] };
+        embeds?: [];
+      }
+    | undefined;
+  const container = payload?.components?.[0];
+  if (!container || typeof payload.flags !== "number") {
+    throw new Error("Expected a Components V2 reply");
+  }
+  expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
+  expect(payload.allowedMentions).toEqual({ parse: [] });
+  if (payload.embeds) expect(payload.embeds).toEqual([]);
+  const text = container
+    .toJSON()
+    .components.find((component) => component.type === ComponentType.TextDisplay);
+  if (!text || text.type !== ComponentType.TextDisplay) throw new Error("Expected a TextDisplay");
+  return text.content;
 }
+
+describe("Components V2 command replies", () => {
+  test("/help と /model list は4,000文字以内のContainerで返信する", async () => {
+    const llmClient = createMockLLMClient();
+    const handlers = createCommandHandlers(
+      llmClient,
+      createMockSettingsService(),
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const help = createInteraction();
+    const modelList = createInteraction();
+
+    await handlers.help(help.interaction);
+    await handlers.modelList(modelList.interaction);
+
+    const helpText = repliedText(help.reply);
+    const modelListText = repliedText(modelList.reply);
+    expect(helpText).toStartWith("## DisQord ヘルプ\n\n");
+    expect(modelListText).toStartWith("## モデル一覧\n\n");
+    expect(helpText.length).toBeLessThanOrEqual(4000);
+    expect(modelListText.length).toBeLessThanOrEqual(4000);
+  });
+
+  test("/status はrate-limit値を読まずV2フラグとembeds空配列で更新する", async () => {
+    const llmClient = createMockLLMClient();
+    const isRateLimited = spyOn(llmClient, "isRateLimited");
+    const handlers = createCommandHandlers(
+      llmClient,
+      createMockSettingsService(),
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const status = createInteraction();
+
+    await handlers.status(status.interaction);
+
+    expect(isRateLimited).not.toHaveBeenCalled();
+    expect(status.deferReply).toHaveBeenCalledTimes(1);
+    expect(repliedText(status.editReply)).toContain("## ステータス");
+    const payload = status.editReply.mock.calls[0]?.[0] as { flags: number; embeds: [] };
+    expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
+    expect(payload.embeds).toEqual([]);
+  });
+
+  test("/model refresh はV2フラグとembeds空配列で編集する", async () => {
+    const llmClient = createMockLLMClient();
+    const handlers = createCommandHandlers(
+      llmClient,
+      createMockSettingsService(),
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const refresh = createInteraction();
+
+    await handlers.modelRefresh(refresh.interaction);
+
+    expect(repliedText(refresh.editReply)).toContain("モデルキャッシュを更新しました。");
+    const payload = refresh.editReply.mock.calls[0]?.[0] as { flags: number; embeds: [] };
+    expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
+    expect(payload.embeds).toEqual([]);
+  });
+
+  test("auto-reply の追加・未登録削除・一覧もComponents V2で返信する", async () => {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    settingsService.removeAutoReplyChannel = mock(() => Promise.resolve(false));
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    const add = createInteraction();
+    Object.assign(add.interaction.options, { getChannel: mock(() => ({ id: "channel-1" })) });
+    const remove = createInteraction("channel-1");
+    const list = createInteraction();
+
+    await handlers.configAutoReplyAdd(add.interaction);
+    await handlers.configAutoReplyRemove(remove.interaction);
+    await handlers.configAutoReplyList(list.interaction);
+
+    expect(repliedText(add.reply)).toContain("<#channel-1> を自動応答チャンネルに追加しました。");
+    expect(repliedText(remove.reply)).toContain(
+      "<#channel-1> は自動応答チャンネルに設定されていません。",
+    );
+    expect(repliedText(list.reply)).toContain("自動応答チャンネルは設定されていません。");
+  });
+});
 
 describe("model command handlers", () => {
   test("currentとsetが同じモデル詳細フィールドとOpenRouter URLを表示する", async () => {
@@ -61,11 +167,16 @@ describe("model command handlers", () => {
     await handlers.modelCurrent(current.interaction);
     await handlers.modelSet(set.interaction);
 
-    const currentEmbed = repliedEmbed(current.editReply);
-    const setEmbed = repliedEmbed(set.reply);
-    expect(currentEmbed.fields).toEqual(setEmbed.fields);
-    expect(currentEmbed.url).toBe("https://openrouter.ai/model-1");
-    expect(setEmbed.url).toBe(currentEmbed.url);
+    const currentText = repliedText(current.editReply);
+    const setText = repliedText(set.reply);
+    const currentFields = currentText.slice(currentText.indexOf("**モデル名**"));
+    const setFields = setText.slice(setText.indexOf("**モデル名**"));
+    expect(currentFields).toBe(setFields);
+    expect(currentText).toContain("## [現在のモデル](https://openrouter.ai/model-1)");
+    expect(setText).toContain("## [モデル変更](https://openrouter.ai/model-1)");
+    const currentPayload = current.editReply.mock.calls[0]?.[0] as { flags: number; embeds: [] };
+    expect(currentPayload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
+    expect(currentPayload.embeds).toEqual([]);
     expect(current.deferReply).toHaveBeenCalledTimes(1);
     expect(current.reply).not.toHaveBeenCalled();
     expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", {
@@ -86,7 +197,7 @@ describe("model command handlers", () => {
 
     await handlers.modelCurrent(current.interaction);
 
-    expect(repliedEmbed(current.editReply).description).toContain(
+    expect(repliedText(current.editReply)).toContain(
       "<https://openrouter.ai/missing/model%3Afree>",
     );
   });
@@ -104,9 +215,7 @@ describe("model command handlers", () => {
 
     await handlers.modelCurrent(current.interaction);
 
-    expect(repliedEmbed(current.editReply).description).toContain(
-      "<https://openrouter.ai/fallback/model>",
-    );
+    expect(repliedText(current.editReply)).toContain("<https://openrouter.ai/fallback/model>");
   });
 });
 
@@ -148,7 +257,7 @@ describe("config web-search handler", () => {
     await handlers.configWebSearch(interaction);
 
     expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", true);
-    const description = repliedEmbed(reply).description ?? "";
+    const description = repliedText(reply);
     expect(description).toContain("perplexity");
     expect(description).toContain("server-tools/web-search");
   });
@@ -170,8 +279,8 @@ describe("config web-search handler", () => {
 
     expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
     const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.Ephemeral);
-    expect(repliedEmbed(reply).description).toContain("サーバーの管理");
+    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+    expect(repliedText(reply)).toContain("サーバーの管理");
   });
 });
 
@@ -213,7 +322,7 @@ describe("config twitter-expand handler", () => {
     await handlers.configTwitterExpand(interaction);
 
     expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", true);
-    expect(repliedEmbed(reply).description).toBe("ツイート展開を **有効** にしました。");
+    expect(repliedText(reply)).toContain("ツイート展開を **有効** にしました。");
   });
 
   test("サーバーの管理権限があれば無効化する", async () => {
@@ -233,8 +342,8 @@ describe("config twitter-expand handler", () => {
 
     expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
     const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.Ephemeral);
-    expect(repliedEmbed(reply).description).toContain("サーバーの管理");
+    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+    expect(repliedText(reply)).toContain("サーバーの管理");
   });
 
   test("DMでは設定を変えず、サーバー内限定のエラーを返す", async () => {
@@ -245,7 +354,7 @@ describe("config twitter-expand handler", () => {
     await handlers.configTwitterExpand(interaction);
 
     expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
-    expect(repliedEmbed(reply).description).toContain("サーバー内でのみ");
+    expect(repliedText(reply)).toContain("サーバー内でのみ");
   });
 });
 
@@ -279,8 +388,7 @@ describe("config history handler", () => {
     await handlers.configHistory(interaction);
 
     expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", true);
-    const description = repliedEmbed(reply).description ?? "";
-    expect(description).toBe("会話履歴を **有効** にしました。");
+    expect(repliedText(reply)).toContain("会話履歴を **有効** にしました。");
   });
 
   test("off disables history without claiming that stored history was removed", async () => {
@@ -297,7 +405,7 @@ describe("config history handler", () => {
     await handlers.configHistory(interaction);
 
     expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", false);
-    expect(repliedEmbed(reply).description).toBe("会話履歴を **無効** にしました。");
+    expect(repliedText(reply)).toContain("会話履歴を **無効** にしました。");
   });
 
   test("without ManageGuild it replies ephemerally and does not change the setting", async () => {
@@ -315,7 +423,7 @@ describe("config history handler", () => {
 
     expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
     const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.Ephemeral);
+    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
   });
 });
 

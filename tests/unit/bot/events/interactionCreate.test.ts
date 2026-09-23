@@ -1,6 +1,11 @@
 import { Database } from "bun:sqlite";
 import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { type EmbedBuilder, MessageFlags } from "discord.js";
+import {
+  ComponentType,
+  type ContainerBuilder,
+  MessageFlags,
+  PermissionFlagsBits,
+} from "discord.js";
 import type { CommandHandlers } from "../../../../src/bot/events/interactionCreate";
 import { createInteractionCreateHandler } from "../../../../src/bot/events/interactionCreate";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
@@ -10,39 +15,128 @@ import type { ILLMClient } from "../../../../src/llm/openrouter";
 import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import { type ISettingsService, SettingsService } from "../../../../src/services/settingsService";
+import { STATUS_SWITCHES } from "../../../../src/utils/statusMessage";
+import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
 
 interface ButtonInteractionFixture {
   customId: string;
   guildId: string | null;
+  memberPermissions: { has: ReturnType<typeof mock> };
   isAutocomplete: () => boolean;
   isButton: () => boolean;
   isChatInputCommand: () => boolean;
   deferUpdate: ReturnType<typeof mock>;
   reply: ReturnType<typeof mock>;
+  update: ReturnType<typeof mock>;
+  editReply: ReturnType<typeof mock>;
+  followUp: ReturnType<typeof mock>;
+  replied: boolean;
+  deferred: boolean;
 }
 
 function buttonInteraction(
   customId: string,
   guildId: string | null = "guild-1",
+  hasManageGuild = false,
 ): ButtonInteractionFixture {
-  return {
+  const fixture: ButtonInteractionFixture = {
     customId,
     guildId,
+    memberPermissions: {
+      has: mock((permission: bigint) =>
+        hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
+      ),
+    },
     isAutocomplete: () => false,
     isButton: () => true,
     isChatInputCommand: () => false,
-    deferUpdate: mock(() => Promise.resolve()),
+    deferUpdate: mock(() => {
+      fixture.deferred = true;
+      return Promise.resolve();
+    }),
     reply: mock(() => Promise.resolve()),
+    update: mock(() => Promise.resolve()),
+    editReply: mock(() => Promise.resolve()),
+    followUp: mock(() => Promise.resolve()),
+    replied: false,
+    deferred: false,
+  };
+  return fixture;
+}
+
+function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
+  const settingsService = createMockSettingsService();
+  settingsService.getGuildSettings = mock(() =>
+    Promise.resolve(createMockGuildSettings({ guildId: "guild-1", defaultModel })),
+  );
+  const modelService = {
+    isFreeModel: mock(() => Promise.resolve(isFree)),
+    getCacheStatus: mock(() => ({ lastUpdatedAt: null, modelCount: 0 })),
+    refreshCache: mock(() => Promise.resolve()),
+  } as unknown as IModelService;
+  const llmClient = {
+    getCredits: mock(() => Promise.resolve({ remaining: 1 })),
+  } as unknown as ILLMClient;
+  const handler = createInteractionCreateHandler(
+    {} as CommandHandlers,
+    settingsService,
+    modelService,
+    llmClient,
+    {} as IChatService,
+    "perplexity",
+  );
+  return { handler, settingsService, modelService, llmClient };
+}
+
+function payloadOf(callable: ReturnType<typeof mock>): {
+  components: ContainerBuilder[];
+  flags: number;
+  embeds?: [];
+  allowedMentions?: { parse: [] };
+} {
+  const payload = callable.mock.calls[0]?.[0] as
+    | {
+        components?: ContainerBuilder[];
+        flags?: number;
+        embeds?: [];
+        allowedMentions?: { parse: [] };
+      }
+    | undefined;
+  if (!payload?.components) throw new Error("Expected a Components V2 payload");
+  return payload as {
+    components: ContainerBuilder[];
+    flags: number;
+    embeds?: [];
+    allowedMentions?: { parse: [] };
   };
 }
 
-describe("interactionCreate: 停止ボタン", () => {
-  let cancelRequest: ReturnType<typeof mock>;
-  let handler: ReturnType<typeof createInteractionCreateHandler>;
+function responseText(callable: ReturnType<typeof mock>): string {
+  const container = payloadOf(callable).components[0];
+  if (!container) throw new Error("Expected a Container");
+  return container
+    .toJSON()
+    .components.flatMap((component) => {
+      if (component.type === ComponentType.TextDisplay) return [component.content];
+      if (component.type === ComponentType.Section) {
+        return component.components.map((inner) => inner.content);
+      }
+      return [];
+    })
+    .join("\n");
+}
 
-  beforeEach(() => {
-    cancelRequest = mock(() => true);
-    handler = createInteractionCreateHandler(
+function expectComponentsV2(callable: ReturnType<typeof mock>, ephemeral = false): void {
+  const payload = payloadOf(callable);
+  const expected = MessageFlags.IsComponentsV2 | (ephemeral ? MessageFlags.Ephemeral : 0);
+  expect(payload.flags).toBe(expected);
+  expect(payload.allowedMentions).toEqual({ parse: [] });
+}
+
+describe("interactionCreate: 停止ボタン", () => {
+  test("停止対象があれば deferUpdate する", async () => {
+    const cancelRequest = mock(() => true);
+    const handler = createInteractionCreateHandler(
       {} as CommandHandlers,
       {} as ISettingsService,
       {} as IModelService,
@@ -50,159 +144,247 @@ describe("interactionCreate: 停止ボタン", () => {
       { cancelRequest } as unknown as IChatService,
       "perplexity",
     );
-    spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  test("customId の message ID で cancelRequest を呼び、成功したら deferUpdate する", async () => {
     const interaction = buttonInteraction("stop_response_1234567890");
 
     await handler(interaction as never);
 
-    expect(cancelRequest).toHaveBeenCalledTimes(1);
     expect(cancelRequest).toHaveBeenCalledWith("1234567890");
     expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  test("該当するリクエストが無ければ、ephemeral でその旨を返し deferUpdate しない", async () => {
-    cancelRequest.mockImplementation(() => false);
+  test("停止対象がなければComponents V2で本人にだけ返す", async () => {
+    const cancelRequest = mock(() => false);
+    const handler = createInteractionCreateHandler(
+      {} as CommandHandlers,
+      {} as ISettingsService,
+      {} as IModelService,
+      {} as ILLMClient,
+      { cancelRequest } as unknown as IChatService,
+      "perplexity",
+    );
     const interaction = buttonInteraction("stop_response_1234567890");
 
     await handler(interaction as never);
 
+    expectComponentsV2(interaction.reply, true);
+    expect(responseText(interaction.reply)).toContain(
+      "既に完了しているか、該当するリクエストが見つかりません。",
+    );
     expect(interaction.deferUpdate).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledTimes(1);
-    const payload = interaction.reply.mock.calls[0]?.[0] as { flags: number; content: string };
-    expect(payload.flags).toBe(MessageFlags.Ephemeral);
-    expect(payload.content).toContain("既に完了");
   });
 
-  test("guild 外で押された場合は cancelRequest を呼ばない", async () => {
+  test("ギルド外の操作はComponents V2のephemeralエラーを返す", async () => {
+    const cancelRequest = mock(() => true);
+    const handler = createInteractionCreateHandler(
+      {} as CommandHandlers,
+      {} as ISettingsService,
+      {} as IModelService,
+      {} as ILLMClient,
+      { cancelRequest } as unknown as IChatService,
+      "perplexity",
+    );
     const interaction = buttonInteraction("stop_response_1234567890", null);
 
     await handler(interaction as never);
 
     expect(cancelRequest).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledTimes(1);
+    expectComponentsV2(interaction.reply, true);
   });
 });
 
-describe("interactionCreate: 無料モデル限定ボタン", () => {
-  const FREE_MODEL = "free/model:free";
-  const PAID_MODEL = "paid/model";
+describe("interactionCreate: status_set buttons", () => {
+  beforeEach(() => {
+    spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  test("OpenRouter の応答を待つ前に deferUpdate で interaction を受け付ける", async () => {
+    const { handler, llmClient } = createStatusHarness();
+    let resolveCredits: (value: { remaining: number }) => void = () => {};
+    (llmClient.getCredits as ReturnType<typeof mock>).mockImplementation(
+      () => new Promise((resolve) => (resolveCredits = resolve)),
+    );
+    const interaction = buttonInteraction("status_set:llm_details:on");
+
+    const pending = handler(interaction as never);
+    await Bun.sleep(0);
+    expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(interaction.editReply).not.toHaveBeenCalled();
+
+    resolveCredits({ remaining: 1 });
+    await pending;
+    expect(interaction.editReply).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(STATUS_SWITCHES.flatMap((key) => [[key, true] as const, [key, false] as const]))(
+    "%s を %s に設定し、status message を更新する",
+    async (key, enabled) => {
+      const { handler, settingsService, modelService } = createStatusHarness();
+      const privileged = key === "web_search" || key === "twitter_expand" || key === "history";
+      const interaction = buttonInteraction(
+        `status_set:${key}:${enabled ? "on" : "off"}`,
+        "guild-1",
+        privileged,
+      );
+
+      await handler(interaction as never);
+
+      expect(interaction.reply).not.toHaveBeenCalled();
+      expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
+      expect(interaction.editReply).toHaveBeenCalledTimes(1);
+      expectComponentsV2(interaction.editReply);
+      expect(payloadOf(interaction.editReply).embeds).toEqual([]);
+      if (key === "free_only") {
+        if (enabled) {
+          expect(modelService.isFreeModel).toHaveBeenCalledWith("free/model:free");
+          expect(settingsService.setFreeModelsOnly).toHaveBeenCalledWith("guild-1", true, {
+            model: "free/model:free",
+            isFree: true,
+          });
+        } else {
+          expect(modelService.isFreeModel).not.toHaveBeenCalled();
+          expect(settingsService.setFreeModelsOnly).toHaveBeenCalledWith("guild-1", false);
+        }
+      } else if (key === "llm_details") {
+        expect(settingsService.setShowLlmDetails).toHaveBeenCalledWith("guild-1", enabled);
+      } else if (key === "web_search") {
+        expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", enabled);
+      } else if (key === "twitter_expand") {
+        expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", enabled);
+      } else {
+        expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", enabled);
+      }
+    },
+  );
+
+  test.each(["web_search", "twitter_expand", "history"] as const)(
+    "%s の権限がない場合は設定を変えず、既存の文言でephemeral応答する",
+    async (key) => {
+      const { handler, settingsService } = createStatusHarness();
+      const interaction = buttonInteraction(`status_set:${key}:on`);
+
+      await handler(interaction as never);
+
+      expect(interaction.update).not.toHaveBeenCalled();
+      expect(interaction.editReply).not.toHaveBeenCalled();
+      expectComponentsV2(interaction.reply, true);
+      if (key === "web_search") {
+        expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
+        expect(responseText(interaction.reply)).toContain(
+          "Web検索の設定には「サーバーの管理」権限が必要です。",
+        );
+      } else if (key === "twitter_expand") {
+        expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
+        expect(responseText(interaction.reply)).toContain(
+          "ツイート展開の設定には「サーバーの管理」権限が必要です。",
+        );
+      } else {
+        expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
+        expect(responseText(interaction.reply)).toContain(
+          "会話履歴の設定には「サーバーの管理」権限が必要です。",
+        );
+      }
+    },
+  );
+
+  test("status_model_refresh はV2 status messageへ更新する", async () => {
+    const { handler, modelService } = createStatusHarness();
+    const interaction = buttonInteraction("status_model_refresh");
+
+    await handler(interaction as never);
+
+    expect(modelService.refreshCache).toHaveBeenCalledTimes(1);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
+  });
+
+  test("status_auto_reply_list はComponents V2通知を返す", async () => {
+    const { handler } = createStatusHarness();
+    const interaction = buttonInteraction("status_auto_reply_list");
+
+    await handler(interaction as never);
+
+    expectComponentsV2(interaction.reply);
+    expect(responseText(interaction.reply)).toContain("自動応答チャンネルは設定されていません。");
+  });
+
+  test("有料 default model で無料モデル限定を有効化すると非ephemeralの設定エラーを返す", async () => {
+    const db = new Database(":memory:");
+    db.run("PRAGMA foreign_keys = ON");
+    applyMigrations(db);
+    const settingsService = new SettingsService(new GuildSettingsRepository(db, "paid/model"));
+    const modelService = {
+      isFreeModel: mock(() => Promise.resolve(false)),
+      getCacheStatus: () => ({ lastUpdatedAt: null, modelCount: 0 }),
+    } as unknown as IModelService;
+    const handler = createInteractionCreateHandler(
+      {} as CommandHandlers,
+      settingsService,
+      modelService,
+      { getCredits: () => Promise.resolve({ remaining: 1 }) } as unknown as ILLMClient,
+      {} as IChatService,
+      "perplexity",
+    );
+    const interaction = buttonInteraction("status_set:free_only:on");
+
+    await handler(interaction as never);
+
+    expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
+    expect(interaction.update).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expectComponentsV2(interaction.followUp);
+    expect(responseText(interaction.followUp)).toContain("## ⚠️ 設定エラー");
+    expect(responseText(interaction.followUp)).toContain(
+      "現在のモデル `paid/model` は無料モデルではありません。先に無料モデルに変更してから有効化してください。",
+    );
+    db.close();
+  });
+});
+
+describe("interactionCreate: status の旧ボタン", () => {
   let db: Database;
   let settingsService: SettingsService;
-  let pendingChecks: Array<() => void>;
   let handler: ReturnType<typeof createInteractionCreateHandler>;
 
-  function statusButton(): ButtonInteractionFixture & {
-    update: ReturnType<typeof mock>;
-    replied: boolean;
-    deferred: boolean;
-  } {
-    return {
-      ...buttonInteraction("status_toggle_free_only"),
-      update: mock(() => Promise.resolve()),
-      replied: false,
-      deferred: false,
-    };
-  }
-
-  /** Lets every pending model check finish, so both presses have read the settings first. */
-  async function releaseChecks(): Promise<void> {
-    await Bun.sleep(0);
-    for (const release of pendingChecks.splice(0)) release();
-  }
-
-  beforeEach(async () => {
+  beforeEach(() => {
     db = new Database(":memory:");
     db.run("PRAGMA foreign_keys = ON");
     applyMigrations(db);
-    settingsService = new SettingsService(new GuildSettingsRepository(db, FREE_MODEL));
-    pendingChecks = [];
+    settingsService = new SettingsService(new GuildSettingsRepository(db, "free/model:free"));
     const modelService = {
-      // Held until the test releases it, so the settings read happens before
-      // either press saves.
-      isFreeModel: mock(
-        (model: string) =>
-          new Promise<boolean>((resolve) => {
-            pendingChecks.push(() => resolve(model !== PAID_MODEL));
-          }),
-      ),
+      isFreeModel: mock(() => Promise.resolve(true)),
       getCacheStatus: () => ({ lastUpdatedAt: null, modelCount: 0 }),
     } as unknown as IModelService;
-    const llmClient = {
-      getCredits: () => Promise.resolve({ remaining: 1 }),
-      isRateLimited: () => false,
-    } as unknown as ILLMClient;
     handler = createInteractionCreateHandler(
       {} as CommandHandlers,
       settingsService,
       modelService,
-      llmClient,
+      { getCredits: () => Promise.resolve({ remaining: 1 }) } as unknown as ILLMClient,
       {} as IChatService,
       "perplexity",
     );
     spyOn(console, "error").mockImplementation(() => {});
   });
 
-  test.each([false, true])(
-    "%p の状態で 2 回同時に押すと、両方が成功して 2 回反転し元に戻る",
-    async (initial) => {
-      await settingsService.setFreeModelsOnly("guild-1", initial, {
-        model: FREE_MODEL,
-        isFree: true,
-      });
-      const toggleResults: boolean[] = [];
-      const toggle = settingsService.toggleFreeModelsOnly.bind(settingsService);
-      spyOn(settingsService, "toggleFreeModelsOnly").mockImplementation(async (...args) => {
-        const result = await toggle(...args);
-        toggleResults.push(result);
-        return result;
-      });
-      const first = statusButton();
-      const second = statusButton();
+  test("status_toggle_free_only は従来どおり反転し、更新後は新しいレイアウトになる", async () => {
+    const interaction = buttonInteraction("status_toggle_free_only");
 
-      const presses = Promise.all([handler(first as never), handler(second as never)]);
-      await releaseChecks();
-      await presses;
+    await handler(interaction as never);
 
-      // 2 回とも失敗しても最終値は元に戻るので、両方の押下が成功したことも確かめる
-      expect(toggleResults).toEqual([!initial, initial]);
-      for (const press of [first, second]) {
-        expect(press.reply).not.toHaveBeenCalled();
-        expect(press.update).toHaveBeenCalledTimes(1);
-      }
-      expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(initial);
-    },
-  );
-
-  test("確認中にモデルが有料に変わったら、限定を ON にせず再操作を促す", async () => {
-    const press = statusButton();
-    const pressed = handler(press as never);
-    await Bun.sleep(0);
-    await settingsService.setGuildModel("guild-1", { model: PAID_MODEL, isFree: false });
-    await releaseChecks();
-    await pressed;
-
-    expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
-    const payload = press.reply.mock.calls[0]?.[0] as { embeds: EmbedBuilder[]; flags: number };
-    expect(payload.flags).toBe(MessageFlags.Ephemeral);
-    expect(payload.embeds[0]?.toJSON().title).toBe("設定エラー");
-    expect(payload.embeds[0]?.toJSON().description).toContain("もう一度操作してください");
+    expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(true);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
   });
 
-  test("有料モデルのまま押したら、先に無料モデルへ変えるよう案内する", async () => {
-    await settingsService.setGuildModel("guild-1", { model: PAID_MODEL, isFree: false });
-    const press = statusButton();
+  test("status_toggle_llm_details は従来どおり反転し、更新後は新しいレイアウトになる", async () => {
+    const interaction = buttonInteraction("status_toggle_llm_details");
 
-    const pressed = handler(press as never);
-    await releaseChecks();
-    await pressed;
+    await handler(interaction as never);
 
-    expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
-    const payload = press.reply.mock.calls[0]?.[0] as { embeds: EmbedBuilder[] };
-    expect(payload.embeds[0]?.toJSON().description).toContain("先に無料モデルに変更");
+    expect((await settingsService.getGuildSettings("guild-1")).showLlmDetails).toBe(false);
+    expectComponentsV2(interaction.editReply);
+    expect(payloadOf(interaction.editReply).embeds).toEqual([]);
   });
 });
 
@@ -229,7 +411,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
     expect(configTwitterExpand).toHaveBeenCalledTimes(1);
   });
 
-  async function run(error: Error): Promise<unknown> {
+  async function run(error: Error): Promise<ReturnType<typeof mock>> {
     spyOn(console, "error").mockImplementation(() => {});
     const handlers = {
       configFreeOnly: mock(() => Promise.reject(error)),
@@ -242,7 +424,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as IChatService,
       "perplexity",
     );
-    const reply = mock((_payload: unknown) => Promise.resolve());
+    const reply = mock(() => Promise.resolve());
     await handler({
       commandName: "config",
       isAutocomplete: () => false,
@@ -253,26 +435,52 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       deferred: false,
       reply,
     } as never);
-    return reply.mock.calls[0]?.[0];
+    return reply;
   }
 
-  function embedOf(payload: unknown): { title?: string; description?: string } | undefined {
-    return (payload as { embeds: EmbedBuilder[] }).embeds[0]?.toJSON();
-  }
+  test("設定の競合と規則違反は非ephemeralの設定エラーContainerで案内する", async () => {
+    const conflict = await run(new SettingsConflictError("changed"));
+    expectComponentsV2(conflict);
+    expect(responseText(conflict)).toContain("## ⚠️ 設定エラー");
+    expect(responseText(conflict)).toContain("もう一度操作してください");
 
-  test("設定の競合と規則違反は、見出し「設定エラー」でそれぞれの案内を返す", async () => {
-    const conflict = embedOf(await run(new SettingsConflictError("changed")));
-    expect(conflict?.title).toBe("設定エラー");
-    expect(conflict?.description).toContain("もう一度操作してください");
-
-    const rule = embedOf(
-      await run(new SettingsRuleError("paid", "先に無料モデルに変更してください。")),
-    );
-    expect(rule?.title).toBe("設定エラー");
-    expect(rule?.description).toBe("先に無料モデルに変更してください。");
+    const rule = await run(new SettingsRuleError("paid", "先に無料モデルに変更してください。"));
+    expectComponentsV2(rule);
+    expect(responseText(rule)).toContain("先に無料モデルに変更してください。");
   });
 
-  test("それ以外の失敗は、これまでどおり汎用の文言だけを返す", async () => {
-    expect(await run(new Error("boom"))).toBe("コマンドの実行中にエラーが発生しました。");
+  test("それ以外の失敗は汎用エラーをComponents V2で返す", async () => {
+    const reply = await run(new Error("boom"));
+    expectComponentsV2(reply);
+    expect(responseText(reply)).toContain("コマンドの実行中にエラーが発生しました。");
+  });
+
+  test("既にacknowledge済みのコマンドエラーはComponents V2 followUpで返す", async () => {
+    spyOn(console, "error").mockImplementation(() => {});
+    const handler = createInteractionCreateHandler(
+      {
+        configFreeOnly: mock(() => Promise.reject(new Error("boom"))),
+      } as unknown as CommandHandlers,
+      {} as ISettingsService,
+      {} as IModelService,
+      {} as ILLMClient,
+      {} as IChatService,
+      "perplexity",
+    );
+    const followUp = mock(() => Promise.resolve());
+
+    await handler({
+      commandName: "config",
+      isAutocomplete: () => false,
+      isButton: () => false,
+      isChatInputCommand: () => true,
+      options: { getSubcommandGroup: () => null, getSubcommand: () => "free-only" },
+      replied: true,
+      deferred: false,
+      followUp,
+      reply: mock(() => Promise.resolve()),
+    } as never);
+
+    expectComponentsV2(followUp);
   });
 });

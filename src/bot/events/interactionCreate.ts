@@ -1,10 +1,10 @@
 import type {
   ButtonInteraction,
   ChatInputCommandInteraction,
-  EmbedBuilder,
+  ContainerBuilder,
   Interaction,
 } from "discord.js";
-import { MessageFlags } from "discord.js";
+import { PermissionFlagsBits } from "discord.js";
 import packageJson from "../../../package.json";
 import { SettingsConflictError, SettingsRuleError } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
@@ -12,10 +12,19 @@ import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import {
+  buildErrorContainer,
+  buildSuccessNoticeContainer,
+  formatAutoReplyChannelList,
+  toNoticePayload,
+} from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
 import { metrics } from "../../utils/metrics";
-import { buildStatusMessage } from "../../utils/statusMessage";
+import {
+  buildStatusMessage,
+  parseStatusSetCustomId,
+  type StatusSwitch,
+} from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 
 /**
@@ -24,10 +33,35 @@ import { handleAutocomplete } from "../commands/handlers";
  * title the free-only checks used before they moved into the service. Other
  * failures keep their generic reply.
  */
-function settingsErrorEmbed(error: unknown): EmbedBuilder | undefined {
+function settingsErrorContainer(error: unknown): ContainerBuilder | undefined {
   return error instanceof SettingsConflictError || error instanceof SettingsRuleError
-    ? createErrorEmbed(error.userMessage, "設定エラー")
+    ? buildErrorContainer(error.userMessage, "設定エラー")
     : undefined;
+}
+
+function permissionDeniedNotice(
+  key: Extract<StatusSwitch, "web_search" | "twitter_expand" | "history">,
+): {
+  message: string;
+  title: string;
+} {
+  switch (key) {
+    case "web_search":
+      return {
+        message: "Web検索の設定には「サーバーの管理」権限が必要です。",
+        title: "Web検索設定",
+      };
+    case "twitter_expand":
+      return {
+        message: "ツイート展開の設定には「サーバーの管理」権限が必要です。",
+        title: "ツイート展開設定",
+      };
+    case "history":
+      return {
+        message: "会話履歴の設定には「サーバーの管理」権限が必要です。",
+        title: "会話履歴設定",
+      };
+  }
 }
 
 export interface CommandHandlers {
@@ -158,10 +192,10 @@ export function createInteractionCreateHandler(
           interaction.replied || interaction.deferred
             ? interaction.followUp.bind(interaction)
             : interaction.reply.bind(interaction);
-        const settingsError = settingsErrorEmbed(error);
-        await reply(
-          settingsError ? { embeds: [settingsError] } : "コマンドの実行中にエラーが発生しました。",
-        );
+        const settingsError = settingsErrorContainer(error);
+        const container =
+          settingsError ?? buildErrorContainer("コマンドの実行中にエラーが発生しました。");
+        await reply(toNoticePayload(container));
       } catch (replyError) {
         logger.error("Failed to send error message", { replyError });
       }
@@ -178,10 +212,9 @@ async function handleButtonInteraction(
   webSearchEngine: WebSearchEngine,
 ): Promise<void> {
   if (!interaction.guildId) {
-    await interaction.reply({
-      embeds: [createErrorEmbed("このボタンはサーバー内でのみ使用できます。")],
-      flags: MessageFlags.Ephemeral,
-    });
+    await interaction.reply(
+      toNoticePayload(buildErrorContainer("このボタンはサーバー内でのみ使用できます。"), true),
+    );
     return;
   }
 
@@ -197,15 +230,72 @@ async function handleButtonInteraction(
         // キャンセル成功 - メッセージはmessageCreate.tsのAbortError処理で更新される
         await interaction.deferUpdate();
       } else {
-        await interaction.reply({
-          content: "既に完了しているか、該当するリクエストが見つかりません。",
-          flags: MessageFlags.Ephemeral,
-        });
+        await interaction.reply(
+          toNoticePayload(
+            buildErrorContainer("既に完了しているか、該当するリクエストが見つかりません。"),
+            true,
+          ),
+        );
       }
       return;
     }
 
-    if (customId === "status_toggle_free_only") {
+    const statusChange = parseStatusSetCustomId(customId);
+    if (
+      (statusChange?.key === "web_search" ||
+        statusChange?.key === "twitter_expand" ||
+        statusChange?.key === "history") &&
+      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
+    ) {
+      const notice = permissionDeniedNotice(statusChange.key);
+      await interaction.reply(
+        toNoticePayload(buildErrorContainer(notice.message, notice.title), true),
+      );
+      return;
+    }
+    // Every branch that re-renders /status waits on OpenRouter (model checks,
+    // credits) before it can update, which can pass Discord's 3-second
+    // deadline; acknowledging first keeps the interaction valid.
+    if (
+      statusChange ||
+      customId === "status_toggle_free_only" ||
+      customId === "status_toggle_llm_details" ||
+      customId === "status_model_refresh"
+    ) {
+      await interaction.deferUpdate();
+    }
+    if (statusChange) {
+      const { key, enabled } = statusChange;
+      switch (key) {
+        case "free_only":
+          if (enabled) {
+            const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
+            const isFree = await modelService.isFreeModel(defaultModel);
+            await settingsService.setFreeModelsOnly(interaction.guildId, true, {
+              model: defaultModel,
+              isFree,
+            });
+          } else {
+            await settingsService.setFreeModelsOnly(interaction.guildId, false);
+          }
+          break;
+        case "llm_details":
+          await settingsService.setShowLlmDetails(interaction.guildId, enabled);
+          break;
+        case "web_search":
+        case "twitter_expand":
+        case "history": {
+          if (key === "web_search") {
+            await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
+          } else if (key === "twitter_expand") {
+            await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
+          } else {
+            await settingsService.setHistoryEnabled(interaction.guildId, enabled);
+          }
+          break;
+        }
+      }
+    } else if (customId === "status_toggle_free_only") {
       // The direction is decided on the stored value inside the service, so
       // two presses at once flip twice. The model check is passed either
       // way because only the service knows whether this press turns it on.
@@ -225,21 +315,23 @@ async function handleButtonInteraction(
       const channels = settings.autoReplyChannels;
 
       if (channels.length === 0) {
-        await interaction.reply({
-          embeds: [
-            createSuccessEmbed(
+        await interaction.reply(
+          toNoticePayload(
+            buildSuccessNoticeContainer(
               "自動応答チャンネルは設定されていません。",
               "自動応答チャンネル一覧",
             ),
-          ],
-        });
+          ),
+        );
       } else {
-        const channelList = channels.map((id) => `- <#${id}>`).join("\n");
-        await interaction.reply({
-          embeds: [
-            createSuccessEmbed(`**自動応答チャンネル:**\n${channelList}`, "自動応答チャンネル一覧"),
-          ],
-        });
+        await interaction.reply(
+          toNoticePayload(
+            buildSuccessNoticeContainer(
+              formatAutoReplyChannelList(channels),
+              "自動応答チャンネル一覧",
+            ),
+          ),
+        );
       }
       return;
     } else {
@@ -249,20 +341,18 @@ async function handleButtonInteraction(
 
     // メッセージ再構築
     const credits = await llmClient.getCredits();
-    const rateLimited = llmClient.isRateLimited();
     const cacheStatus = modelService.getCacheStatus();
     const updatedSettings = await settingsService.getGuildSettings(interaction.guildId);
 
     const message = buildStatusMessage({
       credits,
-      rateLimited,
       cacheStatus,
       settings: updatedSettings,
       webSearchEngine,
       version: packageJson.version,
     });
 
-    await interaction.update(message);
+    await interaction.editReply(message);
   } catch (error) {
     logger.error("Button interaction failed", { error, customId: interaction.customId });
     try {
@@ -270,10 +360,9 @@ async function handleButtonInteraction(
         interaction.replied || interaction.deferred
           ? interaction.followUp.bind(interaction)
           : interaction.reply.bind(interaction);
-      await reply({
-        embeds: [settingsErrorEmbed(error) ?? createErrorEmbed("操作中にエラーが発生しました。")],
-        flags: MessageFlags.Ephemeral,
-      });
+      const settingsError = settingsErrorContainer(error);
+      const container = settingsError ?? buildErrorContainer("操作中にエラーが発生しました。");
+      await reply(toNoticePayload(container, !settingsError));
     } catch (replyError) {
       logger.error("Failed to send error message", { replyError });
     }

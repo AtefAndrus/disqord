@@ -14,6 +14,7 @@
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
+| [スラッシュコマンドの返信の Components V2 化と /status の切り替えボタン](changes/components-v2-replies/design.md) | 中 | in-progress | embed で返していたスラッシュコマンドとボタンの返信を Components V2 にし、/status の各設定の行に切り替えボタンを置く |
 | [回答の再生成・編集/undo・compaction](changes/conversation-regeneration/design.md) | 中 | planned | 会話履歴ストアの上に載る再生成（generation_number）・undo（active）・履歴 compaction（要約圧縮） |
 | [カスタム絵文字・スタンプ・GIF への対応](changes/discord-expressions/design.md) | 中 | planned | カスタム絵文字、スタンプ、GIF の埋め込みをモデルが読めるようにし、返信でサーバーのカスタム絵文字を使えるようにする |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | planned | リアクション、投票、スレッド作成、ピン留めを、会話の流れでモデルが行える client tool 群 |
