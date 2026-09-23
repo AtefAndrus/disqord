@@ -23,11 +23,13 @@ import type {
   ResponsesFunctionTool,
   ResponsesInputContentPart,
   ResponsesInputItem,
+  ResponsesReasoningItem,
   ResponsesToolChoice,
   ServerTool,
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
+  StreamReasoningItemChunk,
   StreamToolCallChunk,
   WebSearchCall,
   WebSearchResultLink,
@@ -161,6 +163,24 @@ function finishedWebSearch(state: SseStreamState): WebSearchTrace | undefined {
   return calls.length > 0 || results.length > 0 ? { calls, results } : undefined;
 }
 
+function readReasoningItem(item: Record<string, unknown>): ResponsesReasoningItem {
+  if (typeof item.id !== "string") {
+    throw new StreamProtocolError("reasoning item id must be a string");
+  }
+  if (!Array.isArray(item.summary)) {
+    throw new StreamProtocolError("reasoning item summary must be an array");
+  }
+  if (item.content !== undefined && !Array.isArray(item.content)) {
+    throw new StreamProtocolError("reasoning item content must be an array when present");
+  }
+  for (const part of [...item.summary, ...(Array.isArray(item.content) ? item.content : [])]) {
+    if (!isPlainObject(part) || typeof part.text !== "string") {
+      throw new StreamProtocolError("reasoning item text parts must have a string text field");
+    }
+  }
+  return item as unknown as ResponsesReasoningItem;
+}
+
 /**
  * Runtime object-shape check for wire data. The JSON payload is untyped at
  * the wire (a cast only asserts a shape, it never validates one), so a
@@ -182,7 +202,11 @@ export interface ILLMClient {
     request: ChatCompletionRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<
-    StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult,
+    | StreamChunk
+    | StreamToolCallChunk
+    | StreamReasoningItemChunk
+    | StreamHeartbeatChunk
+    | StreamFinalResult,
     void,
     void
   >;
@@ -470,6 +494,9 @@ function toResponsesInput(messages: ChatMessage[]): ResponsesInputItem[] {
       case "assistant":
         // A tool-calling turn with no text has `content: null`; Responses has
         // no empty assistant message, so only the function_call items remain.
+        for (const reasoningItem of message.reasoningItems ?? []) {
+          input.push(reasoningItem);
+        }
         if (message.content) input.push({ role: "assistant", content: message.content });
         for (const call of message.tool_calls ?? []) {
           input.push({
@@ -515,6 +542,7 @@ function toResponsesBody(request: ChatCompletionRequest, stream: boolean): Recor
   return {
     ...rest,
     input: toResponsesInput(messages),
+    ...(hasTools && { include: ["reasoning.encrypted_content"] }),
     ...(plugins && { plugins }),
     ...(hasTools && {
       tools: responsesTools,
@@ -661,7 +689,11 @@ export class OpenRouterClient implements ILLMClient {
     request: ChatCompletionRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<
-    StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult,
+    | StreamChunk
+    | StreamToolCallChunk
+    | StreamReasoningItemChunk
+    | StreamHeartbeatChunk
+    | StreamFinalResult,
     void,
     void
   > {
@@ -882,7 +914,11 @@ export class OpenRouterClient implements ILLMClient {
     line: string,
     state: SseStreamState,
   ): Generator<
-    StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult,
+    | StreamChunk
+    | StreamToolCallChunk
+    | StreamReasoningItemChunk
+    | StreamHeartbeatChunk
+    | StreamFinalResult,
     boolean,
     void
   > {
@@ -1045,6 +1081,10 @@ export class OpenRouterClient implements ILLMClient {
           const call = readWebSearchCall(item);
           if (call) state.webSearch.calls.push(call);
           break;
+        }
+        if (item.type === "reasoning" && event.type === "response.output_item.done") {
+          yield { reasoningItem: readReasoningItem(item), done: false };
+          return false;
         }
         // Every other item type (`message`, `reasoning`, a server tool run
         // such as `openrouter:datetime`, ...) has nothing for the caller.

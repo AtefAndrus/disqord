@@ -74,6 +74,7 @@ export interface CommandHandlers {
   configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configWebSearch: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  configReasoningDisplay: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configTwitterExpand: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configHistory: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
@@ -169,6 +170,9 @@ export function createInteractionCreateHandler(
                 break;
               case "web-search":
                 await handlers.configWebSearch(interaction);
+                break;
+              case "reasoning-display":
+                await handlers.configReasoningDisplay(interaction);
                 break;
               case "twitter-expand":
                 await handlers.configTwitterExpand(interaction);

@@ -40,6 +40,7 @@ describe("SettingsService", () => {
         showLlmDetails: true,
         autoReplyChannels: [],
         webSearchEnabled: false,
+        reasoningDisplayEnabled: false,
         twitterExpandEnabled: true,
       });
       expect(await repo.findByGuildId(G)).toEqual(settings);
@@ -64,6 +65,7 @@ describe("SettingsService", () => {
     test("setter ごとに、その値を持つ行を作る", async () => {
       await service.setShowLlmDetails("g-llm", false);
       await service.setWebSearchEnabled("g-ws", true);
+      await service.setReasoningDisplayEnabled("g-reasoning", true);
       await service.setTwitterExpandEnabled("g-twitter", false);
       await service.setGuildModel("g-model", PAID);
       await service.addAutoReplyChannel("g-ch", "c1");
@@ -72,6 +74,7 @@ describe("SettingsService", () => {
 
       expect((await repo.findByGuildId("g-llm"))?.showLlmDetails).toBe(false);
       expect((await repo.findByGuildId("g-ws"))?.webSearchEnabled).toBe(true);
+      expect((await repo.findByGuildId("g-reasoning"))?.reasoningDisplayEnabled).toBe(true);
       expect((await repo.findByGuildId("g-twitter"))?.twitterExpandEnabled).toBe(false);
       expect((await repo.findByGuildId("g-model"))?.defaultModel).toBe(PAID.model);
       expect((await repo.findByGuildId("g-ch"))?.autoReplyChannels).toEqual(["c1"]);

@@ -54,6 +54,7 @@ export function createCommandHandlers(
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
+- \`/config reasoning-display <on|off>\` - 推論内容の表示切り替え（サーバーの管理権限が必要）
 - \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
 - \`/config history <on|off>\` - 会話履歴の切り替え（サーバーの管理権限が必要）
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
@@ -261,6 +262,31 @@ export function createCommandHandlers(
           "Web検索設定",
         ),
       );
+    },
+
+    async configReasoningDisplay(interaction: ChatInputCommandInteraction): Promise<void> {
+      if (!interaction.guildId) {
+        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
+        await interaction.reply({ embeds: [embed] });
+        return;
+      }
+
+      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+        const embed = createErrorEmbed(
+          "推論内容の表示設定には「サーバーの管理」権限が必要です。",
+          "推論表示設定",
+        );
+        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const enabled = interaction.options.getString("enabled", true) === "on";
+      await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
+      const embed = createSuccessEmbed(
+        `推論内容の表示を **${enabled ? "有効" : "無効"}** にしました。`,
+        "推論表示設定",
+      );
+      await interaction.reply({ embeds: [embed] });
     },
 
     async configTwitterExpand(interaction: ChatInputCommandInteraction): Promise<void> {

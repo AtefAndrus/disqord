@@ -316,6 +316,45 @@ describe("ChatService", () => {
     expect(request.messages[5]?.content).toBe("[current] Current: now");
   });
 
+  test.each([
+    ["supported", true, ["reasoning"], { summary: "auto" }],
+    ["unsupported", true, ["tools"], undefined],
+    ["disabled", false, ["reasoning"], undefined],
+  ] as const)(
+    "reasoning summary is sent only when display is enabled and the model supports it (%s)",
+    async (_label, displayEnabled, supportedParameters, expected) => {
+      const fixture = createFixture({ reasoningDisplayEnabled: displayEnabled });
+      fixture.llmClient.listModelsWithPricing = mock(async () => [
+        {
+          id: "test-model:fixture",
+          name: "Fixture",
+          created: 1640000000,
+          contextLength: 4096,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          supportedParameters: [...supportedParameters],
+        },
+      ]);
+
+      await fixture.chatService.generateChatResponse(
+        "guild-123",
+        { text: "Hello" },
+        `req-reasoning-${_label}`,
+        createUpdater(),
+        { channelId: "channel-1", userId: "user-1" },
+      );
+
+      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+      if (expected) {
+        expect(request.reasoning).toEqual(expected);
+        expect("effort" in (request.reasoning ?? {})).toBe(false);
+      } else {
+        expect("reasoning" in request).toBe(false);
+      }
+    },
+  );
+
   test("cancel races the model-details lookup", async () => {
     const fixture = createFixture({ historyEnabled: true });
     fixture.llmClient.listModelsWithPricing = mock(() => new Promise<never>(() => {}));

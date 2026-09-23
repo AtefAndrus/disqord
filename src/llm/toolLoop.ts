@@ -6,10 +6,13 @@ import type {
   ChatMessage,
   ChatPlugin,
   FunctionTool,
+  ReasoningDisplayText,
+  ResponsesReasoningItem,
   ServerTool,
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
+  StreamReasoningItemChunk,
   StreamToolCallChunk,
   Tool,
   ToolChoice,
@@ -82,6 +85,7 @@ export type ToolLoopResult =
       model?: string;
       provider?: string;
       webSearch?: WebSearchTrace;
+      reasoningText?: ReasoningDisplayText;
     }
   | { status: "cancelled"; history: ChatMessage[]; usage?: AggregatedUsage }
   | { status: "error"; error: unknown; history: ChatMessage[]; usage?: AggregatedUsage };
@@ -149,7 +153,12 @@ function byteLen(text: string): number {
   return utf8Encoder.encode(text).length;
 }
 
-type StreamYield = StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult;
+type StreamYield =
+  | StreamChunk
+  | StreamToolCallChunk
+  | StreamReasoningItemChunk
+  | StreamHeartbeatChunk
+  | StreamFinalResult;
 
 function isToolCallChunk(chunk: StreamYield): chunk is StreamToolCallChunk {
   return "toolCall" in chunk;
@@ -161,6 +170,39 @@ function isFinalResult(chunk: StreamYield): chunk is StreamFinalResult {
 
 function isHeartbeatChunk(chunk: StreamYield): chunk is StreamHeartbeatChunk {
   return "heartbeat" in chunk;
+}
+
+function isReasoningItemChunk(chunk: StreamYield): chunk is StreamReasoningItemChunk {
+  return "reasoningItem" in chunk;
+}
+
+function reasoningItemDisplayText(item: ResponsesReasoningItem): string {
+  const summary = item.summary
+    .filter((part) => part.type === "summary_text")
+    .map((part) => part.text);
+  if (summary.length > 0) return summary.join("\n");
+  return (item.content ?? [])
+    .filter((part) => part.type === "reasoning_text")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+function buildReasoningDisplayText(
+  turns: readonly ResponsesReasoningItem[][],
+): ReasoningDisplayText | undefined {
+  const turnsWithItems = turns.filter((items) => items.length > 0).length;
+  const blocks = turns.flatMap((items, index) => {
+    const text = items
+      .map(reasoningItemDisplayText)
+      .filter((part) => part.length > 0)
+      .join("\n");
+    return text.length > 0 ? [{ turn: index + 1, text }] : [];
+  });
+  if (blocks.length === 0) return undefined;
+  if (turnsWithItems > 1) {
+    return blocks.map(({ turn, text }) => `## ターン ${turn}\n\n${text}`).join("\n\n");
+  }
+  return blocks.map(({ text }) => text).join("\n\n");
 }
 
 /**
@@ -403,6 +445,7 @@ type TurnOutcome =
       final: StreamFinalResult;
       content: string;
       calls: Map<number, AccumulatedCall>;
+      reasoningItems: ResponsesReasoningItem[];
     }
   | { kind: "cancelled"; usage?: ChatCompletionResponse["usage"] }
   | { kind: "timeout"; usage?: ChatCompletionResponse["usage"] }
@@ -441,6 +484,7 @@ async function runTurn(params: RunTurnParams): Promise<TurnOutcome> {
 
   let content = "";
   const calls = new Map<number, AccumulatedCall>();
+  const reasoningItems: ResponsesReasoningItem[] = [];
   let accumBytes = 0;
   // Last usage observed via a heartbeat chunk this turn (see the
   // `TurnOutcome` doc comment for why this exists): the usage on
@@ -549,7 +593,7 @@ async function runTurn(params: RunTurnParams): Promise<TurnOutcome> {
 
       const chunk = step.value;
       if (isFinalResult(chunk)) {
-        return { kind: "completed", final: chunk, content, calls };
+        return { kind: "completed", final: chunk, content, calls, reasoningItems };
       }
 
       if (isHeartbeatChunk(chunk)) {
@@ -563,6 +607,11 @@ async function runTurn(params: RunTurnParams): Promise<TurnOutcome> {
         if (chunk.usage !== undefined) {
           lastHeartbeatUsage = chunk.usage;
         }
+        continue;
+      }
+
+      if (isReasoningItemChunk(chunk)) {
+        reasoningItems.push(chunk.reasoningItem);
         continue;
       }
 
@@ -984,6 +1033,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   // Every turn's server-side searches, in order, for the final result only:
   // a cancelled or failed reply shows no search results.
   let webSearch: WebSearchTrace | undefined;
+  const reasoningTurns: ResponsesReasoningItem[][] = [];
 
   for (let turn = 1; turn <= MAX_TURNS; turn++) {
     // Covers both "before the first request" and "before the next model
@@ -1106,7 +1156,9 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
       );
     }
 
-    const { final, content, calls } = turnResult;
+    const { final, content, calls, reasoningItems } = turnResult;
+    reasoningTurns.push(reasoningItems);
+    const reasoningText = buildReasoningDisplayText(reasoningTurns);
     aggregatedUsage = addUsage(aggregatedUsage, final.usage);
     if (final.webSearch) {
       webSearch = {
@@ -1188,6 +1240,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
               model: lastObservedModel,
               provider: lastObservedProvider,
               ...(webSearch && { webSearch }),
+              ...(reasoningText !== undefined && { reasoningText }),
             },
           );
         }
@@ -1226,6 +1279,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           type: "function",
           function: { name: call.name, arguments: call.rawArguments },
         })),
+        ...(reasoningItems.length > 0 && { reasoningItems }),
       };
       history.push(assistantMessage);
       await decideCommit(updater, "tool_calls", requestSignal, updaterCallMs);
@@ -1290,6 +1344,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           model: lastObservedModel,
           provider: lastObservedProvider,
           ...(webSearch && { webSearch }),
+          ...(reasoningText !== undefined && { reasoningText }),
         },
       );
     }
@@ -1337,6 +1392,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           model: lastObservedModel,
           provider: lastObservedProvider,
           ...(webSearch && { webSearch }),
+          ...(reasoningText !== undefined && { reasoningText }),
         },
       );
     }

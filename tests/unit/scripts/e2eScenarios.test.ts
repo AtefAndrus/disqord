@@ -225,6 +225,22 @@ describe("e2e scenarios: check", () => {
     expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
   });
 
+  test("reasoning: reasoning.md が最終ページの添付にあるときだけ通る", () => {
+    const final = page("1", ["答え"], USAGE, {
+      attachments: [{ id: "file-1", filename: "reasoning.md" }],
+    });
+    expect(check("reasoning", [final])).toEqual([]);
+    expect(check("reasoning", [page("1", ["答え"], USAGE)])).not.toEqual([]);
+    expect(
+      check("reasoning", [
+        page("1", ["答え"], USAGE),
+        page("2", ["続き"], USAGE, {
+          attachments: [{ id: "file-1", filename: "other.md" }],
+        }),
+      ]),
+    ).not.toEqual([]);
+  });
+
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {
     expect(check("stop", [page("1", [`川の話。${STOPPED}`], USAGE)])).not.toEqual([]);
     expect(check("stop", [page("1", ["ナイル川は"], STOPPED)])).toEqual([]);

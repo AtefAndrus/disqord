@@ -12,6 +12,7 @@ export interface DiscordMessage {
   edited_timestamp?: string | null;
   author: { id: string; username: string };
   components?: unknown[];
+  attachments?: { id: string; filename: string }[];
 }
 
 /**
@@ -301,6 +302,24 @@ export const SCENARIOS: Scenario[] = [
       ...(/^公開日:\s*2026-08-20\s*$/m.test(reply.body.normalize("NFKC").replace(/[*`]/g, ""))
         ? []
         : ["the reply has no 公開日: 2026-08-20 line"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    // Requires `/config reasoning-display on` and a model/provider that returns displayable reasoning.
+    name: "reasoning",
+    manual: true,
+    prompt:
+      "[e2e] 5人が円卓に座り、各自は隣り合わない席に座る必要があります。条件を整理して配置の数を考え、答えを短く返してください。",
+    check: (reply) => [
+      ...(reply.isError ? ["the reasoning reply ended in an error"] : []),
+      ...(reply.messages
+        .at(-1)
+        ?.attachments?.some((attachment) => attachment.filename === "reasoning.md")
+        ? []
+        : [
+            "the final message has no reasoning.md attachment (is reasoning display enabled and supported?)",
+          ]),
       ...hasUsageFooter(reply),
     ],
   },

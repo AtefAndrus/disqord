@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MessageFlags } from "discord.js";
+import { AttachmentBuilder, MessageFlags } from "discord.js";
 import { EmbedColors } from "../../../src/types/embed";
 import {
   badgeText,
@@ -57,6 +57,7 @@ function hasLoneSurrogateAtBoundary(chunks: string[]): boolean {
 interface ContainerComponentJSON {
   type: number;
   content?: string;
+  file?: { url?: string };
   divider?: boolean;
   spacing?: number;
   components?: ContainerComponentJSON[];
@@ -510,6 +511,36 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildFinalContainer", () => {
+    test("reasoning.md の File component は final page にだけ追加される", () => {
+      const final = toJSON(
+        buildFinalContainer({
+          text: "answer",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: true,
+          metadata: { showDetails: false },
+          reasoningFile: true,
+        }),
+      );
+      const intermediate = toJSON(
+        buildFinalContainer({
+          text: "answer",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: false,
+          metadata: { showDetails: false },
+          reasoningFile: true,
+        }),
+      );
+
+      expect(final.components.find((component) => component.type === 13)?.file?.url).toBe(
+        "attachment://reasoning.md",
+      );
+      expect(intermediate.components.some((component) => component.type === 13)).toBe(false);
+    });
+
     test("showLlmDetails=true かつ usage ありのとき、isLastでfooter（ページ番号なし・単一message）を表示する", () => {
       const metadata: FinalMetadata = { showDetails: true, usage, latency: 1000 };
       const json = toJSON(
@@ -776,17 +807,25 @@ describe("chatContainerBuilder", () => {
       expect(payload.allowedMentions).toEqual({ parse: [] });
     });
 
+    test("edit payload は File component が参照する reasoning.md attachment を含められる", () => {
+      const file = new AttachmentBuilder(Buffer.from("model\n\nreasoning", "utf8"), {
+        name: "reasoning.md",
+      });
+      const payload = toComponentsV2EditPayload(container, [file]);
+
+      expect(payload.files).toEqual([file]);
+      expect(file.name).toBe("reasoning.md");
+    });
+
     test("toComponentsV2ReplyPayload: parse:[] と repliedUser:false を強制する", () => {
       const payload = toComponentsV2ReplyPayload(container);
       expect(payload.flags).toBe(MessageFlags.IsComponentsV2);
       expect(payload.allowedMentions).toEqual({ parse: [], repliedUser: false });
     });
 
-    test("送信payloadヘルパは引数を1つしか取らず、allowedMentions/flagsを外部から上書きできない", () => {
-      // toComponentsV2Payload(container) はcontainer以外の引数を受け付けない型シグネチャであり、
-      // 呼び出し側から allowedMentions / flags を注入する経路が存在しない。
-      expect(toComponentsV2Payload.length).toBe(1);
-      expect(toComponentsV2EditPayload.length).toBe(1);
+    test("payload helpers は files のみ追加を受け付け、allowedMentions/flagsを外部から上書きできない", () => {
+      expect(toComponentsV2Payload.length).toBe(2);
+      expect(toComponentsV2EditPayload.length).toBe(2);
       expect(toComponentsV2ReplyPayload.length).toBe(1);
     });
   });

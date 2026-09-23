@@ -271,20 +271,28 @@ export class ChatService implements IChatService {
 
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       let supportsTools = false;
-      if (conversation) {
+      let requestReasoning: ChatCompletionRequest["reasoning"];
+      if (conversation || settings.reasoningDisplayEnabled) {
         try {
           const detailsResult = await raceWithAbort(
             this.modelService.getModelDetails(settings.defaultModel),
             controller.signal,
           );
           if (!detailsResult.ok) return { status: "cancelled", history: initialMessages };
-          supportsTools = detailsResult.value?.supportsTools ?? false;
+          const details = detailsResult.value;
+          if (conversation) supportsTools = details?.supportsTools ?? false;
+          if (
+            settings.reasoningDisplayEnabled &&
+            details?.supportedParameters.includes("reasoning")
+          ) {
+            requestReasoning = { summary: "auto" };
+          }
         } catch {
           supportsTools = false;
         }
       }
 
-      const request = conversation
+      const requestBase = conversation
         ? buildChatRequest(
             settings.defaultModel,
             input,
@@ -293,6 +301,10 @@ export class ChatService implements IChatService {
             supportsTools,
           )
         : buildWithoutHistory();
+      const request: ChatCompletionRequest = {
+        ...requestBase,
+        ...(requestReasoning && { reasoning: requestReasoning }),
+      };
 
       let clientToolInvoked = false;
       const firstAttemptToolContext: ConversationWindowContext["toolContext"] | undefined =
@@ -353,6 +365,7 @@ export class ChatService implements IChatService {
           ),
           Boolean(conversation && supportsTools),
         );
+        if (requestReasoning) retryRequest.reasoning = requestReasoning;
         const retryTracked = createTrackingUpdater(updater);
         const retryResult = await this.runChatLoop(
           retryRequest,
@@ -394,7 +407,12 @@ export class ChatService implements IChatService {
       model: request.model,
       messages: request.messages,
       ...(request.plugins && { plugins: request.plugins }),
-      ...(sessionId && { requestFields: { session_id: sessionId } }),
+      ...((sessionId || request.reasoning) && {
+        requestFields: {
+          ...(sessionId && { session_id: sessionId }),
+          ...(request.reasoning && { reasoning: request.reasoning }),
+        },
+      }),
       registry: this.toolRegistry,
       ...(webSearchEnabled && { serverTools: [buildWebSearchServerTool(this.webSearchEngine)] }),
       ctx: {

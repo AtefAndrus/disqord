@@ -10,6 +10,7 @@ export interface GuildSettings {
   showLlmDetails: boolean;
   autoReplyChannels: ChannelId[];
   webSearchEnabled: boolean;
+  reasoningDisplayEnabled: boolean;
   twitterExpandEnabled: boolean;
   historyEnabled: boolean;
   createdAt: string;
@@ -105,6 +106,7 @@ export interface SystemChatMessage {
 export interface AssistantChatMessage {
   role: "assistant";
   content: string | null;
+  reasoningItems?: ResponsesReasoningItem[];
   tool_calls?: ToolCall[];
 }
 
@@ -123,6 +125,8 @@ export type ChatMessage =
 export interface ChatCompletionRequest {
   model: string;
   messages: ChatMessage[];
+  include?: "reasoning.encrypted_content"[];
+  reasoning?: ResponsesReasoningConfig;
   plugins?: ChatPlugin[];
   tools?: Tool[];
   tool_choice?: ToolChoice;
@@ -190,9 +194,32 @@ export type ResponsesInputContentPart =
   | { type: "input_image"; image_url: string; detail: "auto" }
   | { type: "input_file"; filename: string; file_data: string };
 
+/** An opaque Responses reasoning text part; unknown fields are preserved when the item is resent. */
+export interface ResponsesReasoningTextPart {
+  text: string;
+  [key: string]: unknown;
+}
+
+/** A complete reasoning output item, kept exactly as received for a tool-loop continuation. */
+export interface ResponsesReasoningItem {
+  type: "reasoning";
+  id: string;
+  summary: ResponsesReasoningTextPart[];
+  content?: ResponsesReasoningTextPart[];
+  [key: string]: unknown;
+}
+
+export interface ResponsesReasoningConfig {
+  summary: "auto";
+}
+
+/** Provider-authored reasoning text extracted for the final attachment. */
+export type ReasoningDisplayText = string;
+
 export type ResponsesInputItem =
   | { role: "system" | "user"; content: string | ResponsesInputContentPart[] }
   | { role: "assistant"; content: string }
+  | ResponsesReasoningItem
   | { type: "function_call"; call_id: string; name: string; arguments: string }
   | { type: "function_call_output"; call_id: string; output: string | ResponsesInputContentPart[] };
 
@@ -247,6 +274,11 @@ export interface StreamToolCallChunk {
   done: false;
 }
 
+export interface StreamReasoningItemChunk {
+  reasoningItem: ResponsesReasoningItem;
+  done: false;
+}
+
 /**
  * Yielded for an SSE comment line (e.g. OpenRouter's `: OPENROUTER PROCESSING`
  * keep-alive), a non-`data:` field line, or an accepted event that carries
@@ -278,6 +310,8 @@ export interface StreamFinalResult {
   finishReason?: string | null;
   /** Absent when no web search ran in the turn. */
   webSearch?: WebSearchTrace;
+  /** Absent when the turn returned no displayable reasoning text. */
+  reasoningText?: ReasoningDisplayText;
 }
 
 /** One `openrouter:web_search` call as the stream reported it. */

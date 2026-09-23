@@ -7,6 +7,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
 } from "discord.js";
+import { configCommand } from "../../../../src/bot/commands/config";
 import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
@@ -281,6 +282,68 @@ describe("config web-search handler", () => {
     const payload = reply.mock.calls[0]?.[0] as { flags?: number };
     expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
     expect(repliedText(reply)).toContain("サーバーの管理");
+  });
+});
+
+describe("config reasoning-display handler", () => {
+  function createReasoningInteraction(
+    value: "on" | "off",
+    hasManageGuild: boolean,
+  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
+    const { interaction, reply } = createInteraction(value);
+    Object.assign(interaction, {
+      memberPermissions: {
+        has: mock((permission: bigint) =>
+          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
+        ),
+      },
+    });
+    return { interaction, reply };
+  }
+
+  function createHandlers(): {
+    handlers: ReturnType<typeof createCommandHandlers>;
+    settingsService: ReturnType<typeof createMockSettingsService>;
+  } {
+    const llmClient = createMockLLMClient();
+    const settingsService = createMockSettingsService();
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      new ModelService(llmClient),
+      "perplexity",
+    );
+    return { handlers, settingsService };
+  }
+
+  test.each(["on", "off"] as const)("ManageGuild の設定を %s に切り替える", async (value) => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createReasoningInteraction(value, true);
+
+    await handlers.configReasoningDisplay(interaction);
+
+    expect(settingsService.setReasoningDisplayEnabled).toHaveBeenCalledWith(
+      "guild-1",
+      value === "on",
+    );
+    expect(repliedEmbed(reply).description).toContain(value === "on" ? "有効" : "無効");
+  });
+
+  test("ManageGuild が無ければ設定を変えず、ephemeral error を返す", async () => {
+    const { handlers, settingsService } = createHandlers();
+    const { interaction, reply } = createReasoningInteraction("on", false);
+
+    await handlers.configReasoningDisplay(interaction);
+
+    expect(settingsService.setReasoningDisplayEnabled).not.toHaveBeenCalled();
+    expect(reply.mock.calls[0]?.[0]).toMatchObject({ flags: MessageFlags.Ephemeral });
+  });
+
+  test("/config に reasoning-display subcommand を登録する", () => {
+    const subcommands = configCommand.toJSON().options ?? [];
+    expect(
+      subcommands.some((option) => "name" in option && option.name === "reasoning-display"),
+    ).toBe(true);
   });
 });
 

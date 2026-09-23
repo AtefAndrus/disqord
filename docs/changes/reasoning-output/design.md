@@ -1,6 +1,6 @@
 ---
 title: "推論内容の取得・表示"
-status: planned
+status: in-progress
 priority: medium
 summary: "Responses API の reasoning item を受け取り、tool を挟む生成では送り返し、設定に応じて回答に推論のファイルを添える"
 ---
@@ -87,12 +87,12 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 
 ## Tasks
 
-- [ ] 型と、reasoning item の検証・保持を実装する
-- [ ] tool loop で reasoning item を送り返し、`include` を付ける
-- [ ] `supported_parameters` を読み、表示が有効なときだけ `reasoning.summary` を送る
-- [ ] `reasoning_display_enabled` の列と `/config reasoning-display`、`/status` の表示を足す
-- [ ] 最終ページに `reasoning.md` を添える
-- [ ] 要約だけ、本文だけ、暗号化だけ、推論なし、形の壊れた item の各場合をテストする
+- [x] 型と、reasoning item の検証・保持を実装する
+- [x] tool loop で reasoning item を送り返し、`include` を付ける
+- [x] `supported_parameters` を読み、表示が有効なときだけ `reasoning.summary` を送る
+- [x] `reasoning_display_enabled` の列と `/config reasoning-display`、`/status` の表示を足す
+- [x] 最終ページに `reasoning.md` を添える
+- [x] 要約だけ、本文だけ、暗号化だけ、推論なし、形の壊れた item の各場合をテストする
 - [ ] 推論を返すモデルで、tool を挟む応答が送り返しで失敗しないことと、添付が付くことを e2e で確かめる
 - [ ] 手動確認: 実クライアントで `reasoning.md` が折りたたまれて表示され、開くと読めることを確かめる
 - [ ] `docs/changes/reasoning-output/` 削除（リリース完了時、git 履歴がアーカイブ）

@@ -29,6 +29,10 @@ export interface ISettingsService {
   addAutoReplyChannel(guildId: string, channelId: string): Promise<void>;
   removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
   setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings>;
+  setReasoningDisplayEnabled(
+    guildId: string,
+    reasoningDisplayEnabled: boolean,
+  ): Promise<GuildSettings>;
   setTwitterExpandEnabled(guildId: string, twitterExpandEnabled: boolean): Promise<GuildSettings>;
   setHistoryEnabled(guildId: string, historyEnabled: boolean): Promise<GuildSettings>;
 }
@@ -123,6 +127,13 @@ export class SettingsService implements ISettingsService {
 
   async setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings> {
     return this.repo.update(guildId, () => ({ webSearchEnabled }));
+  }
+
+  async setReasoningDisplayEnabled(
+    guildId: string,
+    reasoningDisplayEnabled: boolean,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ reasoningDisplayEnabled }));
   }
 
   async setTwitterExpandEnabled(

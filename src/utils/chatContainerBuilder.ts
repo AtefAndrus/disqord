@@ -481,6 +481,8 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
   metadata: FinalMetadata;
   /** 全 message 数（footer のページ番号表示に使用）。isLast の message でのみ参照される */
   pageInfo?: { page: number; total: number };
+  /** Attach the provider-authored reasoning file component to the final page. */
+  reasoningFile?: boolean;
 }
 
 /**
@@ -492,6 +494,9 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
 export function buildFinalContainer(params: FinalContainerParams): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(params.color);
   addBadgeAndBody(container, params);
+  if (params.isLast && params.reasoningFile) {
+    container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
+  }
 
   // LLM 詳細情報は末尾 message のみ。非末尾 message は showDetails: false 相当にしてページ番号のみにする
   const footerMetadata: FinalMetadata = params.isLast ? params.metadata : { showDetails: false };
@@ -620,20 +625,28 @@ export function toNoticeEditPayload(container: ContainerBuilder): {
 // allowedMentions / flags を必ず内包し、呼び出し側で上書きできない形にする（mention 漏れ事故防止）。
 
 /** channel.send 用の Components V2 payload を構築する */
-export function toComponentsV2Payload(container: ContainerBuilder): MessageCreateOptions {
+export function toComponentsV2Payload(
+  container: ContainerBuilder,
+  files?: MessageCreateOptions["files"],
+): MessageCreateOptions {
   return {
     components: [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
+    ...(files && { files }),
   };
 }
 
 /** message.edit 用の Components V2 payload を構築する */
-export function toComponentsV2EditPayload(container: ContainerBuilder): MessageEditOptions {
+export function toComponentsV2EditPayload(
+  container: ContainerBuilder,
+  files?: MessageEditOptions["files"],
+): MessageEditOptions {
   return {
     components: [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
+    ...(files && { files }),
   };
 }
 

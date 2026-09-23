@@ -18,13 +18,20 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMessage,
+  ResponsesReasoningItem,
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
+  StreamReasoningItemChunk,
   StreamToolCallChunk,
 } from "../../../src/types";
 
-type StreamYield = StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult;
+type StreamYield =
+  | StreamChunk
+  | StreamToolCallChunk
+  | StreamReasoningItemChunk
+  | StreamHeartbeatChunk
+  | StreamFinalResult;
 type TurnScript = (
   request: ChatCompletionRequest,
   signal: AbortSignal,
@@ -61,6 +68,10 @@ function final(overrides: Partial<StreamFinalResult> = {}): StreamFinalResult {
 
 function heartbeat(): StreamHeartbeatChunk {
   return { heartbeat: true, done: false };
+}
+
+function reasoningItem(item: ResponsesReasoningItem): StreamReasoningItemChunk {
+  return { reasoningItem: item, done: false };
 }
 
 const usage1 = (n: number): NonNullable<ChatCompletionResponse["usage"]> => ({
@@ -632,6 +643,118 @@ describe("runToolLoop: server tool only", () => {
 // ---------------------------------------------------------------------------
 
 describe("runToolLoop: 2-turn tool call", () => {
+  test("summary_text だけの reasoning item を最終結果の表示テキストに使う", async () => {
+    const item: ResponsesReasoningItem = {
+      type: "reasoning",
+      id: "rs-summary",
+      summary: [{ type: "summary_text", text: "要約" }],
+      encrypted_content: "opaque",
+    };
+    const { client } = makeClient([
+      scripted(
+        reasoningItem(item),
+        content("answer"),
+        final({ fullText: "answer", finishReason: "stop" }),
+      ),
+    ]);
+
+    const result = await runToolLoop(baseParams({ llmClient: client }));
+
+    expectFinal(result);
+    expect(result.reasoningText).toBe("要約");
+  });
+
+  test("summary が空なら reasoning_text content を表示する", async () => {
+    const { client } = makeClient([
+      scripted(
+        reasoningItem({
+          type: "reasoning",
+          id: "rs-content",
+          summary: [],
+          content: [{ type: "reasoning_text", text: "本文" }],
+        }),
+        content("answer"),
+        final({ fullText: "answer", finishReason: "stop" }),
+      ),
+    ]);
+
+    const result = await runToolLoop(baseParams({ llmClient: client }));
+
+    expectFinal(result);
+    expect(result.reasoningText).toBe("本文");
+  });
+
+  test("暗号化推論だけなら display text を返さず、推論 item が無い場合も省略する", async () => {
+    const { client } = makeClient([
+      scripted(
+        reasoningItem({
+          type: "reasoning",
+          id: "rs-encrypted",
+          summary: [],
+          encrypted_content: "opaque",
+        }),
+        content("answer"),
+        final({ fullText: "answer", finishReason: "stop", usage: usage1(2) }),
+      ),
+      scripted(
+        content("plain"),
+        final({ fullText: "plain", finishReason: "stop", usage: usage1(3) }),
+      ),
+    ]);
+
+    const encryptedOnly = await runToolLoop(baseParams({ llmClient: client }));
+    const withoutReasoning = await runToolLoop(baseParams({ llmClient: client }));
+
+    expectFinal(encryptedOnly);
+    expect("reasoningText" in encryptedOnly).toBe(false);
+    expect(encryptedOnly.usage?.completion_tokens).toBe(4);
+    expectFinal(withoutReasoning);
+    expect("reasoningText" in withoutReasoning).toBe(false);
+    expect(withoutReasoning.usage?.completion_tokens).toBe(6);
+  });
+
+  test("複数ターンの reasoning に見出しを付け、tool turn の item を次の request history に保持する", async () => {
+    const first: ResponsesReasoningItem = {
+      type: "reasoning",
+      id: "rs-1",
+      summary: [{ type: "summary_text", text: "1ターン目" }],
+      encrypted_content: "encrypted-1",
+      signature: "signature-1",
+    };
+    const second: ResponsesReasoningItem = {
+      type: "reasoning",
+      id: "rs-2",
+      summary: [{ type: "summary_text", text: "2ターン目" }],
+      format: { future: true },
+    };
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool());
+    const { client, requests } = makeClient([
+      scripted(
+        reasoningItem(first),
+        toolCall({ index: 0, id: "call_1", name: "echo_tool", argumentsDelta: "{}" }),
+        final({ fullText: "", finishReason: "tool_calls" }),
+      ),
+      scripted(
+        reasoningItem(second),
+        content("done"),
+        final({ fullText: "done", finishReason: "stop" }),
+      ),
+    ]);
+
+    const result = await runToolLoop(baseParams({ llmClient: client, registry }));
+
+    expectFinal(result);
+    expect(result.reasoningText).toBe("## ターン 1\n\n1ターン目\n\n## ターン 2\n\n2ターン目");
+    const assistant = requests[1]?.messages.find((message) => message.role === "assistant");
+    expect(assistant?.role).toBe("assistant");
+    if (assistant?.role !== "assistant") throw new Error("tool turn assistant message is missing");
+    expect(assistant.reasoningItems).toEqual([first]);
+    expect(
+      result.history.some((message) => message.role === "assistant" && message.reasoningItems),
+    ).toBe(true);
+  });
+
   test("turn1 tool_calls (split id/name/arguments) -> dispatch -> turn2 stop", async () => {
     const registry = new ToolRegistry();
     const receivedArgs: unknown[] = [];
