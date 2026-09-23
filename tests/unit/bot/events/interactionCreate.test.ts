@@ -220,7 +220,11 @@ describe("interactionCreate: status_set buttons", () => {
     "%s を %s に設定し、status message を更新する",
     async (key, enabled) => {
       const { handler, settingsService, modelService } = createStatusHarness();
-      const privileged = key === "web_search" || key === "twitter_expand" || key === "history";
+      const privileged =
+        key === "web_search" ||
+        key === "twitter_expand" ||
+        key === "history" ||
+        key === "reasoning_display";
       const interaction = buttonInteraction(
         `status_set:${key}:${enabled ? "on" : "off"}`,
         "guild-1",
@@ -251,13 +255,15 @@ describe("interactionCreate: status_set buttons", () => {
         expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", enabled);
       } else if (key === "twitter_expand") {
         expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", enabled);
-      } else {
+      } else if (key === "history") {
         expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", enabled);
+      } else {
+        expect(settingsService.setReasoningDisplayEnabled).toHaveBeenCalledWith("guild-1", enabled);
       }
     },
   );
 
-  test.each(["web_search", "twitter_expand", "history"] as const)(
+  test.each(["web_search", "twitter_expand", "history", "reasoning_display"] as const)(
     "%s の権限がない場合は設定を変えず、既存の文言でephemeral応答する",
     async (key) => {
       const { handler, settingsService } = createStatusHarness();
@@ -278,10 +284,15 @@ describe("interactionCreate: status_set buttons", () => {
         expect(responseText(interaction.reply)).toContain(
           "ツイート展開の設定には「サーバーの管理」権限が必要です。",
         );
-      } else {
+      } else if (key === "history") {
         expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
         expect(responseText(interaction.reply)).toContain(
           "会話履歴の設定には「サーバーの管理」権限が必要です。",
+        );
+      } else {
+        expect(settingsService.setReasoningDisplayEnabled).not.toHaveBeenCalled();
+        expect(responseText(interaction.reply)).toContain(
+          "推論内容の表示設定には「サーバーの管理」権限が必要です。",
         );
       }
     },

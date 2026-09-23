@@ -40,7 +40,7 @@ function settingsErrorContainer(error: unknown): ContainerBuilder | undefined {
 }
 
 function permissionDeniedNotice(
-  key: Extract<StatusSwitch, "web_search" | "twitter_expand" | "history">,
+  key: Extract<StatusSwitch, "web_search" | "twitter_expand" | "history" | "reasoning_display">,
 ): {
   message: string;
   title: string;
@@ -60,6 +60,11 @@ function permissionDeniedNotice(
       return {
         message: "会話履歴の設定には「サーバーの管理」権限が必要です。",
         title: "会話履歴設定",
+      };
+    case "reasoning_display":
+      return {
+        message: "推論内容の表示設定には「サーバーの管理」権限が必要です。",
+        title: "推論表示設定",
       };
   }
 }
@@ -248,7 +253,8 @@ async function handleButtonInteraction(
     if (
       (statusChange?.key === "web_search" ||
         statusChange?.key === "twitter_expand" ||
-        statusChange?.key === "history") &&
+        statusChange?.key === "history" ||
+        statusChange?.key === "reasoning_display") &&
       !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
     ) {
       const notice = permissionDeniedNotice(statusChange.key);
@@ -288,13 +294,16 @@ async function handleButtonInteraction(
           break;
         case "web_search":
         case "twitter_expand":
-        case "history": {
+        case "history":
+        case "reasoning_display": {
           if (key === "web_search") {
             await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
           } else if (key === "twitter_expand") {
             await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
-          } else {
+          } else if (key === "history") {
             await settingsService.setHistoryEnabled(interaction.guildId, enabled);
+          } else {
+            await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
           }
           break;
         }

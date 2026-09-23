@@ -24,6 +24,7 @@ export const STATUS_SWITCHES = [
   "web_search",
   "twitter_expand",
   "history",
+  "reasoning_display",
 ] as const;
 export type StatusSwitch = (typeof STATUS_SWITCHES)[number];
 
@@ -67,6 +68,7 @@ function switchRows(settings: GuildSettings, webSearchEngine: string): SwitchRow
     },
     { key: "twitter_expand", label: "ツイート展開", enabled: settings.twitterExpandEnabled },
     { key: "history", label: "会話履歴", enabled: settings.historyEnabled },
+    { key: "reasoning_display", label: "推論表示", enabled: settings.reasoningDisplayEnabled },
   ];
 }
 

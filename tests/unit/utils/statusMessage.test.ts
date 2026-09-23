@@ -51,6 +51,7 @@ describe("buildStatusMessage", () => {
     expect(texts).toContain("**Web検索** 無効");
     expect(texts).toContain("**ツイート展開** 有効");
     expect(texts).toContain("**会話履歴** 無効");
+    expect(texts).toContain("**推論表示** 無効");
   });
 
   test("各設定の Section ボタンは現在値と反対の値を指定する", () => {
@@ -71,6 +72,7 @@ describe("buildStatusMessage", () => {
       "status_set:web_search:on",
       "status_set:twitter_expand:off",
       "status_set:history:on",
+      "status_set:reasoning_display:on",
     ]);
   });
 

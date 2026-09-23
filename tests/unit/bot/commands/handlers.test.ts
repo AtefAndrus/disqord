@@ -326,7 +326,7 @@ describe("config reasoning-display handler", () => {
       "guild-1",
       value === "on",
     );
-    expect(repliedEmbed(reply).description).toContain(value === "on" ? "有効" : "無効");
+    expect(repliedText(reply)).toContain(value === "on" ? "有効" : "無効");
   });
 
   test("ManageGuild が無ければ設定を変えず、ephemeral error を返す", async () => {
@@ -336,7 +336,8 @@ describe("config reasoning-display handler", () => {
     await handlers.configReasoningDisplay(interaction);
 
     expect(settingsService.setReasoningDisplayEnabled).not.toHaveBeenCalled();
-    expect(reply.mock.calls[0]?.[0]).toMatchObject({ flags: MessageFlags.Ephemeral });
+    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
+    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
   });
 
   test("/config に reasoning-display subcommand を登録する", () => {

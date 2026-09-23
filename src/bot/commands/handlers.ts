@@ -266,27 +266,29 @@ export function createCommandHandlers(
 
     async configReasoningDisplay(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        const embed = createErrorEmbed(
-          "推論内容の表示設定には「サーバーの管理」権限が必要です。",
-          "推論表示設定",
+        await interaction.reply(
+          errorNotice(
+            "推論内容の表示設定には「サーバーの管理」権限が必要です。",
+            "推論表示設定",
+            true,
+          ),
         );
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         return;
       }
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
-      const embed = createSuccessEmbed(
-        `推論内容の表示を **${enabled ? "有効" : "無効"}** にしました。`,
-        "推論表示設定",
+      await interaction.reply(
+        successNotice(
+          `推論内容の表示を **${enabled ? "有効" : "無効"}** にしました。`,
+          "推論表示設定",
+        ),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configTwitterExpand(interaction: ChatInputCommandInteraction): Promise<void> {
