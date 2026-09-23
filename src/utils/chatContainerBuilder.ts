@@ -348,10 +348,15 @@ export function splitTextIntoMessages(
 ): string[] {
   const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
   const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
-  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes, {
-    maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
-    maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
-  });
+  const chunks = splitMarkdownByCharsAndBytes(
+    markThematicBreaks(text),
+    bodyBudgetChars,
+    bodyBudgetBytes,
+    {
+      maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
+      maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
+    },
+  );
   return chunks.length > 0 ? chunks : [""];
 }
 
@@ -460,39 +465,56 @@ const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
 export const MAX_THEMATIC_BREAKS_PER_PAGE = 8;
 
 /**
- * Splits a page's text at thematic breaks outside code fences, which Discord
- * does not render, so each break can be drawn as a Separator. Empty segments
- * (a break at the start or end, or two in a row) are dropped.
+ * Stands in for a thematic break line from `markThematicBreaks` until a page
+ * is built. Private-use, so a model cannot plausibly write it.
  */
-export function splitAtThematicBreaks(text: string): string[] {
-  const segments: string[] = [];
-  let current: string[] = [];
+export const THEMATIC_BREAK_MARK = "\uE000";
+
+/**
+ * Replaces each thematic break line outside code fences with
+ * THEMATIC_BREAK_MARK. It runs over the whole answer before paging, because a
+ * fence can span pages and a page alone cannot tell whether it is inside one.
+ */
+export function markThematicBreaks(text: string): string {
   // The open fence's character and length (CommonMark): a fence closes only on
   // a line of the same character, at least as long, with nothing after it.
   let fence: { char: string; length: number } | null = null;
-  let breaks = 0;
-  for (const line of text.split(/\r?\n/u)) {
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
-    if (marker) {
-      const [, run = "", rest = ""] = marker;
-      if (!fence) {
-        if (!(run[0] === "`" && rest.includes("`")))
-          fence = { char: run[0] ?? "", length: run.length };
-      } else if (run[0] === fence.char && run.length >= fence.length && rest.trim() === "") {
-        fence = null;
+  return text
+    .split(/\r?\n/u)
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+      if (marker) {
+        const [, run = "", rest = ""] = marker;
+        if (!fence) {
+          if (!(run[0] === "`" && rest.includes("`"))) {
+            fence = { char: run[0] ?? "", length: run.length };
+          }
+        } else if (run[0] === fence.char && run.length >= fence.length && rest.trim() === "") {
+          fence = null;
+        }
+        return line;
       }
-    }
-    if (!fence && !marker && breaks < MAX_THEMATIC_BREAKS_PER_PAGE && THEMATIC_BREAK.test(line)) {
-      segments.push(current.join("\n"));
-      current = [];
-      breaks += 1;
-      continue;
-    }
-    current.push(line);
-  }
-  segments.push(current.join("\n"));
-  const kept = segments.filter((segment) => segment.trim().length > 0);
-  return kept.length > 0 ? kept : [text];
+      return !fence && THEMATIC_BREAK.test(line) ? THEMATIC_BREAK_MARK : line;
+    })
+    .join("\n");
+}
+
+/**
+ * Splits a page at the marks `markThematicBreaks` left, so each can be drawn
+ * as a Separator. Empty segments (a break at the start or end, or two in a
+ * row) are dropped without using the per-page allowance; marks past the
+ * allowance go back to `---` text.
+ */
+export function splitAtThematicBreaks(text: string): string[] {
+  const segments = text
+    .split(new RegExp(`^${THEMATIC_BREAK_MARK}$`, "mu"))
+    .map((segment) => segment.replace(/^\n|\n$/gu, ""))
+    .filter((segment) => segment.trim().length > 0);
+  if (segments.length === 0) return [text.replaceAll(THEMATIC_BREAK_MARK, "---")];
+  const drawn = segments.slice(0, MAX_THEMATIC_BREAKS_PER_PAGE + 1);
+  const rest = segments.slice(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
+  if (rest.length > 0) drawn.push([drawn.pop(), ...rest].join("\n---\n"));
+  return drawn.map((segment) => segment.replaceAll(THEMATIC_BREAK_MARK, "---"));
 }
 
 function addBadgeAndBody(

@@ -18,6 +18,7 @@ import {
   MAX_THEMATIC_BREAKS_PER_PAGE,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
+  markThematicBreaks,
   measureTextBudget,
   REASONING_COMPONENT_ID,
   REASONING_HEADING,
@@ -593,37 +594,42 @@ describe("chatContainerBuilder", () => {
     });
   });
 
-  describe("splitAtThematicBreaks", () => {
+  describe("区切り線の印付けとページごとの分割", () => {
+    const split = (text: string): string[] => splitAtThematicBreaks(markThematicBreaks(text));
+
     test("---、***、___ だけの行で分け、空の区切りは捨てる", () => {
-      expect(splitAtThematicBreaks("a\n---\nb\n***\nc\n_ _ _\nd")).toEqual(["a", "b", "c", "d"]);
-      expect(splitAtThematicBreaks("---\na\n---\n---\nb\n---")).toEqual(["a", "b"]);
+      expect(split("a\n---\nb\n***\nc\n_ _ _\nd")).toEqual(["a", "b", "c", "d"]);
+      expect(split("---\na\n---\n---\nb\n---")).toEqual(["a", "b"]);
     });
 
     test("コードブロックの中と、文の途中の --- は分けない", () => {
-      expect(splitAtThematicBreaks("```\n---\n```\ntext --- more")).toEqual([
-        "```\n---\n```\ntext --- more",
-      ]);
+      expect(split("```\n---\n```\ntext --- more")).toEqual(["```\n---\n```\ntext --- more"]);
     });
 
     test("~~~ の fence、長い fence、閉じにならない行の中の --- も分けない", () => {
-      expect(splitAtThematicBreaks("~~~js\n---\n~~~")).toHaveLength(1);
-      expect(splitAtThematicBreaks("````\n```\n---\n````")).toHaveLength(1);
-      expect(splitAtThematicBreaks("```\n```notclosing\n---\n```")).toHaveLength(1);
-      expect(splitAtThematicBreaks("```js\ncode\n```\n---\nafter")).toEqual([
-        "```js\ncode\n```",
-        "after",
-      ]);
+      expect(split("~~~js\n---\n~~~")).toHaveLength(1);
+      expect(split("````\n```\n---\n````")).toHaveLength(1);
+      expect(split("```\n```notclosing\n---\n```")).toHaveLength(1);
+      expect(split("```js\ncode\n```\n---\nafter")).toEqual(["```js\ncode\n```", "after"]);
     });
 
     test("CRLF の区切り線も分ける", () => {
-      expect(splitAtThematicBreaks("a\r\n---\r\nb")).toEqual(["a", "b"]);
+      expect(split("a\r\n---\r\nb")).toEqual(["a", "b"]);
     });
 
-    test("1 ページあたりの上限を超えた区切りは文字のまま残す", () => {
+    test("1 ページあたりの上限を超えた区切りは文字のまま残し、空の区切りは上限に数えない", () => {
       const text = Array.from({ length: 12 }, (_, i) => `p${i}`).join("\n---\n");
-      const segments = splitAtThematicBreaks(text);
+      const segments = split(text);
       expect(segments).toHaveLength(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
       expect(segments.at(-1)).toContain("---");
+      expect(split(`${"---\n".repeat(8)}a\n---\nb`)).toEqual(["a", "b"]);
+    });
+
+    test("ページをまたぐ ~~~ のコードブロックの中の --- は、後ろのページでも区切りにしない", () => {
+      const text = `~~~txt\n${"x".repeat(3900)}\n---\ninside\n~~~`;
+      const pages = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+      expect(pages.length).toBeGreaterThan(1);
+      for (const page of pages) expect(splitAtThematicBreaks(page)).toHaveLength(1);
     });
   });
 
@@ -652,7 +658,7 @@ describe("chatContainerBuilder", () => {
     test("本文の区切り線は divider 付きの Separator になり、footer の Separator は divider を持たない", () => {
       const json = toJSON(
         buildFinalContainer({
-          text: "上\n---\n下",
+          text: markThematicBreaks("上\n---\n下"),
           modelName: "m",
           color: 0x00ff00,
           isFirst: false,
