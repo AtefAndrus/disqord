@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
-import { BadRequestError } from "../../../src/errors";
+import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
@@ -460,6 +460,68 @@ describe("ChatService", () => {
     ]);
     expect(request.messages[0]?.content).toContain("非信頼データ");
     expect(request.messages[1]?.content).toContain("2026/09/22(火) 14:00 (JST)");
+  });
+
+  test("Web検索が失敗して何も表示していなければ、検索を外して1回だけ答え直す", async () => {
+    const fixture = createFixture({ webSearchEnabled: true });
+    let call = 0;
+    fixture.llmClient.chatStream = mock(async function* () {
+      call += 1;
+      if (call === 1) {
+        throw new WebSearchFailedError(
+          'Server tool "openrouter:web_search" failed: invalid request (400)',
+        );
+      }
+      yield { content: "検索なしの答え", done: false as const };
+      yield {
+        done: true as const,
+        fullText: "検索なしの答え",
+        finishReason: "stop",
+      } satisfies StreamFinalResult;
+    });
+
+    const result = await fixture.chatService.generateChatResponse(
+      "guild-123",
+      { text: "調べて" },
+      "req-web-search-failed",
+      createUpdater(),
+      { channelId: "channel-1", userId: "user-1" },
+    );
+
+    expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
+    const [first] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+    const [second] = fixture.llmClient.chatStream.mock.calls[1] as [ChatCompletionRequest];
+    expect(first.tools?.some((tool) => tool.type === "openrouter:web_search")).toBe(true);
+    expect(second.tools?.some((tool) => tool.type === "openrouter:web_search") ?? false).toBe(
+      false,
+    );
+    expect(result).toMatchObject({
+      status: "final",
+      text: "検索なしの答え",
+      webSearchSkipped: true,
+    });
+  });
+
+  test("Web検索が失敗する前に本文を表示していれば、答え直さずにエラーを返す", async () => {
+    const fixture = createFixture({ webSearchEnabled: true });
+    fixture.llmClient.chatStream = mock(async function* () {
+      yield { content: "途中", done: false as const };
+      throw new WebSearchFailedError(
+        'Server tool "openrouter:web_search" failed: invalid request (400)',
+      );
+    });
+
+    const result = await fixture.chatService.generateChatResponse(
+      "guild-123",
+      { text: "調べて" },
+      "req-web-search-failed-late",
+      createUpdater(),
+      { channelId: "channel-1", userId: "user-1" },
+    );
+
+    expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("error");
+    expect(result.status === "error" && result.error).toBeInstanceOf(WebSearchFailedError);
   });
 
   test("ツイートURLを展開し、Web検索のsystemより後ろに非信頼データのsystemを置く", async () => {

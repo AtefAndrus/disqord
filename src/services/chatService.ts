@@ -1,4 +1,4 @@
-import { BadRequestError } from "../errors";
+import { BadRequestError, WebSearchFailedError } from "../errors";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
@@ -382,6 +382,34 @@ export class ChatService implements IChatService {
         );
         const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
         return usage ? { ...retryResult, usage } : retryResult;
+      }
+
+      // The search fails on some queries the model picks. When nothing has
+      // been shown and no client tool has run (a retry would run it again),
+      // answer once more without web search instead of failing the reply.
+      if (
+        result.status === "error" &&
+        result.error instanceof WebSearchFailedError &&
+        !tracked.stagedNonEmpty &&
+        !clientToolInvoked
+      ) {
+        console.warn("[chatService] retrying without web search after it failed");
+        const retryResult = await this.runChatLoop(
+          request,
+          false,
+          guildId,
+          ctx,
+          createTrackingUpdater(updater).updater,
+          controller.signal,
+          requestId,
+          conversation?.sessionId,
+          conversation?.toolContext,
+          settings.defaultModel,
+          supportsTools,
+        );
+        const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
+        const withUsage = usage ? { ...retryResult, usage } : retryResult;
+        return withUsage.status === "final" ? { ...withUsage, webSearchSkipped: true } : withUsage;
       }
       return result;
     } finally {

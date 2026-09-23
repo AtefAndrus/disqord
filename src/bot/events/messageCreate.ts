@@ -448,7 +448,13 @@ export function createMessageCreateHandler(
         latency,
         usage: result.usage,
         webSearchEngine: options.webSearchEngine,
-        note: buildFinishReasonNote(result.finishReason),
+        note:
+          [
+            result.webSearchSkipped ? "Web 検索に失敗したため、検索なしで回答しました" : undefined,
+            buildFinishReasonNote(result.finishReason),
+          ]
+            .filter((part): part is string => part !== undefined)
+            .join(" / ") || undefined,
       };
       if (result.webSearch) {
         logger.info("Web search", {
