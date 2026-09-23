@@ -4,7 +4,7 @@ import {
   extractComponentsV2Footer,
   type RawDiscordMessage,
 } from "../../src/utils/discordMessageNormalizer";
-import { buildPdfData, PDF_DATA, PNG_DATA } from "./fixtures";
+import { buildDigitsPng, buildPdfData, PDF_DATA, PNG_DATA } from "./fixtures";
 
 export interface DiscordMessage {
   id: string;
@@ -215,6 +215,11 @@ const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
 // 実行ごとに変える: 固定値だと、窓に残った前回の回答から答えても通ってしまう。
 const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
+// 数字だけにする: 画像から読ませるので、見間違えやすい英字を入れない。
+const VIEW_IMAGE_TOKEN = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(
+  6,
+  "0",
+);
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -377,6 +382,28 @@ export const SCENARIOS: Scenario[] = [
       ...(reply.body.includes(VIEW_ATTACHMENT_TOKEN)
         ? []
         : ["the reply did not report the token from the attachment"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    // The image path of view_attachment returns the picture as an
+    // input_image part, which some models behind OpenRouter drop silently,
+    // so a failure here can be the model rather than the code: the FAIL
+    // line names the model that answered.
+    name: "view-image",
+    manual: true,
+    toolName: "view_attachment",
+    setup: {
+      prompt: "[e2e] この画像を後で参照できるようにしておいて。",
+      mention: false,
+      files: [{ name: "digits.png", type: "image/png", data: buildDigitsPng(VIEW_IMAGE_TOKEN) }],
+    },
+    prompt:
+      "[e2e] 必ず view_attachment で直前の画像を開き、画像に書かれた 6 桁の数字を「数字: 」に続けて1行で答えて。",
+    check: (reply) => [
+      ...(reply.body.includes(VIEW_IMAGE_TOKEN)
+        ? []
+        : [`the reply does not contain the number ${VIEW_IMAGE_TOKEN} drawn in the image`]),
       ...hasUsageFooter(reply),
     ],
   },

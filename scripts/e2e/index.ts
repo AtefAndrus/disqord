@@ -268,7 +268,7 @@ async function main(): Promise<number> {
           );
         } else {
           failures++;
-          console.log(`FAIL ${scenario.name} (${seconds}s)`);
+          console.log(`FAIL ${scenario.name} (${seconds}s, model ${modelOf(reply) ?? "unknown"})`);
           for (const problem of problems) console.log(`     - ${problem}`);
           console.log(`     reply: ${reply.body.replace(/\s+/g, " ").slice(0, 300)}`);
           console.log(`     footers: ${reply.footers.join(" / ").slice(0, 300)}`);

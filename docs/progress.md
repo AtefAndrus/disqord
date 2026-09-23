@@ -16,7 +16,7 @@
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [回答の再生成・編集/undo・compaction](changes/conversation-regeneration/design.md) | 中 | planned | 会話履歴ストアの上に載る再生成（generation_number）・undo（active）・履歴 compaction（要約圧縮） |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | planned | LLM に境界付きの Discord 操作（履歴取得/メンバー検索/スレッド作成/ピン/追加文脈取得）を与える client tool 群 |
-| [過去の画像を開く e2e](changes/e2e-image-attachment/design.md) | 中 | planned | view_attachment が画像を開く経路を e2e で確かめる |
+| [過去の画像を開く e2e](changes/e2e-image-attachment/design.md) | 中 | implemented | view_attachment が画像を開く経路を e2e で確かめる |
 | [終了時の進行中返信の後始末](changes/graceful-shutdown/design.md) | 中 | investigating | bot の終了時に、生成途中の返信を停止表示へ書き換えてから落とす |
 | [ログ集約サービスのセルフホスト](changes/log-aggregation/design.md) | 中 | planned | VictoriaLogs / Loki / OpenObserve 等によるログ集約基盤 |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |

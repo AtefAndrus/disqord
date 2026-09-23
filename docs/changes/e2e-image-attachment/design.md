@@ -1,6 +1,6 @@
 ---
 title: "過去の画像を開く e2e"
-status: planned
+status: implemented
 priority: medium
 summary: "view_attachment が画像を開く経路を e2e で確かめる"
 ---
@@ -52,10 +52,10 @@ e2e が確かめているのは PDF だけで、画像の経路（`function_call
 
 ## Tasks
 
-- [ ] `scripts/e2e/fixtures.ts` にトークン入りの PNG を作る関数を足す
-- [ ] 画像版のシナリオを足し、tool の呼び出しログも確かめる
-- [ ] AGENTS.md の End-to-end の節に実行条件を書く
-- [ ] `bun run e2e` で名前を指定して実行し、結果を PR 本文に書く
+- [x] `scripts/e2e/fixtures.ts` にトークン入りの PNG を作る関数を足す
+- [x] 画像版のシナリオを足し、tool の呼び出しログも確かめる
+- [x] AGENTS.md の End-to-end の節に実行条件を書く
+- [x] `bun run e2e` で名前を指定して実行し、結果を PR 本文に書く
 - [ ] `docs/changes/e2e-image-attachment/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
