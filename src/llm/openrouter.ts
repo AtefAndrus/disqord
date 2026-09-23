@@ -173,9 +173,17 @@ function readReasoningItem(item: Record<string, unknown>): ResponsesReasoningIte
   if (item.content !== undefined && !Array.isArray(item.content)) {
     throw new StreamProtocolError("reasoning item content must be an array when present");
   }
-  for (const part of [...item.summary, ...(Array.isArray(item.content) ? item.content : [])]) {
-    if (!isPlainObject(part) || typeof part.text !== "string") {
-      throw new StreamProtocolError("reasoning item text parts must have a string text field");
+  const parts: [unknown[], string][] = [
+    [item.summary, "summary_text"],
+    [Array.isArray(item.content) ? item.content : [], "reasoning_text"],
+  ];
+  for (const [list, type] of parts) {
+    for (const part of list) {
+      if (!isPlainObject(part) || part.type !== type || typeof part.text !== "string") {
+        throw new StreamProtocolError(
+          `reasoning item parts must be {type:"${type}", text: string}, got: ${JSON.stringify(part)}`,
+        );
+      }
     }
   }
   return item as unknown as ResponsesReasoningItem;

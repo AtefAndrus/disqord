@@ -306,11 +306,15 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    // Requires `/config reasoning-display on` and a model/provider that returns displayable reasoning.
+    // Requires `/config reasoning-display on`, `/config history on`, and a
+    // model/provider that returns displayable reasoning. The tool call makes
+    // the loop send the first turn's reasoning items back to OpenRouter, so
+    // a rejected resend shows up as an error reply here.
     name: "reasoning",
     manual: true,
+    toolName: "read_earlier_messages",
     prompt:
-      "[e2e] 5人が円卓に座り、各自は隣り合わない席に座る必要があります。条件を整理して配置の数を考え、答えを短く返してください。",
+      "[e2e] 必ず read_earlier_messages を 1 回呼んでから、5 人を円卓に並べる並べ方が何通りあるか（回転は同じとみなす）を考え、数だけを短く答えて。",
     check: (reply) => [
       ...(reply.isError ? ["the reasoning reply ended in an error"] : []),
       ...(reply.messages

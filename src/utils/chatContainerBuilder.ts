@@ -646,7 +646,10 @@ export function toComponentsV2EditPayload(
     components: [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
-    ...(files && { files }),
+    // An edit without files clears attachments: discord.js keeps them when
+    // `attachments` is omitted, so an error or stopped page rewritten after
+    // the final page would otherwise keep reasoning.md.
+    ...(files ? { files } : { attachments: [] }),
   };
 }
 

@@ -817,6 +817,12 @@ describe("chatContainerBuilder", () => {
       expect(file.name).toBe("reasoning.md");
     });
 
+    test("files の無い edit payload は既存の attachment を消す（失敗や停止の書き直しで reasoning.md を残さない）", () => {
+      expect(toComponentsV2EditPayload(container).attachments).toEqual([]);
+      const file = new AttachmentBuilder(Buffer.from("x"), { name: "reasoning.md" });
+      expect(toComponentsV2EditPayload(container, [file]).attachments).toBeUndefined();
+    });
+
     test("toComponentsV2ReplyPayload: parse:[] と repliedUser:false を強制する", () => {
       const payload = toComponentsV2ReplyPayload(container);
       expect(payload.flags).toBe(MessageFlags.IsComponentsV2);

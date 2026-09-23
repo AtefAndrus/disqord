@@ -1673,6 +1673,11 @@ describe("OpenRouterClient", () => {
         ["content is not an array", { summary: [], content: "bad" }],
         ["summary text is not a string", { summary: [{ type: "summary_text", text: 7 }] }],
         ["content text is not a string", { summary: [], content: [{ type: "reasoning_text" }] }],
+        ["summary part has another type", { summary: [{ type: "output_text", text: "x" }] }],
+        [
+          "content part has another type",
+          { summary: [], content: [{ type: "summary_text", text: "x" }] },
+        ],
       ])("malformed reasoning item (%s) throws StreamProtocolError", async (_label, fields) => {
         respondWithEvents([
           {
