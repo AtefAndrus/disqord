@@ -525,6 +525,13 @@ describe("chatContainerBuilder", () => {
       });
     });
 
+    test("末尾のバックスラッシュが閉じの || をエスケープしないよう、偶数個にそろえる", () => {
+      expect(fitReasoning("ends with \\", room).text).toBe(
+        `${REASONING_HEADING}\n||ends with \\\\||`,
+      );
+      expect(fitReasoning("two \\\\", room).text).toBe(`${REASONING_HEADING}\n||two \\\\||`);
+    });
+
     test("推論の中の || は spoiler を閉じないようエスケープする", () => {
       expect(fitReasoning("a || b", room).text).toBe(`${REASONING_HEADING}\n||a \\|\\| b||`);
     });

@@ -1182,6 +1182,37 @@ describe("createMessageCreateHandler", () => {
     expect(payload.files).toBeUndefined();
   });
 
+  test("長い推論は 1 ページ目で切り、全文を reasoning.md として添える", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    settings.showLlmDetails = false;
+    const longReasoning = "考".repeat(6000);
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        model: "provider/model-id",
+        reasoningText: longReasoning,
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const container = toContainerJSON(payload);
+    const index = container.components.findIndex((c) => c.id === REASONING_COMPONENT_ID);
+    expect(index).toBeGreaterThan(-1);
+    expect(container.components[index + 1]?.type).toBe(13);
+    const attachment = payload.files?.[0] as { name?: string; attachment?: Buffer } | undefined;
+    expect(attachment?.name).toBe("reasoning.md");
+    expect(attachment?.attachment?.toString("utf8")).toBe(`provider/model-id\n\n${longReasoning}`);
+  });
+
   test("長い回答でも 1 ページ目に推論の spoiler が入る余地を残す", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;

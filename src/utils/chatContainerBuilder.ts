@@ -552,9 +552,14 @@ export interface FittedReasoning {
   needsFile: boolean;
 }
 
-/** `||` inside the reasoning would close the spoiler early. */
+/**
+ * `||` inside the reasoning would close the spoiler early, and an odd run of
+ * trailing backslashes would escape the closing `||`.
+ */
 function escapeSpoiler(text: string): string {
-  return text.replaceAll("||", "\\|\\|");
+  return text
+    .replaceAll("||", "\\|\\|")
+    .replace(/\\+$/u, (run) => (run.length % 2 === 1 ? `${run}\\` : run));
 }
 
 /**
