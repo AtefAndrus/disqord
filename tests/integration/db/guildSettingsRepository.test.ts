@@ -63,6 +63,7 @@ describe("GuildSettingsRepository", () => {
         showLlmDetails: true,
         autoReplyChannels: [],
         webSearchEnabled: false,
+        reasoningDisplayEnabled: false,
         twitterExpandEnabled: true,
         historyEnabled: false,
       });
@@ -78,6 +79,7 @@ describe("GuildSettingsRepository", () => {
     test("返さなかった列は保存された値のまま残す", async () => {
       await repo.update("guild-keep", () => ({
         webSearchEnabled: true,
+        reasoningDisplayEnabled: true,
         twitterExpandEnabled: false,
         autoReplyChannels: ["c1"],
         showLlmDetails: false,
@@ -88,6 +90,7 @@ describe("GuildSettingsRepository", () => {
       expect(await repo.findByGuildId("guild-keep")).toMatchObject({
         defaultModel: "other",
         webSearchEnabled: true,
+        reasoningDisplayEnabled: true,
         twitterExpandEnabled: false,
         autoReplyChannels: ["c1"],
         showLlmDetails: false,
@@ -194,6 +197,7 @@ describe("GuildSettingsRepository", () => {
         expect(before).not.toHaveProperty("releaseChannelId");
         // Existing guilds must not start paying for searches because of a migration.
         expect(before?.webSearchEnabled).toBe(false);
+        expect(before?.reasoningDisplayEnabled).toBe(false);
         expect(before?.twitterExpandEnabled).toBe(true);
 
         await legacyRepo.update("legacy-guild", () => ({

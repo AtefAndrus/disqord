@@ -91,7 +91,7 @@ describe("プレビュー fixture", () => {
     const sections = component.components.filter((child) => child.type === ComponentType.Section);
 
     expect(textsOf(fixture, 0)[0]).toContain("## ステータス");
-    expect(sections).toHaveLength(5);
+    expect(sections).toHaveLength(6);
     expect(
       sections.some(
         (section) =>

@@ -51,6 +51,7 @@ const settings: GuildSettings = {
   showLlmDetails: false,
   autoReplyChannels: ["300000000000000000"],
   webSearchEnabled: true,
+  reasoningDisplayEnabled: true,
   twitterExpandEnabled: true,
   historyEnabled: false,
   createdAt: new Date().toISOString(),

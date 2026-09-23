@@ -237,6 +237,8 @@ export function splitMarkdownByCharsAndBytes(
   text: string,
   maxChars: number,
   maxBytes: number,
+  /** A smaller budget for the first chunk only (room kept on the first page for other content). */
+  firstChunk?: { maxChars: number; maxBytes: number },
 ): string[] {
   const chunks: string[] = [];
   let position = 0;
@@ -251,6 +253,8 @@ export function splitMarkdownByCharsAndBytes(
       continue;
     }
 
+    const limitChars = chunks.length === 0 && firstChunk ? firstChunk.maxChars : maxChars;
+    const limitBytes = chunks.length === 0 && firstChunk ? firstChunk.maxBytes : maxBytes;
     const prefix = reopenedFence(state);
     const prefixChars = prefix.length;
     const prefixBytes = byteLength(prefix);
@@ -272,7 +276,7 @@ export function splitMarkdownByCharsAndBytes(
       const projectedChars = prefixChars + (nextCursor - position) + suffix.length;
       const projectedBytes = prefixBytes + nextRawBytes + byteLength(suffix);
 
-      if (projectedChars > maxChars || projectedBytes > maxBytes) {
+      if (projectedChars > limitChars || projectedBytes > limitBytes) {
         break;
       }
 
@@ -339,10 +343,15 @@ export function splitTextIntoMessages(
   text: string,
   badge: TextBudget,
   footer: TextBudget,
+  /** Budget taken from the first page only, on top of badge and footer. */
+  firstPageReserve: TextBudget = ZERO_TEXT_BUDGET,
 ): string[] {
   const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
   const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
-  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
+  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes, {
+    maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
+    maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
+  });
   return chunks.length > 0 ? chunks : [""];
 }
 
@@ -441,9 +450,21 @@ export function estimateFinalFooterBudget(metadata: FinalMetadata): TextBudget {
   };
 }
 
-function addBadgeAndBody(container: ContainerBuilder, params: ChatContainerBaseParams): void {
+function addBadgeAndBody(
+  container: ContainerBuilder,
+  params: ChatContainerBaseParams,
+  reasoning?: FittedReasoning,
+): void {
   if (params.isFirst) {
     container.addTextDisplayComponents((td) => td.setContent(badgeText(params.modelName)));
+  }
+  if (reasoning) {
+    container.addTextDisplayComponents((td) =>
+      td.setId(REASONING_COMPONENT_ID).setContent(reasoning.text),
+    );
+    if (reasoning.needsFile) {
+      container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
+    }
   }
   container.addTextDisplayComponents((td) => td.setContent(params.text || EMPTY_TEXT_PLACEHOLDER));
   // 将来: multimodal 出力 (画像 / ファイル) はここに
@@ -481,6 +502,8 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
   metadata: FinalMetadata;
   /** 全 message 数（footer のページ番号表示に使用）。isLast の message でのみ参照される */
   pageInfo?: { page: number; total: number };
+  /** Reasoning shown between the badge and the answer on the first page. */
+  reasoning?: FittedReasoning;
 }
 
 /**
@@ -491,7 +514,7 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
  */
 export function buildFinalContainer(params: FinalContainerParams): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(params.color);
-  addBadgeAndBody(container, params);
+  addBadgeAndBody(container, params, params.isFirst ? params.reasoning : undefined);
 
   // LLM 詳細情報は末尾 message のみ。非末尾 message は showDetails: false 相当にしてページ番号のみにする
   const footerMetadata: FinalMetadata = params.isLast ? params.metadata : { showDetails: false };
@@ -504,6 +527,93 @@ export function buildFinalContainer(params: FinalContainerParams): ContainerBuil
   }
 
   return container;
+}
+
+/** What one final page leaves of the per-message TextDisplay budget after its body, badge, and footer. */
+export function remainingPageBudget(
+  body: string,
+  badgeModelName: string | undefined,
+  footer: TextBudget,
+): TextBudget {
+  const bodyBudget = measureTextBudget(body);
+  const badge = badgeModelName ? measureTextBudget(badgeText(badgeModelName)) : ZERO_TEXT_BUDGET;
+  return {
+    chars: MAX_TOTAL_CHARS_PER_MESSAGE - bodyBudget.chars - badge.chars - footer.chars,
+    bytes: MAX_TOTAL_BYTES_PER_MESSAGE - bodyBudget.bytes - badge.bytes - footer.bytes,
+  };
+}
+
+/**
+ * Component id of the reasoning TextDisplay. Readers of the conversation
+ * (discordMessageNormalizer) and the e2e reader tell the reasoning from the
+ * answer by this id, never by its text, which the model could imitate.
+ */
+export const REASONING_COMPONENT_ID = 1_000_000;
+export const REASONING_HEADING = "-# 推論（クリックで表示）";
+const REASONING_TRUNCATED_NOTE = "\n-# 長いため途中までです。全文は reasoning.md にあります。";
+/** Below this many characters of room the reasoning is not worth showing inline; only the file is attached. */
+const REASONING_MIN_INLINE_CHARS = 200;
+
+export interface FittedReasoning {
+  /** Content of the reasoning TextDisplay. */
+  text: string;
+  /** The reasoning was cut, so the full text must be attached as reasoning.md. */
+  needsFile: boolean;
+}
+
+/**
+ * `||` inside the reasoning would close the spoiler early, and an odd run of
+ * trailing backslashes would escape the closing `||`.
+ */
+function escapeSpoiler(text: string): string {
+  return text
+    .replaceAll("||", "\\|\\|")
+    .replace(/\\+$/u, (run) => (run.length % 2 === 1 ? `${run}\\` : run));
+}
+
+/**
+ * The provider-authored reasoning as a spoiler inside the answer's Container.
+ * It shares the message's TextDisplay budget with the page, so `remaining` is
+ * what the page left; reasoning that does not fit is cut there and the full
+ * text goes to reasoning.md.
+ */
+/** Room kept on the first page for the reasoning, so a long answer does not leave it nothing. */
+const REASONING_RESERVE: TextBudget = { chars: 1500, bytes: 4500 };
+
+/**
+ * What to take off the first page's budget before splitting the answer when
+ * reasoning will be shown: all of it when short, otherwise REASONING_RESERVE.
+ */
+export function reasoningReserve(reasoning: string): TextBudget {
+  const whole = measureTextBudget(`${REASONING_HEADING}\n||${escapeSpoiler(reasoning)}||`);
+  return {
+    chars: Math.min(whole.chars, REASONING_RESERVE.chars),
+    bytes: Math.min(whole.bytes, REASONING_RESERVE.bytes),
+  };
+}
+
+export function fitReasoning(reasoning: string, remaining: TextBudget): FittedReasoning {
+  const escaped = escapeSpoiler(reasoning);
+  const whole = `${REASONING_HEADING}\n||${escaped}||`;
+  const wholeBudget = measureTextBudget(whole);
+  if (wholeBudget.chars <= remaining.chars && wholeBudget.bytes <= remaining.bytes) {
+    return { text: whole, needsFile: false };
+  }
+  const reserved = measureTextBudget(`${REASONING_HEADING}\n||…||${REASONING_TRUNCATED_NOTE}`);
+  const maxChars = remaining.chars - reserved.chars;
+  const maxBytes = remaining.bytes - reserved.bytes;
+  if (maxChars < REASONING_MIN_INLINE_CHARS || maxBytes < REASONING_MIN_INLINE_CHARS) {
+    return { text: `${REASONING_HEADING}${REASONING_TRUNCATED_NOTE}`, needsFile: true };
+  }
+  // A cut inside an escaped `\|\|` would leave a stray backslash or bar next to the closing `||`.
+  const cut = (splitTextByCharsAndBytes(escaped, maxChars, maxBytes)[0] ?? "").replace(
+    /\\(\|\\?)?$/u,
+    "",
+  );
+  return {
+    text: `${REASONING_HEADING}\n||${cut}…||${REASONING_TRUNCATED_NOTE}`,
+    needsFile: true,
+  };
 }
 
 export interface StoppedContainerParams extends ChatContainerBaseParams {
@@ -620,20 +730,31 @@ export function toNoticeEditPayload(container: ContainerBuilder): {
 // allowedMentions / flags を必ず内包し、呼び出し側で上書きできない形にする（mention 漏れ事故防止）。
 
 /** channel.send 用の Components V2 payload を構築する */
-export function toComponentsV2Payload(container: ContainerBuilder): MessageCreateOptions {
+export function toComponentsV2Payload(
+  container: ContainerBuilder,
+  files?: MessageCreateOptions["files"],
+): MessageCreateOptions {
   return {
     components: [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
+    ...(files && { files }),
   };
 }
 
 /** message.edit 用の Components V2 payload を構築する */
-export function toComponentsV2EditPayload(container: ContainerBuilder): MessageEditOptions {
+export function toComponentsV2EditPayload(
+  container: ContainerBuilder,
+  files?: MessageEditOptions["files"],
+): MessageEditOptions {
   return {
     components: [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
+    // An edit without files clears attachments: discord.js keeps them when
+    // `attachments` is omitted, so an error or stopped page rewritten after
+    // the final page would otherwise keep reasoning.md.
+    ...(files ? { files } : { attachments: [] }),
   };
 }
 

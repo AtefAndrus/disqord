@@ -56,11 +56,25 @@ export function applyMigrations(db: Database): void {
     `);
   }
 
-  // Migration: Add twitter_expand_enabled column (on by default: tweet expansion is free)
+  // Migration: Add reasoning_display_enabled column (off by default: reasoning is private)
   const columnsAfterWebSearch = db
     .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
     .all();
-  const hasTwitterExpandEnabled = columnsAfterWebSearch.some(
+  const hasReasoningDisplayEnabled = columnsAfterWebSearch.some(
+    (c) => c.name === "reasoning_display_enabled",
+  );
+  if (!hasReasoningDisplayEnabled) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN reasoning_display_enabled INTEGER NOT NULL DEFAULT 0
+    `);
+  }
+
+  // Migration: Add twitter_expand_enabled column (on by default: tweet expansion is free)
+  const columnsAfterReasoningDisplay = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasTwitterExpandEnabled = columnsAfterReasoningDisplay.some(
     (c) => c.name === "twitter_expand_enabled",
   );
   if (!hasTwitterExpandEnabled) {

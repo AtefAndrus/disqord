@@ -78,6 +78,9 @@ export function createMockSettingsService(): ISettingsService {
     setWebSearchEnabled: mock((guildId: string, webSearchEnabled: boolean) =>
       Promise.resolve(settings(guildId, { webSearchEnabled })),
     ),
+    setReasoningDisplayEnabled: mock((guildId: string, reasoningDisplayEnabled: boolean) =>
+      Promise.resolve(settings(guildId, { reasoningDisplayEnabled })),
+    ),
     setTwitterExpandEnabled: mock((guildId: string, twitterExpandEnabled: boolean) =>
       Promise.resolve(settings(guildId, { twitterExpandEnabled })),
     ),
@@ -104,6 +107,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     showLlmDetails: true,
     autoReplyChannels: [],
     webSearchEnabled: false,
+    reasoningDisplayEnabled: false,
     twitterExpandEnabled: true,
     historyEnabled: false,
     createdAt: "2025-01-01T00:00:00.000Z",

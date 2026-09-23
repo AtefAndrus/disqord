@@ -1,4 +1,4 @@
-import { type Message, MessageType, type ThreadChannel } from "discord.js";
+import { AttachmentBuilder, type Message, MessageType, type ThreadChannel } from "discord.js";
 import { AppError } from "../../errors";
 import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
@@ -23,7 +23,10 @@ import {
   buildStreamingContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  fitReasoning,
   measureTextBudget,
+  reasoningReserve,
+  remainingPageBudget,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
@@ -471,10 +474,13 @@ export function createMessageCreateHandler(
         ? `${answerText}${openFence ? "\n```" : ""}\n\n${resultLinks}`
         : answerText;
       const footerBudget = estimateFinalFooterBudget(metadata);
+      const reasoningText =
+        settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
       const chunks = splitTextIntoMessages(
         finalText,
         measureTextBudget(badgeText(modelName)),
         footerBudget,
+        reasoningText ? reasoningReserve(reasoningText) : undefined,
       );
 
       const botMessages = updater.messages;
@@ -487,6 +493,14 @@ export function createMessageCreateHandler(
       for (let i = 0; i < chunks.length; i++) {
         const isFirst = i === 0;
         const isLast = i === chunks.length - 1;
+        // Reasoning reads before the answer, so it goes between the badge and
+        // the first page's answer and shares that page's budget. `footerBudget`
+        // is the last page's footer estimate, which also covers an earlier
+        // page's page-number footer.
+        const reasoning =
+          isFirst && reasoningText
+            ? fitReasoning(reasoningText, remainingPageBudget(chunks[i], modelName, footerBudget))
+            : undefined;
         const container = buildFinalContainer({
           text: chunks[i],
           modelName,
@@ -495,14 +509,23 @@ export function createMessageCreateHandler(
           isLast,
           metadata,
           pageInfo: { page: i + 1, total: chunks.length },
+          ...(reasoning && { reasoning }),
         });
+        const files = reasoning?.needsFile
+          ? [
+              new AttachmentBuilder(
+                Buffer.from(`${result.model ?? settings.defaultModel}\n\n${reasoningText}`, "utf8"),
+                { name: "reasoning.md" },
+              ),
+            ]
+          : undefined;
 
         if (i < botMessages.length) {
-          await botMessages[i].edit(toComponentsV2EditPayload(container));
+          await botMessages[i].edit(toComponentsV2EditPayload(container, files));
         } else {
           // 致命的エラー時のクリーンアップが送信済みmessageを再取得できるよう、streaming/stopped経路と
           // 同様にbotMessagesへ追跡する（追跡しないと後続chunkのsend失敗時に既送信分が重複送信されうる）
-          const newMessage = await message.channel.send(toComponentsV2Payload(container));
+          const newMessage = await message.channel.send(toComponentsV2Payload(container, files));
           botMessages.push(newMessage);
           await botMessageCreated(newMessage);
         }

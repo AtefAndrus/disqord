@@ -15,6 +15,7 @@ import {
   buildFinalContainer,
   buildStoppedContainer,
   buildStreamingContainer,
+  REASONING_COMPONENT_ID,
 } from "../../../src/utils/chatContainerBuilder";
 
 const USAGE = "Tokens: 1+2=3 | Cost: $0.000001 | Model: vendor/model-x | Time: 0.0s | Provider: P";
@@ -223,6 +224,38 @@ describe("e2e scenarios: check", () => {
     // 日付違いと、指定の形になっていない回答
     expect(check("search", [page("1", body("公開日: 2026-08-21"), searched)])).not.toEqual([]);
     expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
+  });
+
+  test("reasoning: モデル名の直後に spoiler の推論があるときだけ通り、本文には数えない", () => {
+    const withReasoning = (
+      reasoning: Record<string, unknown>,
+      at = 1,
+      extra: unknown[] = [],
+    ): DiscordMessage => {
+      const base = page("1", ["**Model:** m", "答え"], USAGE);
+      const [container] = (base.components ?? []) as { components: unknown[] }[];
+      const children = [...(container?.components ?? [])];
+      children.splice(at, 0, { type: 10, ...reasoning }, ...extra);
+      return { ...base, components: [{ ...(container as object), components: children }] };
+    };
+    const ok = { id: REASONING_COMPONENT_ID, content: "-# 推論\n||考えた||" };
+    expect(check("reasoning", [withReasoning(ok)])).toEqual([]);
+    expect(toReply([withReasoning(ok)]).body).not.toContain("考えた");
+    expect(check("reasoning", [withReasoning(ok, 2)])).not.toEqual([]);
+    expect(
+      check("reasoning", [
+        withReasoning({ id: REASONING_COMPONENT_ID, content: "-# 推論\n考えた" }),
+      ]),
+    ).not.toEqual([]);
+    const cut = {
+      id: REASONING_COMPONENT_ID,
+      content: "-# 推論\n||考…||\n-# 全文は reasoning.md にあります。",
+    };
+    expect(check("reasoning", [withReasoning(cut)])).not.toEqual([]);
+    expect(check("reasoning", [withReasoning(cut, 1, [{ type: 13 }])])).toEqual([]);
+    expect(
+      check("reasoning", [withReasoning({ id: 7, content: "-# 推論\n||考えた||" })]),
+    ).not.toEqual([]);
   });
 
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {

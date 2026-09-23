@@ -23,6 +23,7 @@ import type {
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
+  StreamReasoningItemChunk,
   StreamToolCallChunk,
 } from "../../../src/types";
 import { metrics } from "../../../src/utils/metrics";
@@ -46,7 +47,12 @@ function sseResponse(chunks: (string | Uint8Array)[]): Response {
   return new Response(readable, { status: 200 });
 }
 
-type StreamYield = StreamChunk | StreamToolCallChunk | StreamHeartbeatChunk | StreamFinalResult;
+type StreamYield =
+  | StreamChunk
+  | StreamToolCallChunk
+  | StreamReasoningItemChunk
+  | StreamHeartbeatChunk
+  | StreamFinalResult;
 
 async function drain(gen: AsyncGenerator<StreamYield, void, void>): Promise<StreamYield[]> {
   const out: StreamYield[] = [];
@@ -299,6 +305,48 @@ describe("OpenRouterClient", () => {
       ]);
     });
 
+    test("assistant の reasoning item は本文と function_call より前に受信順で出力する", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
+
+      const reasoningItems = [
+        {
+          type: "reasoning" as const,
+          id: "rs_1",
+          summary: [{ type: "summary_text", text: "first" }],
+          encrypted_content: "opaque-1",
+          future_field: { keep: true },
+        },
+        {
+          type: "reasoning" as const,
+          id: "rs_2",
+          summary: [{ type: "summary_text", text: "second" }],
+          signature: "opaque-2",
+        },
+      ];
+      await client.chat({
+        model: "test-model",
+        messages: [
+          {
+            role: "assistant",
+            reasoningItems,
+            content: "tool preamble",
+            tool_calls: [
+              { id: "call_1", type: "function", function: { name: "w", arguments: "{}" } },
+            ],
+          },
+        ],
+      });
+
+      const body = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string) as {
+        input: unknown[];
+      };
+      expect(body.input).toEqual([
+        ...reasoningItems,
+        { role: "assistant", content: "tool preamble" },
+        { type: "function_call", call_id: "call_1", name: "w", arguments: "{}" },
+      ]);
+    });
+
     test("tool の input_image / input_file part 配列を function_call_output にそのまま渡す", async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) });
 
@@ -439,6 +487,7 @@ describe("OpenRouterClient", () => {
       expect("tools" in body).toBe(false);
       expect("tool_choice" in body).toBe(false);
       expect("parallel_tool_calls" in body).toBe(false);
+      expect("include" in body).toBe(false);
     });
 
     test("tools が空配列の場合は body の JSON に tools/tool_choice/parallel_tool_calls が含まれない", async () => {
@@ -493,6 +542,7 @@ describe("OpenRouterClient", () => {
       ]);
       expect(body.tool_choice).toBe("auto");
       expect(body.parallel_tool_calls).toBe(false);
+      expect(body.include).toEqual(["reasoning.encrypted_content"]);
     });
 
     test("server tool は無変更で載り、function を名指しする tool_choice は flat な形になる", async () => {
@@ -996,7 +1046,25 @@ describe("OpenRouterClient", () => {
         ]);
         expect(body.tool_choice).toBe("required");
         expect(body.parallel_tool_calls).toBe(true);
+        expect(body.include).toEqual(["reasoning.encrypted_content"]);
         expect(body.stream).toBe(true);
+      });
+
+      test("reasoning summary は指定された場合だけ転送され、effort は追加しない", async () => {
+        mockFetch.mockResolvedValueOnce(sseResponse(["data: [DONE]\n\n"]));
+
+        await drain(
+          client.chatStream({
+            ...REQUEST,
+            reasoning: { summary: "auto" },
+          }),
+        );
+
+        const body = JSON.parse(
+          (mockFetch.mock.calls[0][1] as RequestInit).body as string,
+        ) as Record<string, unknown>;
+        expect(body.reasoning).toEqual({ summary: "auto" });
+        expect("effort" in (body.reasoning as Record<string, unknown>)).toBe(false);
       });
     });
 
@@ -1576,6 +1644,83 @@ describe("OpenRouterClient", () => {
           { heartbeat: true, done: false, usage: MAPPED_USAGE },
         ]);
         expect((results.find(isFinalResult) as StreamFinalResult).usage).toEqual(MAPPED_USAGE);
+      });
+    });
+
+    describe("reasoning output item", () => {
+      test("output_item.done の reasoning item を opaque なまま独立 chunk として返す", async () => {
+        const item = {
+          type: "reasoning" as const,
+          id: "rs_1",
+          summary: [{ type: "summary_text", text: "summary" }],
+          encrypted_content: "encrypted",
+          signature: "signed",
+          format: { type: "future" },
+          content: [{ type: "reasoning_text", text: "body" }],
+        };
+        respondWithEvents([
+          { type: "response.output_item.done", output_index: 0, item },
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results[0]).toEqual({ reasoningItem: item, done: false });
+      });
+
+      test.each([
+        ["summary is not an array", { summary: "bad" }],
+        ["content is not an array", { summary: [], content: "bad" }],
+        ["summary text is not a string", { summary: [{ type: "summary_text", text: 7 }] }],
+        ["content text is not a string", { summary: [], content: [{ type: "reasoning_text" }] }],
+        ["summary part has another type", { summary: [{ type: "output_text", text: "x" }] }],
+        [
+          "content part has another type",
+          { summary: [], content: [{ type: "summary_text", text: "x" }] },
+        ],
+      ])("malformed reasoning item (%s) throws StreamProtocolError", async (_label, fields) => {
+        respondWithEvents([
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: { type: "reasoning", id: "rs_1", ...fields },
+          },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
+      });
+
+      test("content が null の item を受け付ける（OutputReasoningItem は array | null）", async () => {
+        const item = {
+          type: "reasoning" as const,
+          id: "rs_null",
+          summary: [{ type: "summary_text", text: "s" }],
+          content: null,
+        };
+        respondWithEvents([
+          { type: "response.output_item.done", output_index: 0, item },
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results[0]).toEqual({ reasoningItem: item, done: false });
+      });
+
+      test("content が無い要約 item を受け付ける", async () => {
+        const item = {
+          type: "reasoning" as const,
+          id: "rs_summary",
+          summary: [{ type: "summary_text", text: "summary only" }],
+        };
+        respondWithEvents([
+          { type: "response.output_item.done", output_index: 0, item },
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results[0]).toEqual({ reasoningItem: item, done: false });
       });
     });
 

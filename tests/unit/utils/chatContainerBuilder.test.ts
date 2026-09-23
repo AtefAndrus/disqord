@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MessageFlags } from "discord.js";
+import { AttachmentBuilder, MessageFlags } from "discord.js";
 import { EmbedColors } from "../../../src/types/embed";
 import {
   badgeText,
@@ -13,10 +13,14 @@ import {
   buildUsageDetailsText,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  fitReasoning,
   formatAutoReplyChannelList,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
+  REASONING_COMPONENT_ID,
+  REASONING_HEADING,
+  reasoningReserve,
   STREAMING_LABEL,
   splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
@@ -55,8 +59,10 @@ function hasLoneSurrogateAtBoundary(chunks: string[]): boolean {
 }
 
 interface ContainerComponentJSON {
+  id?: number;
   type: number;
   content?: string;
+  file?: { url?: string };
   divider?: boolean;
   spacing?: number;
   components?: ContainerComponentJSON[];
@@ -509,7 +515,118 @@ describe("chatContainerBuilder", () => {
     });
   });
 
+  describe("splitTextIntoMessages の 1 ページ目の予約", () => {
+    test("予約は 1 ページ目だけを狭め、2 ページ目以降は通常の予算で分ける", () => {
+      const text = "x".repeat(10_000);
+      const plain = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+      const reserved = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET, {
+        chars: 1500,
+        bytes: 4500,
+      });
+      expect(reserved[0]?.length).toBe((plain[0]?.length ?? 0) - 1500);
+      expect(reserved[1]?.length).toBe(plain[1]?.length);
+      expect(reserved.join("")).toBe(text);
+    });
+  });
+
+  describe("fitReasoning", () => {
+    const room = { chars: 3000, bytes: 8000 };
+
+    test("収まる推論は見出しの下に spoiler で全文を入れ、ファイルを付けない", () => {
+      expect(fitReasoning("短い推論", room)).toEqual({
+        text: `${REASONING_HEADING}\n||短い推論||`,
+        needsFile: false,
+      });
+    });
+
+    test("末尾のバックスラッシュが閉じの || をエスケープしないよう、偶数個にそろえる", () => {
+      expect(fitReasoning("ends with \\", room).text).toBe(
+        `${REASONING_HEADING}\n||ends with \\\\||`,
+      );
+      expect(fitReasoning("two \\\\", room).text).toBe(`${REASONING_HEADING}\n||two \\\\||`);
+    });
+
+    test("推論の中の || は spoiler を閉じないようエスケープする", () => {
+      expect(fitReasoning("a || b", room).text).toBe(`${REASONING_HEADING}\n||a \\|\\| b||`);
+    });
+
+    test("収まらない推論は残りの予算で切り、全文を reasoning.md に回す", () => {
+      const fitted = fitReasoning("あ".repeat(5000), room);
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text.length).toBeLessThanOrEqual(room.chars);
+      expect(new TextEncoder().encode(fitted.text).length).toBeLessThanOrEqual(room.bytes);
+      expect(fitted.text).toContain("reasoning.md");
+      expect(fitted.text).toMatch(/\|\|[^|]+…\|\|/u);
+    });
+
+    test("エスケープした || の途中で切っても、閉じの前に対にならないバックスラッシュを残さない", () => {
+      for (let pad = 0; pad < 8; pad += 1) {
+        const text = fitReasoning(`${"a".repeat(1200 + pad)}${"||".repeat(400)}`, {
+          chars: 1500,
+          bytes: 4500,
+        }).text;
+        const spoilerBody = text.slice(text.indexOf("||") + 2, text.lastIndexOf("||"));
+        expect(spoilerBody.endsWith("…")).toBe(true);
+        const trailingBackslashes = spoilerBody.slice(0, -1).match(/\\*$/u)?.[0].length ?? 0;
+        expect(trailingBackslashes % 2).toBe(0);
+      }
+    });
+
+    test("残りのバイトが無ければ本文を出さず、ファイルだけを案内する", () => {
+      const fitted = fitReasoning("推論".repeat(2000), { chars: 3000, bytes: 0 });
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text).not.toContain("||");
+    });
+
+    test("reasoningReserve は短い推論なら全体、長い推論なら上限の分だけを取る", () => {
+      const short = reasoningReserve("短い");
+      expect(short.chars).toBe(`${REASONING_HEADING}\n||短い||`.length);
+      expect(reasoningReserve("あ".repeat(10_000))).toEqual({ chars: 1500, bytes: 4500 });
+    });
+
+    test("残りがほとんど無ければ本文を出さず、ファイルだけを案内する", () => {
+      const fitted = fitReasoning("推論".repeat(100), { chars: 150, bytes: 450 });
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text).not.toContain("推論推論");
+    });
+  });
+
   describe("buildFinalContainer", () => {
+    test("推論は 1 ページ目のモデル名と回答の間に、推論の component id 付きで入る", () => {
+      const json = toJSON(
+        buildFinalContainer({
+          text: "answer",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: true,
+          metadata: { showDetails: false },
+          reasoning: { text: `${REASONING_HEADING}\n||考え||`, needsFile: true },
+        }),
+      );
+      const kinds = json.components.map((component) => [component.type, component.id]);
+      expect(kinds.slice(0, 4)).toEqual([
+        [10, undefined],
+        [10, REASONING_COMPONENT_ID],
+        [13, undefined],
+        [10, undefined],
+      ]);
+    });
+
+    test("最終ページの Container は推論を持たない", () => {
+      const final = toJSON(
+        buildFinalContainer({
+          text: "answer",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: true,
+          metadata: { showDetails: false },
+        }),
+      );
+      expect(final.components.some((component) => component.type === 13)).toBe(false);
+    });
+
     test("showLlmDetails=true かつ usage ありのとき、isLastでfooter（ページ番号なし・単一message）を表示する", () => {
       const metadata: FinalMetadata = { showDetails: true, usage, latency: 1000 };
       const json = toJSON(
@@ -776,17 +893,31 @@ describe("chatContainerBuilder", () => {
       expect(payload.allowedMentions).toEqual({ parse: [] });
     });
 
+    test("edit payload は File component が参照する reasoning.md attachment を含められる", () => {
+      const file = new AttachmentBuilder(Buffer.from("model\n\nreasoning", "utf8"), {
+        name: "reasoning.md",
+      });
+      const payload = toComponentsV2EditPayload(container, [file]);
+
+      expect(payload.files).toEqual([file]);
+      expect(file.name).toBe("reasoning.md");
+    });
+
+    test("files の無い edit payload は既存の attachment を消す（失敗や停止の書き直しで reasoning.md を残さない）", () => {
+      expect(toComponentsV2EditPayload(container).attachments).toEqual([]);
+      const file = new AttachmentBuilder(Buffer.from("x"), { name: "reasoning.md" });
+      expect(toComponentsV2EditPayload(container, [file]).attachments).toBeUndefined();
+    });
+
     test("toComponentsV2ReplyPayload: parse:[] と repliedUser:false を強制する", () => {
       const payload = toComponentsV2ReplyPayload(container);
       expect(payload.flags).toBe(MessageFlags.IsComponentsV2);
       expect(payload.allowedMentions).toEqual({ parse: [], repliedUser: false });
     });
 
-    test("送信payloadヘルパは引数を1つしか取らず、allowedMentions/flagsを外部から上書きできない", () => {
-      // toComponentsV2Payload(container) はcontainer以外の引数を受け付けない型シグネチャであり、
-      // 呼び出し側から allowedMentions / flags を注入する経路が存在しない。
-      expect(toComponentsV2Payload.length).toBe(1);
-      expect(toComponentsV2EditPayload.length).toBe(1);
+    test("payload helpers は files のみ追加を受け付け、allowedMentions/flagsを外部から上書きできない", () => {
+      expect(toComponentsV2Payload.length).toBe(2);
+      expect(toComponentsV2EditPayload.length).toBe(2);
       expect(toComponentsV2ReplyPayload.length).toBe(1);
     });
   });

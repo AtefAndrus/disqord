@@ -19,6 +19,11 @@ import type {
 } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
+import {
+  MAX_TOTAL_BYTES_PER_MESSAGE,
+  MAX_TOTAL_CHARS_PER_MESSAGE,
+  REASONING_COMPONENT_ID,
+} from "../../../../src/utils/chatContainerBuilder";
 
 interface MockBotMessage {
   id: string;
@@ -27,8 +32,10 @@ interface MockBotMessage {
 }
 
 interface ContainerComponentJSON {
+  id?: number;
   type: number;
   content?: string;
+  file?: { url?: string };
   components?: ContainerComponentJSON[];
 }
 
@@ -42,6 +49,7 @@ interface ComponentsV2CallArg {
   components: Array<{ toJSON: () => ContainerJSON }>;
   flags: number;
   allowedMentions: { parse: readonly string[]; repliedUser?: boolean };
+  files?: readonly unknown[];
 }
 
 /** mock関数の最後の呼び出しの第1引数（Components V2 payload）を取得する */
@@ -296,6 +304,7 @@ describe("createMessageCreateHandler", () => {
       showLlmDetails: true,
       autoReplyChannels: [] as string[],
       webSearchEnabled: false,
+      reasoningDisplayEnabled: false,
       twitterExpandEnabled: true,
       historyEnabled: true,
       createdAt: new Date().toISOString(),
@@ -312,6 +321,7 @@ describe("createMessageCreateHandler", () => {
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
       setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setReasoningDisplayEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
@@ -466,6 +476,7 @@ describe("createMessageCreateHandler", () => {
             showLlmDetails: false,
             autoReplyChannels: ["channel-123"],
             webSearchEnabled: false,
+            reasoningDisplayEnabled: false,
             twitterExpandEnabled: true,
             historyEnabled: false,
             createdAt: "",
@@ -732,6 +743,7 @@ describe("createMessageCreateHandler", () => {
       showLlmDetails: true,
       autoReplyChannels: ["auto-reply-channel-id"],
       webSearchEnabled: false,
+      reasoningDisplayEnabled: false,
       twitterExpandEnabled: true,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -1144,6 +1156,159 @@ describe("createMessageCreateHandler", () => {
     expect(hasSection(container)).toBe(false);
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
+
+  test("推論表示が有効なら、1 ページ目の回答の前に spoiler の推論を同じ Container に入れる", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    settings.showLlmDetails = false;
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        model: "provider/model-id",
+        reasoningText: "考えた内容",
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    expect(payload.components).toHaveLength(1);
+    const reasoning = toContainerJSON(payload).components.find(
+      (component) => component.id === REASONING_COMPONENT_ID,
+    ) as { content?: string } | undefined;
+    expect(reasoning?.content).toContain("||考えた内容||");
+    expect(payload.files).toBeUndefined();
+  });
+
+  test("長い推論は 1 ページ目で切り、全文を reasoning.md として添える", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    settings.showLlmDetails = false;
+    const longReasoning = "考".repeat(6000);
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        model: "provider/model-id",
+        reasoningText: longReasoning,
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    const container = toContainerJSON(payload);
+    const index = container.components.findIndex((c) => c.id === REASONING_COMPONENT_ID);
+    expect(index).toBeGreaterThan(-1);
+    expect(container.components[index + 1]?.type).toBe(13);
+    const attachment = payload.files?.[0] as { name?: string; attachment?: Buffer } | undefined;
+    expect(attachment?.name).toBe("reasoning.md");
+    expect(attachment?.attachment?.toString("utf8")).toBe(`provider/model-id\n\n${longReasoning}`);
+  });
+
+  test("長い回答でも 1 ページ目に推論の spoiler が入る余地を残す", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    settings.showLlmDetails = false;
+    const answer = createMockChatResponseFn("x".repeat(8000));
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        reasoningText: "考えた内容",
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const firstPage = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls
+      .map((call) => toContainerJSON(call[0]))
+      .find((container) => container.components.some((c) => c.id === REASONING_COMPONENT_ID));
+    const reasoning = firstPage?.components.find((c) => c.id === REASONING_COMPONENT_ID) as
+      | { content?: string }
+      | undefined;
+    expect(reasoning?.content).toContain("||考えた内容||");
+    const texts = (firstPage?.components ?? [])
+      .map((c) => (c as { content?: string }).content)
+      .filter((content): content is string => typeof content === "string");
+    expect(texts.join("").length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+    expect(new TextEncoder().encode(texts.join("")).length).toBeLessThanOrEqual(
+      MAX_TOTAL_BYTES_PER_MESSAGE,
+    );
+  });
+
+  test.each([
+    ["display disabled", false, "reasoning text"],
+    ["display text empty", true, ""],
+  ] as const)("does not attach reasoning when %s", async (_label, enabled, reasoningText) => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = enabled;
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        reasoningText,
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+    expect(payload.files).toBeUndefined();
+    expect(
+      toContainerJSON(payload).components.some(
+        (component) => component.id === REASONING_COMPONENT_ID,
+      ),
+    ).toBe(false);
+  });
+
+  test.each(["stopped", "error"] as const)(
+    "does not attach reasoning to a %s reply",
+    async (status) => {
+      const settings = await mockSettingsService.getGuildSettings("guild-123");
+      settings.reasoningDisplayEnabled = true;
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        status === "stopped"
+          ? createCancelledChatResponseFn("partial")
+          : createFatalErrorChatResponseFn("partial", new Error("failed")),
+      );
+
+      const handler = createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+      );
+      await handler(mockMessage as never);
+
+      const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
+      expect(payload.files).toBeUndefined();
+      expect(
+        toContainerJSON(payload).components.some(
+          (component) => component.id === REASONING_COMPONENT_ID,
+        ),
+      ).toBe(false);
+    },
+  );
 
   test("Web 検索した応答は本文の後ろに検索結果のリンクを付け、検索語と参照 URL をログに出す", async () => {
     const infoSpy = spyOn(console, "info").mockImplementation(() => {});

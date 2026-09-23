@@ -78,6 +78,7 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | `/config free-only <enabled>` | 無料モデル限定の切り替え |
 | `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
 | `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
+| `/config reasoning-display <enabled>` | 推論内容の表示切り替え |
 | `/config twitter-expand <enabled>` | ツイート展開の切り替え |
 | `/config history <enabled>` | 会話履歴の切り替え |
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |

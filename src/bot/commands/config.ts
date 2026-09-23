@@ -41,6 +41,18 @@ export const configCommand = new SlashCommandBuilder()
   )
   .addSubcommand((sub) =>
     sub
+      .setName("reasoning-display")
+      .setDescription("推論内容の表示切り替え")
+      .addStringOption((option) =>
+        option
+          .setName("enabled")
+          .setDescription("有効/無効")
+          .setRequired(true)
+          .addChoices({ name: "on", value: "on" }, { name: "off", value: "off" }),
+      ),
+  )
+  .addSubcommand((sub) =>
+    sub
       .setName("twitter-expand")
       .setDescription("ツイート展開の切り替え")
       .addStringOption((option) =>
