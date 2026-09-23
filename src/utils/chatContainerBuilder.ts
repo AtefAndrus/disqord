@@ -534,6 +534,18 @@ export function buildStoppedContainer(params: StoppedContainerParams): Container
 }
 
 /** エラー表示用の Container を構築する（accent: RED、単一 TextDisplay） */
+/** Cuts to at most `maxLength` UTF-16 units (the length discord.js checks) without splitting a surrogate pair. */
+function truncateUtf16(text: string, maxLength: number): string {
+  let length = 0;
+  let result = "";
+  for (const codePoint of text) {
+    if (length + codePoint.length > maxLength) break;
+    length += codePoint.length;
+    result += codePoint;
+  }
+  return result;
+}
+
 export function buildErrorContainer(message: string, title = "エラー"): ContainerBuilder {
   // The message can quote user input (an unknown model ID can be up to 6000
   // characters), and a TextDisplay over 4000 characters throws while building.
@@ -541,9 +553,7 @@ export function buildErrorContainer(message: string, title = "エラー"): Conta
   return new ContainerBuilder()
     .setAccentColor(EmbedColors.RED)
     .addTextDisplayComponents((td) =>
-      td.setContent(
-        content.length > 4000 ? `${Array.from(content).slice(0, 3998).join("")}…` : content,
-      ),
+      td.setContent(content.length > 4000 ? `${truncateUtf16(content, 3999)}…` : content),
     );
 }
 

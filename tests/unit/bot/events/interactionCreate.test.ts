@@ -39,7 +39,7 @@ function buttonInteraction(
   guildId: string | null = "guild-1",
   hasManageGuild = false,
 ): ButtonInteractionFixture {
-  return {
+  const fixture: ButtonInteractionFixture = {
     customId,
     guildId,
     memberPermissions: {
@@ -50,7 +50,10 @@ function buttonInteraction(
     isAutocomplete: () => false,
     isButton: () => true,
     isChatInputCommand: () => false,
-    deferUpdate: mock(() => Promise.resolve()),
+    deferUpdate: mock(() => {
+      fixture.deferred = true;
+      return Promise.resolve();
+    }),
     reply: mock(() => Promise.resolve()),
     update: mock(() => Promise.resolve()),
     editReply: mock(() => Promise.resolve()),
@@ -58,6 +61,7 @@ function buttonInteraction(
     replied: false,
     deferred: false,
   };
+  return fixture;
 }
 
 function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
@@ -328,9 +332,10 @@ describe("interactionCreate: status_set buttons", () => {
     expect((await settingsService.getGuildSettings("guild-1")).freeModelsOnly).toBe(false);
     expect(interaction.update).not.toHaveBeenCalled();
     expect(interaction.editReply).not.toHaveBeenCalled();
-    expectComponentsV2(interaction.reply);
-    expect(responseText(interaction.reply)).toContain("## ⚠️ 設定エラー");
-    expect(responseText(interaction.reply)).toContain(
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expectComponentsV2(interaction.followUp);
+    expect(responseText(interaction.followUp)).toContain("## ⚠️ 設定エラー");
+    expect(responseText(interaction.followUp)).toContain(
       "現在のモデル `paid/model` は無料モデルではありません。先に無料モデルに変更してから有効化してください。",
     );
     db.close();

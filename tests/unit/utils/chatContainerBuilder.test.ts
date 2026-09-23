@@ -671,10 +671,17 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildErrorContainer", () => {
+    test("サロゲートペアの長い入力でも UTF-16 で 4000 以内に収め、ペアを割らない", () => {
+      const json = toJSON(buildErrorContainer("😀".repeat(6000)));
+      const text = (json.components[0] as { content: string }).content;
+      expect(text.length).toBeLessThanOrEqual(4000);
+      expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    });
+
     test("ユーザ入力を含む長いメッセージでも 4000 字に収めて構築できる", () => {
       const json = toJSON(buildErrorContainer(`モデル \`${"x".repeat(6000)}\` は見つかりません。`));
       const text = (json.components[0] as { content: string }).content;
-      expect(Array.from(text).length).toBeLessThanOrEqual(4000);
+      expect(text.length).toBeLessThanOrEqual(4000);
       expect(text.startsWith("## ⚠️ エラー")).toBe(true);
     });
 
