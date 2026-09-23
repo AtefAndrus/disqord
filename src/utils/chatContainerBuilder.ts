@@ -465,8 +465,10 @@ const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
 export const MAX_THEMATIC_BREAKS_PER_PAGE = 8;
 
 /**
- * Stands in for a thematic break line from `markThematicBreaks` until a page
- * is built. Private-use, so a model cannot plausibly write it.
+ * Prefixed to a thematic break line by `markThematicBreaks` until a page is
+ * built. Private-use, so a model cannot plausibly write it. The line itself is
+ * kept, so a break left as text reads as the model wrote it and is never longer
+ * than the budget the paging measured.
  */
 export const THEMATIC_BREAK_MARK = "\uE000";
 
@@ -494,27 +496,34 @@ export function markThematicBreaks(text: string): string {
         }
         return line;
       }
-      return !fence && THEMATIC_BREAK.test(line) ? THEMATIC_BREAK_MARK : line;
+      return !fence && THEMATIC_BREAK.test(line) ? `${THEMATIC_BREAK_MARK}${line}` : line;
     })
     .join("\n");
 }
 
 /**
  * Splits a page at the marks `markThematicBreaks` left, so each can be drawn
- * as a Separator. Empty segments (a break at the start or end, or two in a
- * row) are dropped without using the per-page allowance; marks past the
- * allowance go back to `---` text.
+ * as a Separator. Empty segments (a break at the start or end of the page, or
+ * two in a row) are dropped: at a page boundary the page break itself
+ * separates the text. Breaks past the per-page allowance stay as text.
  */
 export function splitAtThematicBreaks(text: string): string[] {
-  const segments = text
-    .split(new RegExp(`^${THEMATIC_BREAK_MARK}$`, "mu"))
-    .map((segment) => segment.replace(/^\n|\n$/gu, ""))
-    .filter((segment) => segment.trim().length > 0);
-  if (segments.length === 0) return [text.replaceAll(THEMATIC_BREAK_MARK, "---")];
-  const drawn = segments.slice(0, MAX_THEMATIC_BREAKS_PER_PAGE + 1);
-  const rest = segments.slice(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
-  if (rest.length > 0) drawn.push([drawn.pop(), ...rest].join("\n---\n"));
-  return drawn.map((segment) => segment.replaceAll(THEMATIC_BREAK_MARK, "---"));
+  const segments: string[] = [];
+  let current: string[] = [];
+  for (const line of text.split("\n")) {
+    const isBreak = line.startsWith(THEMATIC_BREAK_MARK);
+    // Past the allowance a break stays in its segment as the model's own text.
+    if (isBreak && segments.length < MAX_THEMATIC_BREAKS_PER_PAGE) {
+      const segment = current.join("\n");
+      if (segment.trim().length > 0) segments.push(segment);
+      current = [];
+      continue;
+    }
+    current.push(isBreak ? line.slice(THEMATIC_BREAK_MARK.length) : line);
+  }
+  const last = current.join("\n");
+  if (last.trim().length > 0) segments.push(last);
+  return segments.length > 0 ? segments : [text.replaceAll(THEMATIC_BREAK_MARK, "")];
 }
 
 function addBadgeAndBody(

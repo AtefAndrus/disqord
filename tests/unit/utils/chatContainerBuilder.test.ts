@@ -623,6 +623,20 @@ describe("chatContainerBuilder", () => {
       expect(segments).toHaveLength(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
       expect(segments.at(-1)).toContain("---");
       expect(split(`${"---\n".repeat(8)}a\n---\nb`)).toEqual(["a", "b"]);
+      const stars = split(Array.from({ length: 10 }, (_, i) => `s${i}`).join("\n***\n"));
+      expect(stars.at(-1)).toContain("***");
+      expect(stars.join("")).not.toContain("---");
+    });
+
+    test("上限を超えた区切りを文字に戻しても、ページの本文は分割で測った字数を超えない", () => {
+      const text = `${"a".repeat(3180)}\n${Array.from({ length: 150 }, (_, i) => `l${i}`).join("\n---\n")}`;
+      for (const page of splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET)) {
+        const rendered = splitAtThematicBreaks(page).join("");
+        expect(rendered.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+        expect(new TextEncoder().encode(rendered).length).toBeLessThanOrEqual(
+          MAX_TOTAL_BYTES_PER_MESSAGE,
+        );
+      }
     });
 
     test("ページをまたぐ ~~~ のコードブロックの中の --- は、後ろのページでも区切りにしない", () => {
