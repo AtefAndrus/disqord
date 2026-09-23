@@ -25,7 +25,7 @@ CJK フォント（Noto Sans JP woff）は初回実行時に `scripts/preview/fo
 
 ## 仕組み
 
-1. `fixtures.ts` が **実際の Bot UI 生成関数**（`buildStatusMessage` / `createEmbed` / `buildStreamingContainer` / `buildFinalContainer` / `splitTextIntoMessages` …）を呼び、`.toJSON()` でペイロードを得る
+1. `fixtures.ts` が **実際の Bot UI 生成関数**（`buildStatusMessage` / `buildSuccessNoticeContainer` / `buildErrorContainer` / `buildModelDetailsContainer` / `buildStreamingContainer` / `buildFinalContainer` / `splitTextIntoMessages` …）を呼び、`.toJSON()` でペイロードを得る
 2. `payloadToMarkup.ts` がペイロードを [@skyra/discord-components-core] のマークアップへ変換
 3. `render.ts` が Bun でコンポーネントをバンドルし、Playwright(Chromium) で描画してスクショ
 

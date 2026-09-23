@@ -1,5 +1,6 @@
 import {
   ContainerBuilder,
+  type InteractionReplyOptions,
   type MessageCreateOptions,
   type MessageEditOptions,
   MessageFlags,
@@ -537,6 +538,41 @@ export function buildErrorContainer(message: string, title = "エラー"): Conta
   return new ContainerBuilder()
     .setAccentColor(EmbedColors.RED)
     .addTextDisplayComponents((td) => td.setContent(`## ⚠️ ${title}\n\n${message}`));
+}
+
+/** 成功通知用の Container を構築する（accent: BLURPLE、単一 TextDisplay） */
+export function buildSuccessNoticeContainer(message: string, title?: string): ContainerBuilder {
+  const content = title ? `## ${title}\n\n${message}` : message;
+  return new ContainerBuilder()
+    .setAccentColor(EmbedColors.BLURPLE)
+    .addTextDisplayComponents((td) => td.setContent(content.slice(0, 4000)));
+}
+
+/** interaction.reply / followUp 用の通知 Components V2 payload を構築する */
+export function toNoticePayload(
+  container: ContainerBuilder,
+  ephemeral = false,
+): InteractionReplyOptions {
+  return {
+    components: [container],
+    flags: MessageFlags.IsComponentsV2 | (ephemeral ? MessageFlags.Ephemeral : 0),
+    allowedMentions: { parse: [] },
+  };
+}
+
+/** embed を使っていた interaction reply を edit するときの Components V2 payload を構築する */
+export function toNoticeEditPayload(container: ContainerBuilder): {
+  components: ContainerBuilder[];
+  embeds: [];
+  flags: MessageFlags.IsComponentsV2;
+  allowedMentions: { parse: [] };
+} {
+  return {
+    components: [container],
+    embeds: [],
+    flags: MessageFlags.IsComponentsV2,
+    allowedMentions: { parse: [] },
+  };
 }
 
 // --- 送信 payload ヘルパ ---

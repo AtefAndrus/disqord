@@ -28,6 +28,14 @@ describe("messagesToMarkup のマークダウン変換", () => {
     expect(markup).not.toContain("## B");
   });
 
+  test("見出し内のMarkdown linkをリンクとして描画する", () => {
+    const markup = renderTextDisplay("## [現在のモデル](https://openrouter.ai/provider/model)");
+
+    expect(markup).toContain(
+      '<discord-header level="2"><discord-link href="https://openrouter.ai/provider/model">現在のモデル</discord-link></discord-header>',
+    );
+  });
+
   test("見出し直後の箇条書きを中黒に変換する", () => {
     const markup = renderTextDisplay("## A\n\n- item\n- next");
 

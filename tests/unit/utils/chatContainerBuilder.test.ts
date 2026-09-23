@@ -9,6 +9,7 @@ import {
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
+  buildSuccessNoticeContainer,
   buildUsageDetailsText,
   estimateFinalFooterBudget,
   type FinalMetadata,
@@ -23,6 +24,8 @@ import {
   toComponentsV2EditPayload,
   toComponentsV2Payload,
   toComponentsV2ReplyPayload,
+  toNoticeEditPayload,
+  toNoticePayload,
   ZERO_TEXT_BUDGET,
 } from "../../../src/utils/chatContainerBuilder";
 
@@ -677,6 +680,38 @@ describe("chatContainerBuilder", () => {
     test("titleを省略すると既定値「エラー」を使う", () => {
       const json = toJSON(buildErrorContainer("問題発生"));
       expect(textContents(json)[0]).toContain("## ⚠️ エラー");
+    });
+  });
+
+  describe("success notice Components V2 helpers", () => {
+    test("titleがある場合はBlurple Containerに見出しと本文を表示する", () => {
+      const container = toJSON(buildSuccessNoticeContainer("本文", "成功"));
+      expect(container.accent_color).toBe(EmbedColors.BLURPLE);
+      expect(textContents(container)).toEqual(["## 成功\n\n本文"]);
+    });
+
+    test("titleを省略すると見出し行を加えず、本文を4,000文字で切り詰める", () => {
+      const container = toJSON(buildSuccessNoticeContainer("a".repeat(4001)));
+      expect(textContents(container)).toEqual(["a".repeat(4000)]);
+    });
+
+    test("通知payloadはComponents V2とallowedMentionsを設定し、必要な場合だけephemeralにする", () => {
+      const container = buildSuccessNoticeContainer("本文");
+      const publicPayload = toNoticePayload(container);
+      const privatePayload = toNoticePayload(container, true);
+
+      expect(publicPayload.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(publicPayload.allowedMentions).toEqual({ parse: [] });
+      expect(privatePayload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+      expect(privatePayload.allowedMentions).toEqual({ parse: [] });
+    });
+
+    test("既存replyを編集するときは空のembeds配列を含める", () => {
+      const payload = toNoticeEditPayload(buildSuccessNoticeContainer("本文"));
+
+      expect(payload.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(payload.embeds).toEqual([]);
+      expect(payload.allowedMentions).toEqual({ parse: [] });
     });
   });
 

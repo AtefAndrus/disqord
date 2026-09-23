@@ -1,7 +1,7 @@
 import {
   type AutocompleteInteraction,
   type ChatInputCommandInteraction,
-  MessageFlags,
+  type InteractionReplyOptions,
   PermissionFlagsBits,
 } from "discord.js";
 import packageJson from "../../../package.json";
@@ -9,11 +9,27 @@ import type { ILLMClient } from "../../llm/openrouter";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
-import { createErrorEmbed, createSuccessEmbed } from "../../utils/embedBuilder";
+import {
+  buildErrorContainer,
+  buildSuccessNoticeContainer,
+  toNoticeEditPayload,
+  toNoticePayload,
+} from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
-import { createModelDetailsEmbed, getOpenRouterModelUrl } from "../../utils/modelDetailsEmbed";
+import {
+  buildModelDetailsContainer,
+  getOpenRouterModelUrl,
+} from "../../utils/modelDetailsContainer";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import type { CommandHandlers } from "../events/interactionCreate";
+
+function successNotice(message: string, title?: string): InteractionReplyOptions {
+  return toNoticePayload(buildSuccessNoticeContainer(message, title));
+}
+
+function errorNotice(message: string, title?: string, ephemeral = false): InteractionReplyOptions {
+  return toNoticePayload(buildErrorContainer(message, title), ephemeral);
+}
 
 export function createCommandHandlers(
   llmClient: ILLMClient,
@@ -43,14 +59,12 @@ export function createCommandHandlers(
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;
 
-      const embed = createSuccessEmbed(helpText, "DisQord ヘルプ");
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply(successNotice(helpText, "DisQord ヘルプ"));
     },
 
     async modelCurrent(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -65,22 +79,21 @@ export function createCommandHandlers(
           model: settings.defaultModel,
         });
       }
-      const embed = details
-        ? createModelDetailsEmbed(details, {
+      const container = details
+        ? buildModelDetailsContainer(details, {
             title: "現在のモデル",
             description: `現在のモデルは \`${settings.defaultModel}\` です。`,
           })
-        : createSuccessEmbed(
+        : buildSuccessNoticeContainer(
             `現在のモデル: \`${settings.defaultModel}\`\n\n<${getOpenRouterModelUrl(settings.defaultModel)}>`,
             "現在のモデル",
           );
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply(toNoticeEditPayload(container));
     },
 
     async modelSet(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -90,17 +103,19 @@ export function createCommandHandlers(
       const validation = await modelService.validateModelSelection(model, settings.freeModelsOnly);
       if (!validation.valid) {
         if (validation.error === "MODEL_NOT_FOUND") {
-          const errorEmbed = createErrorEmbed(
-            `モデル \`${model}\` は見つかりませんでした。\`/model list\` で利用可能なモデルを確認してください。`,
-            "モデル設定エラー",
+          await interaction.reply(
+            errorNotice(
+              `モデル \`${model}\` は見つかりませんでした。\`/model list\` で利用可能なモデルを確認してください。`,
+              "モデル設定エラー",
+            ),
           );
-          await interaction.reply({ embeds: [errorEmbed] });
         } else if (validation.error === "MODEL_NOT_FREE") {
-          const errorEmbed = createErrorEmbed(
-            `このサーバーは無料モデル限定に設定されています。モデル \`${model}\` は無料モデルではありません。`,
-            "モデル設定エラー",
+          await interaction.reply(
+            errorNotice(
+              `このサーバーは無料モデル限定に設定されています。モデル \`${model}\` は無料モデルではありません。`,
+              "モデル設定エラー",
+            ),
           );
-          await interaction.reply({ embeds: [errorEmbed] });
         }
         return;
       }
@@ -114,18 +129,19 @@ export function createCommandHandlers(
       const details = await modelService.getModelDetails(model);
 
       if (details) {
-        const successEmbed = createModelDetailsEmbed(details, {
+        const container = buildModelDetailsContainer(details, {
           title: "モデル変更",
           description: `モデルを \`${model}\` に変更しました。`,
         });
-        await interaction.reply({ embeds: [successEmbed] });
+        await interaction.reply(toNoticePayload(container));
       } else {
         // フォールバック（詳細取得失敗時）
-        const successEmbed = createSuccessEmbed(
-          `モデルを \`${model}\` に変更しました。\n\n<${getOpenRouterModelUrl(model)}>`,
-          "モデル変更",
+        await interaction.reply(
+          successNotice(
+            `モデルを \`${model}\` に変更しました。\n\n<${getOpenRouterModelUrl(model)}>`,
+            "モデル変更",
+          ),
         );
-        await interaction.reply({ embeds: [successEmbed] });
       }
     },
 
@@ -135,26 +151,24 @@ export function createCommandHandlers(
 
 モデルを変更するには \`/model set <model>\` を使用してください。`;
 
-      const embed = createSuccessEmbed(message, "モデル一覧");
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply(successNotice(message, "モデル一覧"));
     },
 
     async modelRefresh(interaction: ChatInputCommandInteraction): Promise<void> {
       await interaction.deferReply();
       await modelService.refreshCache();
       const cacheStatus = modelService.getCacheStatus();
-      const embed = createSuccessEmbed(
+      const container = buildSuccessNoticeContainer(
         `モデルキャッシュを更新しました。${cacheStatus.modelCount}件のモデルを取得しました。`,
         "モデルキャッシュ更新",
       );
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply(toNoticeEditPayload(container));
     },
 
     async status(interaction: ChatInputCommandInteraction): Promise<void> {
       await interaction.deferReply();
 
       const credits = await llmClient.getCredits();
-      const rateLimited = llmClient.isRateLimited();
       const cacheStatus = modelService.getCacheStatus();
 
       const settings = interaction.guildId
@@ -163,7 +177,6 @@ export function createCommandHandlers(
 
       const message = buildStatusMessage({
         credits,
-        rateLimited,
         cacheStatus,
         settings,
         webSearchEngine,
@@ -175,8 +188,7 @@ export function createCommandHandlers(
 
     async configFreeOnly(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -194,36 +206,36 @@ export function createCommandHandlers(
       } else {
         await settingsService.setFreeModelsOnly(interaction.guildId, false);
       }
-      const successEmbed = createSuccessEmbed(
-        enabled
-          ? "無料モデル限定を **有効** にしました。"
-          : "無料モデル限定を **無効** にしました。",
-        "無料モデル限定設定",
+      await interaction.reply(
+        successNotice(
+          enabled
+            ? "無料モデル限定を **有効** にしました。"
+            : "無料モデル限定を **無効** にしました。",
+          "無料モデル限定設定",
+        ),
       );
-      await interaction.reply({ embeds: [successEmbed] });
     },
 
     async configLlmDetails(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setShowLlmDetails(interaction.guildId, enabled);
 
-      const embed = createSuccessEmbed(
-        `LLM詳細情報表示を **${enabled ? "有効" : "無効"}** にしました。`,
-        "LLM詳細設定",
+      await interaction.reply(
+        successNotice(
+          `LLM詳細情報表示を **${enabled ? "有効" : "無効"}** にしました。`,
+          "LLM詳細設定",
+        ),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configWebSearch(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -231,98 +243,93 @@ export function createCommandHandlers(
       // gate every /config subcommand. The permissions change replaces this
       // with its admin_role_id check.
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        const embed = createErrorEmbed(
-          "Web検索の設定には「サーバーの管理」権限が必要です。",
-          "Web検索設定",
+        await interaction.reply(
+          errorNotice("Web検索の設定には「サーバーの管理」権限が必要です。", "Web検索設定", true),
         );
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         return;
       }
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
 
-      const embed = createSuccessEmbed(
-        enabled
-          ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
-          : "Web検索を **無効** にしました。",
-        "Web検索設定",
+      await interaction.reply(
+        successNotice(
+          enabled
+            ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
+            : "Web検索を **無効** にしました。",
+          "Web検索設定",
+        ),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configTwitterExpand(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        const embed = createErrorEmbed(
-          "ツイート展開の設定には「サーバーの管理」権限が必要です。",
-          "ツイート展開設定",
+        await interaction.reply(
+          errorNotice(
+            "ツイート展開の設定には「サーバーの管理」権限が必要です。",
+            "ツイート展開設定",
+            true,
+          ),
         );
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         return;
       }
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
 
-      const embed = createSuccessEmbed(
-        enabled ? "ツイート展開を **有効** にしました。" : "ツイート展開を **無効** にしました。",
-        "ツイート展開設定",
+      await interaction.reply(
+        successNotice(
+          enabled ? "ツイート展開を **有効** にしました。" : "ツイート展開を **無効** にしました。",
+          "ツイート展開設定",
+        ),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configHistory(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
       if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        const embed = createErrorEmbed(
-          "会話履歴の設定には「サーバーの管理」権限が必要です。",
-          "会話履歴設定",
+        await interaction.reply(
+          errorNotice("会話履歴の設定には「サーバーの管理」権限が必要です。", "会話履歴設定", true),
         );
-        await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
         return;
       }
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setHistoryEnabled(interaction.guildId, enabled);
-      const embed = createSuccessEmbed(
-        enabled ? "会話履歴を **有効** にしました。" : "会話履歴を **無効** にしました。",
-        "会話履歴設定",
+      await interaction.reply(
+        successNotice(
+          enabled ? "会話履歴を **有効** にしました。" : "会話履歴を **無効** にしました。",
+          "会話履歴設定",
+        ),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configAutoReplyAdd(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
       const channel = interaction.options.getChannel("channel", true);
       await settingsService.addAutoReplyChannel(interaction.guildId, channel.id);
 
-      const embed = createSuccessEmbed(
-        `<#${channel.id}> を自動応答チャンネルに追加しました。`,
-        "自動応答設定",
+      await interaction.reply(
+        successNotice(`<#${channel.id}> を自動応答チャンネルに追加しました。`, "自動応答設定"),
       );
-      await interaction.reply({ embeds: [embed] });
     },
 
     async configAutoReplyRemove(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -330,24 +337,19 @@ export function createCommandHandlers(
       const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channelId);
 
       if (removed) {
-        const embed = createSuccessEmbed(
-          `<#${channelId}> を自動応答チャンネルから削除しました。`,
-          "自動応答設定",
+        await interaction.reply(
+          successNotice(`<#${channelId}> を自動応答チャンネルから削除しました。`, "自動応答設定"),
         );
-        await interaction.reply({ embeds: [embed] });
       } else {
-        const embed = createErrorEmbed(
-          `<#${channelId}> は自動応答チャンネルに設定されていません。`,
-          "自動応答設定",
+        await interaction.reply(
+          errorNotice(`<#${channelId}> は自動応答チャンネルに設定されていません。`, "自動応答設定"),
         );
-        await interaction.reply({ embeds: [embed] });
       }
     },
 
     async configAutoReplyList(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        const embed = createErrorEmbed("このコマンドはサーバー内でのみ使用できます。");
-        await interaction.reply({ embeds: [embed] });
+        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
 
@@ -355,20 +357,16 @@ export function createCommandHandlers(
       const channels = settings.autoReplyChannels;
 
       if (channels.length === 0) {
-        const embed = createSuccessEmbed(
-          "自動応答チャンネルは設定されていません。",
-          "自動応答チャンネル一覧",
+        await interaction.reply(
+          successNotice("自動応答チャンネルは設定されていません。", "自動応答チャンネル一覧"),
         );
-        await interaction.reply({ embeds: [embed] });
         return;
       }
 
       const channelList = channels.map((id) => `- <#${id}>`).join("\n");
-      const embed = createSuccessEmbed(
-        `**自動応答チャンネル:**\n${channelList}`,
-        "自動応答チャンネル一覧",
+      await interaction.reply(
+        successNotice(`**自動応答チャンネル:**\n${channelList}`, "自動応答チャンネル一覧"),
       );
-      await interaction.reply({ embeds: [embed] });
     },
   };
 }

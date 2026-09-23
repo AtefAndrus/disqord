@@ -6,7 +6,8 @@
  * `bun run preview` の出力に即反映される。
  */
 
-import type { ActionRowBuilder, ButtonBuilder, ContainerBuilder, EmbedBuilder } from "discord.js";
+import type { ContainerBuilder } from "discord.js";
+import type { ModelDetails } from "../../src/services/modelService";
 import type { GuildSettings } from "../../src/types";
 import {
   badgeText,
@@ -15,18 +16,15 @@ import {
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
+  buildSuccessNoticeContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
   measureTextBudget,
   STREAMING_LABEL,
   splitTextIntoMessages,
 } from "../../src/utils/chatContainerBuilder";
-import {
-  createEmbed,
-  createErrorEmbed,
-  createSuccessEmbed,
-  getColorForModel,
-} from "../../src/utils/embedBuilder";
+import { getColorForModel } from "../../src/utils/embedBuilder";
+import { buildModelDetailsContainer } from "../../src/utils/modelDetailsContainer";
 import { buildStatusMessage } from "../../src/utils/statusMessage";
 import type { IRenderMessage } from "./payloadToMarkup";
 
@@ -35,16 +33,6 @@ export interface IFixture {
   title: string;
   note: string;
   messages: IRenderMessage[];
-}
-
-function pack(
-  embeds: EmbedBuilder[],
-  components: ActionRowBuilder<ButtonBuilder>[] = [],
-): IRenderMessage {
-  return {
-    embeds: embeds.map((e) => e.toJSON()),
-    components: components.map((c) => c.toJSON()),
-  };
 }
 
 /** Components V2: Container 1 個が message 1 通（toComponentsV2Payload と同じ構造） */
@@ -69,19 +57,25 @@ const settings: GuildSettings = {
   updatedAt: new Date().toISOString(),
 };
 
-const HELP_TEXT = [
-  "DisQord は OpenRouter 経由で LLM と会話する Discord Bot です。",
-  "",
-  "**スラッシュコマンド**",
-  "`/help` — このヘルプを表示",
-  "`/status` — Bot の状態・設定を表示",
-  "`/model current` — 現在のモデルを表示",
-  "`/model set <model>` — デフォルトモデルを変更",
-  "`/model list` — 利用可能なモデル一覧",
-  "`/config free-only <bool>` — 無料モデル限定の切替",
-  "",
-  "メンションするか、自動応答チャンネルで話しかけると返信します。",
-].join("\n");
+const HELP_TEXT = `**使い方:**
+- Botにメンションして話しかけると、LLMが応答します
+- 例: \`@DisQord こんにちは\`
+
+**コマンド:**
+- \`/help\` - このヘルプを表示
+- \`/status\` - Bot状態（残高等）を表示
+- \`/model current\` - 現在のモデルを表示
+- \`/model set <model>\` - モデルを変更
+- \`/model list\` - OpenRouterのモデル一覧ページへ
+- \`/model refresh\` - モデルキャッシュを更新
+- \`/config free-only <on|off>\` - 無料モデル限定の切り替え
+- \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
+- \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
+- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
+- \`/config history <on|off>\` - 会話履歴の切り替え（サーバーの管理権限が必要）
+- \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
+- \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
+- \`/config auto-reply list\` - 自動応答チャンネル一覧`;
 
 const LONG_ANSWER = (() => {
   const para =
@@ -127,7 +121,6 @@ export function buildFixtures(): IFixture[] {
   // 1. /status（ギルド内・ボタンあり）
   const statusGuild = buildStatusMessage({
     credits: { remaining: 1.2345 },
-    rateLimited: false,
     cacheStatus: { lastUpdatedAt: new Date(Date.now() - 42 * 60 * 1000), modelCount: 327 },
     settings,
     webSearchEngine: "perplexity",
@@ -136,14 +129,13 @@ export function buildFixtures(): IFixture[] {
   fixtures.push({
     id: "status-guild",
     title: "/status（ギルド・ボタンあり）",
-    note: "buildStatusMessage: Embed フィールド + 4 ボタンのアクションロウ",
-    messages: [pack(statusGuild.embeds, statusGuild.components)],
+    note: "buildStatusMessage: TextDisplay + 設定ごとのボタン accessory を持つ Section",
+    messages: packContainers(statusGuild.components),
   });
 
   // 2. /status（DM・ボタンなし）
   const statusDm = buildStatusMessage({
     credits: { remaining: Number.POSITIVE_INFINITY },
-    rateLimited: true,
     cacheStatus: { lastUpdatedAt: null, modelCount: 0 },
     webSearchEngine: "perplexity",
     version: "1.4.0",
@@ -151,89 +143,88 @@ export function buildFixtures(): IFixture[] {
   fixtures.push({
     id: "status-dm",
     title: "/status（DM・設定なし）",
-    note: "settings 無しでボタンが出ない分岐、残高無制限・レート制限中",
-    messages: [pack(statusDm.embeds, statusDm.components)],
+    note: "settings 無しでボタンが出ない分岐と残高無制限を表示",
+    messages: packContainers(statusDm.components),
   });
 
   // 3. /help
   fixtures.push({
     id: "help",
     title: "/help",
-    note: "createSuccessEmbed: マークダウン（太字・インラインコード）",
-    messages: [pack([createSuccessEmbed(HELP_TEXT, "DisQord ヘルプ")])],
+    note: "成功通知用 Components V2 Container: 見出し、太字、インラインコード",
+    messages: packContainers([buildSuccessNoticeContainer(HELP_TEXT, "DisQord ヘルプ")]),
   });
 
-  // 4. /model set 確認（fields 付き Embed）
-  const modelSet = createEmbed({
-    color: getColorForModel(DEMO_MODEL),
-    title: "モデルを変更しました",
-    fields: [
-      { name: "モデル", value: `\`${DEMO_MODEL}\``, inline: false },
-      { name: "コンテキスト長", value: "163K (163,840)", inline: true },
-      { name: "入力", value: "$0.00/1M", inline: true },
-      { name: "出力", value: "$0.00/1M", inline: true },
-    ],
-    timestamp: null,
-  });
+  // 4. /model set 確認（モデル詳細 Container）
+  const details: ModelDetails = {
+    id: DEMO_MODEL,
+    name: "Demo Preview Model",
+    contextLength: 163840,
+    pricing: { prompt: "0", completion: "0" },
+    isFree: true,
+    inputModalities: ["text", "image"],
+    outputModalities: ["text"],
+    supportedParameters: [],
+    supportsTools: false,
+  };
   fixtures.push({
     id: "model-set",
     title: "/model set 確認",
-    note: "createEmbed: モデルハッシュ由来カラー + inline フィールドの折り返し",
-    messages: [pack([modelSet])],
+    note: "buildModelDetailsContainer: OpenRouter へのタイトルリンクとモデル詳細の TextDisplay",
+    messages: packContainers([
+      buildModelDetailsContainer(details, {
+        title: "モデル変更",
+        description: `モデルを \`${DEMO_MODEL}\` に変更しました。`,
+      }),
+    ]),
   });
 
   // 5. エラー
   fixtures.push({
     id: "error",
-    title: "エラー Embed",
-    note: "createErrorEmbed: 赤色・タイムスタンプ付き",
-    messages: [
-      pack([
-        createErrorEmbed(
-          "OpenRouter API がタイムアウトしました。しばらくしてから再試行してください。",
-        ),
-      ]),
-    ],
+    title: "エラー通知",
+    note: "buildErrorContainer: 赤い accent と警告付き見出し",
+    messages: packContainers([
+      buildErrorContainer(
+        "OpenRouter API がタイムアウトしました。しばらくしてから再試行してください。",
+      ),
+    ]),
   });
 
   // 6. /model list
   fixtures.push({
     id: "model-list",
     title: "/model list",
-    note: "createSuccessEmbed: 埋め込み抑制リンク <url> + インラインコード",
-    messages: [
-      pack([
-        createSuccessEmbed(
-          "モデル一覧はOpenRouterのサイトで確認できます:\n<https://openrouter.ai/models>\n\nモデルを変更するには `/model set <model>` を使用してください。",
-          "モデル一覧",
-        ),
-      ]),
-    ],
+    note: "成功通知 Container: 埋め込み抑制リンクとインラインコード",
+    messages: packContainers([
+      buildSuccessNoticeContainer(
+        "モデル一覧はOpenRouterのサイトで確認できます:\n<https://openrouter.ai/models>\n\nモデルを変更するには `/model set <model>` を使用してください。",
+        "モデル一覧",
+      ),
+    ]),
   });
 
   // 7. /config auto-reply list
   fixtures.push({
     id: "auto-reply-list",
     title: "/config auto-reply list",
-    note: "createSuccessEmbed: 太字 + 箇条書き + 複数チャンネルメンション",
-    messages: [
-      pack([
-        createSuccessEmbed(
-          "**自動応答チャンネル:**\n- <#300000000000000000>\n- <#300000000000000001>\n- <#300000000000000002>",
-          "自動応答チャンネル一覧",
-        ),
-      ]),
-    ],
+    note: "成功通知 Container: 太字、箇条書き、複数チャンネルメンション",
+    messages: packContainers([
+      buildSuccessNoticeContainer(
+        "**自動応答チャンネル:**\n- <#300000000000000000>\n- <#300000000000000001>\n- <#300000000000000002>",
+        "自動応答チャンネル一覧",
+      ),
+    ]),
   });
 
   // 8. /config 設定変更の確認
   fixtures.push({
     id: "config-confirm",
     title: "/config free-only 確認",
-    note: "createSuccessEmbed: 文中の太字強調",
-    messages: [
-      pack([createSuccessEmbed("無料モデル限定を **有効** にしました。", "無料モデル限定設定")]),
-    ],
+    note: "成功通知 Container: 文中の太字強調",
+    messages: packContainers([
+      buildSuccessNoticeContainer("無料モデル限定を **有効** にしました。", "無料モデル限定設定"),
+    ]),
   });
 
   // 9. チャット返信・ストリーミング中（Components V2 / Section の停止ボタン）
