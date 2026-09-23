@@ -59,7 +59,7 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 
 - 修正: `src/bot/client.ts` — intent に `GatewayIntentBits.GuildExpressions` を足す
 - 修正: `src/utils/discordMessageNormalizer.ts` — カスタム絵文字の置き換え、`sticker_items` と `gifv` の埋め込みの表記、`view_attachment` で開ける項目への追加
-- 修正: `src/services/conversationWindow.ts` — 過去のスタンプと GIF を `view_attachment` で開く
+- 修正: `src/services/conversationWindow.ts` — 過去のカスタム絵文字、スタンプ、GIF を `view_attachment` で開く
 - 修正: `src/services/attachmentParser.ts` / `src/bot/events/messageCreate.ts` — bot を呼んだメッセージのカスタム絵文字、スタンプ、GIF のサムネイルを画像としてモデルへ渡す
 - 新規: `src/utils/customEmoji.ts` — guild の絵文字一覧の作成と、返信の `:name:` の置き換え
 - 修正: `src/services/chatService.ts` — 絵文字一覧を system メッセージに入れる
