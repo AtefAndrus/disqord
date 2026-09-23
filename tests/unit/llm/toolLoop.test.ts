@@ -771,6 +771,34 @@ describe("runToolLoop: 2-turn tool call", () => {
 // ---------------------------------------------------------------------------
 
 describe("runToolLoop: tool_choice across turns / MAX_TURNS", () => {
+  test("final-turn tool_calls with no fragments is answered when text is present", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "loopy", handler: async () => ({ llmResult: "ok" }) }));
+
+    const toolTurn = (n: number): TurnScript =>
+      scripted(
+        toolCall({ index: 0, id: `call_${n}`, name: "loopy", argumentsDelta: "{}" }),
+        final({ fullText: "", finishReason: "tool_calls" }),
+      );
+
+    const { client } = makeClient([
+      toolTurn(1),
+      toolTurn(2),
+      toolTurn(3),
+      toolTurn(4),
+      // 断片のない tool_calls は正規化ならエラーだが、最終ターンでは実行しないので本文を返す。
+      scripted(
+        content("ドリアンです"),
+        final({ fullText: "ドリアンです", finishReason: "tool_calls" }),
+      ),
+    ]);
+
+    const result = await runToolLoop(baseParams({ llmClient: client, registry }));
+
+    expectFinal(result);
+    expect(result.text).toBe("ドリアンです");
+  });
+
   test("final-turn tool_calls with text is answered with that text", async () => {
     const registry = new ToolRegistry();
     registry.register(makeEchoTool({ name: "loopy", handler: async () => ({ llmResult: "ok" }) }));
