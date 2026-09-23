@@ -627,6 +627,33 @@ describe("chatContainerBuilder", () => {
       expect(stars.at(-1)).toBe("s8\n---\ns9");
     });
 
+    test("区切り線だけのページも、空でない本文として組み立てられる", () => {
+      for (const text of ["---", `${"a".repeat(3738)}\n---`]) {
+        const pages = splitTextIntoMessages(
+          text,
+          measureTextBudget(badgeText("m")),
+          ZERO_TEXT_BUDGET,
+        );
+        for (const [index, page] of pages.entries()) {
+          expect(() =>
+            buildFinalContainer({
+              text: page,
+              modelName: "m",
+              color: 0,
+              isFirst: index === 0,
+              isLast: index === pages.length - 1,
+              metadata: { showDetails: false },
+            }),
+          ).not.toThrow();
+        }
+      }
+      expect(splitAtThematicBreaks(markThematicBreaks("---"))).toEqual(["---"]);
+    });
+
+    test("モデルが書いた U+E000 は本文の中なら残す", () => {
+      expect(split("glyph: \uE000 here")).toEqual(["glyph: \uE000 here"]);
+    });
+
     test("ページの境目で区切り線の行が切れても、前後の本文を失わず、印の文字も残さない", () => {
       const text = `${"a".repeat(1800)}\n${"-".repeat(600)}\n${"b".repeat(10)}`;
       const pages = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET, {

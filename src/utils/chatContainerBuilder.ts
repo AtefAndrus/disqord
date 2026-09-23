@@ -507,7 +507,7 @@ export function markThematicBreaks(text: string): string {
  * drawn as a Separator. Empty segments (a break at the start or end of the
  * page, or two in a row) are dropped: at a page boundary the page break itself
  * separates the text. Breaks past the per-page allowance become `---` text.
- * A page cut can split a mark line; its stray mark characters are removed.
+ * A page cut can split a mark line; the cut-off pieces are dropped.
  */
 export function splitAtThematicBreaks(text: string): string[] {
   const segments: string[] = [];
@@ -519,11 +519,15 @@ export function splitAtThematicBreaks(text: string): string[] {
       current = [];
       continue;
     }
-    current.push(line === THEMATIC_BREAK_MARK ? "---" : line.replaceAll("\uE000", ""));
+    // A line of only one or two mark characters is a mark cut by a page boundary.
+    if (/^\uE000{1,2}$/u.test(line)) continue;
+    current.push(line === THEMATIC_BREAK_MARK ? "---" : line);
   }
   const last = current.join("\n");
   if (last.trim().length > 0) segments.push(last);
-  return segments.length > 0 ? segments : [text.replaceAll("\uE000", "")];
+  // A page holding only breaks (an answer of just `---`, or a break pushed onto
+  // a page of its own) still needs non-empty text.
+  return segments.length > 0 ? segments : ["---"];
 }
 
 function addBadgeAndBody(

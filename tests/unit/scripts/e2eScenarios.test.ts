@@ -211,6 +211,7 @@ describe("e2e scenarios: check", () => {
       };
     };
     expect(check("separator", [withBreak(true)])).toEqual([]);
+    expect(toReply([withBreak(true)]).body).toBe("前半\n---\n後半");
     expect(check("separator", [withBreak(false)])).not.toEqual([]);
     expect(check("separator", [page("1", ["前半\n---\n後半"], USAGE)])).not.toEqual([]);
   });

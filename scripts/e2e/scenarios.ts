@@ -97,6 +97,8 @@ function collectText(node: unknown, out: string[]): void {
   if (!isComponent(node)) return;
   // The reasoning above an answer is not part of the answer the checks read.
   if (node.id === REASONING_COMPONENT_ID) return;
+  // A divider Separator is a thematic break in the answer.
+  if (node.type === SEPARATOR && node.divider !== false) out.push("---");
   if (typeof node.content === "string") out.push(node.content);
   collectText(node.components, out);
   collectText(node.accessory, out);
@@ -297,7 +299,16 @@ export const SCENARIOS: Scenario[] = [
       )
         ? []
         : ["no Separator with a divider in the reply (was --- left as text?)"]),
-      ...(/^\s*---\s*$/mu.test(reply.body) ? ["the reply still shows --- as text"] : []),
+      ...(reply.messages.some((message) =>
+        childrenOf(containerOf(message)).some(
+          (c) =>
+            c.type === TEXT_DISPLAY &&
+            typeof c.content === "string" &&
+            /^\s*---\s*$/mu.test(c.content),
+        ),
+      )
+        ? ["the reply still shows --- as text"]
+        : []),
       ...hasUsageFooter(reply),
     ],
   },
