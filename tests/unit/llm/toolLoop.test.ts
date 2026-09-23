@@ -771,6 +771,36 @@ describe("runToolLoop: 2-turn tool call", () => {
 // ---------------------------------------------------------------------------
 
 describe("runToolLoop: tool_choice across turns / MAX_TURNS", () => {
+  test("final-turn tool_calls with text is answered with that text", async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeEchoTool({ name: "loopy", handler: async () => ({ llmResult: "ok" }) }));
+
+    const toolTurn = (n: number): TurnScript =>
+      scripted(
+        toolCall({ index: 0, id: `call_${n}`, name: "loopy", argumentsDelta: "{}" }),
+        final({ fullText: "", finishReason: "tool_calls" }),
+      );
+
+    const { client } = makeClient([
+      toolTurn(1),
+      toolTurn(2),
+      toolTurn(3),
+      toolTurn(4),
+      // 最終ターン: tool_choice:"none" に従わず tool を呼びつつ、本文も書いたケース。
+      scripted(
+        content("ドリアンです"),
+        toolCall({ index: 0, id: "call_5", name: "loopy", argumentsDelta: "{}" }),
+        final({ fullText: "ドリアンです", finishReason: "tool_calls" }),
+      ),
+    ]);
+
+    const result = await runToolLoop(baseParams({ llmClient: client, registry }));
+
+    expectFinal(result);
+    expect(result.text).toBe("ドリアンです");
+    expect(result.finishReason).toBe("stop");
+  });
+
   test('turn 1 uses "auto", final turn uses "none"; tool_calls on the final turn is a protocol error', async () => {
     const registry = new ToolRegistry();
     let handlerCalls = 0;
