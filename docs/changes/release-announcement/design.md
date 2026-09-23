@@ -1,6 +1,6 @@
 ---
 title: "リリース通知と /release-note"
-status: investigating
+status: planned
 priority: medium
 summary: "起動時に動いている版を記録と比べ、新しい版なら CHANGELOG の該当する節を設定したチャンネルへ通知する。/release-note で任意の版の変更点を表示する"
 ---
