@@ -25,7 +25,7 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 **Goals:**
 
 - 本文中のカスタム絵文字を、モデルが読める `:name:` の形で渡し、bot を呼んだメッセージの絵文字は画像でも渡す
-- スタンプを、名前と説明の表記で渡し、画像として見られる形式のスタンプは画像としても渡す
+- スタンプを、名前の表記で渡し、画像として見られる形式のスタンプは画像としても渡す
 - GIF の埋め込みを、表記と静止画のサムネイルで渡す
 - 過去のメッセージのカスタム絵文字、スタンプ、GIF を `view_attachment` で開けるようにする
 - 返信の中でモデルが書いた `:name:` を、そのサーバーのカスタム絵文字に置き換える
@@ -46,18 +46,17 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 | 本文中のカスタム絵文字 | `<:name:id>` と `<a:name:id>` を `:name:` に置き換えて渡す。bot を呼んだメッセージでは、加えて絵文字の静止画（`emojis/<id>.webp`、アニメーションも静止画で取る）を、重複を除いて最大 5 個まで画像として渡す。窓の過去のメッセージでは名前だけを渡し、`view_attachment` で開けるようにする | カスタム絵文字の名前は `:a1:` や `:kusa2:` のように見た目を表さないことが多く、絵文字だけのメッセージでは画像が唯一の内容になる。一方で窓の全メッセージの絵文字を画像にすると token が大きく増えるので、画像は呼ばれたメッセージに限る。ID はモデルに不要である |
 | スタンプの表記 | `[スタンプ "name"]` の形で本文の後に置く。説明は添えない | 添付の表記（`[添付 m7/1: 画像 ...]`）と同じく、本文と区別できる形にする。メッセージの `sticker_items` は ID、名前、形式しか持たず、説明を得るにはスタンプごとに追加の取得が要る。名前と画像で足りる |
 | スタンプの画像 | bot を呼んだメッセージのスタンプは、PNG・APNG・GIF 形式なら CDN の画像をモデルへ渡す。Lottie は表記だけにする | スタンプだけのメッセージでは、画像が唯一の内容である。Lottie は画像ファイルではない |
-| GIF の埋め込み | `type: "gifv"` の埋め込みは `[GIF "provider"]` の表記にし、bot を呼んだメッセージではサムネイル（`thumbnail.url`）を画像として渡す | 動画としての本体はモデルが読めない。サムネイルは静止画で、多くのモデルが読める |
+| GIF の埋め込み | `type: "gifv"` の埋め込みは `[GIF "provider"]` の表記にし、bot を呼んだメッセージではサムネイルを画像として渡す（取得先は下の「画像の取得先」のとおり `proxy_url` に限る） | 動画としての本体はモデルが読めない。サムネイルは静止画で、多くのモデルが読める |
 | 過去のカスタム絵文字・スタンプ・GIF | 窓に入った過去のメッセージでは表記だけを渡し、`view_attachment` の対象に含めて番号で開けるようにする | 過去の添付と同じく、必要なときだけモデルが取りに行く。添付の番号の後ろに続けて番号を振る |
 | 画像の取得先 | カスタム絵文字は Discord CDN の `emojis/<id>.webp`、スタンプは `stickers/<id>.png`（GIF 形式は `media.discordapp.net/stickers/<id>.gif`）、GIF は埋め込みのサムネイルの `proxy_url` だけを取得する。取得してよいホストは `cdn.discordapp.com`、`media.discordapp.net`、Discord のメディアプロキシ（`images-ext-<n>.discordapp.net`）に限り、redirect のたびに宛先のホストを確かめる。`proxy_url` が無い、または許可したホストでないときは、`thumbnail.url` に切り替えず表記だけにする | `thumbnail.url` は埋め込み元のサイトの URL で、任意のホストを指しうる。既存の `view_attachment` も取得先を Discord の CDN に限っている（`src/services/conversationWindow.ts` の `isDiscordCdnHost`）。絵文字は WebP で上げられたものが PNG では取れず、WebP はどの絵文字でも取れる |
-| 返信での絵文字 | 返信の本文をページに分ける前に、本文中の `:name:` のうち guild のカスタム絵文字の名前に一致するものを `<:name:id>`（アニメーションは `<a:name:id>`）に置き換える。コードブロックとインラインコードの中は置き換えない | モデルに ID を書かせない。一致しない `:name:` はそのまま残るので、誤った絵文字にはならない |
-| モデルへの絵文字一覧 | guild のカスタム絵文字の名前を、system メッセージに最大 50 個まで並べる。bot が使えない絵文字（利用ロールの制限があり bot がそのロールを持たないもの、`available: false` のもの）は除く | 名前を知らないとモデルは使えない。数百個あるサーバーでも token を抑える |
-| 絵文字一覧の鮮度 | gateway intent に `GuildExpressions` を足し、キャッシュを絵文字の追加・変更・削除に追従させる | 特権 intent ではない。いまの `Guilds` だけでは、起動後の絵文字の変更がキャッシュに届かない |
+| 返信での絵文字 | 返信の本文をページに分ける前に、単独で書かれた `:name:` のうち guild のカスタム絵文字の名前に一致するものを `<:name:id>`（アニメーションは `<a:name:id>`）に置き換える。コードブロック、インラインコード、既にある `<...>` の Discord の表記（メンション、絵文字、タイムスタンプ）、URL（自動リンクと Markdown のリンク先）の中は置き換えない。`:name:` の前後が英数字や `_` のときも置き換えない | モデルに ID を書かせない。一致しない `:name:` はそのまま残るので、誤った絵文字にはならない。既存の表記や URL の中を置き換えると、`<<:ok:id>id>` のような壊れた表記やリンク切れになる |
+| モデルへの絵文字一覧 | guild のカスタム絵文字の名前を、system メッセージに最大 50 個まで並べる。置き換えにも同じ一覧を使う。bot が使えない絵文字（利用ロールの制限があり bot がそのロールを持たないもの、`available: false` のもの）は除く | 名前を知らないとモデルは使えない。数百個あるサーバーでも token を抑える |
+| 絵文字一覧の鮮度 | 一覧は `guild.emojis.fetch()` で REST から取り、guild ごとに 5 分だけ手元に持つ。gateway のキャッシュは使わない | bot は `GuildExpressions` intent を持たないので、起動後の絵文字の追加、変更、削除はキャッシュに届かない。intent を足しても、discord.js 14.26.5 は `available` だけが変わった更新をキャッシュに反映しない（`GuildEmoji#equals` が `available` を比べない）。REST の一覧は 1 回の取得で全部が新しくなり、5 分の保持で応答ごとの取得を避ける |
 
 ## Design
 
 ### 変更対象ファイル
 
-- 修正: `src/bot/client.ts` — intent に `GatewayIntentBits.GuildExpressions` を足す
 - 修正: `src/utils/discordMessageNormalizer.ts` — カスタム絵文字の置き換え、`sticker_items` と `gifv` の埋め込みの表記、`view_attachment` で開ける項目への追加
 - 修正: `src/services/conversationWindow.ts` — 過去のカスタム絵文字、スタンプ、GIF を `view_attachment` で開く
 - 修正: `src/services/attachmentParser.ts` / `src/bot/events/messageCreate.ts` — bot を呼んだメッセージのカスタム絵文字、スタンプ、GIF のサムネイルを画像としてモデルへ渡す
@@ -69,15 +68,16 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 
 ### 実装内容
 
+- ページの分割は、`<:name:id>` と `<a:name:id>` を 1 つの塊として扱い、途中で切らない。いまの splitter はコードブロックだけを守り、普通の文は文字単位で切るので、表記がページの境目にかかると `<:ok:` と `123456789012345678>` に分かれて絵文字として表示されない。
 - 置き換えは、ページの分割より前の本文に掛ける。置き換えると `:ok:` が `<:ok:123456789012345678>` になって文字数とバイト数が増えるので、分割した後のページに掛けると 1 メッセージの上限を超えうる。ストリーミング中も、分割のたびに置き換えた本文を使う。途中まで届いた `:name` は一致しないのでそのまま表示され、`:` が閉じた時点で絵文字になる。
 - bot 自身の過去の返信を窓に読み戻すときも、`<:name:id>` を `:name:` に戻し、絵文字を `view_attachment` の番号に並べる。bot の返信は `normalizeBotReply()` が人のメッセージとは別に正規化するので、カスタム絵文字の置き換えと番号付けは、人のメッセージと bot の返信の両方から呼ぶ共通の関数にする。
 - bot を呼んだメッセージの本文には、カスタム絵文字の `:name:`、スタンプと GIF の表記を、入力の検査より前に入れる。スタンプや GIF だけのメッセージも本文があるものとして扱い、「メッセージを入力してください」で断らない。
-- カスタム絵文字、スタンプ、GIF の画像は添付とは別に扱い、モデルが画像入力に対応しない（`isMultimodalCapable` が false）ときは画像を落として表記だけで続ける。添付の画像を画像非対応のモデルで断る既存の挙動は変えない。添付はユーザが見せたいものそのものだが、絵文字やスタンプの画像は表記で意味の大部分が伝わる。
+- カスタム絵文字、スタンプ、GIF の画像は添付とは別に扱い、モデルが画像入力に対応すると分かっている（`isMultimodalCapable` が true）ときだけ渡す。false と、メタデータが取れず分からない null のときは、画像を落として表記だけで続ける。会話の窓の過去の添付と同じ扱いである。添付の画像を画像非対応のモデルで断る既存の挙動は変えない。添付はユーザが見せたいものそのものだが、絵文字やスタンプの画像は表記で意味の大部分が伝わる。
 - `view_attachment` の番号は、添付を 1 から振った後に、スタンプ、GIF、カスタム絵文字の順で続けて振る。スタンプと GIF は表記に番号を含める（例 `[スタンプ m7/2: "name"]`）。本文中の絵文字は `:name:` のまま置き、本文の後に `[絵文字 m7/3: "name"]` のように番号を並べる。
 
 ## Tasks
 
-- [ ] `GuildExpressions` intent を足す
+- [ ] guild の絵文字一覧を REST から取り、5 分保持する
 - [ ] カスタム絵文字、スタンプ、GIF の正規化と表記を実装する
 - [ ] bot を呼んだメッセージのカスタム絵文字、スタンプ、GIF のサムネイルを画像として渡す
 - [ ] 過去のカスタム絵文字、スタンプ、GIF を `view_attachment` で開けるようにする
@@ -97,4 +97,3 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 - [Discord Sticker Resource](https://discord.com/developers/docs/resources/sticker) — `format_type`（PNG / APNG / LOTTIE / GIF）
 - [Discord Image Formatting](https://discord.com/developers/docs/reference#image-formatting) — `emojis/<id>.png`、`stickers/<id>.png`、GIF 形式のスタンプの URL
 - [Discord Message Resource](https://discord.com/developers/docs/resources/message) — `sticker_items`、埋め込みの `type: "gifv"`、`IS_COMPONENTS_V2` のメッセージに `sticker_ids` を付けられないこと
-- [Discord Gateway Intents](https://discord.com/developers/docs/events/gateway#list-of-intents) — `GUILD_EXPRESSIONS`
