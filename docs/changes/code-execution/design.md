@@ -57,6 +57,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 
 - 会話単位の持続コンテナ → `container_reference` の ID を会話の `session_id` から導けば実現できる。network policy がコンテナ起動時に固定される制約（後述）とファイル保持期間の扱いを決める必要があるため、別 change とする
 - 添付ファイルのコンテナ持ち込み → Files API へのアップロードと `environment.file_ids`
+- 生成ファイルの永続化 → `POST /api/v1/containers/{container_id}/files/{file_id}/promote` は、コンテナのファイルを workspace の永続的な文書ストレージへ複製し、コンテナより長く残る file ID を返す（2026-09-23 に OpenAPI 定義で確認、未実測）。複製は workspace のストレージ容量を消費し、workspace は Bot の API キー全体で共有されるので、採るかどうかは保持期間と guild どうしの分離とあわせて決める候補である
 
 ## Decisions
 
@@ -85,7 +86,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | コマンドと出力の表示 | コマンド、stdout、stderr をそれぞれコードブロックで表示し、長いものは `File` 添付へ逃がす。フェンスを壊さないための加工は publisher が行う: 表示用の文字列では、3 個以上連続するバッククォートの間にゼロ幅スペース（U+200B）を挟む。加工していない全文は `File` 添付で取得できる | 既存の splitter は 3 連バッククォートのフェンスをチャンク境界で閉じて開き直すだけで、任意の出力に含まれるバッククォートからフェンスを守る機能は無い |
 | mention の抑止 | 実行結果を含むメッセージはすべて `allowedMentions: { parse: [] }` で送る | サンドボックスの出力に `@everyone` やロール mention を書かせて ping を発火させる経路を塞ぐ。`TextDisplay` は embed の description と違い mention を発火する |
 | キャンセル | 停止ボタンは既存どおり `AbortSignal` で HTTP リクエストを中断する。キャンセルされた生成では実行結果を公開しない | Bot から実行中のコマンドを直接止める API は無い。中断後にコンテナ側のコマンドが止まるか、課金がいつ止まるかは未検証（Open Questions）。結果の公開は生成が返ったあとに行うので、停止ボタンの対象にはならない。公開には全体の期限を置く（後述） |
-| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、item の再送は想定された使い方だと読めるが、実測はしていない（Phase D で確認する） |
+| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、OpenAPI 定義の入力の union（`Inputs`）も `OutputShellServerToolItem` を含むので、shell の item を `input` に再送することはスキーマ上正しい（2026-09-23 に確認）。wire では実測していない（Phase D で確認する） |
 | 会話履歴への載せ方 | 生成が終わったあとの会話履歴には、assistant の本文だけを入れる | 内部 DTO（`ChatMessage`）に server tool の item を表す型が無く、コンテナも生成ごとに新しくなる。次の発言でモデルが参照できるのは前回の本文だけである（Open Questions） |
 | 課金の表示 | `usage.cost_details.server_tool_cost` を footer に `Server tools: $…` として出す。値が報告されなかった場合は 0 と表示せず、項目ごと出さない | この値は shell に限らず、計量課金される server tool 全体の合計である。shell 以外の server tool と併用したときに内訳は分からないので、shell の費用として表示しない。実測では 126 秒の実行で推論コストの約 3 倍だった |
 
@@ -254,6 +255,7 @@ export interface ServerToolItemMessage {
 
 生成が終わって会話履歴へ返すときは、この型のメッセージを取り除く。
 
+再送する item は、OpenAPI 定義の `Inputs` が受け付ける `OutputShellServerToolItem` の形に合わせる（スキーマ上の確認で、wire では実測していない）。
 item の再送が API に受け付けられなかった場合の代替は、Phase D の結果を見て設計する。
 その場合も、コマンドの出力を `system` メッセージへ入れることはしない。
 出力は信頼できないデータであり、指示としての優先度を与えないためである。
@@ -411,7 +413,7 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 - **中断後の課金に上限を置けない**: HTTP リクエストを中断したとき、実行中や実行待ちのコマンドが止まるか、課金の時計がいつ止まるかは確認できていない。ドキュメントは「レスポンスが完了したとき」に止まるとしか述べていない。1 call は最大 100 コマンドを順に実行でき、timeout はコマンドごとなので、止まらない場合の実行時間は Bot 側から制限できない。課金の確かな上限は、OpenRouter 側で止まることを Phase D で確認できた場合にだけ言える。確認できなければ、OpenRouter の API キーに設定するクレジット上限を唯一の確かな上限として README に書く
 - **完了しないリクエスト**: `pip install` を含む複数コマンドの call が 16 分たっても完了しなかった事例が 1 回ある（原因未特定）。Bot 側は 600 秒の wall-clock で待つのをやめるが、その間の課金は発生し、中断後の課金は上の項目のとおり不明である
-- **実測していない前提が 2 つある**: 実測はすべて `container_auto` で行った。`container_reference` で 1 回の生成の複数リクエストがファイルを共有できることと、shell の item を `input` に再送できることは、ドキュメントの記述に基づく設計であり、Phase D で確認する。後者が受け付けられない場合の代替は Decisions「生成の途中の文脈」に書いた
+- **実測していない前提が 2 つある**: 実測はすべて `container_auto` で行った。`container_reference` で 1 回の生成の複数リクエストがファイルを共有できることと、shell の item を `input` に再送できることは、ドキュメントの記述と OpenAPI 定義（`Inputs` が `OutputShellServerToolItem` を含む）に基づく設計であり、Phase D で確認する。後者が受け付けられない場合の代替は Decisions「生成の途中の文脈」に書いた
 - **beta**: server tool は beta で、API と挙動は変わりうる。item の中身を normalizer で検証し、想定外の形なら結果表示だけを諦めて本文は返す。外形が崩れた場合と 4 MiB を超えた場合はターンがエラーになる。`CODE_EXECUTION_ENABLED` と再起動で全体を止められる
 - **実行環境は選べない**: イメージ、言語のバージョン、CPU とメモリは OpenRouter が決める。`gcc` が無いので、コンパイルを要する Python パッケージはインストールできないことがある
 - **in-region endpoint では使えない**: shell とコンテナは `openrouter.ai` でのみ動き、`eu.` / `us.` の endpoint では拒否される。現行の Bot は `openrouter.ai` を使っているので影響は無い
@@ -426,4 +428,4 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 - [OpenRouter Shell Server Tool](https://openrouter.ai/docs/guides/features/server-tools/shell) — engine、environment、network policy、上限、課金
 - [OpenRouter Containers](https://openrouter.ai/docs/guides/features/containers) — コンテナ ID の決まり方、寿命、ファイルの保存と `files[]`
 - [OpenRouter Server Tools](https://openrouter.ai/docs/guides/features/server-tools) — `max_tool_calls` と `stop_server_tools_when`
-- OpenRouter の公開 OpenAPI 定義（`https://openrouter.ai/openapi.json`）— `GET /containers/{container_id}/files/{file_id}/content`、`ResponsesRequest.max_tool_calls`（既定かつ最大が 30）
+- OpenRouter の公開 OpenAPI 定義（`https://openrouter.ai/openapi.json`）— `GET /containers/{container_id}/files/{file_id}/content`、`POST /containers/{container_id}/files/{file_id}/promote`、`ResponsesRequest.max_tool_calls`（既定かつ最大が 30）、`Inputs` が `OutputShellServerToolItem` を含むこと

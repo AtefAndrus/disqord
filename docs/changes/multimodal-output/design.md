@@ -84,6 +84,7 @@ DiscordResponseMessagePlan[]
 
 `ResponseArtifact` は成果物種別、検証済み bytes、MIME、ファイル名、代替テキストを保持する。
 外部 URL、data URL、base64 文字列、任意の Markdown URL は成果物境界へ入れない。
+`openrouter:image_generation` の output item は OpenAPI 定義上 `imageUrl` / `imageB64` / `result` のいずれかで画像を返しうるが、wire 上の形は実測していない（Open Questions）。
 具体的な型は、`openrouter:image_generation` の実 wire fixture と Discord の upload 上限を確認してから確定する。
 
 ### producer adapter の不変条件
@@ -140,7 +141,9 @@ warning のモデル由来部分は Markdown を escape し、最大 5 件、各
 
 ## Open Questions / Risks
 
-- **OpenRouter の wire 形式**：`openrouter:image_generation` の生成画像が構造化 URL、data URL、別フィールドのどれで返るかは、実レスポンスを fixture 化して確認する。
+- **OpenRouter の wire 形式**：OpenAPI 定義では、`openrouter:image_generation` の output item（`OutputImageGenerationServerToolItem`）は任意フィールドとして `imageUrl`、`imageB64`、`result`（base64 文字列または URL）、`revisedPrompt` を持つ（2026-09-23 に確認）。
+  - どのフィールドに値が入り、URL と base64 のどちらで返るかはスキーマからは決まらず、実測もしていないので、実レスポンスを fixture 化して確認する。
+  - producer adapter は URL と base64 の両方の経路を持つ前提で設計し、fixture で使われない経路を落とす。
 - **Discord の添付上限**：guild の upload 上限を超える場合の切り捨て順、追加メッセージ分割、警告表示を決める。
 - **edit reconciliation**：Discord message edit で既存添付を保持しながら新規 file を追加する payload を実 API で検証し、再試行時に重複 upload が発生しない条件を確認する。
 - **成果物の寿命**：永続保存は本 change の対象外なので、期限付き URL から取得した bytes をプロセスが失った後は同じ成果物を再描画できない。
