@@ -273,6 +273,50 @@ describe("conversation-context request construction", () => {
     expect(result).toMatchObject({ status: "final", webSearchSkipped: true });
   });
 
+  test("drops web search and then tweet images when they fail in that order", async () => {
+    const fixture = createRetryFixture(true);
+    let streamCall = 0;
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      streamCall += 1;
+      if (streamCall === 1) return webSearchFailedTurn();
+      if (streamCall === 2) return badRequestTurn();
+      return finalTurn("answer");
+    });
+
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      retryInput(fixture.readEarlier),
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+
+    expect(fixture.requests).toHaveLength(3);
+    const images = (request: ChatCompletionRequest): number =>
+      request.messages
+        .flatMap((message) =>
+          message.role === "user" && Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((part) => part.type === "image_url").length;
+    const searches = (request: ChatCompletionRequest): boolean =>
+      request.tools?.some((tool) => tool.type === "openrouter:web_search") ?? false;
+    const instructed = (request: ChatCompletionRequest): boolean =>
+      request.messages.some(
+        (message) =>
+          message.role === "system" && String(message.content).includes("Web 検索ツールを使える"),
+      );
+    const [first, second, third] = fixture.requests;
+    expect(first && [images(first), searches(first), instructed(first)]).toEqual([1, true, true]);
+    expect(second && [images(second), searches(second), instructed(second)]).toEqual([
+      1,
+      false,
+      false,
+    ]);
+    expect(third && [images(third), searches(third), instructed(third)]).toEqual([0, false, false]);
+    expect(result).toMatchObject({ status: "final", webSearchSkipped: true });
+  });
+
   test("does not retry tweet images after a client tool was invoked", async () => {
     const fixture = createRetryFixture();
     let streamCall = 0;
