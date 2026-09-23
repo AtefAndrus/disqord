@@ -66,11 +66,13 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ### 共通の確認
 
 認可関数は、操作のたびに次を順に確かめ、1 つでも満たさなければ実行せず、どの条件で断ったかを返す。
+判断に使う Discord の状態（依頼者のメンバー、チャンネルとスレッド、カスタム絵文字）は、キャッシュから読まず、実行の直前に REST で取り直す。
+bot は `GuildMembers` と `GuildExpressions` の intent を持たないので、ロールの付け外しや絵文字の利用ロールの変更はキャッシュに届かない。
 
 1. 依頼者を `guild.members.fetch({ user, force: true, cache: false })` で取り直す。取れなければ断る。1 回の応答は tool のターンを重ねて数分続きうるので、応答の開始時に取ったメンバーや gateway 由来の `message.member` では、途中でロールを外されたことを反映できない。
 2. 取り直したメンバーで `canReadConversation()`（`src/services/messageAuthorization.ts`）を呼ぶ。bot と依頼者の双方がそのチャンネルの `ViewChannel` と `ReadMessageHistory` を持ち、非公開スレッドなら依頼者がその参加者か `ManageThreads` を持つことを確かめる。`permissionsFor()` は `ViewChannel` が無いときも他の権限ビットを立てたまま返し、スレッドでは親チャンネルの権限を返すので、この確認を操作ごとの権限の確認で代えない。
 3. 依頼者がタイムアウト中（`communicationDisabledUntilTimestamp` が現在より後）なら、guild の所有者か `Administrator` を持つ場合を除いて断る。Discord はタイムアウト中のメンバーに閲覧と履歴の読み取りしか許さないが、`permissionsFor()` はタイムアウトを反映しない。
-4. チャンネルがロックされたスレッドなら、bot と依頼者の双方に `ManageThreads` を求める。ロック中のスレッドでメッセージを送るには `ManageThreads` が要り、スレッドの `permissionsFor()` は親チャンネルの権限を返すだけでロックを反映しない。
+4. 取り直したチャンネルがロックされたスレッドなら、bot と依頼者の双方に `ManageThreads` を求める。ロック中のスレッドでメッセージを送るには `ManageThreads` が要り、スレッドの `permissionsFor()` は親チャンネルの権限を返すだけでロックを反映しない。
 5. 下の表の、操作ごとの権限を bot と依頼者の双方が持つことを確かめる。
 
 ### 操作ごとの仕様
@@ -84,9 +86,9 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 
 - 送信権限は、スレッドの中では `SendMessagesInThreads`、それ以外では `SendMessages` である。スレッドの権限は親チャンネルから継承されるが、スレッド内の送信だけは別の権限で決まる。返信として送るのに要る `ReadMessageHistory` は共通の確認に含まれる。
 - `add_reaction` で常に `AddReactions` を求めるのは、Discord がまだ誰も付けていない絵文字を付けるときに `AddReactions` を要求するためである。既に付いている絵文字に重ねるだけなら要らないが、その区別を省く。
-- カスタム絵文字に使えるロールの制限（`GuildEmoji.roles` が空でない）があるときは、bot と依頼者の双方がそのロールのどれかを持つときだけ使う。
+- カスタム絵文字に使えるロールの制限（`roles` が空でない）があるときは、bot と依頼者の双方がそのロールのどれかを持つときだけ使う。制限は `guild.emojis.fetch(id, { force: true })` で取り直した絵文字から読む。
 - `create_thread` はテキストチャンネル（`ChannelType.GuildText`）でだけ提示する。アナウンスチャンネルでは discord.js が要求した種別を無視してアナウンススレッドを作り、スレッドの中ではスレッドを作れない。
-- `add_reaction` のカスタム絵文字は、guild の絵文字キャッシュから名前で引く。見つからなければ実行せず、使える絵文字が無いことを返す。
+- `add_reaction` のカスタム絵文字は、guild の絵文字キャッシュから名前で ID を引き、上のとおり取り直してから使う。見つからなければ実行せず、使える絵文字が無いことを返す。
 - `pin_message` の `message.pinnable` は、システムメッセージと閲覧できないチャンネルを弾く。権限が足りているのに `pinnable` が false のときは、その理由を返す。
 
 ### 変更対象ファイル
