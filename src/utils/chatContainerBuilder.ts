@@ -467,11 +467,22 @@ export const MAX_THEMATIC_BREAKS_PER_PAGE = 8;
 export function splitAtThematicBreaks(text: string): string[] {
   const segments: string[] = [];
   let current: string[] = [];
-  let inFence = false;
+  // The open fence's character and length (CommonMark): a fence closes only on
+  // a line of the same character, at least as long, with nothing after it.
+  let fence: { char: string; length: number } | null = null;
   let breaks = 0;
-  for (const line of text.split("\n")) {
-    if (/^ {0,3}```/u.test(line)) inFence = !inFence;
-    if (!inFence && breaks < MAX_THEMATIC_BREAKS_PER_PAGE && THEMATIC_BREAK.test(line)) {
+  for (const line of text.split(/\r?\n/u)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (marker) {
+      const [, run = "", rest = ""] = marker;
+      if (!fence) {
+        if (!(run[0] === "`" && rest.includes("`")))
+          fence = { char: run[0] ?? "", length: run.length };
+      } else if (run[0] === fence.char && run.length >= fence.length && rest.trim() === "") {
+        fence = null;
+      }
+    }
+    if (!fence && !marker && breaks < MAX_THEMATIC_BREAKS_PER_PAGE && THEMATIC_BREAK.test(line)) {
       segments.push(current.join("\n"));
       current = [];
       breaks += 1;

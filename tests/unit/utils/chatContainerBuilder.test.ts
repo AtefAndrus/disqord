@@ -605,6 +605,20 @@ describe("chatContainerBuilder", () => {
       ]);
     });
 
+    test("~~~ の fence、長い fence、閉じにならない行の中の --- も分けない", () => {
+      expect(splitAtThematicBreaks("~~~js\n---\n~~~")).toHaveLength(1);
+      expect(splitAtThematicBreaks("````\n```\n---\n````")).toHaveLength(1);
+      expect(splitAtThematicBreaks("```\n```notclosing\n---\n```")).toHaveLength(1);
+      expect(splitAtThematicBreaks("```js\ncode\n```\n---\nafter")).toEqual([
+        "```js\ncode\n```",
+        "after",
+      ]);
+    });
+
+    test("CRLF の区切り線も分ける", () => {
+      expect(splitAtThematicBreaks("a\r\n---\r\nb")).toEqual(["a", "b"]);
+    });
+
     test("1 ページあたりの上限を超えた区切りは文字のまま残す", () => {
       const text = Array.from({ length: 12 }, (_, i) => `p${i}`).join("\n---\n");
       const segments = splitAtThematicBreaks(text);
