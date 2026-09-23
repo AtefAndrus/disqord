@@ -450,6 +450,40 @@ export function estimateFinalFooterBudget(metadata: FinalMetadata): TextBudget {
   };
 }
 
+/** A Markdown thematic break: three or more `-`, `*`, or `_` alone on a line. */
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
+/**
+ * Breaks drawn as Separators on one page. Each costs two components (the
+ * Separator and the next TextDisplay) against Discord's 40 per message, so
+ * the rest stay as text.
+ */
+export const MAX_THEMATIC_BREAKS_PER_PAGE = 8;
+
+/**
+ * Splits a page's text at thematic breaks outside code fences, which Discord
+ * does not render, so each break can be drawn as a Separator. Empty segments
+ * (a break at the start or end, or two in a row) are dropped.
+ */
+export function splitAtThematicBreaks(text: string): string[] {
+  const segments: string[] = [];
+  let current: string[] = [];
+  let inFence = false;
+  let breaks = 0;
+  for (const line of text.split("\n")) {
+    if (/^ {0,3}```/u.test(line)) inFence = !inFence;
+    if (!inFence && breaks < MAX_THEMATIC_BREAKS_PER_PAGE && THEMATIC_BREAK.test(line)) {
+      segments.push(current.join("\n"));
+      current = [];
+      breaks += 1;
+      continue;
+    }
+    current.push(line);
+  }
+  segments.push(current.join("\n"));
+  const kept = segments.filter((segment) => segment.trim().length > 0);
+  return kept.length > 0 ? kept : [text];
+}
+
 function addBadgeAndBody(
   container: ContainerBuilder,
   params: ChatContainerBaseParams,
@@ -466,7 +500,17 @@ function addBadgeAndBody(
       container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
     }
   }
-  container.addTextDisplayComponents((td) => td.setContent(params.text || EMPTY_TEXT_PLACEHOLDER));
+  const segments = splitAtThematicBreaks(params.text || EMPTY_TEXT_PLACEHOLDER);
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      // A visible divider. The footer's Separator has none, which is how
+      // readers of a page tell the two apart (discordMessageNormalizer).
+      container.addSeparatorComponents((sep) =>
+        sep.setDivider(true).setSpacing(SeparatorSpacingSize.Small),
+      );
+    }
+    container.addTextDisplayComponents((td) => td.setContent(segment));
+  });
   // 将来: multimodal 出力 (画像 / ファイル) はここに
   // addMediaGalleryComponents / addFileComponents で追加予定（chat-response-v2 Phase D、現状 noop）
 }

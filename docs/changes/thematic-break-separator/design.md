@@ -1,0 +1,28 @@
+---
+title: "回答の区切り線を Separator で描く"
+status: in-progress
+priority: low
+summary: "回答の --- などの区切り線を、Discord が描かない Markdown のまま出さず、区切り線付きの Separator にする"
+---
+
+# 回答の区切り線を Separator で描く
+
+## Why
+
+Discord の Markdown は区切り線（`---`、`***`、`___` だけの行）を描かないので、モデルが回答に書いた区切り線はそのまま文字で表示される。
+Components V2 には区切り線を描く Separator があるので、回答の区切り線はそれで描く。
+
+## Decisions
+
+| 判断事項 | 選択 | 理由 |
+| -------- | ---- | ---- |
+| 変換する範囲 | コードブロックの外で、`-`、`*`、`_` のどれか 3 つ以上だけの行を区切り線とみなし、前後を別の TextDisplay にして間に divider 付きの Separator を置く。先頭、末尾、連続した区切りで空になる部分は捨てる | Markdown の区切り線と同じ形だけを拾う。文の途中の `---` は変えない |
+| 1 ページの上限 | 1 ページで Separator にするのは 8 本までとし、それを超えた区切り線は文字のまま残す | 区切り線 1 本で Separator と TextDisplay の 2 部品を使い、Discord の 1 メッセージ 40 部品の上限に近づく |
+| footer との区別 | footer の前の Separator は divider を持たないので、会話の履歴の読み取りと e2e は `divider: false` の Separator だけを footer の区切りとみなす。divider 付きの Separator は、履歴に `---` として読み戻す | 区切り線が回答の末尾近くにあっても、その後の段落を footer と取り違えない |
+
+## Tasks
+
+- [x] 区切り線を Separator にし、履歴と e2e の footer の見分けを divider で行う
+- [x] e2e に `separator` シナリオを足す
+- [ ] 手動確認: 実クライアントで、区切り線が線として表示され、前後の段落の間隔が不自然でないことを確かめる
+- [ ] `docs/changes/thematic-break-separator/` 削除（リリース完了時、git 履歴がアーカイブ）

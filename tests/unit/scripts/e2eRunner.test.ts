@@ -6,7 +6,8 @@ const USAGE = "Tokens: 1+2=3 | Model: m | Provider: P";
 
 function page(id: string, body: string, footer?: string): DiscordMessage {
   const components: unknown[] = [{ type: 10, content: body }];
-  if (footer !== undefined) components.push({ type: 14 }, { type: 10, content: footer });
+  if (footer !== undefined)
+    components.push({ type: 14, divider: false }, { type: 10, content: footer });
   return {
     id,
     content: "",

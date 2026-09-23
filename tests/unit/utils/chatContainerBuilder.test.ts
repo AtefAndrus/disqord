@@ -15,6 +15,7 @@ import {
   type FinalMetadata,
   fitReasoning,
   formatAutoReplyChannelList,
+  MAX_THEMATIC_BREAKS_PER_PAGE,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
@@ -22,6 +23,7 @@ import {
   REASONING_HEADING,
   reasoningReserve,
   STREAMING_LABEL,
+  splitAtThematicBreaks,
   splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
   splitTextIntoMessages,
@@ -591,6 +593,26 @@ describe("chatContainerBuilder", () => {
     });
   });
 
+  describe("splitAtThematicBreaks", () => {
+    test("---、***、___ だけの行で分け、空の区切りは捨てる", () => {
+      expect(splitAtThematicBreaks("a\n---\nb\n***\nc\n_ _ _\nd")).toEqual(["a", "b", "c", "d"]);
+      expect(splitAtThematicBreaks("---\na\n---\n---\nb\n---")).toEqual(["a", "b"]);
+    });
+
+    test("コードブロックの中と、文の途中の --- は分けない", () => {
+      expect(splitAtThematicBreaks("```\n---\n```\ntext --- more")).toEqual([
+        "```\n---\n```\ntext --- more",
+      ]);
+    });
+
+    test("1 ページあたりの上限を超えた区切りは文字のまま残す", () => {
+      const text = Array.from({ length: 12 }, (_, i) => `p${i}`).join("\n---\n");
+      const segments = splitAtThematicBreaks(text);
+      expect(segments).toHaveLength(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
+      expect(segments.at(-1)).toContain("---");
+    });
+  });
+
   describe("buildFinalContainer", () => {
     test("推論は 1 ページ目のモデル名と回答の間に、推論の component id 付きで入る", () => {
       const json = toJSON(
@@ -609,6 +631,27 @@ describe("chatContainerBuilder", () => {
         [10, undefined],
         [10, REASONING_COMPONENT_ID],
         [13, undefined],
+        [10, undefined],
+      ]);
+    });
+
+    test("本文の区切り線は divider 付きの Separator になり、footer の Separator は divider を持たない", () => {
+      const json = toJSON(
+        buildFinalContainer({
+          text: "上\n---\n下",
+          modelName: "m",
+          color: 0x00ff00,
+          isFirst: false,
+          isLast: true,
+          metadata: { showDetails: true, usage, latency: 1000 },
+        }),
+      );
+      const kinds = json.components.map((c) => [c.type, (c as { divider?: boolean }).divider]);
+      expect(kinds).toEqual([
+        [10, undefined],
+        [14, true],
+        [10, undefined],
+        [14, false],
         [10, undefined],
       ]);
     });

@@ -88,11 +88,19 @@ function textDisplays(nodes: readonly Component[]): string[] {
 }
 
 /** Extracts the Components V2 footer using the same structural rule as the e2e reader. */
+/**
+ * The footer's Separator draws no divider; a Separator with a divider comes
+ * from a thematic break in the answer (`splitAtThematicBreaks`).
+ */
+function isFooterSeparator(component: Component | undefined): boolean {
+  return component?.type === SEPARATOR && component.divider === false;
+}
+
 export function extractComponentsV2Footer(message: RawDiscordMessage): string | undefined {
   const children = childrenOf(containerOf(message));
   const last = children.at(-1);
   const beforeLast = children.at(-2);
-  if (last?.type === TEXT_DISPLAY && beforeLast?.type === SEPARATOR) {
+  if (last?.type === TEXT_DISPLAY && isFooterSeparator(beforeLast)) {
     return typeof last.content === "string" ? last.content : undefined;
   }
   return undefined;
@@ -110,10 +118,13 @@ export function extractComponentsV2ReplyBody(
   isFirstPage: boolean,
 ): string {
   const children = childrenOf(containerOf(message));
-  const separatorIndex = children.findLastIndex((child) => child.type === SEPARATOR);
+  const separatorIndex = children.findLastIndex(isFooterSeparator);
   const bodyChildren = separatorIndex >= 0 ? children.slice(0, separatorIndex) : children;
-  const texts = textDisplays(bodyChildren);
-  const withoutBadge = isFirstPage ? stripModelBadge(texts) : texts;
+  // A divider Separator is a thematic break in the answer; put it back as `---`.
+  const parts = bodyChildren.flatMap((child) =>
+    child.type === SEPARATOR ? ["---"] : textDisplays([child]),
+  );
+  const withoutBadge = isFirstPage ? stripModelBadge(parts) : parts;
   return withoutBadge.join("\n");
 }
 

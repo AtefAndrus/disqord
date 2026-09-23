@@ -29,7 +29,8 @@ function page(
   extra: Partial<DiscordMessage> = {},
 ): DiscordMessage {
   const components: unknown[] = body.map((content) => ({ type: 10, content }));
-  if (footer !== undefined) components.push({ type: 14 }, { type: 10, content: footer });
+  if (footer !== undefined)
+    components.push({ type: 14, divider: false }, { type: 10, content: footer });
   return {
     id,
     content: "",
@@ -190,6 +191,30 @@ describe("e2e scenarios: 完了判定", () => {
 });
 
 describe("e2e scenarios: check", () => {
+  test("separator: divider 付きの Separator があり、本文に --- が残っていないときだけ通る", () => {
+    const withBreak = (divider: boolean, body = ["前半", "後半"]): DiscordMessage => {
+      const base = page("1", [], USAGE);
+      const [container] = (base.components ?? []) as { components: unknown[] }[];
+      return {
+        ...base,
+        components: [
+          {
+            ...(container as object),
+            components: [
+              { type: 10, content: body[0] },
+              { type: 14, divider },
+              { type: 10, content: body[1] },
+              ...(container?.components ?? []),
+            ],
+          },
+        ],
+      };
+    };
+    expect(check("separator", [withBreak(true)])).toEqual([]);
+    expect(check("separator", [withBreak(false)])).not.toEqual([]);
+    expect(check("separator", [page("1", ["前半\n---\n後半"], USAGE)])).not.toEqual([]);
+  });
+
   test("image: 画像が渡っていない返答や、複数の答えを並べた返答では通らない", () => {
     expect(check("image", [page("1", ["An image is required."], USAGE)])).not.toEqual([]);
     expect(check("image", [page("1", ["NO-IMAGE"], USAGE)])).not.toEqual([]);
