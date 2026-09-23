@@ -15,6 +15,7 @@ import type { ISettingsService } from "../../services/settingsService";
 import {
   buildErrorContainer,
   buildSuccessNoticeContainer,
+  formatAutoReplyChannelList,
   toNoticePayload,
 } from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
@@ -323,11 +324,10 @@ async function handleButtonInteraction(
           ),
         );
       } else {
-        const channelList = channels.map((id) => `- <#${id}>`).join("\n");
         await interaction.reply(
           toNoticePayload(
             buildSuccessNoticeContainer(
-              `**自動応答チャンネル:**\n${channelList}`,
+              formatAutoReplyChannelList(channels),
               "自動応答チャンネル一覧",
             ),
           ),

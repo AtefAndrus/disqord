@@ -12,6 +12,7 @@ import type { ISettingsService } from "../../services/settingsService";
 import {
   buildErrorContainer,
   buildSuccessNoticeContainer,
+  formatAutoReplyChannelList,
   toNoticeEditPayload,
   toNoticePayload,
 } from "../../utils/chatContainerBuilder";
@@ -363,9 +364,8 @@ export function createCommandHandlers(
         return;
       }
 
-      const channelList = channels.map((id) => `- <#${id}>`).join("\n");
       await interaction.reply(
-        successNotice(`**自動応答チャンネル:**\n${channelList}`, "自動応答チャンネル一覧"),
+        successNotice(formatAutoReplyChannelList(channels), "自動応答チャンネル一覧"),
       );
     },
   };

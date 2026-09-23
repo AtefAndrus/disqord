@@ -557,6 +557,30 @@ export function buildErrorContainer(message: string, title = "エラー"): Conta
     );
 }
 
+/**
+ * The auto-reply channel list body. It keeps whole `- <#id>` lines within
+ * `maxChars` and counts the rest, since cutting the text would leave a broken
+ * channel mention.
+ */
+export function formatAutoReplyChannelList(channelIds: readonly string[], maxChars = 3800): string {
+  const header = "**自動応答チャンネル:**";
+  const lines: string[] = [];
+  let length = header.length;
+  for (const [index, id] of channelIds.entries()) {
+    const line = `- <#${id}>`;
+    const rest = channelIds.length - index - 1;
+    // Keep room for the "ほか N 件" line in case a later entry does not fit.
+    const reserve = rest > 0 ? `\nほか ${rest} 件`.length : 0;
+    if (length + 1 + line.length + reserve > maxChars) {
+      lines.push(`ほか ${channelIds.length - index} 件`);
+      break;
+    }
+    lines.push(line);
+    length += 1 + line.length;
+  }
+  return [header, ...lines].join("\n");
+}
+
 /** 成功通知用の Container を構築する（accent: BLURPLE、単一 TextDisplay） */
 export function buildSuccessNoticeContainer(message: string, title?: string): ContainerBuilder {
   const content = title ? `## ${title}\n\n${message}` : message;

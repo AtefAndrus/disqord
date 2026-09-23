@@ -13,6 +13,7 @@ import {
   buildUsageDetailsText,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  formatAutoReplyChannelList,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
@@ -698,6 +699,20 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("success notice Components V2 helpers", () => {
+    test("自動応答チャンネルの一覧は行の途中で切らず、入らない分を件数で示す", () => {
+      const ids = Array.from({ length: 200 }, (_, index) =>
+        String(10_000_000_000_000_000n + BigInt(index)),
+      );
+      const text = formatAutoReplyChannelList(ids);
+      expect(text.length).toBeLessThanOrEqual(3800);
+      const lines = text.split("\n");
+      const shown = lines.filter((line) => /^- <#\d+>$/u.test(line)).length;
+      expect(lines.at(-1)).toBe(`ほか ${ids.length - shown} 件`);
+      expect(formatAutoReplyChannelList(["1", "2"])).toBe(
+        "**自動応答チャンネル:**\n- <#1>\n- <#2>",
+      );
+    });
+
     test("titleがある場合はBlurple Containerに見出しと本文を表示する", () => {
       const container = toJSON(buildSuccessNoticeContainer("本文", "成功"));
       expect(container.accent_color).toBe(EmbedColors.BLURPLE);
