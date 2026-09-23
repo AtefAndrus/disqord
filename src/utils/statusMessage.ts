@@ -90,28 +90,27 @@ export function buildStatusMessage(data: StatusMessageData): {
       : `$${data.credits.remaining.toFixed(4)}`;
 
   const container = new ContainerBuilder().setAccentColor(EmbedColors.BLURPLE);
-  container.addTextDisplayComponents((td) =>
-    td.setContent(
-      [
-        "## ステータス",
-        `**バージョン** v${data.version}`,
-        `**OpenRouter残高** ${remainingText}`,
-        `**モデルキャッシュ** ${formatCache(data.cacheStatus)}`,
-      ].join("\n"),
-    ),
-  );
+  // One TextDisplay per item, so each label and value pair gets its own spacing.
+  for (const content of [
+    "## ステータス",
+    `**バージョン**\nv${data.version}`,
+    `**OpenRouter残高**\n${remainingText}`,
+    `**モデルキャッシュ**\n${formatCache(data.cacheStatus)}`,
+  ]) {
+    container.addTextDisplayComponents((td) => td.setContent(content));
+  }
 
   if (data.settings) {
     const settings = data.settings;
     container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
     container.addTextDisplayComponents((td) =>
-      td.setContent(`**デフォルトモデル** \`${settings.defaultModel}\``),
+      td.setContent(`**デフォルトモデル**\n\`${settings.defaultModel}\``),
     );
     for (const row of switchRows(settings, data.webSearchEngine)) {
       const state = row.enabled ? `有効${row.detail ? `（${row.detail}）` : ""}` : "無効";
       container.addSectionComponents((section) =>
         section
-          .addTextDisplayComponents((td) => td.setContent(`**${row.label}** ${state}`))
+          .addTextDisplayComponents((td) => td.setContent(`**${row.label}**\n${state}`))
           .setButtonAccessory(
             new ButtonBuilder()
               .setCustomId(statusSetCustomId(row.key, !row.enabled))
