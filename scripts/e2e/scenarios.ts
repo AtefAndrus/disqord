@@ -216,9 +216,9 @@ const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
 const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 // 数字だけにする: 画像から読ませるので、見間違えやすい英字を入れない。
-const VIEW_IMAGE_TOKEN = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(
-  6,
-  "0",
+// 先頭を 0 にしない: 数として答えると先頭の 0 が落ち、正しく読めていても落ちる。
+const VIEW_IMAGE_TOKEN = String(
+  100_000 + ((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 900_000),
 );
 
 export const SCENARIOS: Scenario[] = [

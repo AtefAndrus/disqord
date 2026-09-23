@@ -10,7 +10,7 @@ summary: "view_attachment が画像を開く経路を e2e で確かめる"
 ## Why
 
 `view_attachment` は画像と PDF の両方を開ける。
-e2e が確かめているのは PDF だけで、画像の経路（`function_call_output` に `input_image` の part を入れて返す）は単体テストと、実クライアントでの手動確認 1 回にしか支えられていない。
+PDF のシナリオ `view-attachment` では、画像の経路（`function_call_output` に `input_image` の part を入れて返す）は通らない。
 
 画像の経路は、モデルとプロバイダの側で壊れても単体テストでは分からない。
 実際、`openai/gpt-6-luna` は OpenRouter 経由で画像が入力に載らず、同じ PNG を `openai/gpt-6-sol` と `google/gemini-3.8-flash` は読み取れる（2026-09-23 実測）。
