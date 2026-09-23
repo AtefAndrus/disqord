@@ -170,8 +170,10 @@ function readReasoningItem(item: Record<string, unknown>): ResponsesReasoningIte
   if (!Array.isArray(item.summary)) {
     throw new StreamProtocolError("reasoning item summary must be an array");
   }
-  if (item.content !== undefined && !Array.isArray(item.content)) {
-    throw new StreamProtocolError("reasoning item content must be an array when present");
+  // `OutputReasoningItem` declares `content` as `array | null`, so null is an
+  // absent content list, not a malformed one.
+  if (item.content !== undefined && item.content !== null && !Array.isArray(item.content)) {
+    throw new StreamProtocolError("reasoning item content must be an array or null when present");
   }
   const parts: [unknown[], string][] = [
     [item.summary, "summary_text"],

@@ -1690,6 +1690,23 @@ describe("OpenRouterClient", () => {
         await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(StreamProtocolError);
       });
 
+      test("content が null の item を受け付ける（OutputReasoningItem は array | null）", async () => {
+        const item = {
+          type: "reasoning" as const,
+          id: "rs_null",
+          summary: [{ type: "summary_text", text: "s" }],
+          content: null,
+        };
+        respondWithEvents([
+          { type: "response.output_item.done", output_index: 0, item },
+          completed(),
+        ]);
+
+        const results = await drain(client.chatStream(REQUEST));
+
+        expect(results[0]).toEqual({ reasoningItem: item, done: false });
+      });
+
       test("content が無い要約 item を受け付ける", async () => {
         const item = {
           type: "reasoning" as const,

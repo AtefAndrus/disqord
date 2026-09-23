@@ -205,7 +205,7 @@ export interface ResponsesReasoningItem {
   type: "reasoning";
   id: string;
   summary: ResponsesReasoningTextPart[];
-  content?: ResponsesReasoningTextPart[];
+  content?: ResponsesReasoningTextPart[] | null;
   [key: string]: unknown;
 }
 

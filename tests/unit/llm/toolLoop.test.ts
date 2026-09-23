@@ -1458,6 +1458,27 @@ describe("runToolLoop: stream termination matrix", () => {
     expect(result.error).toBeInstanceOf(ToolProtocolError);
   });
 
+  test("reasoning item も turn の byte 上限に数える", async () => {
+    const big = "x".repeat(MAX_TURN_ACCUM_BYTES / 2);
+    const item = (id: string): ResponsesReasoningItem => ({
+      type: "reasoning",
+      id,
+      summary: [{ type: "summary_text", text: big }],
+    });
+    const { client } = makeClient([
+      scripted(
+        reasoningItem(item("rs_1")),
+        reasoningItem(item("rs_2")),
+        content("ok"),
+        final({ fullText: "ok", finishReason: "stop" }),
+      ),
+    ]);
+    const result = await runToolLoop(baseParams({ llmClient: client }));
+    expectError(result);
+    expect(result.error).toBeInstanceOf(ToolProtocolError);
+    expect((result.error as Error).message).toContain("byte budget");
+  });
+
   test("turn accumulation exceeding MAX_TURN_ACCUM_BYTES fails the turn", async () => {
     const huge = "x".repeat(MAX_TURN_ACCUM_BYTES + 1);
     const { client } = makeClient([

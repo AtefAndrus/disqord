@@ -611,6 +611,21 @@ async function runTurn(params: RunTurnParams): Promise<TurnOutcome> {
       }
 
       if (isReasoningItemChunk(chunk)) {
+        // Charged like content: each item is under the per-frame limit, but
+        // many of them would otherwise grow the turn (and reasoning.md)
+        // without bound.
+        // Defence in depth: once charged, the content and tool_call guards
+        // below also trip on the next fragment; the test pins the charge.
+        const itemBytes = byteLen(JSON.stringify(chunk.reasoningItem));
+        if (accumBytes + itemBytes > MAX_TURN_ACCUM_BYTES) {
+          transportController.abort();
+          return {
+            kind: "guard-violation",
+            message: "Turn accumulation exceeded the maximum byte budget.",
+            usage: lastHeartbeatUsage,
+          };
+        }
+        accumBytes += itemBytes;
         reasoningItems.push(chunk.reasoningItem);
         continue;
       }
