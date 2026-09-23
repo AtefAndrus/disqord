@@ -13,7 +13,6 @@ summary: "重い処理を Discord イベントハンドラ外で走らせ、完�
 
 DisQord のチャット経路は現状、Discord イベントハンドラ（`messageCreate`）の中で `chatService.generateResponseStream()` を **同期的に `await` し続ける**設計になっている（`src/bot/events/messageCreate.ts`: `for await (const chunk of stream)` でストリーム完了までハンドラが返らない）。応答が速いうちはこれで足りるが、今後入れたい重い処理ではこのモデルが破綻する:
 
-- [model-compare](../model-compare/design.md): 2-4 モデルへ並列リクエストし、すべての応答が揃うまで待つ。
 - [web-search](../web-search/design.md) で server tool（`openrouter:web_search` / `web_fetch`）が 1 リクエスト内で複数回サーバ側実行されると、1 ターンが長くなる。
 - [code-execution](../code-execution/design.md) のサンドボックス実行や、[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) のマルチターン tool ループ（最大 `MAX_TURNS` 回の往復）。
 - 将来の `openrouter:fusion`（panel→judge を回す。1 ターン 1 回だが内部で複数モデルを動かすため遅い）。
@@ -29,7 +28,7 @@ discord.js の `interaction.deferReply()` + `editReply()` は、**interaction �
 
 - 連携: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — tool ループ（`runToolLoop()`）は重く、本基盤の最初の利用候補。tool ループ自身の cancellation（`AbortSignal`）と本基盤のジョブ cancel は連結する。
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 完了結果の Discord 描画（Container / progress 表示）は V2 の updater を利用する。本基盤は「結果をどう配送するか（送信先メッセージ / 編集対象）」だけを持ち、描画自体は updater に委ねる。
-- 利用候補: [model-compare](../model-compare/design.md) / [web-search](../web-search/design.md) / [code-execution](../code-execution/design.md)。
+- 利用候補: [web-search](../web-search/design.md) / [code-execution](../code-execution/design.md)。
 
 ## Goals / Non-Goals
 
@@ -296,7 +295,7 @@ type JobOutcome<R> =
 
 ## Open Questions / Risks
 
-- **適用範囲**: どの経路を本基盤に載せるか（全チャットか、model-compare / code-execution / tool ループのような明示的に重い処理だけか）。通常の単発チャットを載せると ack→follow-up の体験が変わるため、まず重い処理に限定する案が有力。実装着手時に確定。
+- **適用範囲**: どの経路を本基盤に載せるか（全チャットか、code-execution / tool ループのような明示的に重い処理だけか）。通常の単発チャットを載せると ack→follow-up の体験が変わるため、まず重い処理に限定する案が有力。実装着手時に確定。
 - **既存 abort マップとの統合**: `chatService.activeRequests` と本基盤のジョブマップを一本化するか並存させるか。移行期は停止ボタンを `jobManager.cancel` → `chatService.cancelRequest` の順にフォールバックさせる（上記）。最終的に通常チャットも jobManager に寄せて二重管理を解消するかは配線時に決める。
 - **キャップ値とタイムアウト値**: `BACKGROUND_MAX_CONCURRENT` / `BACKGROUND_JOB_TIMEOUT_MS` の妥当な既定値。code-execution は別途 `SANDBOX_MAX_CONCURRENT` を持つため、二段のキャップが重複しないよう整理が要る。
 - **配送形態（placeholder edit vs follow-up send）**: 所有は呼び出し側に確定（`deliveryTarget` を渡す）。残るのは、完了時に placeholder を `edit` するか新規 `channel.send` で返すかの選択、および長文分割（既存の splitText 系）や chat-response-v2 の Container 構造との相性。
