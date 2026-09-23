@@ -70,7 +70,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 1. 依頼者を `guild.members.fetch({ user, force: true, cache: false })` で取り直す。取れなければ断る。1 回の応答は tool のターンを重ねて数分続きうるので、応答の開始時に取ったメンバーや gateway 由来の `message.member` では、途中でロールを外されたことを反映できない。
 2. 取り直したメンバーで `canReadConversation()`（`src/services/messageAuthorization.ts`）を呼ぶ。bot と依頼者の双方がそのチャンネルの `ViewChannel` と `ReadMessageHistory` を持ち、非公開スレッドなら依頼者がその参加者か `ManageThreads` を持つことを確かめる。`permissionsFor()` は `ViewChannel` が無いときも他の権限ビットを立てたまま返し、スレッドでは親チャンネルの権限を返すので、この確認を操作ごとの権限の確認で代えない。
 3. 依頼者がタイムアウト中（`communicationDisabledUntilTimestamp` が現在より後）なら、guild の所有者か `Administrator` を持つ場合を除いて断る。Discord はタイムアウト中のメンバーに閲覧と履歴の読み取りしか許さないが、`permissionsFor()` はタイムアウトを反映しない。
-4. 下の表の、操作ごとの権限を bot と依頼者の双方が持つことを確かめる。
+4. チャンネルがロックされたスレッドなら、bot と依頼者の双方に `ManageThreads` を求める。ロック中のスレッドでメッセージを送るには `ManageThreads` が要り、スレッドの `permissionsFor()` は親チャンネルの権限を返すだけでロックを反映しない。
+5. 下の表の、操作ごとの権限を bot と依頼者の双方が持つことを確かめる。
 
 ### 操作ごとの仕様
 
@@ -123,7 +124,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 - [ ] `discord_tools_enabled` の列と `/config discord-tools`、`/status` の表示を足す
 - [ ] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
 - [ ] 4 つの tool を実装して登録する
-- [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
+- [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
 - [ ] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
 - [ ] `docs/changes/discord-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
