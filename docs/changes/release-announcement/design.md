@@ -35,14 +35,14 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 通知の起点 | `ready` の後に、動いている版（`package.json` の `version`）と、DB に記録した最後に通知した版を比べる | 起動は新しい版が実際に動き出したことを表す。GitHub からの受け口が要らない |
-| ノートの出どころ | イメージに同梱した `CHANGELOG.md` から、版ごとの節（`## [x.y.z] - YYYY-MM-DD` から次の `## [` の前まで）を読む。`[Unreleased]` は読まない | リリースノートは CHANGELOG の節と同じ内容である。ネットワークや rate limit に依存しない。`.dockerignore` が `*.md` を除外しているので、`!CHANGELOG.md` を足して Dockerfile で `COPY` する |
-| 記録の場所 | 新しいテーブル `bot_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)` の `last_announced_version` | サーバーごとではなく bot 全体で 1 つの値である。guild 設定の表に置くと意味が合わない |
-| 初回の起動 | 記録が無ければ、動いている版を記録するだけで通知しない | この機能を入れた版で、過去の全版の変更点を一度に流さない |
-| 版の比較 | semver として比べる（`x.y.z` の数値の組）。動いている版の方が新しければ、記録より新しく動いている版以下の節をすべて、新しい順に通知する。古いか同じなら、記録を動いている版に合わせるだけで通知しない | 複数の版を飛ばして起動した場合も抜けなく伝える。ロールバックでは通知しない |
-| 記録の更新と送信の順 | 送信の前に記録を更新する（通知は多くても 1 回） | 送信の途中で落ちて再起動を繰り返したときに、同じ通知が何度も流れるより、一部のサーバーに届かない方が害が小さい |
-| 通知先の設定 | `/config release-channel <channel>` で設定し、`/config release-channel off` で外す。「サーバーの管理」権限を要る。列は `release_announce_channel_id` とする | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
-| 送信の条件 | 送信の直前に、bot がそのチャンネルで `ViewChannel` と `SendMessages` を持つことを確かめ、無ければ送らずにログに残す。チャンネルが消えていれば設定はそのままにしてログに残す | 権限の無いチャンネルへ送って失敗を繰り返さない |
-| 表示 | Components V2 の Container に `## DisQord v1.6.0 をリリースしました` と節の本文を入れ、4000 字を超えるときは既存の splitter でページに分ける。複数の版は版ごとに別のメッセージにする | 他の返信と同じ部品と分割を使う |
+| ノートの出どころ | イメージに同梱した `CHANGELOG.md` から、版ごとの節（`## [x.y.z] - YYYY-MM-DD` の見出しから、次の `## [` の見出し、または git-cliff が末尾に出す注釈と比較リンクの定義の前まで）を読む。`[Unreleased]` は読まない。見出しは行頭のものだけを数え、コードブロックの中は無視し、CRLF も読める。同じ版の見出しが 2 つあれば、その版は壊れたものとして扱う | リリースノートは CHANGELOG の節と同じ内容である。ネットワークや rate limit に依存しない。`.dockerignore` が `*.md` を除外しているので、`!CHANGELOG.md` を足して Dockerfile で `COPY` する |
+| 記録の場所 | 新しいテーブル `bot_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)` の `last_processed_release_version` | サーバーごとではなく bot 全体で 1 つの値である。値は「この版までは通知の機会を使った」ことを表し、実際に届いたことは表さない。どのサーバーも通知先を設定していない版や、初回の起動で記録しただけの版も含む |
+| 初回の起動 | 記録が無ければ、動いている版を記録するだけで通知しない。DB を作り直した場合も同じである | この機能を入れた版で、過去の全版の変更点を一度に流さない |
+| 版の比較 | 数値 3 つの `x.y.z` だけを扱い、数値の組として比べる。prerelease や build の付いた版は扱わず、通知しない。動いている版の方が新しければ、記録より新しく動いている版以下の節をすべて、新しい順に通知し、記録を動いている版に進める。古いか同じなら何もせず、記録も下げない | 複数の版を飛ばして起動した場合も抜けなく伝える。記録を下げないので、ロールバックの後に元の版へ戻しても通知し直さない |
+| 記録の更新と送信の順 | 通知する節をすべて組み立て終えてから、比較と記録の更新を 1 つの IMMEDIATE トランザクションで行い、commit した後に送る。届くことは保証せず、取りこぼした分は自動で送り直さない | 送信の途中で落ちて再起動を繰り返したときに、同じ通知が何度も流れるより、一部のサーバーに届かない方が害が小さい。取りこぼしても `/release-note` で読める。同じ DB を使う 2 つのプロセスが同時に起動しても、トランザクションに勝った方だけが送る。届くまで送り直すには、サーバーごと・版ごと・ページごとの進み具合を持つ必要があり、情報の通知には見合わない |
+| 通知先の設定 | サブコマンドグループ `/config release-channel` に `set channel:<channel>` と `off` を置く。どちらも「サーバーの管理」権限を要る（`/config web-search` と同じく handler で確かめる）。設定できるのはテキストチャンネルとアナウンスチャンネルだけで、設定の時点で bot の `ViewChannel` と `SendMessages` も確かめる。列は `release_announce_channel_id` とし、古い列 `release_channel_id` の値は写さない | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
+| 送信の条件 | 送信の直前に、チャンネルの種別と、bot がそのチャンネルで `ViewChannel` と `SendMessages` を持つことを確かめ、無ければ送らない。送信の失敗はサーバーごとに受け止めて、残りのサーバーへの送信を続ける。版、サーバー、ページ、結果をログに残す。チャンネルが消えていれば設定はそのままにする | 1 つのサーバーの失敗で他のサーバーへの通知を止めない |
+| 表示 | Components V2 の Container に `## DisQord v1.6.0 をリリースしました` と節の本文を入れる。本文は見出しとページの footer の分を差し引いたうえで、チャット返信と同じ `splitTextIntoMessages`（`src/utils/chatContainerBuilder.ts`。文字数とバイト数の両方の上限を守る）でページに分ける。複数の版は版ごとに別のメッセージにする。通知、`/release-note` の返信、追加のページのすべてに `allowedMentions: { parse: [] }` を付ける | 日本語は 4000 字より前にバイト数の上限に届く。CHANGELOG の行は PR のタイトルそのままなので、`@everyone` やロールのメンションが入っていても通知しないようにする |
 | `/release-note` | 引数 `version` は任意で、CHANGELOG にある版を autocomplete で出す（新しい順に 25 個まで）。省略時は動いている版。節が無ければエラーの notice を返す。返信は ephemeral にしない | 他の人にも見せたい情報である |
 
 ## Design
@@ -54,16 +54,19 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 - 修正: `src/db/schema.ts` — `bot_state` テーブルと `release_announce_channel_id` 列
 - 新規: `src/db/repositories/botState.ts` — `bot_state` の読み書き
 - 修正: `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/types/index.ts` — 通知先の設定
-- 修正: `src/bot/commands/config.ts` / `src/bot/commands/handlers.ts` / `src/bot/events/interactionCreate.ts` — `/config release-channel` と `/release-note`、autocomplete
+- 修正: `src/bot/commands/config.ts` / `src/bot/commands/index.ts`（新しいコマンドの登録） / `src/bot/commands/handlers.ts` / `src/bot/events/interactionCreate.ts` — `/config release-channel` と `/release-note`、autocomplete
 - 修正: `src/utils/statusMessage.ts` — `/status` に通知先を表示する
 - 修正: `src/index.ts` — `ready` の後に announcer を呼ぶ
 - 修正: `Dockerfile` / `.dockerignore` — `CHANGELOG.md` をイメージに入れる
-- テスト: 節の切り出し（先頭、末尾、`[Unreleased]`、見出しの形の崩れ）、版の比較、初回・同じ版・ロールバック・複数版飛ばし、記録の更新が送信より先であること、権限の無いチャンネル、`/release-note` の既定値と存在しない版
+- 修正: `.agents/skills/release/SKILL.md` — 動いている版の節が CHANGELOG にちょうど 1 つあることを確かめる工程
+- テスト: 実際の CHANGELOG.md での節の切り出し（先頭、末尾の注釈とリンク定義、`[Unreleased]`、壊れた見出し、重複、CRLF、コードブロックの中の見出し）、版の比較（prerelease の拒否）、初回・同じ版・ロールバックとその後の再アップグレード・複数版飛ばし、同時に起動した 2 つの claim のうち 1 つだけが送ること、動いている版の節が無いときに記録が進まないこと、1 つのサーバーで失敗しても他へ送ること、メンションの抑止、日本語の複数ページ、権限の無いチャンネル、`/release-note` の既定値と存在しない版
 
 ### 実装内容
 
-- CHANGELOG は起動時に 1 回読み、プロセスの中で持つ。ファイルが無ければ通知と `/release-note` を無効にし、ログに残す。
-- 開発環境の bot は開発用の DB を持つので、本番の記録とは独立する。
+- CHANGELOG は起動時に 1 回読み、プロセスの中で持つ。ファイルが無い、または読めなければ通知と `/release-note` を無効にし、ログに残す。
+- 動いている版の節が CHANGELOG に無い、または壊れているときは、記録を進めずにエラーをログに残し、bot はそのまま動かす。次にその版の節を含むイメージで起動したときに通知する。
+- 前提として、本番で通知を送るプロセスは 1 つで、DB は永続化されている。開発環境は別の bot（別のトークン）と別のサーバーと別の DB を使う。同じトークンや同じ DB を本番と開発で共有すると、どちらからも通知が出る。
+- `/release` の手順に、動いている版の節が CHANGELOG にちょうど 1 つあることを確かめる工程を足す。
 
 ## Tasks
 
@@ -78,4 +81,5 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 ## Open Questions / Risks
 
 - **CHANGELOG の言語**: 1.5.0 までの節は英語のコミットの件名で、1.6.0 からは日本語の PR のタイトルになる。通知はそのまま流す。
+- **起点の限界**: 起動したことは、その版が動き続けることを保証しない。起動直後に落ちる版でも通知は出る。デプロイの完了を起点にする Coolify の post-deployment command も候補だが、サーバーごとの通知先の設定と重複の防止を bot の外で持つことになるので使わない。
 - **通知の量**: 1 回のリリースで数十行になることがある。長すぎる場合に `[type]` の分類ごとに件数だけにするかは、運用を見て決める。
