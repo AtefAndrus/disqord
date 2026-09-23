@@ -15,6 +15,7 @@ import {
   buildFinalContainer,
   buildStoppedContainer,
   buildStreamingContainer,
+  REASONING_COMPONENT_ID,
 } from "../../../src/utils/chatContainerBuilder";
 
 const USAGE = "Tokens: 1+2=3 | Cost: $0.000001 | Model: vendor/model-x | Time: 0.0s | Provider: P";
@@ -225,21 +226,26 @@ describe("e2e scenarios: check", () => {
     expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
   });
 
-  test("reasoning: 1 ページ目の回答の前に spoiler Container があるときだけ通り、回答と footer は読める", () => {
-    const withReasoning = (spoiler: boolean): DiscordMessage => {
+  test("reasoning: 1 ページ目に推論の component id の TextDisplay があるときだけ通り、本文には数えない", () => {
+    const withReasoning = (id: number): DiscordMessage => {
       const base = page("1", ["答え"], USAGE);
+      const [container] = (base.components ?? []) as { components: unknown[] }[];
       return {
         ...base,
         components: [
-          { type: 17, spoiler, components: [{ type: 10, content: "-# 推論\n考えた" }] },
-          ...(base.components ?? []),
+          {
+            ...(container as object),
+            components: [
+              { type: 10, id, content: "-# 推論\n||考えた||" },
+              ...(container?.components ?? []),
+            ],
+          },
         ],
       };
     };
-    expect(toReply([withReasoning(true)]).footers).toEqual([USAGE]);
-    expect(isFinished(toReply([withReasoning(true)]))).toBe(true);
-    expect(check("reasoning", [withReasoning(true)])).toEqual([]);
-    expect(check("reasoning", [withReasoning(false)])).not.toEqual([]);
+    expect(check("reasoning", [withReasoning(REASONING_COMPONENT_ID)])).toEqual([]);
+    expect(toReply([withReasoning(REASONING_COMPONENT_ID)]).body).not.toContain("考えた");
+    expect(check("reasoning", [withReasoning(7)])).not.toEqual([]);
     expect(check("reasoning", [page("1", ["答え"], USAGE)])).not.toEqual([]);
   });
 

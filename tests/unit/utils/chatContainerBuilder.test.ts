@@ -6,7 +6,6 @@ import {
   buildErrorContainer,
   buildFinalContainer,
   buildFinalFooterText,
-  buildReasoningContainer,
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
@@ -14,10 +13,12 @@ import {
   buildUsageDetailsText,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  fitReasoning,
   formatAutoReplyChannelList,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
+  REASONING_COMPONENT_ID,
   REASONING_HEADING,
   STREAMING_LABEL,
   splitMarkdownByCharsAndBytes,
@@ -57,6 +58,7 @@ function hasLoneSurrogateAtBoundary(chunks: string[]): boolean {
 }
 
 interface ContainerComponentJSON {
+  id?: number;
   type: number;
   content?: string;
   file?: { url?: string };
@@ -512,45 +514,58 @@ describe("chatContainerBuilder", () => {
     });
   });
 
-  describe("buildReasoningContainer", () => {
+  describe("fitReasoning", () => {
     const room = { chars: 3000, bytes: 8000 };
 
-    test("収まる推論は spoiler の Container に見出し付きで全文を入れ、ファイルを付けない", () => {
-      const { container, needsFile } = buildReasoningContainer("短い推論", room);
-      const json = toJSON(container);
-      expect((json as { spoiler?: boolean }).spoiler).toBe(true);
-      expect(needsFile).toBe(false);
-      expect(json.components).toHaveLength(1);
-      expect((json.components[0] as { content: string }).content).toBe(
-        `${REASONING_HEADING}\n短い推論`,
-      );
+    test("収まる推論は見出しの下に spoiler で全文を入れ、ファイルを付けない", () => {
+      expect(fitReasoning("短い推論", room)).toEqual({
+        text: `${REASONING_HEADING}\n||短い推論||`,
+        needsFile: false,
+      });
     });
 
-    test("収まらない推論は残りの予算で切り、全文を reasoning.md の File component で参照する", () => {
-      const { container, needsFile } = buildReasoningContainer("あ".repeat(5000), room);
-      const json = toJSON(container);
-      const text = (json.components[0] as { content: string }).content;
-      expect(needsFile).toBe(true);
-      expect(text.length).toBeLessThanOrEqual(room.chars);
-      expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(room.bytes);
-      expect(text).toContain("reasoning.md");
-      expect(json.components.find((component) => component.type === 13)?.file?.url).toBe(
-        "attachment://reasoning.md",
-      );
+    test("推論の中の || は spoiler を閉じないようエスケープする", () => {
+      expect(fitReasoning("a || b", room).text).toBe(`${REASONING_HEADING}\n||a \\|\\| b||`);
+    });
+
+    test("収まらない推論は残りの予算で切り、全文を reasoning.md に回す", () => {
+      const fitted = fitReasoning("あ".repeat(5000), room);
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text.length).toBeLessThanOrEqual(room.chars);
+      expect(new TextEncoder().encode(fitted.text).length).toBeLessThanOrEqual(room.bytes);
+      expect(fitted.text).toContain("reasoning.md");
+      expect(fitted.text).toMatch(/\|\|[^|]+…\|\|/u);
     });
 
     test("残りがほとんど無ければ本文を出さず、ファイルだけを案内する", () => {
-      const { container, needsFile } = buildReasoningContainer("推論".repeat(100), {
-        chars: 150,
-        bytes: 450,
-      });
-      const text = (toJSON(container).components[0] as { content: string }).content;
-      expect(needsFile).toBe(true);
-      expect(text).not.toContain("推論推論");
+      const fitted = fitReasoning("推論".repeat(100), { chars: 150, bytes: 450 });
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text).not.toContain("推論推論");
     });
   });
 
   describe("buildFinalContainer", () => {
+    test("推論は 1 ページ目のモデル名と回答の間に、推論の component id 付きで入る", () => {
+      const json = toJSON(
+        buildFinalContainer({
+          text: "answer",
+          modelName: "gpt-5-mini",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: true,
+          metadata: { showDetails: false },
+          reasoning: { text: `${REASONING_HEADING}\n||考え||`, needsFile: true },
+        }),
+      );
+      const kinds = json.components.map((component) => [component.type, component.id]);
+      expect(kinds.slice(0, 4)).toEqual([
+        [10, undefined],
+        [10, REASONING_COMPONENT_ID],
+        [13, undefined],
+        [10, undefined],
+      ]);
+    });
+
     test("最終ページの Container は推論を持たない", () => {
       const final = toJSON(
         buildFinalContainer({

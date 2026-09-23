@@ -1,4 +1,5 @@
 import type { ReplyPage } from "../db/repositories/replyRecord";
+import { REASONING_COMPONENT_ID } from "./chatContainerBuilder";
 
 export interface RawDiscordAttachment {
   id: string;
@@ -71,20 +72,17 @@ function childrenOf(container: Component | undefined): Component[] {
   return Array.isArray(container?.components) ? container.components.filter(isComponent) : [];
 }
 
-/**
- * The answer's Container. A final page with reasoning display on puts a
- * spoiler Container with the reasoning before it (`buildReasoningContainer`);
- * skipping spoilers keeps the reasoning out of later prompts.
- */
 function containerOf(message: RawDiscordMessage): Component | undefined {
   return (message.components ?? [])
     .filter(isComponent)
-    .find((component) => component.type === CONTAINER && component.spoiler !== true);
+    .find((component) => component.type === CONTAINER);
 }
 
 function textDisplays(nodes: readonly Component[]): string[] {
   return nodes.flatMap((node) => {
     if (node.type !== TEXT_DISPLAY || typeof node.content !== "string") return [];
+    // The reasoning shown above an answer is not part of the answer and must not reach later prompts.
+    if (node.id === REASONING_COMPONENT_ID) return [];
     return [node.content];
   });
 }

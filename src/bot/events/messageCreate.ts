@@ -18,12 +18,12 @@ import {
   badgeText,
   buildErrorContainer,
   buildFinalContainer,
-  buildReasoningContainer,
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  fitReasoning,
   measureTextBudget,
   remainingPageBudget,
   splitTextIntoMessages,
@@ -491,6 +491,14 @@ export function createMessageCreateHandler(
       for (let i = 0; i < chunks.length; i++) {
         const isFirst = i === 0;
         const isLast = i === chunks.length - 1;
+        // Reasoning reads before the answer, so it goes between the badge and
+        // the first page's answer and shares that page's budget. `footerBudget`
+        // is the last page's footer estimate, which also covers an earlier
+        // page's page-number footer.
+        const reasoning =
+          isFirst && reasoningText
+            ? fitReasoning(reasoningText, remainingPageBudget(chunks[i], modelName, footerBudget))
+            : undefined;
         const container = buildFinalContainer({
           text: chunks[i],
           modelName,
@@ -499,19 +507,8 @@ export function createMessageCreateHandler(
           isLast,
           metadata,
           pageInfo: { page: i + 1, total: chunks.length },
+          ...(reasoning && { reasoning }),
         });
-        // Reasoning reads before the answer, so it goes above the first page's
-        // answer and shares that page's budget. `footerBudget` is the last
-        // page's footer estimate, which also covers an earlier page's
-        // page-number footer.
-        const reasoning =
-          isFirst && reasoningText
-            ? buildReasoningContainer(
-                reasoningText,
-                remainingPageBudget(chunks[i], modelName, footerBudget),
-              )
-            : undefined;
-        const components = reasoning ? [reasoning.container, container] : container;
         const files = reasoning?.needsFile
           ? [
               new AttachmentBuilder(
@@ -522,11 +519,11 @@ export function createMessageCreateHandler(
           : undefined;
 
         if (i < botMessages.length) {
-          await botMessages[i].edit(toComponentsV2EditPayload(components, files));
+          await botMessages[i].edit(toComponentsV2EditPayload(container, files));
         } else {
           // 致命的エラー時のクリーンアップが送信済みmessageを再取得できるよう、streaming/stopped経路と
           // 同様にbotMessagesへ追跡する（追跡しないと後続chunkのsend失敗時に既送信分が重複送信されうる）
-          const newMessage = await message.channel.send(toComponentsV2Payload(components, files));
+          const newMessage = await message.channel.send(toComponentsV2Payload(container, files));
           botMessages.push(newMessage);
           await botMessageCreated(newMessage);
         }

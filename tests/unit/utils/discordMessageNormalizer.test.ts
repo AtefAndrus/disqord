@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { REASONING_COMPONENT_ID } from "../../../src/utils/chatContainerBuilder";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 import {
   extractComponentsV2Footer,
@@ -48,13 +49,20 @@ describe("Discord message normalization", () => {
     });
   });
 
-  test("推論の spoiler Container は回答より前にあっても本文にも footer にも入らない", () => {
+  test("推論の component id を持つ TextDisplay は本文に入らない", () => {
     const page = botPage("1", "answer", "Tokens: 1+1=2");
+    const [container] = page.components as { components: unknown[] }[];
     const withReasoning: RawDiscordMessage = {
       ...page,
       components: [
-        { type: 17, spoiler: true, components: [{ type: 10, content: "-# 推論\nsecret" }] },
-        ...(page.components ?? []),
+        {
+          ...(container as object),
+          components: [
+            container?.components[0],
+            { type: 10, id: REASONING_COMPONENT_ID, content: "-# 推論\n||secret||" },
+            ...(container?.components.slice(1) ?? []),
+          ],
+        },
       ],
     };
 

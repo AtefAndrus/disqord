@@ -45,7 +45,7 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 | 暗号化された推論の取得 | request に tool があるときは `include: ["reasoning.encrypted_content"]` を付ける | `previous_response_id` は使えず（OpenAPI 定義で非 null は 400）、状態はクライアントが送り直す。暗号化された推論は `include` で求めないと返らない |
 | 推論の要約を求めるか | 表示が有効で、モデルの `supported_parameters` に `reasoning` があるときだけ `reasoning: { summary: "auto" }` を送る。それ以外は `reasoning` を送らない | 要約は求めないと返らないモデルがある。非対応モデルに未対応のパラメータを送らない。effort はモデルの既定に任せる |
 | 表示の設定 | `/config reasoning-display on\|off` を足し、既定は off とする。guild 設定の列 `reasoning_display_enabled` に保存する | 推論には質問の断片が繰り返し現れうるので、共有チャンネルへ意図せず出さない。token と料金の表示（`llm-details`）とは別に切り替えられるようにする |
-| 表示の形 | 1 ページ目の回答の Container の前に、推論だけを入れた 2 つ目の Container を spoiler（`spoiler: true`）にして置く。見出しは `-# 推論` とする。1 メッセージの TextDisplay の字数とバイト数の上限の、回答と footer の残りに収まらなければ残りで切り、全文を `reasoning.md` として同じ Container の File component で添える | 推論は回答より先に読むものなので上に置く。Components V2 に折りたたみの部品は無く、spoiler の Container はクリックするまで中身をぼかす。ファイルの添付だけでは Discord 上で開かずに読めない。会話の履歴は bot の返信の spoiler でない最初の Container だけを本文として読むので、推論は次の応答の文脈に混ざらない |
+| 表示の形 | 1 ページ目のモデル名と回答の間に、推論だけの TextDisplay を置き、見出し `-# 推論（クリックで表示）` の下で本文を spoiler（`\|\|…\|\|`）で囲む。推論の中の `\|\|` はエスケープする。1 メッセージの TextDisplay の字数とバイト数の上限の、回答と footer の残りに収まらなければ残りで切り、全文を `reasoning.md` として同じ Container の File component で添える | 推論は回答より先に読むものなので上に置く。Components V2 に折りたたみの部品は無い。spoiler の Container を別に置くと回答と別の枠になって邪魔になり、ファイルの添付だけでは Discord 上で開かずに読めない。推論の TextDisplay には固定の component id（`REASONING_COMPONENT_ID`）を付け、会話の履歴と e2e はこの id で推論を除く。本文の文字列で見分けないので、モデルが同じ見出しを書いても取り違えない |
 | 複数ターンの推論 | tool loop の各ターンの推論を、ターン順に `## ターン n` の見出しを付けて 1 つのファイルにまとめる | 1 回の応答に 1 ファイルとし、どのターンの推論かを区別できるようにする |
 | 停止とエラー | 停止した返信とエラーで終わった返信には推論を添えない | 完了していない推論を公開しない |
 
@@ -57,10 +57,10 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 - 修正: `src/llm/openrouter.ts` — `response.output_item.done` の reasoning item を検証して terminal の結果へ載せる。`toResponsesInput()` で assistant メッセージの reasoning item を先に出す。`include` と `reasoning` を body に入れる。`listModelsWithPricing()` で `supported_parameters` を読む
 - 修正: `src/llm/toolLoop.ts` — ターンごとの reasoning item を assistant メッセージに付けて履歴へ積み、ターンをまたいで表示用の推論を集める
 - 修正: `src/services/chatService.ts` — 表示設定とモデルの対応から `reasoning` と `include` を決める
-- 修正: `src/bot/events/messageCreate.ts` / `src/utils/chatContainerBuilder.ts` — 1 ページ目に推論の spoiler Container を置き、収まらない分を `reasoning.md` で添える
-- 修正: `src/utils/discordMessageNormalizer.ts` / `scripts/e2e/scenarios.ts` — 回答の Container を、spoiler でない最初の Container として読む
+- 修正: `src/bot/events/messageCreate.ts` / `src/utils/chatContainerBuilder.ts` — 1 ページ目に推論の TextDisplay を置き、収まらない分を `reasoning.md` で添える
+- 修正: `src/utils/discordMessageNormalizer.ts` / `scripts/e2e/scenarios.ts` — 推論の component id を持つ TextDisplay を本文として読まない
 - 修正: `src/db/schema.ts` / `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/bot/commands/config.ts` — `reasoning_display_enabled` の列、setter、`/config reasoning-display`、`/status` の表示
-- 修正: `scripts/e2e/scenarios.ts` — 推論の Container を確かめる、名前を指定して走るシナリオ
+- 修正: `scripts/e2e/scenarios.ts` — 推論の表示を確かめる、名前を指定して走るシナリオ
 - テスト: `tests/unit/llm/openrouter.test.ts` / `tests/unit/llm/toolLoop.test.ts` / 設定と表示のテスト
 
 ### DBスキーマ変更
@@ -93,10 +93,11 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 - [x] tool loop で reasoning item を送り返し、`include` を付ける
 - [x] `supported_parameters` を読み、表示が有効なときだけ `reasoning.summary` を送る
 - [x] `reasoning_display_enabled` の列と `/config reasoning-display`、`/status` の表示を足す
-- [x] 1 ページ目に推論の spoiler Container を置く
+- [x] 1 ページ目の回答の上に推論を spoiler で置く
 - [x] 要約だけ、本文だけ、暗号化だけ、推論なし、形の壊れた item の各場合をテストする
 - [x] 推論を返すモデルで、tool を挟む応答が送り返しで失敗しないことと、推論が表示されることを e2e で確かめる
 - [ ] 手動確認: 実クライアントで、推論が回答の上にぼかした状態で出て、クリックすると読めること、長い推論では `reasoning.md` が添えられることを確かめる
+- [ ] 手動確認: 推論にコードブロックが含まれるとき、その部分が spoiler でぼかされないことを許容できるか確かめる
 - [ ] `docs/changes/reasoning-output/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

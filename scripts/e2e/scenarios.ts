@@ -1,5 +1,6 @@
 import { WINDOW_RAW_MESSAGE_LIMIT } from "../../src/services/conversationWindow";
 import { EmbedColors } from "../../src/types/embed";
+import { REASONING_COMPONENT_ID } from "../../src/utils/chatContainerBuilder";
 import {
   extractComponentsV2Footer,
   type RawDiscordMessage,
@@ -61,11 +62,8 @@ function isComponent(node: unknown): node is Component {
   return typeof node === "object" && node !== null && !Array.isArray(node);
 }
 
-/** The answer's Container; a reasoning spoiler Container may come before it. */
 function containerOf(message: DiscordMessage): Component | undefined {
-  return (message.components ?? [])
-    .filter(isComponent)
-    .find((c) => c.type === CONTAINER && c.spoiler !== true);
+  return (message.components ?? []).filter(isComponent).find((c) => c.type === CONTAINER);
 }
 
 function childrenOf(container: Component | undefined): Component[] {
@@ -95,6 +93,8 @@ function collectText(node: unknown, out: string[]): void {
     return;
   }
   if (!isComponent(node)) return;
+  // The reasoning above an answer is not part of the answer the checks read.
+  if (node.id === REASONING_COMPONENT_ID) return;
   if (typeof node.content === "string") out.push(node.content);
   collectText(node.components, out);
   collectText(node.accessory, out);
@@ -114,12 +114,11 @@ function isErrorContainer(message: DiscordMessage): boolean {
   );
 }
 
-/** `buildReasoningContainer`: a spoiler Container placed before the answer's Container on the first page. */
-function hasReasoningContainer(message: DiscordMessage | undefined): boolean {
-  const containers = (message?.components ?? [])
-    .filter(isComponent)
-    .filter((c) => c.type === CONTAINER);
-  return containers.length >= 2 && containers[0]?.spoiler === true;
+/** `fitReasoning`: the first page carries a TextDisplay with the reasoning component id. */
+function hasReasoning(message: DiscordMessage | undefined): boolean {
+  return childrenOf(
+    containerOf(message ?? { id: "", content: "", author: { id: "", username: "" } }),
+  ).some((c) => c.type === TEXT_DISPLAY && c.id === REASONING_COMPONENT_ID);
 }
 
 export function toReply(messages: DiscordMessage[]): Reply {
@@ -327,10 +326,10 @@ export const SCENARIOS: Scenario[] = [
       "[e2e] 必ず read_earlier_messages を 1 回呼んでから、5 人を円卓に並べる並べ方が何通りあるか（回転は同じとみなす）を考え、数だけを短く答えて。",
     check: (reply) => [
       ...(reply.isError ? ["the reasoning reply ended in an error"] : []),
-      ...(hasReasoningContainer(reply.messages[0])
+      ...(hasReasoning(reply.messages[0])
         ? []
         : [
-            "the first message has no spoiler reasoning container (is reasoning display enabled and does the model return reasoning?)",
+            "the first message shows no reasoning (is reasoning display enabled and does the model return reasoning text?)",
           ]),
       ...hasUsageFooter(reply),
     ],

@@ -19,6 +19,7 @@ import type {
 } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
+import { REASONING_COMPONENT_ID } from "../../../../src/utils/chatContainerBuilder";
 
 interface MockBotMessage {
   id: string;
@@ -27,6 +28,7 @@ interface MockBotMessage {
 }
 
 interface ContainerComponentJSON {
+  id?: number;
   type: number;
   content?: string;
   file?: { url?: string };
@@ -1151,7 +1153,7 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
 
-  test("推論表示が有効なら、1 ページ目の回答の前に推論の spoiler Container を置く", async () => {
+  test("推論表示が有効なら、1 ページ目の回答の前に spoiler の推論を同じ Container に入れる", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;
     settings.showLlmDetails = false;
@@ -1172,14 +1174,11 @@ describe("createMessageCreateHandler", () => {
     await handler(mockMessage as never);
 
     const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
-    const components = (payload.components ?? []) as unknown as { toJSON(): unknown }[];
-    expect(components).toHaveLength(2);
-    const reasoning = components[0]?.toJSON() as {
-      spoiler?: boolean;
-      components: { content?: string }[];
-    };
-    expect(reasoning.spoiler).toBe(true);
-    expect(reasoning.components[0]?.content).toContain("考えた内容");
+    expect(payload.components).toHaveLength(1);
+    const reasoning = toContainerJSON(payload).components.find(
+      (component) => component.id === REASONING_COMPONENT_ID,
+    ) as { content?: string } | undefined;
+    expect(reasoning?.content).toContain("||考えた内容||");
     expect(payload.files).toBeUndefined();
   });
 
@@ -1206,7 +1205,11 @@ describe("createMessageCreateHandler", () => {
 
     const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
     expect(payload.files).toBeUndefined();
-    expect(payload.components).toHaveLength(1);
+    expect(
+      toContainerJSON(payload).components.some(
+        (component) => component.id === REASONING_COMPONENT_ID,
+      ),
+    ).toBe(false);
   });
 
   test.each(["stopped", "error"] as const)(
@@ -1229,7 +1232,11 @@ describe("createMessageCreateHandler", () => {
 
       const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
       expect(payload.files).toBeUndefined();
-      expect(payload.components).toHaveLength(1);
+      expect(
+        toContainerJSON(payload).components.some(
+          (component) => component.id === REASONING_COMPONENT_ID,
+        ),
+      ).toBe(false);
     },
   );
 
