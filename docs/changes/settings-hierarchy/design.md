@@ -14,7 +14,7 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 ## 依存 / 関連 change
 
 - 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す配管は同 change が用意する。あわせて送信可能なパラメータ集合が狭まる（後述）
-- 連携: [reasoning-output](../reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
+- 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
 
 ## Goals / Non-Goals
 
@@ -29,7 +29,7 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 - ロール単位の設定（複雑性が高すぎる）
 - パラメータのプリセット機能
 - プロンプトのバージョン管理
-- reasoning 本文の取得・表示 UI（[reasoning-output](../reasoning-output/design.md) が担当）
+- reasoning 本文の取得・表示 UI（[reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) が担当）
 
 ## Decisions
 

@@ -13,13 +13,13 @@ Bot が全チャンネル・全ユーザに無制限でアクセス可能な状�
 チャンネル単位の制限が必要である。
 
 加えて、課金が絡む `/config` サブコマンドを誰が実行できるかの契約が無い。
-契約が無いため、[Web 検索 + ツイート展開](../web-search/design.md) と [スケジュール実行（cron）](../cron/design.md) は、どちらも「権限機構が未実装なら暫定的に handler 内で `ManageGuild` を確認する」という同じ暫定措置を design に書いている。
+契約が無いため、[Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) と [スケジュール実行（cron）](../cron/design.md) は、どちらも「権限機構が未実装なら暫定的に handler 内で `ManageGuild` を確認する」という同じ暫定措置を design に書いている。
 本 change で共通の認可契約を先に確定し、この重複を無くす。
 
 ## 依存 / 関連 change
 
 - 関連: [使用統計](../usage-stats/design.md) — 同じ `guild_settings` を触るが、リリース単位としては独立。本 change は権限だけを扱う
-- 後続: [Web 検索 + ツイート展開](../web-search/design.md) / [スケジュール実行（cron）](../cron/design.md) — 本 change の認可契約を使う。未成立の場合の暫定措置が各 design に書かれている
+- 後続: [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) / [スケジュール実行（cron）](../cron/design.md) — 本 change の認可契約を使う。未成立の場合の暫定措置が各 design に書かれている
 - 関連: [Discord 操作ツール](../discord-tool/design.md) — 独自の認可設計（bot 権限と invoking member 権限の積）を持つ。本 change の `admin_role_id` に置き換えない
 - 関連: [回答の再生成・編集/undo・compaction](../conversation-regeneration/design.md) — 操作認可は「発話者本人または `ManageMessages`」であり、本 change の設定変更権限とは別軸
 

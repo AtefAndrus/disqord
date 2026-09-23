@@ -9,15 +9,15 @@ summary: "会話履歴ストアの上に載る再生成（generation_number）�
 
 ## Why
 
-[conversation-context](../conversation-context/design.md) で多ターンの会話文脈が DB 永続化されるが、ユーザは「いまの回答が気に入らないのでもう一度」「直前のやり取りを無かったことに」「長い会話のトークンコストを抑えたい」を操作できない。
+[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) で多ターンの会話文脈が DB 永続化されるが、ユーザは「いまの回答が気に入らないのでもう一度」「直前のやり取りを無かったことに」「長い会話のトークンコストを抑えたい」を操作できない。
 本 change は会話履歴ストア（`sessions`/`turns`/`turn_messages`）の上に、(1) **回答の再生成**（同じ user turn に対する複数世代）、(2) **undo/redo**（直前 exchange の有効/無効切替）、(3) **編集起因の再生成**（user メッセージ編集 → 応答やり直し）、(4) **履歴 compaction**（古い exchange を要約 turn へ畳んでトークン予算を確保）を加える。
 
 conversation-context は v1 で「1 user → 1 assistant」を `idx_turns_one_assistant` で強制し、**再生成は本 change で `generation_number` を追加導入して当該インデックスを置換する**と明記している。本 change はその切り出しスコープそのものを実装する。
 
 ## 依存 / 関連 change
 
-- 要見直し: [conversation-context](../conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
-- 先行（旧前提。上の「要見直し」を参照）: [conversation-context](../conversation-context/design.md) — `sessions`/`turns`/`turn_messages`、`status`/`active`/`finalized_at`、`parent_user_turn_id`/`abandoned`、`idx_turns_one_assistant`（`failed` を除く部分 UNIQUE）、`WHERE status='pending'` による確定、exchange 単位の境界/予算/保持、`messageUpdate` を無視。本 change はこれらの契約の上に載る
+- 要見直し: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
+- 先行（旧前提。上の「要見直し」を参照）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — `sessions`/`turns`/`turn_messages`、`status`/`active`/`finalized_at`、`parent_user_turn_id`/`abandoned`、`idx_turns_one_assistant`（`failed` を除く部分 UNIQUE）、`WHERE status='pending'` による確定、exchange 単位の境界/予算/保持、`messageUpdate` を無視。本 change はこれらの契約の上に載る
 - 連携: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — 生成は `runToolLoop()`（`Promise<ToolLoopResult>`、判別共用体 final/cancelled/error）経由。再生成で in-flight 生成を打ち切る場合は同基盤の **`AbortSignal` cancellation 経路**（`{status:'cancelled'}`）を使う
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — Components V2 の描画プリミティブ（Container/Section accessory・ボタン・分割送信・stream updater）と制約を利用する。chat-response-v2 自体は再生成 interaction を扱わず描画基盤のみ提供するため、再生成/undo ボタンの追加・customId ルーティング・edit による世代差し替えは**本 change の責務**
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — compaction の要約生成に使う system prompt / モデル / 予算しきい値は precedence 解決した設定を使う
@@ -402,7 +402,7 @@ conversation-context は v1 で `messageUpdate` を無視する。本 change は
 
 ## 参照
 
-- [conversation-context design](../conversation-context/design.md) — `turns`/`status`/`active`/`parent_user_turn_id`/`idx_turns_one_assistant`、CAS 確定、§4 境界選択・§5 メディア剥がし・§6 トークン予算、`deleting_internal_at` lease、`messageUpdate` v1 無視
+- [conversation-context design](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — `turns`/`status`/`active`/`parent_user_turn_id`/`idx_turns_one_assistant`、CAS 確定、§4 境界選択・§5 メディア剥がし・§6 トークン予算、`deleting_internal_at` lease、`messageUpdate` v1 無視
 - [tool-calling-foundation design](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `runToolLoop()`（`Promise<ToolLoopResult>`、cancelled 経路の `AbortSignal`）
 - [SQLite partial indexes](https://www.sqlite.org/partialindex.html) — `WHERE` 句付き UNIQUE INDEX の条件評価（**per-statement で即時評価**）
 - [SQLite ALTER TABLE](https://www.sqlite.org/lang_altertable.html) — `ADD COLUMN` の制約（`NOT NULL` は DEFAULT 必須、FK 参照を持つ追加列は DEFAULT NULL 必須）。**実測: FK 参照先テーブルは ADD COLUMN 時に未作成でもよい**（遅延解決）。本 migration は可読性のため `session_summaries` を先に作る

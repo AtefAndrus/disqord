@@ -16,8 +16,8 @@ summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
 
 - 関連: [権限管理](../permissions/design.md) — 同じ `guild_settings` を触るが、リリース単位としては独立。`/stats` の実行権限は同 change の共通認可契約に従う
 - 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — usage のフィールド名と、ターンをまたぐ集計対象は同 change が確定する。本 change は確定した集計結果を保存する側
-- 関連: [対話UX改善（会話履歴）](../conversation-context/design.md) — cache read / write トークンの計上先は本 change の `usage_logs`
-- 関連: [Web 検索 + ツイート展開](../web-search/design.md) — server tool の実行回数（`usage.server_tool_use_details`）の計上先は本 change の `usage_logs`
+- 関連: [対話UX改善（会話履歴）](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — cache read / write トークンの計上先は本 change の `usage_logs`
+- 関連: [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — server tool の実行回数（`usage.server_tool_use_details`）の計上先は本 change の `usage_logs`
 
 ## Goals / Non-Goals
 

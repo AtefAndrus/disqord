@@ -13,7 +13,7 @@ summary: "重い処理を Discord イベントハンドラ外で走らせ、完�
 
 DisQord のチャット経路は現状、Discord イベントハンドラ（`messageCreate`）の中で `chatService.generateResponseStream()` を **同期的に `await` し続ける**設計になっている（`src/bot/events/messageCreate.ts`: `for await (const chunk of stream)` でストリーム完了までハンドラが返らない）。応答が速いうちはこれで足りるが、今後入れたい重い処理ではこのモデルが破綻する:
 
-- [web-search](../web-search/design.md) で server tool（`openrouter:web_search` / `web_fetch`）が 1 リクエスト内で複数回サーバ側実行されると、1 ターンが長くなる。
+- [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) で server tool（`openrouter:web_search` / `web_fetch`）が 1 リクエスト内で複数回サーバ側実行されると、1 ターンが長くなる。
 - [code-execution](../code-execution/design.md) のサンドボックス実行や、[tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) のマルチターン tool ループ（最大 `MAX_TURNS` 回の往復）。
 - 将来の `openrouter:fusion`（panel→judge を回す。1 ターン 1 回だが内部で複数モデルを動かすため遅い）。
 
@@ -28,7 +28,7 @@ discord.js の `interaction.deferReply()` + `editReply()` は、**interaction �
 
 - 連携: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — tool ループ（`runToolLoop()`）は重く、本基盤の最初の利用候補。tool ループ自身の cancellation（`AbortSignal`）と本基盤のジョブ cancel は連結する。
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 完了結果の Discord 描画（Container / progress 表示）は V2 の updater を利用する。本基盤は「結果をどう配送するか（送信先メッセージ / 編集対象）」だけを持ち、描画自体は updater に委ねる。
-- 利用候補: [web-search](../web-search/design.md) / [code-execution](../code-execution/design.md)。
+- 利用候補: [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) / [code-execution](../code-execution/design.md)。
 
 ## Goals / Non-Goals
 

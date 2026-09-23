@@ -14,7 +14,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 
 ## 依存 / 関連 change
 
-- 連携: [web-search](../web-search/design.md) — 時事的な背景や新しい用語の解説は検索があると正確になる。この change は検索なしで出し、web-search の server tool が chat 経路に載った時点で解説経路にも同じものを渡す。
+- 連携: [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — 時事的な背景や新しい用語の解説は検索があると正確になる。この change は検索なしで出し、web-search の server tool が chat 経路に載った時点で解説経路にも同じものを渡す。
 - 連携: [permissions](../permissions/design.md) — 誰がこのコマンドを使えるかの制限は permissions の共通認可契約に従う。この change 単独では全員が使える。
 
 ## Goals / Non-Goals
@@ -27,7 +27,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 
 **Non-Goals:**
 
-- 対象メッセージより前の会話履歴を材料にすること。どこまでが同じ話題かを決める基準が無く、無関係な発言を混ぜると解説がずれるためである。会話の境界は [conversation-context](../conversation-context/design.md) が扱う。
+- 対象メッセージより前の会話履歴を材料にすること。どこまでが同じ話題かを決める基準が無く、無関係な発言を混ぜると解説がずれるためである。会話の境界は [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) が扱う。
 - 解説への追加質問（対話の継続）。ephemeral メッセージにはメンションで返信できないため、続きを聞く手段は別途設計が要る。
 - DM とグループ DM での利用。モデルや設定がサーバー単位で保存されているため、サーバーの外では使うモデルが決まらない。
 - ユーザーインストールでの利用。ユーザーインストールのコマンドは bot が参加していないサーバーでも実行できる。設定は未登録のサーバーでも既定値で作られるので動かすことはできるが、そのサーバーの管理者が関与しないまま OpenRouter の消費が発生するので、誰の負担でどこまで許すかの方針が要る。この change の範囲からは外す。

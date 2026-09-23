@@ -15,7 +15,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 
 ## 依存 / 関連 change
 
-- 前提（実装済み）: [conversation-context](../conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
+- 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
 - 連携: [権限管理](../permissions/design.md) — 設定を変える操作の認可（`ManageGuild`）は同 change の契約に従う
 
 ## Goals / Non-Goals

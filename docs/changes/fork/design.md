@@ -12,13 +12,13 @@ summary: "会話履歴の途中から新しいセッションへ分岐する /fo
 長い会話で話題が枝分かれするとき、現状は同一セッションに新しい話題を継ぎ足すか、別チャンネルで一から文脈を作り直すしかない。
 過去のある時点（特定の turn）までの文脈を保ったまま、そこから先を別系統として進めたい（「あの回答の続きを別案で試す」「途中まで共有した前提から分岐する」）需要がある。
 
-本 change は、[conversation-context](../conversation-context/design.md) が確立した turn/session モデルと**安定 `session_id`** を前提に、**指定 turn を起点に新セッションへ分岐する `/fork`** を検討する。
+本 change は、[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) が確立した turn/session モデルと**安定 `session_id`** を前提に、**指定 turn を起点に新セッションへ分岐する `/fork`** を検討する。
 本 doc は `investigating`（方針探索段階）であり、設計の確定ではなく検討点と未決事項の洗い出しを目的とする。
 
 ## 依存 / 関連 change
 
-- 要見直し: [conversation-context](../conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
-- 先行（旧前提。上の「要見直し」を参照）: [conversation-context](../conversation-context/design.md) — turn/session/turn_messages モデル、gap 区切りの session、**`session_id` を「fork/sandbox 用の安定 ID」として不変に保つ方針**（同 change Decisions「セッション同一性」+ Design §2「セッション解決・保存経路」で物理マージしないと明記）。本 change はこの安定 ID を分岐の親参照に使う。
+- 要見直し: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
+- 先行（旧前提。上の「要見直し」を参照）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — turn/session/turn_messages モデル、gap 区切りの session、**`session_id` を「fork/sandbox 用の安定 ID」として不変に保つ方針**（同 change Decisions「セッション同一性」+ Design §2「セッション解決・保存経路」で物理マージしないと明記）。本 change はこの安定 ID を分岐の親参照に使う。
 - 関連: [code-execution](../code-execution/design.md) — persistent sandbox は `session_id` をキーにできる（所有・ライフサイクルは code-execution 側）。fork で新 `session_id` が生まれたとき、新セッションの sandbox を**親から継承するか新規にするか**は両 change 間で決める必要がある（本 doc Open Questions）。
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — 分岐先セッションに適用する system prompt 等の設定 scope（チャンネル/スレッド/ユーザ）の解決。
 
@@ -28,7 +28,7 @@ summary: "会話履歴の途中から新しいセッションへ分岐する /fo
 
 - `/fork`（slash command）で、**現在のチャンネル/スレッドの会話を、指定した過去 turn を境界に新セッションへ分岐**する道筋を定める。
 - 分岐元（親）セッションと、起点 turn を**安定 ID で参照**して記録する（履歴の物理複製はしない方針を第一候補とする）。
-- 分岐先で文脈構築（[conversation-context](../conversation-context/design.md) の境界ロジック）が、**起点 turn 以前の親履歴 + 分岐後の新 turn** を一貫して拾えるデータモデルの候補を 1-2 案出す。
+- 分岐先で文脈構築（[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) の境界ロジック）が、**起点 turn 以前の親履歴 + 分岐後の新 turn** を一貫して拾えるデータモデルの候補を 1-2 案出す。
 - `session_id` 安定性（fork/sandbox 前提）を壊さない範囲で実現できることを確認する。
 
 **Non-Goals（本 change / v1 では扱わない）:**
@@ -134,6 +134,6 @@ CREATE INDEX idx_sessions_forked_from ON sessions(forked_from_session_id); -- �
 
 ## 参照
 
-- [conversation-context](../conversation-context/design.md) — turn/session/turn_messages モデル、安定 `session_id`、物理マージしない方針、文脈境界（Section 4 cutoff = `discord_msg_id` snowflake）・トークン予算（Section 6）。
+- [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — turn/session/turn_messages モデル、安定 `session_id`、物理マージしない方針、文脈境界（Section 4 cutoff = `discord_msg_id` snowflake）・トークン予算（Section 6）。
 - [discord.js Threads](https://discord.js.org/docs/packages/discord.js/14.26.2/ThreadManager:Class) — `channel.threads.create({name,autoArchiveDuration,type})` / `message.startThread()`、必要権限。
 - [discord.js Context Menus](https://discordjs.guide/interactions/context-menus.html) — メッセージコンテキストメニュー command（`interaction.targetMessage` で起点メッセージを取得）。

@@ -17,7 +17,7 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 
 ## 依存 / 関連 change
 
-- 前提（実装済み）: [conversation-context](../conversation-context/design.md) — 会話の窓は Discord のメッセージを正規化してモデルへ渡し、過去の添付は `view_attachment` で開く。本 change はその正規化と `view_attachment` の対象を広げる
+- 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓は Discord のメッセージを正規化してモデルへ渡し、過去の添付は `view_attachment` で開く。本 change はその正規化と `view_attachment` の対象を広げる
 - 連携: [discord-tool](../discord-tool/design.md) — 同 change の `add_reaction` もカスタム絵文字を名前で引く。共有するのは、絵文字の一覧から名前で 1 つを選ぶ処理だけである。本 change の 5 分の保持と 50 個の上限は `add_reaction` には使わず、`add_reaction` は同 change のとおり実行の直前に REST で全件を取り直す
 
 ## Goals / Non-Goals

@@ -19,7 +19,7 @@ DisQord は既に OpenRouter 呼び出し経路・スラッシュコマンド・
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 登録承認の Approve/Reject ボタンと、配信メッセージの整形に V2 を利用
 - 連携: [権限管理](../permissions/design.md) — 誰が cron を登録/承認できるか、使用統計への計上はこの権限機構に合わせる（暫定は `ManageGuild`）
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — ジョブ実行時の system prompt / モデルは guild/channel 設定を尊重する。**未成立時は system prompt なし・ジョブ保存モデル（or デフォルトモデル）で実行**して degrade（下記「実行（ティッカー）」）
-- 連携: [conversation-context](../conversation-context/design.md) — ジョブ実行は会話文脈ゼロだが、`runScheduledJob` が作る単発履歴をオプションで履歴ストアに記録するなら本 change の session/turn モデルに合わせる。v1 は履歴非記録（保存 `prompt` を都度実行するだけ）で本基盤に非依存
+- 連携: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — ジョブ実行は会話文脈ゼロだが、`runScheduledJob` が作る単発履歴をオプションで履歴ストアに記録するなら本 change の session/turn モデルに合わせる。v1 は履歴非記録（保存 `prompt` を都度実行するだけ）で本基盤に非依存
 
 ## Goals / Non-Goals
 
@@ -31,7 +31,7 @@ DisQord は既に OpenRouter 呼び出し経路・スラッシュコマンド・
 - スケジュール表現: **簡易インターバル**（`30m` / `every 2h`）/ **cron 式**（`0 9 * * 1-5`）/ **一回限り ISO 日時**。自然言語は LLM が上記いずれかへ変換（NL 日付パーサは自作しない）
 - 各ジョブに **IANA タイムゾーン**を持たせ、DST を正しく扱う
 - **再起動耐性**: `next_run_at` を DB に永続化し、発火を跨いでも at-most-once。溜まった定期ジョブは起動時に「次の未来スロット」へ fast-forward（取りこぼし連投を防ぐ）
-- ジョブ実行は**会話文脈ゼロの新規 `messages` 配列**（[conversation-context](../conversation-context/design.md) の session/turn は作らない）で行うため、保存プロンプトは自己完結している必要がある（LLM 整形でこれを担保）
+- ジョブ実行は**会話文脈ゼロの新規 `messages` 配列**（[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) の session/turn は作らない）で行うため、保存プロンプトは自己完結している必要がある（LLM 整形でこれを担保）
 - 配信は指定チャンネルへ `channel.send`。`[SILENT]` 規約で「特筆事項が無ければ投稿しない」を可能にする
 - 暴走/コスト対策: 最小実行間隔・ユーザあたり/guild あたり最大ジョブ数の上限
 
@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 CREATE INDEX IF NOT EXISTS idx_cron_due ON cron_jobs(status, next_run_at);
 ```
 
-- **DM 非対応**: 既存 `client.ts` は `DirectMessages` intent を持たず、`messageCreate` は DM を早期 return する（[conversation-context](../conversation-context/design.md) も DM は将来）。よって v1 の登録経路（`/cron`・mention）も配信も guild チャンネル前提で、`guild_id` は NOT NULL とする。DM 対応は将来 change。
+- **DM 非対応**: 既存 `client.ts` は `DirectMessages` intent を持たず、`messageCreate` は DM を早期 return する（[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) も DM は将来）。よって v1 の登録経路（`/cron`・mention）も配信も guild チャンネル前提で、`guild_id` は NOT NULL とする。DM 対応は将来 change。
 - スキーマ追加は既存の `applyMigrations`（`CREATE TABLE IF NOT EXISTS` + `PRAGMA table_info` で列追加判定）パターンに合わせる。既存テーブルが `created_at` を TEXT `datetime('now')` で持つのに対し本テーブルは epoch ms (INTEGER) を採る点は**意図的**（分未満精度の `next_run_at` 計算と比較を一貫した数値で行うため）。
 - `created_at` は INTEGER NOT NULL で SQL デフォルトを持たない（epoch ms を SQLite で素直に出せないため）。**全 INSERT は `CronJobsRepository.create()` 経由に集約**し、そこで `Date.now()` を供給する契約とする（コマンド/tool 経路が raw SQL で直接 INSERT しないことをテストで担保。既存テーブルのような列 default には頼らない）。新規 `CREATE TABLE` 時に NOT NULL 列を置く分には既存行が無いので問題ない。
 - `last_run_at` の意味は**「最後に*スケジュール*実行を試みた開始時刻」**（claim/tick の `now`、または stale 復旧時の `claimed_at`）と定義する（成功完了時刻ではない）。**ad-hoc 手動実行（非 due の `/cron run` 別パス）は `last_run_at` を更新しない**（claim を経ずスケジュール状態を一切変えないため。手動実行の可視化が要れば将来 `last_manual_run_at` を別列で足す——Open Questions）。次スロットは完了時刻基準なので `last_run_at < next_run_at - 間隔` のように見えうるが、これは「開始 vs 完了」の差として許容。`once` の取りこぼし（fast-forward で `done`）は実行していないので `last_run_at` を更新しない（`NULL` のままで取りこぼしと完了を区別）。
@@ -159,7 +159,7 @@ function computeNextRun(kind: string, expr: string, tz: string, from: Date): num
 
 - **NL→schedule 正規化の service 境界（`normalizeCronProposal`）**: 自然言語スケジュールの cron/ISO/interval への変換は専用サービス `normalizeCronProposal(rawSchedule, ctx, signal): Promise<{ kind, expr, tz? } | { error }>` に集約し、`/cron add` と `create_cron_job` の両経路が**同一関数**を呼ぶ（変換主体と検証主体を一本化し、両経路の挙動を一致させる）。手順:
   - (1) **まず決定的に分類**: 入力が既に cron 式（croner で構築可）/ offset 付き ISO / interval 表記（`Ns`・`every Nm` 等）なら **LLM を呼ばず**そのまま `{ kind, expr }` 候補にする。
-  - (2) **真に自然言語のときだけ** OpenRouter を **1 回だけ・非 stream・tool 無効・会話文脈なし**で呼ぶ（厳格 JSON `{ kind, expr, tz? }` を出力させる固定 system prompt、モデルは現行デフォルトモデル、`CRON_JOB_TIMEOUT_MS` 級の timeout、`signal` を fetch へ伝播）。**`runToolLoop()` を呼ばず・[conversation-context](../conversation-context/design.md) の session/turn 履歴も読まない**（再帰的な tool ループや会話状態への依存を作らない）。
+  - (2) **真に自然言語のときだけ** OpenRouter を **1 回だけ・非 stream・tool 無効・会話文脈なし**で呼ぶ（厳格 JSON `{ kind, expr, tz? }` を出力させる固定 system prompt、モデルは現行デフォルトモデル、`CRON_JOB_TIMEOUT_MS` 級の timeout、`signal` を fetch へ伝播）。**`runToolLoop()` を呼ばず・[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) の session/turn 履歴も読まない**（再帰的な tool ループや会話状態への依存を作らない）。
   - (3) (1)/(2) いずれの候補も**最後に必ず共有 `validateSchedule()`**（kind/expr/tz 確定・kind 別下限・全 kind tz 検証・過去/暦上ありえない日時拒否・first `next_run_at` 非 null 必須）を通す。失敗は `{ error }` で返し、コマンド経路はユーザに再入力を促し、tool 経路は `handler` が `llmResult` の error 文字列でモデルに再考させる。
   - tool 経路では呼び出し中のモデルが `schedule` に具体的な cron/ISO/interval を入れるよう parameters 記述で促すが、NL が来ても同じ normalizer が処理するためコマンド/tool で挙動が一致する（tool 経路で (2) が走っても、それは別の単発呼び出しで現在の tool ループとは独立）。
 - **検証（登録時）と実行時計算（computeNextRun）は別フェーズ**。下限チェックは登録時の `validateSchedule()` に集約し、`computeNextRun` は純粋な次回時刻計算に限定する（実行のたびに下限を再検査しない）。
@@ -299,7 +299,7 @@ async function onFailure(job, now, claimId) {
   - `once`（`pending` のままダウンタイム中に発火時刻を過ぎた未発火）: **`done`**（過去の単発は back-run しない。実行はしていないので `last_run_at` は `NULL` 据え置き）。「ダウンタイムで取りこぼした」ことは `/cron list` で `done` + `last_run_at=NULL` から判別でき、必要なら将来 `missed` ステータスを足す（Open Questions）。
   - `cron`（今後一致スロットが無い式）: **`done`**。
   - `failed` は「実行を試みて失敗 / 結果不明」専用に予約し、fast-forward の未発火終了（`pending` の取りこぼし）には使わない（実行失敗・結果不明と単純な未発火を区別する）。
-- ジョブ実行 `runScheduledJob(job, signal)` は会話履歴を渡さず、**毎回新規の OpenRouter `messages` 配列**を組む（[conversation-context](../conversation-context/design.md) の session/turn レコードは作らない＝v1 は履歴非記録）。保存 `prompt` を user メッセージとし、guild/channel の system prompt を前置（settings-hierarchy 未成立時は前置なし）。**`deliver_silent=1` のジョブは system prompt 末尾に `[SILENT]` 規約**（特筆事項が無ければ本文を `[SILENT]` のみにせよ）を注入する（フラグ 0 なら注入しない＝常に通常応答）。tool は v1 では渡さない。実 LLM 呼び出しは上記「LLM 呼び出し経路」決定に従い、**`model` 非 NULL ならそのモデル、NULL なら実行時の現行デフォルトモデル**で行い、`signal` を OpenRouter fetch へ通して timeout 時に abort する。
+- ジョブ実行 `runScheduledJob(job, signal)` は会話履歴を渡さず、**毎回新規の OpenRouter `messages` 配列**を組む（[conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) の session/turn レコードは作らない＝v1 は履歴非記録）。保存 `prompt` を user メッセージとし、guild/channel の system prompt を前置（settings-hierarchy 未成立時は前置なし）。**`deliver_silent=1` のジョブは system prompt 末尾に `[SILENT]` 規約**（特筆事項が無ければ本文を `[SILENT]` のみにせよ）を注入する（フラグ 0 なら注入しない＝常に通常応答）。tool は v1 では渡さない。実 LLM 呼び出しは上記「LLM 呼び出し経路」決定に従い、**`model` 非 NULL ならそのモデル、NULL なら実行時の現行デフォルトモデル**で行い、`signal` を OpenRouter fetch へ通して timeout 時に abort する。
 - **`remove`/`pause` 中の送信抑止**: 送信直前（および分割配信時は**各チャンク送信前**）に `shouldSend()` を評価する。**スケジュール実行**は `repo.isStillRunning(job.id, claimId)`（= `WHERE status='running' AND claim_id=?` 確認）で、実行中にユーザが pause/remove していたら（行が `running` でなくなる or claim_id が変わる）送らない/以降のチャンクを止める。**ad-hoc 手動実行**は claim を持たないので `repo.exists(job.id)`（remove で停止）を述語にする。これで `remove` 後の遅延投稿を best-effort に抑止する（ただし `send` 発行後の遅延成功は上記 timeout 同様にキャンセル不能）。claim_id 突合は同時に「stale 復旧/将来の多重起動で別 claim へ横取りされた行に古い実行が誤配信する」のも防ぐ（status 単独だと横取り後の再 `running` を自分のものと誤認する）。
 - **ロック内の全外部 await は timeout-bounded**: serialized 非再入 tick + per-job `jobLocks` 保持中に外部 I/O が無限待ちすると、その job が `running` のまま固着し（jobLocks 保持で sweeper も除外）tick も塞がって **cron 全体がデッドロック**する。よって LLM 実行・配信だけでなく**チャンネル fetch（preflight）・登録者通知（`notifyOwner`）・将来の任意 Discord API 呼び出しも全て timeout で囲む**。preflight timeout は `onFailure` へ、`notifyOwner` は短い best-effort timeout + ログ（throw/timeout を握って tick を止めない）。
 - 配信先 preflight `resolveSendable(channelId, timeoutMs): Promise<SendableChannel | null>`: `client.channels.fetch(channelId)` を `timeoutMs` で囲み（hang 防止）、**`null` / 非テキストチャンネルを返しうる**ため `ch?.isTextBased() && ch.isSendable()`（discord.js v14 の sendable 判定）で**型ガード**し、true のときだけ返す（fetch reject/timeout は内部 catch → `null`）。戻り型は discord.js の sendable 系 union（`isSendable()` が絞り込む型。明示するなら `Extract<Channel, { send: (...args: never[]) => unknown }>` 相当のローカル別名 `SendableChannel`）にして、`deliver(ch, ...)` が strict TS 下で `ch.send(...)` を型付きで呼べるようにする。**LLM 呼び出しの前**に実行し、不能なら LLM を呼ばずに `onFailure` へ（削除済みチャンネル等で毎回 OpenRouter 課金が走るのを防ぐ）。preflight 通過後に**最初の `send`** が throw（一時的権限変動）して 0 チャンクなら catch → `onFailure`（2 チャンク目以降の throw の扱いは下記「分割配信の会計ポリシー」で success 側）。

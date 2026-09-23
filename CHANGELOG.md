@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.6.0] - 2026-09-23
+
+
+### Added
+
+- ギルド単位で有効にできる Web 検索を追加する (#129)
+- Web 検索の上限を 1 リクエスト 4 回に上げる (#131)
+- X のポストの URL を fxtwitter で展開してモデルに渡す (#135)
+- 会話履歴を保存してモデルの文脈に使う (#136)
+- 会話履歴を Discord から読み、窓の外は tool で取りに行く (#140)
+- コマンドの返信を Components V2 にし、/status で設定を切り替えられるようにする (#149)
+- モデルの推論を受け取り、送り返し、設定に応じて回答の上に表示する (#150)
+- /status の各項目を項目名と値の 2 行で表示する (#151)
+- 回答の区切り線を Separator で描く (#152)
+
+
+### Fixed
+
+- 1 ページに収まる返信を最後の行だけ次のページに分けない (#128)
+- 回答フッターの所要時間を Latency ではなく Time と秒で表示する (#130)
+- 同時に走ったギルド設定の変更が互いを消さないようにする (#132)
+- ツイート展開と会話履歴の設定の注意書きを Discord 上から削る (#137)
+- 会話履歴で過去の添付を送り直さず表記にする (#138)
+- 最終ターンの tool 呼び出しに本文が付いていれば、その本文で答える (#142)
+- Web 検索が失敗したら検索なしで答え直す (#153)
+
+
+### Documentation
+
+- リリースで削除した design へのリンク切れを直し、以後も切れないようにする (#123)
+- Renovate-pr に lock の年齢の確認と手元での lookup の手順を足す (#127)
+- テストが手元の .env を読むことと、design の無い変更の手動確認の置き場所を書く (#133)
+- 会話履歴の design を初回リリースの範囲に絞り、削除同期の強化を分ける (#134)
+- 会話履歴を Discord から読み、それより前は tool で取りに行く design に書き直す (#139)
+- 暗黙の prompt cache の実測結果を design に記録する (#141)
+- 過去の画像を開く e2e を change として起こす (#143)
+- Gotchas に OpenRouter のモデル選択の手順を足す (#144)
+- 重複する design を削除し、ツール系の design を現行の仕様に合わせて書き直す (#146)
+- カスタム絵文字・スタンプ・GIF への対応の design を起こす (#147)
+- リリース通知と /release-note の design を起こす (#148)
+
+
+### Testing
+
+- 過去の画像を view_attachment で開く e2e を足す (#145)
+
+
+### Dependencies
+
+- Update all non-major dependencies
+
+
 ## [1.5.0] - 2026-09-21
 
 
@@ -368,6 +420,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.6.0]: https://github.com/AtefAndrus/disqord/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AtefAndrus/disqord/compare/v1.3.4...v1.4.0
 [1.3.4]: https://github.com/AtefAndrus/disqord/compare/v1.3.3...v1.3.4
