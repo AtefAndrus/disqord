@@ -26,7 +26,7 @@ OpenRouter の Responses API は会話状態をサーバ側へ保存せず（`st
 
 - 前提（リリース済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — `runToolLoop()`（`src/llm/toolLoop.ts`）と `ToolRegistry`（`src/llm/tools/registry.ts`）。client tool は 1 つも登録されていない
 - 連携: [Web 検索](../web-search/design.md) — Web 検索 ON 時の system メッセージは、変わらない指示を先頭に、現在日時を今回の発言の直前に置く（prompt cache の先頭を毎分変えないため）
-- 連携: [discord-tool](../discord-tool/design.md) — 同 change の `fetch_recent_messages` / `fetch_more_context` の役割は本 change の `read_earlier_messages` が担う
+- 連携: [discord-tool](../discord-tool/design.md) — 会話の履歴を読むのは本 change の `read_earlier_messages` / `view_attachment` で、Discord を変える操作（リアクション、投票、スレッド作成、ピン留め）は同 change が担う。同 change の tool も、対象のメッセージを本 change の窓の参照（`m7`）で受け取る
 - 後続: [conversation-regeneration](../conversation-regeneration/design.md) / [fork](../fork/design.md) — DB の会話ストアを前提にしない形で、本 change の後に設計し直す
 - 連携: [使用統計](../usage-stats/design.md) — cache の読み取り・書き込み token の永続化
 

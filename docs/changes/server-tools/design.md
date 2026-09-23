@@ -144,7 +144,7 @@ tools: [
 
 - **用途**: 進行中の会話のまま、**より強いモデルに相談**する server tool。難しい部分だけ上位モデルへ委譲できる。
 - **パラメータ**（現行ドキュメントと公開スキーマ `AdvisorServerToolConfig` で確認）: `name` / `model`（相談先。省くと実行中のモデルが tool call の `model` 引数で選び、どちらも無ければ外側のリクエストのモデルになる）/ `instructions` / `forward_transcript`（既定 false）/ `stream`（Responses API のみ）/ `max_completion_tokens` / `reasoning` / `temperature`。
-- **返り形**: 成功時 `{ status: "ok", model, advice }`、失敗時 `{ status: "error", error }`。`advice` を会話に取り込む。
+- **返り形**: モデルが tool result として受け取るのは、成功時 `{ status: "ok", model, advice }`、失敗時 `{ status: "error", error }` である（advisor ガイド）。bot が受信する output item `OutputAdvisorServerToolItem` はこれと別で、`type` / `id` / `status` / `model` / `prompt` / `advice` / `error` / `instance_name` を持ち、`status` は `in_progress` / `completed` / `incomplete` / `failed`、失敗は `status: "failed"` と `error` で表す（2026-09-23 に OpenAPI 定義で確認）。bot 側の成否判定は output item の `status` で行う。
 - **nested tools は存在しない**: `advisor` に `tools` と `max_tool_calls` は**無い**。advisor 内から別のツールを呼ばせる経路そのものが無いため、nested tools の allowlist も再帰の可否も設計する必要が無い。
 - **コスト**: 相談先 `model` と `max_completion_tokens`（推論トークンを含む）で決まる。上位モデルを指定すると高コストになる。`model` を省くと、実行中のモデルが任意の OpenRouter モデルを相談先に選べるので、採用時は `parameters.model` を必ず固定する。
 - **DisQord 適用先候補**: 安価な既定モデルで会話しつつ、難所だけ上位モデルへ自動エスカレーション。`forward_transcript` で文脈を渡すか選べる。
