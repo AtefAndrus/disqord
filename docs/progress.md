@@ -9,7 +9,7 @@
 <!-- AUTO:PROGRESS:START -->
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
-| [対話UX改善（会話履歴）](changes/conversation-context/design.md) | 高 | in-progress | 直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く |
+| [対話UX改善（会話履歴）](changes/conversation-context/design.md) | 高 | implemented | 直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く |
 | [スケジュール実行（cron）](changes/cron/design.md) | 高 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | planned | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [バックグラウンドタスク基盤](changes/background-task/design.md) | 中 | investigating | 重い処理を Discord イベントハンドラ外で走らせ、完了後に follow-up / 編集で結果を返す in-memory ジョブ基盤 |

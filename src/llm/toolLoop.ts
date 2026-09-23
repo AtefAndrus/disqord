@@ -1165,6 +1165,32 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
 
     if (finishReason === "tool_calls") {
       if (turn === MAX_TURNS) {
+        // 最終ターンは tool_choice:"none" で送るが、従わずに tool を呼ぶモデルがある。
+        // その要求は通せない一方、本文を書いていればそれが利用者への答えになる。
+        // 捨てるとエラー表示だけが残り、ここまでの tool の往復も無駄になる。
+        // ここは正規化 (normalizeToolCalls) より前なので、断片が 0 件や関数名の欠けた
+        // tool_calls も本文があれば答えとして返す。最終ターンの要求はどのみち実行しないので、
+        // 壊れた要求の形を理由に本文を捨てる必要はない。
+        if (content.length > 0) {
+          history.push({ role: "assistant", content });
+          return await commitFinalOrCancelled(
+            updater,
+            requestSignal,
+            updaterCallMs,
+            history,
+            aggregatedUsage,
+            {
+              status: "final",
+              text: content,
+              finishReason: "stop",
+              history,
+              usage: aggregatedUsage,
+              model: lastObservedModel,
+              provider: lastObservedProvider,
+              ...(webSearch && { webSearch }),
+            },
+          );
+        }
         return await abortToErrorOrCancelled(
           updater,
           "model returned tool_calls on the final turn",

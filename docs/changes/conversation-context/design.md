@@ -1,6 +1,6 @@
 ---
 title: "対話UX改善（会話履歴）"
-status: in-progress
+status: implemented
 priority: high
 summary: "直近の会話を Discord から読んで渡し、それより前と過去の添付はモデルが tool で取りに行く"
 ---
@@ -239,7 +239,7 @@ main には、会話の本文を DB に保存する実装がリリース前の�
 - [x] テスト（窓の開始位置と進め方、reply 先、適格性、Bot の返答の正規化とページの欠け、トリガーの 404、ページング、バッファ、上限の数え方、添付の解決と固定、認可、private thread、非 tool モデル、管理記録、移行を旧 DB・新規 DB・2 度目の起動で）
 - [x] e2e（未メンション発言を含む窓、`read_earlier_messages`、`view_attachment`）と runner のメンションなし投稿
 - [x] prompt cache の効き具合の実測（下記「7. session_id と prompt cache」に結果を記録した）
-- [ ] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF を見直す質問、自分の発言を消した後にそれを指す質問を試す
+- [x] 手動確認: 実クライアントで、未メンションの発言を指す質問、昔の発言を指す質問、過去の PDF と画像を見直す質問、自分の発言を消した後にそれを指す質問を試す
 - [ ] `docs/changes/conversation-context/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
