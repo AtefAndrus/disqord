@@ -350,6 +350,10 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - [FxEmbed Self-Hosting](https://docs.fxembed.com/deployment/) - Cloudflare Workers デプロイ手順
 - [FxEmbed elongator](https://github.com/FxEmbed/elongator) - NSFW対応・レート緩和用のアカウントプロキシ（任意）
 
+## Open Questions / Risks
+
+- **失敗した応答の usage（未対応）**: `response.failed` で終わった応答は、その応答に付いた usage を読まずにエラーにする。検索に失敗した回の token や検索の費用が課金されていても、答え直した回答の footer の合計には入らない。
+
 ## Tasks
 
 ### 一般Web検索（server tools）

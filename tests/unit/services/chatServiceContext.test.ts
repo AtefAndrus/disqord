@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { BadRequestError } from "../../../src/errors";
+import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createReadEarlierMessagesTool } from "../../../src/llm/tools/readEarlierMessages";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
@@ -36,6 +36,13 @@ async function* toolCallTurn(): AsyncGenerator<
   yield { done: true, fullText: "", finishReason: "tool_calls" };
 }
 
+async function* webSearchFailedTurn(): AsyncGenerator<never, void, void> {
+  yield* [];
+  throw new WebSearchFailedError(
+    'Server tool "openrouter:web_search" failed: invalid request (400)',
+  );
+}
+
 async function* badRequestTurn(): AsyncGenerator<never, void, void> {
   yield* [];
   throw new BadRequestError("tweet image rejected");
@@ -63,7 +70,7 @@ function createUpdater(): IToolLoopUpdater {
   };
 }
 
-function createRetryFixture(): {
+function createRetryFixture(webSearchEnabled = false): {
   chatService: ChatService;
   llmClient: ReturnType<typeof createMockLLMClient>;
   requests: ChatCompletionRequest[];
@@ -84,7 +91,7 @@ function createRetryFixture(): {
   ]);
   const settingsService = createMockSettingsService();
   settingsService.getGuildSettings = mock(async (guildId: string) =>
-    createMockGuildSettings({ guildId, historyEnabled: true }),
+    createMockGuildSettings({ guildId, historyEnabled: true, webSearchEnabled }),
   );
   const tweetService = createMockTweetService();
   const imagePart = {
@@ -198,6 +205,72 @@ describe("conversation-context request construction", () => {
       AbortSignal,
     ];
     expect(request).toEqual(buildChatRequest("test-model:fixture", { text: "question" }));
+  });
+
+  test("does not retry without web search after a client tool was invoked", async () => {
+    const fixture = createRetryFixture(true);
+    let streamCall = 0;
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      streamCall += 1;
+      return streamCall === 1 ? toolCallTurn() : webSearchFailedTurn();
+    });
+
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      retryInput(fixture.readEarlier),
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+
+    expect(fixture.readEarlier).toHaveBeenCalledTimes(1);
+    expect(fixture.requests).toHaveLength(2);
+    expect(result.status === "error" && result.error).toBeInstanceOf(WebSearchFailedError);
+  });
+
+  test("drops tweet images and then web search when each fails before anything is shown", async () => {
+    const fixture = createRetryFixture(true);
+    let streamCall = 0;
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      streamCall += 1;
+      if (streamCall === 1) return badRequestTurn();
+      if (streamCall === 2) return webSearchFailedTurn();
+      return finalTurn("answer");
+    });
+
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      retryInput(fixture.readEarlier),
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+
+    expect(fixture.requests).toHaveLength(3);
+    const images = (request: ChatCompletionRequest): number =>
+      request.messages
+        .flatMap((message) =>
+          message.role === "user" && Array.isArray(message.content) ? message.content : [],
+        )
+        .filter((part) => part.type === "image_url").length;
+    const searches = (request: ChatCompletionRequest): boolean =>
+      request.tools?.some((tool) => tool.type === "openrouter:web_search") ?? false;
+    const instructed = (request: ChatCompletionRequest): boolean =>
+      request.messages.some(
+        (message) =>
+          message.role === "system" && String(message.content).includes("Web 検索ツールを使える"),
+      );
+    const [first, second, third] = fixture.requests;
+    expect(first && [images(first), searches(first), instructed(first)]).toEqual([1, true, true]);
+    expect(second && [images(second), searches(second), instructed(second)]).toEqual([
+      0,
+      true,
+      true,
+    ]);
+    expect(third && [images(third), searches(third), instructed(third)]).toEqual([0, false, false]);
+    expect(result).toMatchObject({ status: "final", webSearchSkipped: true });
   });
 
   test("does not retry tweet images after a client tool was invoked", async () => {

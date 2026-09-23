@@ -306,9 +306,37 @@ export class ChatService implements IChatService {
         ...(requestReasoning && { reasoning: requestReasoning }),
       };
 
-      let clientToolInvoked = false;
-      const firstAttemptToolContext: ConversationWindowContext["toolContext"] | undefined =
-        conversation
+      // A request the provider rejects because of one input (a tweet image,
+      // or the web search tool on the query the model chose) is answered
+      // again without that input, each at most once, and only while nothing
+      // has been shown and no client tool has run: a retry would repeat both.
+      const webSearchInstruction = buildWebSearchStaticSystemMessage().content;
+      const requestWithout = (images: boolean, search: boolean): ChatCompletionRequest => {
+        if (!images && !search) return request;
+        const messages = request.messages
+          .filter(
+            (message) =>
+              !(search && message.role === "system" && message.content === webSearchInstruction),
+          )
+          .map((message) =>
+            images && message.role === "user" && Array.isArray(message.content)
+              ? {
+                  ...message,
+                  content: message.content.filter(
+                    (part) => part.type !== "image_url" || !expansion?.imageParts.includes(part),
+                  ),
+                }
+              : message,
+          );
+        return { ...request, messages };
+      };
+
+      let dropTweetImages = false;
+      let dropWebSearch = false;
+      let usage: ToolLoopResult["usage"];
+      while (true) {
+        let clientToolInvoked = false;
+        const toolContext: ConversationWindowContext["toolContext"] | undefined = conversation
           ? {
               readEarlierMessages: (count, signal) => {
                 clientToolInvoked = true;
@@ -325,93 +353,47 @@ export class ChatService implements IChatService {
               },
             }
           : undefined;
-      const tracked = createTrackingUpdater(updater);
-      const result = await this.runChatLoop(
-        request,
-        settings.webSearchEnabled,
-        guildId,
-        ctx,
-        tracked.updater,
-        controller.signal,
-        requestId,
-        conversation?.sessionId,
-        firstAttemptToolContext,
-        settings.defaultModel,
-        supportsTools,
-      );
-
-      if (
-        result.status === "error" &&
-        result.error instanceof BadRequestError &&
-        (expansion?.imageParts.length ?? 0) > 0 &&
-        !tracked.stagedNonEmpty &&
-        !clientToolInvoked
-      ) {
-        console.warn("[chatService] retrying after removing tweet images");
-        const retryBase = conversation ? request : buildWithoutHistory();
-        const retryRequest = buildChatRequest(
-          settings.defaultModel,
-          input,
-          expansion?.textParts ?? [],
-          retryBase.messages.map((message) =>
-            message.role === "user" && Array.isArray(message.content)
-              ? {
-                  ...message,
-                  content: message.content.filter(
-                    (part) => part.type !== "image_url" || !expansion?.imageParts.includes(part),
-                  ),
-                }
-              : message,
-          ),
-          Boolean(conversation && supportsTools),
-        );
-        if (requestReasoning) retryRequest.reasoning = requestReasoning;
-        const retryTracked = createTrackingUpdater(updater);
-        const retryResult = await this.runChatLoop(
-          retryRequest,
-          settings.webSearchEnabled,
+        const tracked = createTrackingUpdater(updater);
+        const result = await this.runChatLoop(
+          requestWithout(dropTweetImages, dropWebSearch),
+          settings.webSearchEnabled && !dropWebSearch,
           guildId,
           ctx,
-          retryTracked.updater,
+          tracked.updater,
           controller.signal,
           requestId,
           conversation?.sessionId,
-          conversation?.toolContext,
+          toolContext,
           settings.defaultModel,
           supportsTools,
         );
-        const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
-        return usage ? { ...retryResult, usage } : retryResult;
+        usage = addUsage(usage, result.usage);
+        const untouched = !tracked.stagedNonEmpty && !clientToolInvoked;
+        if (result.status === "error" && untouched) {
+          if (
+            result.error instanceof BadRequestError &&
+            !dropTweetImages &&
+            (expansion?.imageParts.length ?? 0) > 0
+          ) {
+            console.warn("[chatService] retrying after removing tweet images");
+            dropTweetImages = true;
+            continue;
+          }
+          if (
+            result.error instanceof WebSearchFailedError &&
+            !dropWebSearch &&
+            settings.webSearchEnabled
+          ) {
+            console.warn("[chatService] retrying without web search after it failed");
+            dropWebSearch = true;
+            continue;
+          }
+        }
+        const withUsage = usage ? { ...result, usage } : result;
+        return withUsage.status === "final" && dropWebSearch
+          ? { ...withUsage, webSearchSkipped: true }
+          : withUsage;
       }
-
-      // The search fails on some queries the model picks. When nothing has
-      // been shown and no client tool has run (a retry would run it again),
-      // answer once more without web search instead of failing the reply.
-      if (
-        result.status === "error" &&
-        result.error instanceof WebSearchFailedError &&
-        !tracked.stagedNonEmpty &&
-        !clientToolInvoked
-      ) {
-        console.warn("[chatService] retrying without web search after it failed");
-        const retryResult = await this.runChatLoop(
-          request,
-          false,
-          guildId,
-          ctx,
-          createTrackingUpdater(updater).updater,
-          controller.signal,
-          requestId,
-          conversation?.sessionId,
-          conversation?.toolContext,
-          settings.defaultModel,
-          supportsTools,
-        );
-        const usage = addUsage(addUsage(undefined, result.usage), retryResult.usage);
-        const withUsage = usage ? { ...retryResult, usage } : retryResult;
-        return withUsage.status === "final" ? { ...withUsage, webSearchSkipped: true } : withUsage;
-      }
-      return result;
     } finally {
       this.activeRequests.delete(requestId);
     }
