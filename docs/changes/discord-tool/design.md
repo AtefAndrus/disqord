@@ -53,7 +53,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 | v1 の操作 | リアクション、投票、スレッド作成、ピン留め | どれも REST だけで完結し、特権 intent を足さずに動く。結果は Discord 上で誰にでも見え、リアクションとピンは取り消せ、投票とスレッドは作成者や管理者が消せる |
 | 有効化の単位 | `/config discord-tools on\|off` で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
 | 対象メッセージの指定 | 会話の窓の参照（`m7`）で受け取り、省略時は bot を呼んだメッセージとする。会話履歴が off の guild では、bot を呼んだメッセージだけを対象にできる | モデルに生のメッセージ ID を書かせない。窓に無いメッセージは操作できない |
-| 権限の確認 | 実行の直前に、bot と依頼したメンバーの両方について `channel.permissionsFor()` で必要な権限を確かめ、どちらかが欠けていれば実行しない。メンバーは応答ごとに 1 回 `guild.members.fetch({ user, force: true, cache: false })` で取り直す | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。gateway 由来の `message.member` はロールを外された後も古いロールを持ちうる |
+| 権限の確認 | 各操作の実行の直前に、依頼したメンバーを `guild.members.fetch({ user, force: true, cache: false })` で取り直し、bot とそのメンバーの両方について `channel.permissionsFor()` で必要な権限を確かめ、どちらかが欠けていれば実行しない | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。1 回の応答は tool のターンを重ねて数分続きうるので、応答の開始時に取ったメンバーでは途中でロールを外されたことを反映できない。gateway 由来の `message.member` も古いロールを持ちうる |
 | 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.26.5 の `Message#pinnable` の実装に合わせる |
 | 失敗の返し方 | 権限不足（`50013`、`50001`）は足りない権限名を、対象が無い（`10008` など）は対象が無いことを、それ以外は一般的な失敗を、短い JSON でモデルに返す | 権限と not-found を混ぜると、モデルがユーザに誤った対処を伝える |
 | 1 応答あたりの上限 | リアクションは 3 個、投票・スレッド・ピンは各 1 回 | モデルが繰り返し呼んでチャンネルを荒らさないようにする。上限を超えた呼び出しは実行せず、上限に達したことを返す |
@@ -67,11 +67,13 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 
 | tool | 引数 | Discord の操作 | bot に要る権限 | 依頼者に要る権限 |
 | ---- | ---- | -------------- | -------------- | ---------------- |
-| `add_reaction` | `emoji`（Unicode の絵文字、またはこの guild のカスタム絵文字の名前）、`message_ref`（任意） | `message.react()` | `ViewChannel`、`ReadMessageHistory`、`AddReactions` | `ViewChannel` |
-| `create_poll` | `question`（300 字まで）、`answers`（2〜10 個、各 55 字まで）、`duration_hours`（1〜768、既定 24）、`allow_multiselect`（既定 false） | `channel.send({ poll })` を bot を呼んだメッセージへの返信として送る | `ViewChannel`、`SendMessages`、`SendPolls` | `SendPolls` |
+| `add_reaction` | `emoji`（Unicode の絵文字、またはこの guild のカスタム絵文字の名前）、`message_ref`（任意） | `message.react()` | `ViewChannel`、`ReadMessageHistory`、`AddReactions` | `ViewChannel`、`ReadMessageHistory`、`AddReactions` |
+| `create_poll` | `question`（300 字まで）、`answers`（2〜10 個、各 55 字まで）、`duration_hours`（1〜768、既定 24）、`allow_multiselect`（既定 false） | `channel.send({ poll })` を bot を呼んだメッセージへの返信として送る | `ViewChannel`、`ReadMessageHistory`（返信に要る）、送信権限、`SendPolls` | 送信権限、`SendPolls` |
 | `create_thread` | `name`（100 字まで）、`message_ref`（任意） | `message.startThread({ name })` | `ViewChannel`、`ReadMessageHistory`、`CreatePublicThreads` | `CreatePublicThreads` |
 | `pin_message` | `message_ref`（任意） | `message.pin()`。事前に `message.pinnable` を見る | `ViewChannel`、`ReadMessageHistory`、`PinMessages` | `PinMessages` |
 
+- 送信権限は、スレッドの中では `SendMessagesInThreads`、それ以外では `SendMessages` である。スレッドの権限は親チャンネルから継承されるが、スレッド内の送信だけは別の権限で決まる。
+- `add_reaction` の依頼者に `AddReactions` まで求めるのは、Discord がまだ誰も付けていない絵文字を付けるときに `AddReactions` を要求するためである。既に付いている絵文字に重ねるだけなら要らないが、その区別を省き、常に求める。
 - `create_thread` はテキストチャンネル（`ChannelType.GuildText`）でだけ提示する。アナウンスチャンネルでは discord.js が要求した種別を無視してアナウンススレッドを作り、スレッドの中ではスレッドを作れない。
 - `add_reaction` のカスタム絵文字は、guild の絵文字キャッシュから名前で引く。見つからなければ実行せず、使える絵文字が無いことを返す。
 - `pin_message` の `message.pinnable` は、システムメッセージと閲覧できないチャンネルを弾く。権限が足りているのに `pinnable` が false のときは、その理由を返す。
@@ -96,7 +98,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ### 実装内容
 
 - `isEnabled(ctx)` は、`toolsAllowed` が false でなく、`ctx.discord` があるときに true を返す。`ctx.discord` は guild の設定が有効なときにだけ作るので、DM と無効な guild では tool を提示しない。`create_thread` はチャンネルの種別も見る。
-- `DiscordToolContext` は応答ごとに作り、依頼者のメンバー、bot を呼んだメッセージ、上限のカウンタを持つ。メンバーの取得に失敗したら、権限が分からないので全操作を拒否する。
+- `DiscordToolContext` は応答ごとに作り、依頼者の ID、bot を呼んだメッセージ、上限のカウンタを持つ。メンバーは操作のたびに取り直し、取得に失敗したら、権限が分からないのでその操作を拒否する。
 - handler は `AbortSignal` を受け取るが、Discord への要求が送られた後の中断では結果が分からない。リアクションとピンは繰り返しても害が無く、スレッドは Discord が重複を断るので、中断後の再試行で二重に作られることは無い。投票だけは中断後に再試行すると二重になりうるので、1 応答 1 回の上限を、中断した呼び出しにも数える。
 - モデルに返す結果は `{"ok":true}` か `{"ok":false,"reason":"missing_permission","who":"bot","permissions":["PinMessages"]}` のような短い JSON にする。
 

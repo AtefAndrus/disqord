@@ -69,7 +69,7 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 
 ### 受信
 
-- `response.output_item.done` の item が `type: "reasoning"` のとき、`summary` と `content` が配列であること、各要素の `text` が文字列であることを検証する。形が違えば既存の `StreamProtocolError` として扱う。
+- `response.output_item.done` の item が `type: "reasoning"` のとき、必須の `summary` が配列であることと、任意の `content` があれば配列であること、それぞれの要素の `text` が文字列であることを検証する。形が違えば既存の `StreamProtocolError` として扱う。OpenAPI 定義の `OutputItemReasoning` で必須なのは `type`、`id`、`summary` だけで、要約だけの item や暗号化されたものだけの item は `content` を持たない。
 - 未知の field は捨てずに item ごと保持する。送り返すときに OpenRouter が要る field を bot が知っている必要は無い。
 - 表示用の文字列は検証済みの `summary_text` または `reasoning_text` から作る。
 
