@@ -23,16 +23,16 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
-    "discord.js": "14.26.5",
-    "zod": "4.4.3"
+    "discord.js": "14.27.0",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@skyra/discord-components-core": "4.0.2",
-    "@types/node": "26.6.1",
+    "@types/node": "26.6.2",
     "bun-types": "1.4.2",
     "lefthook": "2.1.14",
-    "markdownlint-cli2": "0.23.2",
+    "markdownlint-cli2": "0.23.3",
     "playwright": "1.63.0",
     "typescript": "7.0.2"
   }
