@@ -24,6 +24,7 @@
 | [出力マルチモーダル対応](changes/multimodal-output/design.md) | 中 | investigating | 検証済みの生成画像と生成ファイルを Discord の MediaGallery / File で表示 |
 | [権限管理](changes/permissions/design.md) | 中 | planned | チャンネル制限と、設定変更の共通認可契約（admin_role_id） |
 | [推論内容の取得・表示](changes/reasoning-output/design.md) | 中 | planned | Responses API の reasoning item を受け取り、tool を挟む生成では送り返し、設定に応じて回答に推論のファイルを添える |
+| [リリース通知と /release-note](changes/release-announcement/design.md) | 中 | investigating | 起動時に動いている版を記録と比べ、新しい版なら CHANGELOG の該当する節を設定したチャンネルへ通知する。/release-note で任意の版の変更点を表示する |
 | [Renovate 移行](changes/renovate-migration/design.md) | 中 | implemented | Dependabot を Renovate (Mend App) に置き換え、手動ピン更新を自動化 |
 | [OpenRouter サーバツール群](changes/server-tools/design.md) | 中 | investigating | image_generation / fusion / advisor / subagent の OpenRouter server tool 群（web_search/web_fetch は web-search 側） |
 | [ギルド設定の同時変更で変更が消えないようにする](changes/settings-concurrent-writes/design.md) | 中 | in-progress | 同時に走った設定変更が互いを消さないよう、書き込みを 1 つのトランザクションにまとめる（実装済み、実クライアントでの確認待ち） |
