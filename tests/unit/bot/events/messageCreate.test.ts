@@ -19,7 +19,11 @@ import type {
 } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
-import { REASONING_COMPONENT_ID } from "../../../../src/utils/chatContainerBuilder";
+import {
+  MAX_TOTAL_BYTES_PER_MESSAGE,
+  MAX_TOTAL_CHARS_PER_MESSAGE,
+  REASONING_COMPONENT_ID,
+} from "../../../../src/utils/chatContainerBuilder";
 
 interface MockBotMessage {
   id: string;
@@ -1239,6 +1243,13 @@ describe("createMessageCreateHandler", () => {
       | { content?: string }
       | undefined;
     expect(reasoning?.content).toContain("||考えた内容||");
+    const texts = (firstPage?.components ?? [])
+      .map((c) => (c as { content?: string }).content)
+      .filter((content): content is string => typeof content === "string");
+    expect(texts.join("").length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+    expect(new TextEncoder().encode(texts.join("")).length).toBeLessThanOrEqual(
+      MAX_TOTAL_BYTES_PER_MESSAGE,
+    );
   });
 
   test.each([

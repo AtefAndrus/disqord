@@ -515,6 +515,20 @@ describe("chatContainerBuilder", () => {
     });
   });
 
+  describe("splitTextIntoMessages の 1 ページ目の予約", () => {
+    test("予約は 1 ページ目だけを狭め、2 ページ目以降は通常の予算で分ける", () => {
+      const text = "x".repeat(10_000);
+      const plain = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+      const reserved = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET, {
+        chars: 1500,
+        bytes: 4500,
+      });
+      expect(reserved[0]?.length).toBe((plain[0]?.length ?? 0) - 1500);
+      expect(reserved[1]?.length).toBe(plain[1]?.length);
+      expect(reserved.join("")).toBe(text);
+    });
+  });
+
   describe("fitReasoning", () => {
     const room = { chars: 3000, bytes: 8000 };
 
@@ -543,6 +557,19 @@ describe("chatContainerBuilder", () => {
       expect(new TextEncoder().encode(fitted.text).length).toBeLessThanOrEqual(room.bytes);
       expect(fitted.text).toContain("reasoning.md");
       expect(fitted.text).toMatch(/\|\|[^|]+…\|\|/u);
+    });
+
+    test("エスケープした || の途中で切っても、閉じの前に対にならないバックスラッシュを残さない", () => {
+      for (let pad = 0; pad < 8; pad += 1) {
+        const text = fitReasoning(`${"a".repeat(1200 + pad)}${"||".repeat(400)}`, {
+          chars: 1500,
+          bytes: 4500,
+        }).text;
+        const spoilerBody = text.slice(text.indexOf("||") + 2, text.lastIndexOf("||"));
+        expect(spoilerBody.endsWith("…")).toBe(true);
+        const trailingBackslashes = spoilerBody.slice(0, -1).match(/\\*$/u)?.[0].length ?? 0;
+        expect(trailingBackslashes % 2).toBe(0);
+      }
     });
 
     test("残りのバイトが無ければ本文を出さず、ファイルだけを案内する", () => {

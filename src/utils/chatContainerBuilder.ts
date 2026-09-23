@@ -237,6 +237,8 @@ export function splitMarkdownByCharsAndBytes(
   text: string,
   maxChars: number,
   maxBytes: number,
+  /** A smaller budget for the first chunk only (room kept on the first page for other content). */
+  firstChunk?: { maxChars: number; maxBytes: number },
 ): string[] {
   const chunks: string[] = [];
   let position = 0;
@@ -251,6 +253,8 @@ export function splitMarkdownByCharsAndBytes(
       continue;
     }
 
+    const limitChars = chunks.length === 0 && firstChunk ? firstChunk.maxChars : maxChars;
+    const limitBytes = chunks.length === 0 && firstChunk ? firstChunk.maxBytes : maxBytes;
     const prefix = reopenedFence(state);
     const prefixChars = prefix.length;
     const prefixBytes = byteLength(prefix);
@@ -272,7 +276,7 @@ export function splitMarkdownByCharsAndBytes(
       const projectedChars = prefixChars + (nextCursor - position) + suffix.length;
       const projectedBytes = prefixBytes + nextRawBytes + byteLength(suffix);
 
-      if (projectedChars > maxChars || projectedBytes > maxBytes) {
+      if (projectedChars > limitChars || projectedBytes > limitBytes) {
         break;
       }
 
@@ -339,10 +343,15 @@ export function splitTextIntoMessages(
   text: string,
   badge: TextBudget,
   footer: TextBudget,
+  /** Budget taken from the first page only, on top of badge and footer. */
+  firstPageReserve: TextBudget = ZERO_TEXT_BUDGET,
 ): string[] {
   const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
   const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
-  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes);
+  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes, {
+    maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
+    maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
+  });
   return chunks.length > 0 ? chunks : [""];
 }
 
@@ -572,10 +581,8 @@ function escapeSpoiler(text: string): string {
 const REASONING_RESERVE: TextBudget = { chars: 1500, bytes: 4500 };
 
 /**
- * What to take off every page's budget before splitting the answer when
+ * What to take off the first page's budget before splitting the answer when
  * reasoning will be shown: all of it when short, otherwise REASONING_RESERVE.
- * Splitting applies one budget to every page, so later pages get the same
- * margin; the cost is an occasional extra page.
  */
 export function reasoningReserve(reasoning: string): TextBudget {
   const whole = measureTextBudget(`${REASONING_HEADING}\n||${escapeSpoiler(reasoning)}||`);

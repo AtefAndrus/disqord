@@ -476,14 +476,11 @@ export function createMessageCreateHandler(
       const footerBudget = estimateFinalFooterBudget(metadata);
       const reasoningText =
         settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
-      const badgeBudget = measureTextBudget(badgeText(modelName));
-      const reserve = reasoningText ? reasoningReserve(reasoningText) : undefined;
       const chunks = splitTextIntoMessages(
         finalText,
-        reserve
-          ? { chars: badgeBudget.chars + reserve.chars, bytes: badgeBudget.bytes + reserve.bytes }
-          : badgeBudget,
+        measureTextBudget(badgeText(modelName)),
         footerBudget,
+        reasoningText ? reasoningReserve(reasoningText) : undefined,
       );
 
       const botMessages = updater.messages;
