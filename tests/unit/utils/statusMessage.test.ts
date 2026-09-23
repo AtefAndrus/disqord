@@ -43,15 +43,16 @@ describe("buildStatusMessage", () => {
     expect(message.flags).toBe(MessageFlags.IsComponentsV2);
     expect(message.embeds).toEqual([]);
     expect(message.allowedMentions).toEqual({ parse: [] });
-    expect(texts).toContain(
-      "## ステータス\n**バージョン** v1.3.2\n**OpenRouter残高** $100.0000\n**モデルキャッシュ** <t:1735689600:R> (10件)",
-    );
-    expect(texts).toContain("**無料モデル限定** 有効");
-    expect(texts).toContain("**LLM詳細表示** 有効");
-    expect(texts).toContain("**Web検索** 無効");
-    expect(texts).toContain("**ツイート展開** 有効");
-    expect(texts).toContain("**会話履歴** 無効");
-    expect(texts).toContain("**推論表示** 無効");
+    expect(texts).toContain("## ステータス");
+    expect(texts).toContain("**バージョン**\nv1.3.2");
+    expect(texts).toContain("**OpenRouter残高**\n$100.0000");
+    expect(texts).toContain("**モデルキャッシュ**\n<t:1735689600:R> (10件)");
+    expect(texts).toContain("**無料モデル限定**\n有効");
+    expect(texts).toContain("**LLM詳細表示**\n有効");
+    expect(texts).toContain("**Web検索**\n無効");
+    expect(texts).toContain("**ツイート展開**\n有効");
+    expect(texts).toContain("**会話履歴**\n無効");
+    expect(texts).toContain("**推論表示**\n無効");
   });
 
   test("各設定の Section ボタンは現在値と反対の値を指定する", () => {
@@ -87,7 +88,10 @@ describe("buildStatusMessage", () => {
     if (!container) throw new Error("Expected the status Container");
 
     expect(statusTextDisplays(message)).toEqual([
-      "## ステータス\n**バージョン** v1.3.2\n**OpenRouter残高** 無制限\n**モデルキャッシュ** 未取得",
+      "## ステータス",
+      "**バージョン**\nv1.3.2",
+      "**OpenRouter残高**\n無制限",
+      "**モデルキャッシュ**\n未取得",
     ]);
     expect(container.components.some((component) => component.type === ComponentType.Section)).toBe(
       false,
