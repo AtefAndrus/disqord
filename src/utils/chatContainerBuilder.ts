@@ -563,6 +563,23 @@ function escapeSpoiler(text: string): string {
  * what the page left; reasoning that does not fit is cut there and the full
  * text goes to reasoning.md.
  */
+/** Room kept on the first page for the reasoning, so a long answer does not leave it nothing. */
+const REASONING_RESERVE: TextBudget = { chars: 1500, bytes: 4500 };
+
+/**
+ * What to take off every page's budget before splitting the answer when
+ * reasoning will be shown: all of it when short, otherwise REASONING_RESERVE.
+ * Splitting applies one budget to every page, so later pages get the same
+ * margin; the cost is an occasional extra page.
+ */
+export function reasoningReserve(reasoning: string): TextBudget {
+  const whole = measureTextBudget(`${REASONING_HEADING}\n||${escapeSpoiler(reasoning)}||`);
+  return {
+    chars: Math.min(whole.chars, REASONING_RESERVE.chars),
+    bytes: Math.min(whole.bytes, REASONING_RESERVE.bytes),
+  };
+}
+
 export function fitReasoning(reasoning: string, remaining: TextBudget): FittedReasoning {
   const escaped = escapeSpoiler(reasoning);
   const whole = `${REASONING_HEADING}\n||${escaped}||`;
@@ -573,7 +590,7 @@ export function fitReasoning(reasoning: string, remaining: TextBudget): FittedRe
   const reserved = measureTextBudget(`${REASONING_HEADING}\n||…||${REASONING_TRUNCATED_NOTE}`);
   const maxChars = remaining.chars - reserved.chars;
   const maxBytes = remaining.bytes - reserved.bytes;
-  if (maxChars < REASONING_MIN_INLINE_CHARS) {
+  if (maxChars < REASONING_MIN_INLINE_CHARS || maxBytes < REASONING_MIN_INLINE_CHARS) {
     return { text: `${REASONING_HEADING}${REASONING_TRUNCATED_NOTE}`, needsFile: true };
   }
   // A cut inside an escaped `\|\|` would leave a stray backslash or bar next to the closing `||`.

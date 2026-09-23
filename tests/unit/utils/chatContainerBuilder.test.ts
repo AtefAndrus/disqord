@@ -20,6 +20,7 @@ import {
   measureTextBudget,
   REASONING_COMPONENT_ID,
   REASONING_HEADING,
+  reasoningReserve,
   STREAMING_LABEL,
   splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
@@ -535,6 +536,18 @@ describe("chatContainerBuilder", () => {
       expect(new TextEncoder().encode(fitted.text).length).toBeLessThanOrEqual(room.bytes);
       expect(fitted.text).toContain("reasoning.md");
       expect(fitted.text).toMatch(/\|\|[^|]+…\|\|/u);
+    });
+
+    test("残りのバイトが無ければ本文を出さず、ファイルだけを案内する", () => {
+      const fitted = fitReasoning("推論".repeat(2000), { chars: 3000, bytes: 0 });
+      expect(fitted.needsFile).toBe(true);
+      expect(fitted.text).not.toContain("||");
+    });
+
+    test("reasoningReserve は短い推論なら全体、長い推論なら上限の分だけを取る", () => {
+      const short = reasoningReserve("短い");
+      expect(short.chars).toBe(`${REASONING_HEADING}\n||短い||`.length);
+      expect(reasoningReserve("あ".repeat(10_000))).toEqual({ chars: 1500, bytes: 4500 });
     });
 
     test("残りがほとんど無ければ本文を出さず、ファイルだけを案内する", () => {

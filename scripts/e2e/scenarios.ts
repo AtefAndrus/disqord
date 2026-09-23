@@ -54,6 +54,7 @@ export interface Scenario {
 // Discord component types.
 const TEXT_DISPLAY = 10;
 const CONTAINER = 17;
+const FILE = 13;
 const STOP_BUTTON_ID_PREFIX = "stop_response_";
 
 type Component = Record<string, unknown>;
@@ -114,11 +115,39 @@ function isErrorContainer(message: DiscordMessage): boolean {
   );
 }
 
-/** `fitReasoning`: the first page carries a TextDisplay with the reasoning component id. */
-function hasReasoning(message: DiscordMessage | undefined): boolean {
-  return childrenOf(
-    containerOf(message ?? { id: "", content: "", author: { id: "", username: "" } }),
-  ).some((c) => c.type === TEXT_DISPLAY && c.id === REASONING_COMPONENT_ID);
+/**
+ * `fitReasoning`: on the first page the reasoning TextDisplay (found by its
+ * component id) comes right after the model badge, before the answer, with
+ * its text in a spoiler; when it was cut, a File component for reasoning.md
+ * follows it.
+ */
+function reasoningProblems(message: DiscordMessage | undefined): string[] {
+  const children = childrenOf(message ? containerOf(message) : undefined);
+  const index = children.findIndex(
+    (c) => c.type === TEXT_DISPLAY && c.id === REASONING_COMPONENT_ID,
+  );
+  if (index === -1) {
+    return [
+      "the first message shows no reasoning (is reasoning display enabled and does the model return reasoning text?)",
+    ];
+  }
+  const reasoning = children[index];
+  const next = children[index + 1];
+  const truncated =
+    typeof reasoning?.content === "string" && reasoning.content.includes("reasoning.md");
+  return [
+    ...(index === 1
+      ? []
+      : [`the reasoning is component ${index + 1}, not right after the model badge`]),
+    ...(typeof reasoning?.content === "string" && /\|\|[\s\S]+\|\|/u.test(reasoning.content)
+      ? []
+      : truncated
+        ? []
+        : ["the reasoning text is not in a spoiler"]),
+    ...(truncated && next?.type !== FILE
+      ? ["the cut reasoning has no reasoning.md file component"]
+      : []),
+  ];
 }
 
 export function toReply(messages: DiscordMessage[]): Reply {
@@ -326,11 +355,7 @@ export const SCENARIOS: Scenario[] = [
       "[e2e] 必ず read_earlier_messages を 1 回呼んでから、5 人を円卓に並べる並べ方が何通りあるか（回転は同じとみなす）を考え、数だけを短く答えて。",
     check: (reply) => [
       ...(reply.isError ? ["the reasoning reply ended in an error"] : []),
-      ...(hasReasoning(reply.messages[0])
-        ? []
-        : [
-            "the first message shows no reasoning (is reasoning display enabled and does the model return reasoning text?)",
-          ]),
+      ...reasoningProblems(reply.messages[0]),
       ...hasUsageFooter(reply),
     ],
   },

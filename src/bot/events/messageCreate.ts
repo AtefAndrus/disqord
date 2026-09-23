@@ -25,6 +25,7 @@ import {
   type FinalMetadata,
   fitReasoning,
   measureTextBudget,
+  reasoningReserve,
   remainingPageBudget,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
@@ -473,15 +474,19 @@ export function createMessageCreateHandler(
         ? `${answerText}${openFence ? "\n```" : ""}\n\n${resultLinks}`
         : answerText;
       const footerBudget = estimateFinalFooterBudget(metadata);
+      const reasoningText =
+        settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
+      const badgeBudget = measureTextBudget(badgeText(modelName));
+      const reserve = reasoningText ? reasoningReserve(reasoningText) : undefined;
       const chunks = splitTextIntoMessages(
         finalText,
-        measureTextBudget(badgeText(modelName)),
+        reserve
+          ? { chars: badgeBudget.chars + reserve.chars, bytes: badgeBudget.bytes + reserve.bytes }
+          : badgeBudget,
         footerBudget,
       );
 
       const botMessages = updater.messages;
-      const reasoningText =
-        settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
 
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから送る確定表示を停止ボタン付きの stale な内容で上書きさせない。

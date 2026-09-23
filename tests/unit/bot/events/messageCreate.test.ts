@@ -1182,6 +1182,34 @@ describe("createMessageCreateHandler", () => {
     expect(payload.files).toBeUndefined();
   });
 
+  test("長い回答でも 1 ページ目に推論の spoiler が入る余地を残す", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    settings.showLlmDetails = false;
+    const answer = createMockChatResponseFn("x".repeat(8000));
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        reasoningText: "考えた内容",
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const firstPage = (mockBotMessage.edit as ReturnType<typeof mock>).mock.calls
+      .map((call) => toContainerJSON(call[0]))
+      .find((container) => container.components.some((c) => c.id === REASONING_COMPONENT_ID));
+    const reasoning = firstPage?.components.find((c) => c.id === REASONING_COMPONENT_ID) as
+      | { content?: string }
+      | undefined;
+    expect(reasoning?.content).toContain("||考えた内容||");
+  });
+
   test.each([
     ["display disabled", false, "reasoning text"],
     ["display text empty", true, ""],

@@ -226,27 +226,36 @@ describe("e2e scenarios: check", () => {
     expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
   });
 
-  test("reasoning: 1 ページ目に推論の component id の TextDisplay があるときだけ通り、本文には数えない", () => {
-    const withReasoning = (id: number): DiscordMessage => {
-      const base = page("1", ["答え"], USAGE);
+  test("reasoning: モデル名の直後に spoiler の推論があるときだけ通り、本文には数えない", () => {
+    const withReasoning = (
+      reasoning: Record<string, unknown>,
+      at = 1,
+      extra: unknown[] = [],
+    ): DiscordMessage => {
+      const base = page("1", ["**Model:** m", "答え"], USAGE);
       const [container] = (base.components ?? []) as { components: unknown[] }[];
-      return {
-        ...base,
-        components: [
-          {
-            ...(container as object),
-            components: [
-              { type: 10, id, content: "-# 推論\n||考えた||" },
-              ...(container?.components ?? []),
-            ],
-          },
-        ],
-      };
+      const children = [...(container?.components ?? [])];
+      children.splice(at, 0, { type: 10, ...reasoning }, ...extra);
+      return { ...base, components: [{ ...(container as object), components: children }] };
     };
-    expect(check("reasoning", [withReasoning(REASONING_COMPONENT_ID)])).toEqual([]);
-    expect(toReply([withReasoning(REASONING_COMPONENT_ID)]).body).not.toContain("考えた");
-    expect(check("reasoning", [withReasoning(7)])).not.toEqual([]);
-    expect(check("reasoning", [page("1", ["答え"], USAGE)])).not.toEqual([]);
+    const ok = { id: REASONING_COMPONENT_ID, content: "-# 推論\n||考えた||" };
+    expect(check("reasoning", [withReasoning(ok)])).toEqual([]);
+    expect(toReply([withReasoning(ok)]).body).not.toContain("考えた");
+    expect(check("reasoning", [withReasoning(ok, 2)])).not.toEqual([]);
+    expect(
+      check("reasoning", [
+        withReasoning({ id: REASONING_COMPONENT_ID, content: "-# 推論\n考えた" }),
+      ]),
+    ).not.toEqual([]);
+    const cut = {
+      id: REASONING_COMPONENT_ID,
+      content: "-# 推論\n||考…||\n-# 全文は reasoning.md にあります。",
+    };
+    expect(check("reasoning", [withReasoning(cut)])).not.toEqual([]);
+    expect(check("reasoning", [withReasoning(cut, 1, [{ type: 13 }])])).toEqual([]);
+    expect(
+      check("reasoning", [withReasoning({ id: 7, content: "-# 推論\n||考えた||" })]),
+    ).not.toEqual([]);
   });
 
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {
