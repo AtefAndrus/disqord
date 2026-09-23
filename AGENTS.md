@@ -40,6 +40,7 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 ## docs/changes (per-feature design docs)
 
 - One folder per change, `docs/changes/<kebab-case-name>/design.md`, copied from [TEMPLATE.md](docs/changes/TEMPLATE.md). The template owns the frontmatter schema and the section list; the title heading is the Japanese feature name.
+- Work to be picked up later is written here, not opened as a GitHub Issue: the backlog lives in these folders, and the Issue templates under `.github/ISSUE_TEMPLATE/` are for reports from outside.
 - `status` moves `investigating` (design under discussion) → `planned` (design settled) → `in-progress` (implementation started) → `implemented` (merged to main).
 - The backlog in docs/progress.md is generated from that frontmatter and lists every unreleased folder, so a change that is implemented but not yet released still appears there.
 - The folder is the unit of backlog item, release, and deletion, so split by release unit rather than by document size. Sub-features that ship together stay in one folder, separated by `---` in the Design section, or move to `design.<subfeature>.md` with `design.md` as the index when they are large and share a core. Split a sub-feature into its own folder only when it will ship separately.
