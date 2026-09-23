@@ -110,7 +110,8 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 
 ### 実装内容
 
-- `isEnabled(ctx)` は、`toolsAllowed` が false でなく、`ctx.discord` があるときに true を返す。`ctx.discord` は guild の設定が有効なときにだけ作るので、DM と無効な guild では tool を提示しない。`create_thread` はチャンネルの種別も見る。
+- tool を提示するのは、テキストチャンネル（`ChannelType.GuildText`）と、その中の公開・非公開スレッドだけとする。ボイスやステージのチャンネルのテキストチャットは、メッセージを読むのに `Connect` も要るなど権限の前提が異なるので対象にしない。
+- `isEnabled(ctx)` は、`toolsAllowed` が false でなく、`ctx.discord` があり、チャンネルが上の種別のときに true を返す。`ctx.discord` は guild の設定が有効なときにだけ作るので、DM と無効な guild では tool を提示しない。`create_thread` はチャンネルの種別も見る。
 - `DiscordToolContext` は応答ごとに作り、依頼者の ID、bot を呼んだメッセージ、上限のカウンタを持つ。メンバーは持たず、共通の確認が操作のたびに取り直す。
 - handler は `AbortSignal` を受け取るが、Discord への要求が送られた後の中断では結果が分からない。リアクションとピンは繰り返しても害が無く、スレッドは Discord が重複を断るので、中断後の再試行で二重に作られることは無い。投票だけは中断後に再試行すると二重になりうるので、1 応答 1 回の上限を、中断した呼び出しにも数える。
 - モデルに返す結果は `{"ok":true}` か `{"ok":false,"reason":"missing_permission","who":"bot","permissions":["PinMessages"]}` のような短い JSON にする。
@@ -133,6 +134,7 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 ## Open Questions / Risks
 
 - **`SEND_POLLS` の bot への適用（未検証）**: `SendPolls` が bot の投票作成にも要求されるかは Discord の文書から確かめられていない。bot 側の事前確認には含め、実装時に権限を外した bot で挙動を確かめる。
+- **ボイスチャンネルでの履歴の読み取り**: 会話の窓と `read_earlier_messages` が使う `canReadConversation()` は、ボイスチャンネルのテキストチャットで要る `Connect` を確かめていない。本 change の tool はボイスチャンネルで提示しないので影響しないが、履歴の読み取り側の抜けとして別に直す。
 - **モデルの呼びすぎ**: tool があると、頼まれていないのにリアクションや投票をするモデルがありうる。tool の description に「ユーザが頼んだときだけ使う」と書き、e2e とログで様子を見る。
 
 ## 参照
