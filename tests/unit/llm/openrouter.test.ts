@@ -10,6 +10,7 @@ import {
   StreamProtocolError,
   TimeoutError,
   UnknownApiError,
+  WebSearchFailedError,
 } from "../../../src/errors";
 import {
   MAX_SSE_FRAME_BYTES,
@@ -1404,6 +1405,25 @@ describe("OpenRouterClient", () => {
         ]);
 
         await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(UnknownApiError);
+      });
+
+      test("web_search server tool の失敗は WebSearchFailedError になる", async () => {
+        respondWithEvents([
+          {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              error: {
+                code: "invalid_prompt",
+                message: 'Server tool "openrouter:web_search" failed: invalid request (400)',
+              },
+            },
+          },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+          WebSearchFailedError,
+        );
       });
 
       test("response.failed が error を伴わなければ protocol error になる", async () => {

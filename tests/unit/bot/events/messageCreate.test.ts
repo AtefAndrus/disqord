@@ -1157,6 +1157,31 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
 
+  test("Web 検索を外して答え直した回答は、footer にその旨を出す", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.showLlmDetails = false;
+    const answer = createMockChatResponseFn("answer", "length");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        webSearchSkipped: true,
+      }),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const texts = extractTextContents(
+      toContainerJSON(lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>)),
+    ).join("\n");
+    expect(texts).toContain("Web 検索に失敗したため、検索なしで回答しました");
+    expect(texts).toContain("最大出力長");
+  });
+
   test("推論表示が有効なら、1 ページ目の回答の前に spoiler の推論を同じ Container に入れる", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;

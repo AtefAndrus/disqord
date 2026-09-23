@@ -88,6 +88,21 @@ export class UnknownApiError extends AppError {
   }
 }
 
+/**
+ * OpenRouter's `openrouter:web_search` server tool failed and ended the
+ * stream. The query the model chose decides whether it happens, so it is
+ * intermittent rather than a fault in the request as a whole.
+ */
+export class WebSearchFailedError extends AppError {
+  constructor(message: string) {
+    super(
+      message,
+      "Web 検索に失敗したため回答できませんでした。もう一度試すか、質問の書き方を変えてください。",
+      502,
+    );
+  }
+}
+
 export class ConfigurationError extends AppError {
   constructor(message: string, configUrl?: string) {
     const userMessage = configUrl

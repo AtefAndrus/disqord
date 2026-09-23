@@ -12,6 +12,7 @@ import {
   StreamProtocolError,
   TimeoutError,
   UnknownApiError,
+  WebSearchFailedError,
 } from "../errors";
 import type {
   ChatCompletionRequest,
@@ -1316,6 +1317,9 @@ export class OpenRouterClient implements ILLMClient {
       ...(metadata && { metadata }),
     });
     if (typeof code === "string") {
+      if (/^Server tool "openrouter:web_search" failed/u.test(message)) {
+        throw new WebSearchFailedError(message);
+      }
       throw new UnknownApiError(message);
     }
     throw this.buildApiError(code, message);

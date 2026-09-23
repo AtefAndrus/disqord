@@ -86,6 +86,8 @@ export type ToolLoopResult =
       provider?: string;
       webSearch?: WebSearchTrace;
       reasoningText?: ReasoningDisplayText;
+      /** Set by the chat service when it answered again without web search after the search failed. */
+      webSearchSkipped?: true;
     }
   | { status: "cancelled"; history: ChatMessage[]; usage?: AggregatedUsage }
   | { status: "error"; error: unknown; history: ChatMessage[]; usage?: AggregatedUsage };

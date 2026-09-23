@@ -47,6 +47,7 @@ Web検索機能を付与することで、最新情報に基づいた回答が�
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 一般Web検索の実装 | OpenRouter server tools（`openrouter:web_search`） | OpenRouterがサーバ側で実行し、tool-calling非対応を含む **any model** で動作する。クライアント側のツール実行ループ不要 |
+| 検索の失敗 | `openrouter:web_search` が失敗してストリームが終わった（`Server tool "openrouter:web_search" failed` のエラー）とき、まだ何も表示しておらず client tool も呼んでいなければ、Web 検索を外して 1 回だけ答え直し、footer に「Web 検索に失敗したため、検索なしで回答しました」と出す。表示し始めていたか client tool を呼んでいたときは、答え直さずに「Web 検索に失敗したため回答できませんでした」と出す | 失敗はモデルが選んだ検索語によって起き、同じ質問でも起きたり起きなかったりする。一般的なエラーで終えると、利用者には原因も対処も分からない。表示済みの本文を置き換えたり、client tool を 2 回実行したりしないよう、答え直すのは何も起きていないときに限る |
 | `:online` / web plugin | 使用しない | OpenRouter docs で deprecated と明記（server tool への移行が推奨）。新規採用しない |
 | 検索エンジン | 環境変数 `WEB_SEARCH_ENGINE` で選ぶ。既定は Perplexity | 既定の Perplexity は実測で品質と費用の釣り合いが最もよかった（後述の「エンジンの選定」）。`auto` は provider の native 検索を選び費用が事前に読めないため、既定にはしない。エンジンは運用者が費用とあわせて決める事項なので、スラッシュコマンドでは変えられないようにする。OpenRouter の `WebSearchEngineEnum` に無い値は起動時の設定検証で拒否し、検索のたびに HTTP 400 で失敗し続ける状態を作らない |
 | 検索結果の表示 | 回答の後ろに、モデルに渡った検索結果のページを最大 5 件、ホスト名を添えたリンクで並べる。検索語と結果 URL はログに出す | 利用者が回答の根拠を開けるようにし、運用者が検索の中身を後から確かめられるようにする |
@@ -348,6 +349,10 @@ ALTER TABLE guild_settings ADD COLUMN twitter_expand_enabled INTEGER NOT NULL DE
 - [OpenRouter OpenAPI 定義](https://openrouter.ai/openapi.json) - `WebSearchServerToolConfig`（`engine` / `mode` / `max_uses` / `max_results` / `max_total_results` の意味と既定値）
 - [FxEmbed Self-Hosting](https://docs.fxembed.com/deployment/) - Cloudflare Workers デプロイ手順
 - [FxEmbed elongator](https://github.com/FxEmbed/elongator) - NSFW対応・レート緩和用のアカウントプロキシ（任意）
+
+## Open Questions / Risks
+
+- **失敗した応答の usage（未対応）**: `response.failed` で終わった応答は、その応答に付いた usage を読まずにエラーにする。検索に失敗した回の token や検索の費用が課金されていても、答え直した回答の footer の合計には入らない。
 
 ## Tasks
 
