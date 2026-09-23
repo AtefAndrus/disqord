@@ -139,7 +139,7 @@ function botPage(
   const children = [
     ...(seq === 0 ? [{ type: 10, content: "**Model:** property-test" }] : []),
     { type: 10, content: `exchange=${exchangeId}|reply=${seq}` },
-    { type: 14 },
+    { type: 14, divider: false },
     { type: 10, content: `footer=${exchangeId}|page=${seq}` },
   ];
   return message(id, exchangeId, timestamp, {

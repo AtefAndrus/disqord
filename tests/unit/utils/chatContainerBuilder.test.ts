@@ -15,13 +15,16 @@ import {
   type FinalMetadata,
   fitReasoning,
   formatAutoReplyChannelList,
+  MAX_THEMATIC_BREAKS_PER_PAGE,
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
+  markThematicBreaks,
   measureTextBudget,
   REASONING_COMPONENT_ID,
   REASONING_HEADING,
   reasoningReserve,
   STREAMING_LABEL,
+  splitAtThematicBreaks,
   splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
   splitTextIntoMessages,
@@ -591,6 +594,97 @@ describe("chatContainerBuilder", () => {
     });
   });
 
+  describe("区切り線の印付けとページごとの分割", () => {
+    const split = (text: string): string[] => splitAtThematicBreaks(markThematicBreaks(text));
+
+    test("---、***、___ だけの行で分け、空の区切りは捨てる", () => {
+      expect(split("a\n---\nb\n***\nc\n_ _ _\nd")).toEqual(["a", "b", "c", "d"]);
+      expect(split("---\na\n---\n---\nb\n---")).toEqual(["a", "b"]);
+    });
+
+    test("コードブロックの中と、文の途中の --- は分けない", () => {
+      expect(split("```\n---\n```\ntext --- more")).toEqual(["```\n---\n```\ntext --- more"]);
+    });
+
+    test("~~~ の fence、長い fence、閉じにならない行の中の --- も分けない", () => {
+      expect(split("~~~js\n---\n~~~")).toHaveLength(1);
+      expect(split("````\n```\n---\n````")).toHaveLength(1);
+      expect(split("```\n```notclosing\n---\n```")).toHaveLength(1);
+      expect(split("```js\ncode\n```\n---\nafter")).toEqual(["```js\ncode\n```", "after"]);
+    });
+
+    test("CRLF の区切り線も分ける", () => {
+      expect(split("a\r\n---\r\nb")).toEqual(["a", "b"]);
+    });
+
+    test("1 ページあたりの上限を超えた区切りは文字のまま残し、空の区切りは上限に数えない", () => {
+      const text = Array.from({ length: 12 }, (_, i) => `p${i}`).join("\n---\n");
+      const segments = split(text);
+      expect(segments).toHaveLength(MAX_THEMATIC_BREAKS_PER_PAGE + 1);
+      expect(segments.at(-1)).toContain("---");
+      expect(split(`${"---\n".repeat(8)}a\n---\nb`)).toEqual(["a", "b"]);
+      const stars = split(Array.from({ length: 10 }, (_, i) => `s${i}`).join("\n***\n"));
+      expect(stars.at(-1)).toBe("s8\n---\ns9");
+    });
+
+    test("区切り線だけのページも、空でない本文として組み立てられる", () => {
+      for (const text of ["---", `${"a".repeat(3738)}\n---`]) {
+        const pages = splitTextIntoMessages(
+          text,
+          measureTextBudget(badgeText("m")),
+          ZERO_TEXT_BUDGET,
+        );
+        for (const [index, page] of pages.entries()) {
+          expect(() =>
+            buildFinalContainer({
+              text: page,
+              modelName: "m",
+              color: 0,
+              isFirst: index === 0,
+              isLast: index === pages.length - 1,
+              metadata: { showDetails: false },
+            }),
+          ).not.toThrow();
+        }
+      }
+      expect(splitAtThematicBreaks(markThematicBreaks("---"))).toEqual(["---"]);
+    });
+
+    test("モデルが書いた U+E000 は本文の中なら残す", () => {
+      expect(split("glyph: \uE000 here")).toEqual(["glyph: \uE000 here"]);
+    });
+
+    test("ページの境目で区切り線の行が切れても、前後の本文を失わず、印の文字も残さない", () => {
+      const text = `${"a".repeat(1800)}\n${"-".repeat(600)}\n${"b".repeat(10)}`;
+      const pages = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET, {
+        chars: 1995,
+        bytes: 0,
+      });
+      const rendered = pages.flatMap((page) => splitAtThematicBreaks(page)).join("\n");
+      expect(rendered).toContain("a".repeat(1800));
+      expect(rendered).toContain("b".repeat(10));
+      expect(rendered).not.toContain("\uE000");
+    });
+
+    test("上限を超えた区切りを文字に戻しても、ページの本文は分割で測った字数を超えない", () => {
+      const text = `${"a".repeat(3180)}\n${Array.from({ length: 150 }, (_, i) => `l${i}`).join("\n---\n")}`;
+      for (const page of splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET)) {
+        const rendered = splitAtThematicBreaks(page).join("");
+        expect(rendered.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+        expect(new TextEncoder().encode(rendered).length).toBeLessThanOrEqual(
+          MAX_TOTAL_BYTES_PER_MESSAGE,
+        );
+      }
+    });
+
+    test("ページをまたぐ ~~~ のコードブロックの中の --- は、後ろのページでも区切りにしない", () => {
+      const text = `~~~txt\n${"x".repeat(3900)}\n---\ninside\n~~~`;
+      const pages = splitTextIntoMessages(text, ZERO_TEXT_BUDGET, ZERO_TEXT_BUDGET);
+      expect(pages.length).toBeGreaterThan(1);
+      for (const page of pages) expect(splitAtThematicBreaks(page)).toHaveLength(1);
+    });
+  });
+
   describe("buildFinalContainer", () => {
     test("推論は 1 ページ目のモデル名と回答の間に、推論の component id 付きで入る", () => {
       const json = toJSON(
@@ -609,6 +703,27 @@ describe("chatContainerBuilder", () => {
         [10, undefined],
         [10, REASONING_COMPONENT_ID],
         [13, undefined],
+        [10, undefined],
+      ]);
+    });
+
+    test("本文の区切り線は divider 付きの Separator になり、footer の Separator は divider を持たない", () => {
+      const json = toJSON(
+        buildFinalContainer({
+          text: markThematicBreaks("上\n---\n下"),
+          modelName: "m",
+          color: 0x00ff00,
+          isFirst: false,
+          isLast: true,
+          metadata: { showDetails: true, usage, latency: 1000 },
+        }),
+      );
+      const kinds = json.components.map((c) => [c.type, (c as { divider?: boolean }).divider]);
+      expect(kinds).toEqual([
+        [10, undefined],
+        [14, true],
+        [10, undefined],
+        [14, false],
         [10, undefined],
       ]);
     });

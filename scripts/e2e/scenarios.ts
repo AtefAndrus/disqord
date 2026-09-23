@@ -54,6 +54,7 @@ export interface Scenario {
 // Discord component types.
 const TEXT_DISPLAY = 10;
 const CONTAINER = 17;
+const SEPARATOR = 14;
 const FILE = 13;
 const STOP_BUTTON_ID_PREFIX = "stop_response_";
 
@@ -96,6 +97,8 @@ function collectText(node: unknown, out: string[]): void {
   if (!isComponent(node)) return;
   // The reasoning above an answer is not part of the answer the checks read.
   if (node.id === REASONING_COMPONENT_ID) return;
+  // A divider Separator is a thematic break in the answer.
+  if (node.type === SEPARATOR && node.divider !== false) out.push("---");
   if (typeof node.content === "string") out.push(node.content);
   collectText(node.components, out);
   collectText(node.accessory, out);
@@ -283,6 +286,31 @@ export const SCENARIOS: Scenario[] = [
       "[e2e] 日本の四季それぞれについて各1500字以上、合計6000字以上の随筆を書いて。途中にPythonのコードブロックを1つ入れて。",
     timeoutMs: 300_000,
     check: (reply) => [...checkPages(reply), ...hasUsageFooter(reply)],
+  },
+  {
+    // A thematic break must reach Discord as a Separator with a divider (the
+    // footer's Separator has none), not as literal `---` text.
+    name: "separator",
+    prompt:
+      "[e2e] 「前半」と「後半」の2段落で返事をして。2段落の間には、--- だけの行を1行だけ入れて。",
+    check: (reply) => [
+      ...(reply.messages.some((message) =>
+        childrenOf(containerOf(message)).some((c) => c.type === SEPARATOR && c.divider !== false),
+      )
+        ? []
+        : ["no Separator with a divider in the reply (was --- left as text?)"]),
+      ...(reply.messages.some((message) =>
+        childrenOf(containerOf(message)).some(
+          (c) =>
+            c.type === TEXT_DISPLAY &&
+            typeof c.content === "string" &&
+            /^\s*---\s*$/mu.test(c.content),
+        ),
+      )
+        ? ["the reply still shows --- as text"]
+        : []),
+      ...hasUsageFooter(reply),
+    ],
   },
   {
     name: "image",

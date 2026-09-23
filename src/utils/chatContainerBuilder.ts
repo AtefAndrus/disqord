@@ -348,10 +348,15 @@ export function splitTextIntoMessages(
 ): string[] {
   const bodyBudgetChars = Math.max(1, MAX_TOTAL_CHARS_PER_MESSAGE - badge.chars - footer.chars);
   const bodyBudgetBytes = Math.max(1, MAX_TOTAL_BYTES_PER_MESSAGE - badge.bytes - footer.bytes);
-  const chunks = splitMarkdownByCharsAndBytes(text, bodyBudgetChars, bodyBudgetBytes, {
-    maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
-    maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
-  });
+  const chunks = splitMarkdownByCharsAndBytes(
+    markThematicBreaks(text),
+    bodyBudgetChars,
+    bodyBudgetBytes,
+    {
+      maxChars: Math.max(1, bodyBudgetChars - firstPageReserve.chars),
+      maxBytes: Math.max(1, bodyBudgetBytes - firstPageReserve.bytes),
+    },
+  );
   return chunks.length > 0 ? chunks : [""];
 }
 
@@ -450,6 +455,81 @@ export function estimateFinalFooterBudget(metadata: FinalMetadata): TextBudget {
   };
 }
 
+/** A Markdown thematic break: three or more `-`, `*`, or `_` alone on a line. */
+const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/u;
+/**
+ * Breaks drawn as Separators on one page. Each costs two components (the
+ * Separator and the next TextDisplay) against Discord's 40 per message, so
+ * the rest stay as text.
+ */
+export const MAX_THEMATIC_BREAKS_PER_PAGE = 8;
+
+/**
+ * The line `markThematicBreaks` puts in place of a thematic break until a page
+ * is built. Private-use, so a model cannot plausibly write it. It is as long
+ * as `---`, the text a break past the per-page allowance turns back into, so
+ * restoring it never makes a page longer than the paging measured, and a break
+ * line carries no other content that a page cut could lose.
+ */
+export const THEMATIC_BREAK_MARK = "\uE000".repeat(3);
+
+/**
+ * Replaces each thematic break line outside code fences with
+ * THEMATIC_BREAK_MARK. It runs over the whole answer before paging, because a
+ * fence can span pages and a page alone cannot tell whether it is inside one.
+ */
+export function markThematicBreaks(text: string): string {
+  // The open fence's character and length (CommonMark): a fence closes only on
+  // a line of the same character, at least as long, with nothing after it.
+  let fence: { char: string; length: number } | null = null;
+  return text
+    .split(/\r?\n/u)
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+      if (marker) {
+        const [, run = "", rest = ""] = marker;
+        if (!fence) {
+          if (!(run[0] === "`" && rest.includes("`"))) {
+            fence = { char: run[0] ?? "", length: run.length };
+          }
+        } else if (run[0] === fence.char && run.length >= fence.length && rest.trim() === "") {
+          fence = null;
+        }
+        return line;
+      }
+      return !fence && THEMATIC_BREAK.test(line) ? THEMATIC_BREAK_MARK : line;
+    })
+    .join("\n");
+}
+
+/**
+ * Splits a page at the break lines `markThematicBreaks` left, so each can be
+ * drawn as a Separator. Empty segments (a break at the start or end of the
+ * page, or two in a row) are dropped: at a page boundary the page break itself
+ * separates the text. Breaks past the per-page allowance become `---` text.
+ * A page cut can split a mark line; the cut-off pieces are dropped.
+ */
+export function splitAtThematicBreaks(text: string): string[] {
+  const segments: string[] = [];
+  let current: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line === THEMATIC_BREAK_MARK && segments.length < MAX_THEMATIC_BREAKS_PER_PAGE) {
+      const segment = current.join("\n");
+      if (segment.trim().length > 0) segments.push(segment);
+      current = [];
+      continue;
+    }
+    // A line of only one or two mark characters is a mark cut by a page boundary.
+    if (/^\uE000{1,2}$/u.test(line)) continue;
+    current.push(line === THEMATIC_BREAK_MARK ? "---" : line);
+  }
+  const last = current.join("\n");
+  if (last.trim().length > 0) segments.push(last);
+  // A page holding only breaks (an answer of just `---`, or a break pushed onto
+  // a page of its own) still needs non-empty text.
+  return segments.length > 0 ? segments : ["---"];
+}
+
 function addBadgeAndBody(
   container: ContainerBuilder,
   params: ChatContainerBaseParams,
@@ -466,7 +546,17 @@ function addBadgeAndBody(
       container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
     }
   }
-  container.addTextDisplayComponents((td) => td.setContent(params.text || EMPTY_TEXT_PLACEHOLDER));
+  const segments = splitAtThematicBreaks(params.text || EMPTY_TEXT_PLACEHOLDER);
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      // A visible divider. The footer's Separator has none, which is how
+      // readers of a page tell the two apart (discordMessageNormalizer).
+      container.addSeparatorComponents((sep) =>
+        sep.setDivider(true).setSpacing(SeparatorSpacingSize.Small),
+      );
+    }
+    container.addTextDisplayComponents((td) => td.setContent(segment));
+  });
   // 将来: multimodal 出力 (画像 / ファイル) はここに
   // addMediaGalleryComponents / addFileComponents で追加予定（chat-response-v2 Phase D、現状 noop）
 }

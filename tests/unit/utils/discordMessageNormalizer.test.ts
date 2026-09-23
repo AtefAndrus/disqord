@@ -22,7 +22,7 @@ function botPage(id: string, body: string, footer: string): RawDiscordMessage {
         components: [
           { type: 10, content: "**Model:** test-model" },
           { type: 10, content: body },
-          { type: 14 },
+          { type: 14, divider: false },
           { type: 10, content: footer },
         ],
       },
@@ -72,6 +72,65 @@ describe("Discord message normalization", () => {
         { ...withReasoning, page: { pageMsgId: "1", triggerMsgId: "trigger", seq: 0 } },
       ]).text,
     ).toBe("answer");
+  });
+
+  test("本文の区切り線は --- として読み戻し、末尾にあっても footer と取り違えない", () => {
+    const page: RawDiscordMessage = {
+      id: "1",
+      channel_id: "channel",
+      content: "",
+      timestamp: "2026-09-22T12:00:01Z",
+      author: { id: "bot", username: "bot", bot: true },
+      components: [
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "**Model:** test-model" },
+            { type: 10, content: "上" },
+            { type: 14, divider: true },
+            { type: 10, content: "下" },
+          ],
+        },
+      ],
+    };
+
+    expect(extractComponentsV2Footer(page)).toBeUndefined();
+    expect(
+      normalizeBotReply("trigger", [
+        { ...page, page: { pageMsgId: "1", triggerMsgId: "trigger", seq: 0 } },
+      ]).text,
+    ).toBe("上\n---\n下");
+  });
+
+  test("区切り線、推論、footer が同じページにあっても、本文と footer を取り違えない", () => {
+    const page: RawDiscordMessage = {
+      id: "1",
+      channel_id: "channel",
+      content: "",
+      timestamp: "2026-09-22T12:00:01Z",
+      author: { id: "bot", username: "bot", bot: true },
+      components: [
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "**Model:** test-model" },
+            { type: 10, id: REASONING_COMPONENT_ID, content: "-# 推論\n||secret||" },
+            { type: 10, content: "上" },
+            { type: 14, divider: true },
+            { type: 10, content: "下" },
+            { type: 14, divider: false },
+            { type: 10, content: "Tokens: 1+1=2" },
+          ],
+        },
+      ],
+    };
+
+    expect(extractComponentsV2Footer(page)).toBe("Tokens: 1+1=2");
+    expect(
+      normalizeBotReply("trigger", [
+        { ...page, page: { pageMsgId: "1", triggerMsgId: "trigger", seq: 0 } },
+      ]).text,
+    ).toBe("上\n---\n下");
   });
 
   test("normalizes human labels and exposes attachment metadata without CDN URLs", () => {

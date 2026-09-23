@@ -33,6 +33,7 @@
 | [Web 検索 + ツイート展開](changes/web-search/design.md) | 中 | in-progress | OpenRouter server tools による Web 検索と fxtwitter ツイート展開 |
 | [セッション分岐 (/fork)](changes/fork/design.md) | 低 | investigating | 会話履歴の途中から新しいセッションへ分岐する /fork（参照コピー・session_id 安定性前提） |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | investigating | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
+| [回答の区切り線を Separator で描く](changes/thematic-break-separator/design.md) | 低 | in-progress | 回答の --- などの区切り線を、Discord が描かない Markdown のまま出さず、区切り線付きの Separator にする |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用統計（/stats） |
 <!-- AUTO:PROGRESS:END -->
 
