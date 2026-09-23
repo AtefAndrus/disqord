@@ -225,20 +225,22 @@ describe("e2e scenarios: check", () => {
     expect(check("search", [page("1", body("2026年8月20日です。"), searched)])).not.toEqual([]);
   });
 
-  test("reasoning: reasoning.md が最終ページの添付にあるときだけ通る", () => {
-    const final = page("1", ["答え"], USAGE, {
-      attachments: [{ id: "file-1", filename: "reasoning.md" }],
-    });
-    expect(check("reasoning", [final])).toEqual([]);
+  test("reasoning: 1 ページ目の回答の前に spoiler Container があるときだけ通り、回答と footer は読める", () => {
+    const withReasoning = (spoiler: boolean): DiscordMessage => {
+      const base = page("1", ["答え"], USAGE);
+      return {
+        ...base,
+        components: [
+          { type: 17, spoiler, components: [{ type: 10, content: "-# 推論\n考えた" }] },
+          ...(base.components ?? []),
+        ],
+      };
+    };
+    expect(toReply([withReasoning(true)]).footers).toEqual([USAGE]);
+    expect(isFinished(toReply([withReasoning(true)]))).toBe(true);
+    expect(check("reasoning", [withReasoning(true)])).toEqual([]);
+    expect(check("reasoning", [withReasoning(false)])).not.toEqual([]);
     expect(check("reasoning", [page("1", ["答え"], USAGE)])).not.toEqual([]);
-    expect(
-      check("reasoning", [
-        page("1", ["答え"], USAGE),
-        page("2", ["続き"], USAGE, {
-          attachments: [{ id: "file-1", filename: "other.md" }],
-        }),
-      ]),
-    ).not.toEqual([]);
   });
 
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {

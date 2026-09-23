@@ -48,6 +48,24 @@ describe("Discord message normalization", () => {
     });
   });
 
+  test("推論の spoiler Container は回答より前にあっても本文にも footer にも入らない", () => {
+    const page = botPage("1", "answer", "Tokens: 1+1=2");
+    const withReasoning: RawDiscordMessage = {
+      ...page,
+      components: [
+        { type: 17, spoiler: true, components: [{ type: 10, content: "-# 推論\nsecret" }] },
+        ...(page.components ?? []),
+      ],
+    };
+
+    expect(extractComponentsV2Footer(withReasoning)).toBe("Tokens: 1+1=2");
+    expect(
+      normalizeBotReply("trigger", [
+        { ...withReasoning, page: { pageMsgId: "1", triggerMsgId: "trigger", seq: 0 } },
+      ]).text,
+    ).toBe("answer");
+  });
+
   test("normalizes human labels and exposes attachment metadata without CDN URLs", () => {
     const message: RawDiscordMessage = {
       id: "message",

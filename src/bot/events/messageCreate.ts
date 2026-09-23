@@ -18,12 +18,14 @@ import {
   badgeText,
   buildErrorContainer,
   buildFinalContainer,
+  buildReasoningContainer,
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
   measureTextBudget,
+  remainingPageBudget,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
@@ -478,16 +480,8 @@ export function createMessageCreateHandler(
       );
 
       const botMessages = updater.messages;
-      const reasoningFile =
-        settings.reasoningDisplayEnabled && result.reasoningText && result.reasoningText.length > 0
-          ? new AttachmentBuilder(
-              Buffer.from(
-                `${result.model ?? settings.defaultModel}\n\n${result.reasoningText}`,
-                "utf8",
-              ),
-              { name: "reasoning.md" },
-            )
-          : undefined;
+      const reasoningText =
+        settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
 
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから送る確定表示を停止ボタン付きの stale な内容で上書きさせない。
@@ -505,16 +499,34 @@ export function createMessageCreateHandler(
           isLast,
           metadata,
           pageInfo: { page: i + 1, total: chunks.length },
-          ...(isLast && reasoningFile && { reasoningFile: true }),
         });
-        const files = isLast && reasoningFile ? [reasoningFile] : undefined;
+        // Reasoning reads before the answer, so it goes above the first page's
+        // answer and shares that page's budget. `footerBudget` is the last
+        // page's footer estimate, which also covers an earlier page's
+        // page-number footer.
+        const reasoning =
+          isFirst && reasoningText
+            ? buildReasoningContainer(
+                reasoningText,
+                remainingPageBudget(chunks[i], modelName, footerBudget),
+              )
+            : undefined;
+        const components = reasoning ? [reasoning.container, container] : container;
+        const files = reasoning?.needsFile
+          ? [
+              new AttachmentBuilder(
+                Buffer.from(`${result.model ?? settings.defaultModel}\n\n${reasoningText}`, "utf8"),
+                { name: "reasoning.md" },
+              ),
+            ]
+          : undefined;
 
         if (i < botMessages.length) {
-          await botMessages[i].edit(toComponentsV2EditPayload(container, files));
+          await botMessages[i].edit(toComponentsV2EditPayload(components, files));
         } else {
           // 致命的エラー時のクリーンアップが送信済みmessageを再取得できるよう、streaming/stopped経路と
           // 同様にbotMessagesへ追跡する（追跡しないと後続chunkのsend失敗時に既送信分が重複送信されうる）
-          const newMessage = await message.channel.send(toComponentsV2Payload(container, files));
+          const newMessage = await message.channel.send(toComponentsV2Payload(components, files));
           botMessages.push(newMessage);
           await botMessageCreated(newMessage);
         }

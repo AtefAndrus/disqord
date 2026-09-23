@@ -481,8 +481,6 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
   metadata: FinalMetadata;
   /** 全 message 数（footer のページ番号表示に使用）。isLast の message でのみ参照される */
   pageInfo?: { page: number; total: number };
-  /** Attach the provider-authored reasoning file component to the final page. */
-  reasoningFile?: boolean;
 }
 
 /**
@@ -494,9 +492,6 @@ export interface FinalContainerParams extends ChatContainerBaseParams {
 export function buildFinalContainer(params: FinalContainerParams): ContainerBuilder {
   const container = new ContainerBuilder().setAccentColor(params.color);
   addBadgeAndBody(container, params);
-  if (params.isLast && params.reasoningFile) {
-    container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
-  }
 
   // LLM 詳細情報は末尾 message のみ。非末尾 message は showDetails: false 相当にしてページ番号のみにする
   const footerMetadata: FinalMetadata = params.isLast ? params.metadata : { showDetails: false };
@@ -509,6 +504,61 @@ export function buildFinalContainer(params: FinalContainerParams): ContainerBuil
   }
 
   return container;
+}
+
+/** What one final page leaves of the per-message TextDisplay budget after its body, badge, and footer. */
+export function remainingPageBudget(
+  body: string,
+  badgeModelName: string | undefined,
+  footer: TextBudget,
+): TextBudget {
+  const bodyBudget = measureTextBudget(body);
+  const badge = badgeModelName ? measureTextBudget(badgeText(badgeModelName)) : ZERO_TEXT_BUDGET;
+  return {
+    chars: MAX_TOTAL_CHARS_PER_MESSAGE - bodyBudget.chars - badge.chars - footer.chars,
+    bytes: MAX_TOTAL_BYTES_PER_MESSAGE - bodyBudget.bytes - badge.bytes - footer.bytes,
+  };
+}
+
+/** Heading of the reasoning container; the container itself is a spoiler, so the heading is all that shows until clicked. */
+export const REASONING_HEADING = "-# 推論";
+const REASONING_TRUNCATED_NOTE = "\n\n-# 長いため途中までです。全文は reasoning.md にあります。";
+/** Below this many characters of room the reasoning is not worth showing inline; only the file is attached. */
+const REASONING_MIN_INLINE_CHARS = 200;
+
+/**
+ * The provider-authored reasoning as a second, spoiler Container on the final
+ * page. It shares the message's TextDisplay budget with the answer page, so
+ * `remaining` is what the answer page left; reasoning that does not fit is cut
+ * there and the full text goes to reasoning.md, referenced from this container.
+ * Readers of the conversation (discordMessageNormalizer) take only the first
+ * Container of a bot page, so the reasoning never reaches later prompts.
+ */
+export function buildReasoningContainer(
+  reasoning: string,
+  remaining: TextBudget,
+): { container: ContainerBuilder; needsFile: boolean } {
+  const container = new ContainerBuilder().setSpoiler(true);
+  const heading = `${REASONING_HEADING}\n`;
+  const whole = `${heading}${reasoning}`;
+  const wholeBudget = measureTextBudget(whole);
+  if (wholeBudget.chars <= remaining.chars && wholeBudget.bytes <= remaining.bytes) {
+    container.addTextDisplayComponents((td) => td.setContent(whole));
+    return { container, needsFile: false };
+  }
+  const reserved = measureTextBudget(`${heading}…${REASONING_TRUNCATED_NOTE}`);
+  const maxChars = remaining.chars - reserved.chars;
+  const maxBytes = remaining.bytes - reserved.bytes;
+  const cut =
+    maxChars >= REASONING_MIN_INLINE_CHARS
+      ? (splitMarkdownByCharsAndBytes(reasoning, maxChars, maxBytes)[0] ?? "")
+      : "";
+  const shown = cut
+    ? `${heading}${cut}…${REASONING_TRUNCATED_NOTE}`
+    : `${heading}-# 全文は reasoning.md にあります。`;
+  container.addTextDisplayComponents((td) => td.setContent(shown));
+  container.addFileComponents((file) => file.setURL("attachment://reasoning.md"));
+  return { container, needsFile: true };
 }
 
 export interface StoppedContainerParams extends ChatContainerBaseParams {
@@ -626,11 +676,11 @@ export function toNoticeEditPayload(container: ContainerBuilder): {
 
 /** channel.send 用の Components V2 payload を構築する */
 export function toComponentsV2Payload(
-  container: ContainerBuilder,
+  container: ContainerBuilder | ContainerBuilder[],
   files?: MessageCreateOptions["files"],
 ): MessageCreateOptions {
   return {
-    components: [container],
+    components: Array.isArray(container) ? container : [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
     ...(files && { files }),
@@ -639,11 +689,11 @@ export function toComponentsV2Payload(
 
 /** message.edit 用の Components V2 payload を構築する */
 export function toComponentsV2EditPayload(
-  container: ContainerBuilder,
+  container: ContainerBuilder | ContainerBuilder[],
   files?: MessageEditOptions["files"],
 ): MessageEditOptions {
   return {
-    components: [container],
+    components: Array.isArray(container) ? container : [container],
     flags: MessageFlags.IsComponentsV2,
     allowedMentions: { parse: [] },
     // An edit without files clears attachments: discord.js keeps them when

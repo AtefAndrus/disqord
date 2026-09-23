@@ -6,6 +6,7 @@ import {
   buildErrorContainer,
   buildFinalContainer,
   buildFinalFooterText,
+  buildReasoningContainer,
   buildStoppedContainer,
   buildStoppedFooterText,
   buildStreamingContainer,
@@ -17,6 +18,7 @@ import {
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
+  REASONING_HEADING,
   STREAMING_LABEL,
   splitMarkdownByCharsAndBytes,
   splitTextByCharsAndBytes,
@@ -510,8 +512,46 @@ describe("chatContainerBuilder", () => {
     });
   });
 
+  describe("buildReasoningContainer", () => {
+    const room = { chars: 3000, bytes: 8000 };
+
+    test("収まる推論は spoiler の Container に見出し付きで全文を入れ、ファイルを付けない", () => {
+      const { container, needsFile } = buildReasoningContainer("短い推論", room);
+      const json = toJSON(container);
+      expect((json as { spoiler?: boolean }).spoiler).toBe(true);
+      expect(needsFile).toBe(false);
+      expect(json.components).toHaveLength(1);
+      expect((json.components[0] as { content: string }).content).toBe(
+        `${REASONING_HEADING}\n短い推論`,
+      );
+    });
+
+    test("収まらない推論は残りの予算で切り、全文を reasoning.md の File component で参照する", () => {
+      const { container, needsFile } = buildReasoningContainer("あ".repeat(5000), room);
+      const json = toJSON(container);
+      const text = (json.components[0] as { content: string }).content;
+      expect(needsFile).toBe(true);
+      expect(text.length).toBeLessThanOrEqual(room.chars);
+      expect(new TextEncoder().encode(text).length).toBeLessThanOrEqual(room.bytes);
+      expect(text).toContain("reasoning.md");
+      expect(json.components.find((component) => component.type === 13)?.file?.url).toBe(
+        "attachment://reasoning.md",
+      );
+    });
+
+    test("残りがほとんど無ければ本文を出さず、ファイルだけを案内する", () => {
+      const { container, needsFile } = buildReasoningContainer("推論".repeat(100), {
+        chars: 150,
+        bytes: 450,
+      });
+      const text = (toJSON(container).components[0] as { content: string }).content;
+      expect(needsFile).toBe(true);
+      expect(text).not.toContain("推論推論");
+    });
+  });
+
   describe("buildFinalContainer", () => {
-    test("reasoning.md の File component は final page にだけ追加される", () => {
+    test("最終ページの Container は推論を持たない", () => {
       const final = toJSON(
         buildFinalContainer({
           text: "answer",
@@ -520,25 +560,9 @@ describe("chatContainerBuilder", () => {
           isFirst: true,
           isLast: true,
           metadata: { showDetails: false },
-          reasoningFile: true,
         }),
       );
-      const intermediate = toJSON(
-        buildFinalContainer({
-          text: "answer",
-          modelName: "gpt-5-mini",
-          color: 0x00ff00,
-          isFirst: true,
-          isLast: false,
-          metadata: { showDetails: false },
-          reasoningFile: true,
-        }),
-      );
-
-      expect(final.components.find((component) => component.type === 13)?.file?.url).toBe(
-        "attachment://reasoning.md",
-      );
-      expect(intermediate.components.some((component) => component.type === 13)).toBe(false);
+      expect(final.components.some((component) => component.type === 13)).toBe(false);
     });
 
     test("showLlmDetails=true かつ usage ありのとき、isLastでfooter（ページ番号なし・単一message）を表示する", () => {

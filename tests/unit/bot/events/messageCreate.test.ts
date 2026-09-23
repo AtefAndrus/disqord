@@ -1151,7 +1151,7 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
   });
 
-  test("推論表示が有効なら reasoning.md を final page の File component と attachment に付ける", async () => {
+  test("推論表示が有効なら、1 ページ目の回答の前に推論の spoiler Container を置く", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;
     settings.showLlmDetails = false;
@@ -1172,17 +1172,15 @@ describe("createMessageCreateHandler", () => {
     await handler(mockMessage as never);
 
     const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
-    const container = toContainerJSON(payload);
-    expect(container.components.find((component) => component.type === 13)?.file?.url).toBe(
-      "attachment://reasoning.md",
-    );
-    expect(payload.files).toHaveLength(1);
-    const attachment = payload.files?.[0] as { name?: string; attachment?: unknown };
-    expect(attachment.name).toBe("reasoning.md");
-    expect(Buffer.isBuffer(attachment.attachment)).toBe(true);
-    expect((attachment.attachment as Buffer).toString("utf8")).toBe(
-      "provider/model-id\n\n考えた内容",
-    );
+    const components = (payload.components ?? []) as unknown as { toJSON(): unknown }[];
+    expect(components).toHaveLength(2);
+    const reasoning = components[0]?.toJSON() as {
+      spoiler?: boolean;
+      components: { content?: string }[];
+    };
+    expect(reasoning.spoiler).toBe(true);
+    expect(reasoning.components[0]?.content).toContain("考えた内容");
+    expect(payload.files).toBeUndefined();
   });
 
   test.each([
@@ -1208,9 +1206,7 @@ describe("createMessageCreateHandler", () => {
 
     const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
     expect(payload.files).toBeUndefined();
-    expect(toContainerJSON(payload).components.some((component) => component.type === 13)).toBe(
-      false,
-    );
+    expect(payload.components).toHaveLength(1);
   });
 
   test.each(["stopped", "error"] as const)(
@@ -1233,9 +1229,7 @@ describe("createMessageCreateHandler", () => {
 
       const payload = lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>);
       expect(payload.files).toBeUndefined();
-      expect(toContainerJSON(payload).components.some((component) => component.type === 13)).toBe(
-        false,
-      );
+      expect(payload.components).toHaveLength(1);
     },
   );
 

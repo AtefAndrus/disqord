@@ -2,7 +2,7 @@
 title: "推論内容の取得・表示"
 status: in-progress
 priority: medium
-summary: "Responses API の reasoning item を受け取り、tool を挟む生成では送り返し、設定に応じて回答に推論のファイルを添える"
+summary: "Responses API の reasoning item を受け取り、tool を挟む生成では送り返し、設定に応じて回答の上に推論を spoiler で表示する"
 ---
 
 # 推論内容の取得・表示
@@ -24,7 +24,7 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 
 - ストリームから `type: "reasoning"` の output item を検証して受け取り、表示できる要約と本文を取り出す
 - tool を呼んで同じ生成を続けるとき、そのターンの reasoning item を改変せずに次の request へ送り返す
-- guild の設定が有効なとき、provider が返した推論を回答の最終ページにファイルとして添える
+- guild の設定が有効なとき、provider が返した推論を回答の 1 ページ目の上に spoiler で表示する
 - 推論の本文が返らないモデルでは、これまでどおり token 数だけを footer に出す
 
 **Non-Goals:**
@@ -45,7 +45,7 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 | 暗号化された推論の取得 | request に tool があるときは `include: ["reasoning.encrypted_content"]` を付ける | `previous_response_id` は使えず（OpenAPI 定義で非 null は 400）、状態はクライアントが送り直す。暗号化された推論は `include` で求めないと返らない |
 | 推論の要約を求めるか | 表示が有効で、モデルの `supported_parameters` に `reasoning` があるときだけ `reasoning: { summary: "auto" }` を送る。それ以外は `reasoning` を送らない | 要約は求めないと返らないモデルがある。非対応モデルに未対応のパラメータを送らない。effort はモデルの既定に任せる |
 | 表示の設定 | `/config reasoning-display on\|off` を足し、既定は off とする。guild 設定の列 `reasoning_display_enabled` に保存する | 推論には質問の断片が繰り返し現れうるので、共有チャンネルへ意図せず出さない。token と料金の表示（`llm-details`）とは別に切り替えられるようにする |
-| 表示の形 | 回答の最終ページに、Components V2 の File component で `reasoning.md` を添える。TextDisplay には入れない | 推論は回答より長くなりやすく、TextDisplay に入れると 1 メッセージ 4000 字の制約でページが増え、回答が読みにくくなる。Discord はテキストファイルを折りたたんだ状態で表示する。bot の返信の添付は履歴に入らないので、次の応答で推論が文脈に混ざらない |
+| 表示の形 | 1 ページ目の回答の Container の前に、推論だけを入れた 2 つ目の Container を spoiler（`spoiler: true`）にして置く。見出しは `-# 推論` とする。1 メッセージの TextDisplay の字数とバイト数の上限の、回答と footer の残りに収まらなければ残りで切り、全文を `reasoning.md` として同じ Container の File component で添える | 推論は回答より先に読むものなので上に置く。Components V2 に折りたたみの部品は無く、spoiler の Container はクリックするまで中身をぼかす。ファイルの添付だけでは Discord 上で開かずに読めない。会話の履歴は bot の返信の spoiler でない最初の Container だけを本文として読むので、推論は次の応答の文脈に混ざらない |
 | 複数ターンの推論 | tool loop の各ターンの推論を、ターン順に `## ターン n` の見出しを付けて 1 つのファイルにまとめる | 1 回の応答に 1 ファイルとし、どのターンの推論かを区別できるようにする |
 | 停止とエラー | 停止した返信とエラーで終わった返信には推論を添えない | 完了していない推論を公開しない |
 
@@ -57,9 +57,10 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 - 修正: `src/llm/openrouter.ts` — `response.output_item.done` の reasoning item を検証して terminal の結果へ載せる。`toResponsesInput()` で assistant メッセージの reasoning item を先に出す。`include` と `reasoning` を body に入れる。`listModelsWithPricing()` で `supported_parameters` を読む
 - 修正: `src/llm/toolLoop.ts` — ターンごとの reasoning item を assistant メッセージに付けて履歴へ積み、ターンをまたいで表示用の推論を集める
 - 修正: `src/services/chatService.ts` — 表示設定とモデルの対応から `reasoning` と `include` を決める
-- 修正: `src/bot/events/messageCreate.ts` / `src/utils/chatContainerBuilder.ts` — 最終ページの編集で `reasoning.md` を File component と添付として付ける
+- 修正: `src/bot/events/messageCreate.ts` / `src/utils/chatContainerBuilder.ts` — 1 ページ目に推論の spoiler Container を置き、収まらない分を `reasoning.md` で添える
+- 修正: `src/utils/discordMessageNormalizer.ts` / `scripts/e2e/scenarios.ts` — 回答の Container を、spoiler でない最初の Container として読む
 - 修正: `src/db/schema.ts` / `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/bot/commands/config.ts` — `reasoning_display_enabled` の列、setter、`/config reasoning-display`、`/status` の表示
-- 修正: `scripts/e2e/scenarios.ts` — 推論の添付を確かめる、名前を指定して走るシナリオ
+- 修正: `scripts/e2e/scenarios.ts` — 推論の Container を確かめる、名前を指定して走るシナリオ
 - テスト: `tests/unit/llm/openrouter.test.ts` / `tests/unit/llm/toolLoop.test.ts` / 設定と表示のテスト
 
 ### DBスキーマ変更
@@ -82,7 +83,8 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 ### 表示
 
 - 推論の本文は Markdown として書き出し、ファイルの先頭にモデル名を書く。
-- 添付の上限（既定 20 MiB）に比べて推論は十分に小さいので、ファイルは分割しない。
+- 推論を切ったときに添える `reasoning.md` は、添付の上限（既定 20 MiB）に比べて十分に小さいので分割しない。
+- 最終ページの後にメッセージを書き直すとき（停止、エラー、余分なページの中立化）は添付を消す。
 - `showLlmDetails` の値は推論の表示に影響しない。
 
 ## Tasks
@@ -91,17 +93,17 @@ bot は OpenRouter の Responses API で回答を生成しているが、スト�
 - [x] tool loop で reasoning item を送り返し、`include` を付ける
 - [x] `supported_parameters` を読み、表示が有効なときだけ `reasoning.summary` を送る
 - [x] `reasoning_display_enabled` の列と `/config reasoning-display`、`/status` の表示を足す
-- [x] 最終ページに `reasoning.md` を添える
+- [x] 1 ページ目に推論の spoiler Container を置く
 - [x] 要約だけ、本文だけ、暗号化だけ、推論なし、形の壊れた item の各場合をテストする
-- [ ] 推論を返すモデルで、tool を挟む応答が送り返しで失敗しないことと、添付が付くことを e2e で確かめる
-- [ ] 手動確認: 実クライアントで `reasoning.md` が折りたたまれて表示され、開くと読めることを確かめる
+- [x] 推論を返すモデルで、tool を挟む応答が送り返しで失敗しないことと、推論が表示されることを e2e で確かめる
+- [ ] 手動確認: 実クライアントで、推論が回答の上にぼかした状態で出て、クリックすると読めること、長い推論では `reasoning.md` が添えられることを確かめる
 - [ ] `docs/changes/reasoning-output/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
 - **送り返しの効果（未検証）**: reasoning item を送り返さなくても request は通る見込みで、送り返したときにモデルの推論が引き継がれることは wire で確かめていない。e2e で、送り返しを入れても 400 にならないことだけは確かめる。
 - **provider による差**: 推論を求めても、token 数だけ、要約だけ、暗号化されたものだけが返ることがある。既定モデル `google/gemma-4-26b-a4b-it:free` は Models API で reasoning が既定 off なので、既定の構成ではファイルはほぼ付かない（2026-09-23 に Models API で確認）。
-- **編集での添付（未検証）**: 最終ページはストリーミング中のメッセージを編集して作るので、編集で File component と添付を同時に付けられることを実装時に確かめる。付けられなければ、最終ページの送信の時点で添付する。
+- **provider による要約の有無**: `reasoning.summary` を送っても、要約を返すかは provider が応答ごとに決める。`google/gemini-3.8-flash` と `openai/gpt-6-luna` は暗号化された推論だけを返すことが多く、`z-ai/glm-5.3-flash` は毎回本文を返した（2026-09-24 に e2e で確認）。effort を high にしても gpt-6-luna は要約を返さなかった。
 
 ## 参照
 

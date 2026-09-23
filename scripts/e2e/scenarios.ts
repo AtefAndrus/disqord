@@ -12,7 +12,6 @@ export interface DiscordMessage {
   edited_timestamp?: string | null;
   author: { id: string; username: string };
   components?: unknown[];
-  attachments?: { id: string; filename: string }[];
 }
 
 /**
@@ -62,8 +61,11 @@ function isComponent(node: unknown): node is Component {
   return typeof node === "object" && node !== null && !Array.isArray(node);
 }
 
+/** The answer's Container; a reasoning spoiler Container may come before it. */
 function containerOf(message: DiscordMessage): Component | undefined {
-  return (message.components ?? []).filter(isComponent).find((c) => c.type === CONTAINER);
+  return (message.components ?? [])
+    .filter(isComponent)
+    .find((c) => c.type === CONTAINER && c.spoiler !== true);
 }
 
 function childrenOf(container: Component | undefined): Component[] {
@@ -110,6 +112,14 @@ function isErrorContainer(message: DiscordMessage): boolean {
     typeof only.content === "string" &&
     only.content.startsWith("## ⚠️ ")
   );
+}
+
+/** `buildReasoningContainer`: a spoiler Container placed before the answer's Container on the first page. */
+function hasReasoningContainer(message: DiscordMessage | undefined): boolean {
+  const containers = (message?.components ?? [])
+    .filter(isComponent)
+    .filter((c) => c.type === CONTAINER);
+  return containers.length >= 2 && containers[0]?.spoiler === true;
 }
 
 export function toReply(messages: DiscordMessage[]): Reply {
@@ -317,12 +327,10 @@ export const SCENARIOS: Scenario[] = [
       "[e2e] 必ず read_earlier_messages を 1 回呼んでから、5 人を円卓に並べる並べ方が何通りあるか（回転は同じとみなす）を考え、数だけを短く答えて。",
     check: (reply) => [
       ...(reply.isError ? ["the reasoning reply ended in an error"] : []),
-      ...(reply.messages
-        .at(-1)
-        ?.attachments?.some((attachment) => attachment.filename === "reasoning.md")
+      ...(hasReasoningContainer(reply.messages[0])
         ? []
         : [
-            "the final message has no reasoning.md attachment (is reasoning display enabled and supported?)",
+            "the first message has no spoiler reasoning container (is reasoning display enabled and does the model return reasoning?)",
           ]),
       ...hasUsageFooter(reply),
     ],
