@@ -6,7 +6,7 @@ import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
 import { buildChatRequest, ChatService } from "../../../src/services/chatService";
 import { ModelService } from "../../../src/services/modelService";
-import type { ChatCompletionRequest } from "../../../src/types";
+import type { ChatCompletionRequest, FunctionTool } from "../../../src/types";
 import {
   createMockGuildSettings,
   createMockLLMClient,
@@ -322,6 +322,30 @@ describe("conversation-context request construction", () => {
     ]);
     expect(third && [images(third), searches(third), instructed(third)]).toEqual([0, false, false]);
     expect(result).toMatchObject({ status: "final", webSearchSkipped: true });
+  });
+
+  test.each([
+    [false, ["read_earlier_messages", "openrouter:datetime"]],
+    [true, ["read_earlier_messages", "openrouter:web_search"]],
+  ])("sends one server tool with the client tools (web search %p)", async (webSearch, expected) => {
+    const fixture = createRetryFixture(webSearch);
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      return finalTurn("answer");
+    });
+
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      retryInput(fixture.readEarlier),
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+
+    const names = fixture.requests[0]?.tools?.map((tool) =>
+      tool.type === "function" ? (tool as FunctionTool).function.name : tool.type,
+    );
+    expect(names).toEqual(expected);
   });
 
   test("does not retry tweet images after a client tool was invoked", async () => {

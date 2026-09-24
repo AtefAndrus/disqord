@@ -15,6 +15,7 @@ import type {
   ChatMessageContent,
   GuildId,
   MessageId,
+  ServerTool,
 } from "../types";
 import { PDF_PARSER_PLUGIN } from "./attachmentParser";
 import type { ConversationWindowContext } from "./conversationWindow";
@@ -423,7 +424,9 @@ export class ChatService implements IChatService {
         },
       }),
       registry: this.toolRegistry,
-      ...(webSearchEnabled && { serverTools: [buildWebSearchServerTool(this.webSearchEngine)] }),
+      ...(webSearchEnabled
+        ? { serverTools: [buildWebSearchServerTool(this.webSearchEngine)] }
+        : conversation && toolsAllowed && { serverTools: [DATETIME_SERVER_TOOL] }),
       ctx: {
         guildId,
         channelId: ctx.channelId,
@@ -489,6 +492,23 @@ function buildDateTimeSystemMessage(now: Date, webSearchEnabled: boolean): ChatM
     ].join("\n"),
   };
 }
+
+/**
+ * Sent alongside the client tools when web search is off, for what it changes
+ * on OpenRouter's side rather than for the date. With no server tool in the
+ * request, google/gemini-3.8-flash answered every turn that followed an image
+ * from `view_attachment` with HTTP 400 ("Corrupted thought signature"),
+ * whether the image came back in the tool output or in a user message. With
+ * `openrouter:web_search` or this tool in the request the same turn succeeded
+ * (2026-09-24, 3 of 3 each, against 0 of 3 without a server tool).
+ * The tool has no charge beyond token usage, and with the date already in the
+ * system prompt the models called it in 2 of 48 requests, both asking for the
+ * time of day.
+ */
+const DATETIME_SERVER_TOOL: ServerTool = {
+  type: "openrouter:datetime",
+  parameters: { timezone: "Asia/Tokyo" },
+};
 
 function buildConversationSafetyMessage(): ChatMessage {
   return {
