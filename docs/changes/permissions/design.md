@@ -1,6 +1,6 @@
 ---
 title: "ギルド設定変更の共通認可"
-status: planned
+status: in-progress
 priority: high
 summary: "ギルド設定を変更できるかの判定を共通関数 canManageGuildSettings（ManageGuild または admin_role_id のロール）にまとめ、既存のすべての書き込みの入口に掛ける"
 ---
@@ -33,7 +33,6 @@ summary: "ギルド設定を変更できるかの判定を共通関数 canManage
 - ギルド設定を変更できるかの判定を共通関数 1 つで表現し、スラッシュコマンドと `/status` のボタンの両方の入口から呼ぶ
 - 現在の `/config` のすべての書き込み（無料モデル限定と自動応答チャンネルを含む）を認可の対象にする
 - ギルド設定の変更を委譲するロールを保存する列 `admin_role_id` を用意し、未設定時の既定動作を確定する
-- 会話中の tool に、依頼者がこの判定を満たすかを渡す経路を用意する
 
 **Non-Goals:**
 
@@ -67,7 +66,6 @@ summary: "ギルド設定を変更できるかの判定を共通関数 canManage
 - 新規: `src/services/settingsAuthorization.ts` — 共通認可関数と拒否文言。メッセージを読めるかを判定する `src/services/messageAuthorization.ts` とは判定の軸が違うので別ファイルにする
 - 修正: `src/bot/commands/handlers.ts` — `/config` の書き込み系 handler すべてで共通関数を呼び、`ManageGuild` の直接確認を削る
 - 修正: `src/bot/events/interactionCreate.ts` — `status_set:<key>` のボタン 6 種と、旧形式の `status_toggle_free_only` / `status_toggle_llm_details` ボタンで共通関数を呼ぶ。`ManageGuild` の直接確認と、4 設定だけを対象にした拒否文言の分岐を削る
-- 修正: `src/bot/events/messageCreate.ts` / `src/services/chatService.ts` / `src/llm/tools/registry.ts` — 依頼者について共通関数を評価し、tool コンテキストへ渡す
 
 ### DB スキーマ変更
 
@@ -90,10 +88,10 @@ function canManageGuildSettings(
 - `ManageGuild` を持つか、`adminRoleId` が非 NULL でそのロールを持てば true を返す。`permissions` が取れない場合は false とする。
 - 引数を discord.js のインタラクションやメッセージではなく権限とロール ID の組にするのは、スラッシュコマンド、ボタン、選択メニュー、modal の送信、メッセージ（`message.member`）のどこからでも同じ関数を呼べるようにするためである。
 - 拒否したときの文言も 1 つにまとめ、`admin_role_id` の有無に応じて必要な権限またはロールを示す。
-- 本 change での呼び出し元は次の 3 種類である。
+- 本 change での呼び出し元は次の 2 種類である。
   - `/config` の書き込み系サブコマンド（`free-only`、`llm-details`、`web-search`、`reasoning-display`、`twitter-expand`、`history`、`auto-reply add|remove`。`interaction.memberPermissions` と、`interaction.member` のロール ID）
   - `/status` の設定ボタン（`status_set:<key>` の 6 種と旧形式の `status_toggle_*`。同上）
-  - `messageCreate` から LLM の tool に渡すコンテキスト。会話中に tool がギルドの課金に関わる操作を提案する場合（[スケジュール実行（cron）](../cron/design.md) の登録提案）に、依頼者がこの判定を満たすかを真偽値として `IToolContext.canManageGuildSettings` に渡す。tool の `isEnabled(ctx)` は同期関数で、メンバー情報を持たないため
+- 会話中の tool に依頼者の判定結果を渡す経路（`IToolContext.canManageGuildSettings`）は、それを最初に使う [スケジュール実行（cron）](../cron/design.md) が加える。
 - [設定パネル](../config-panel/design.md) は `/config` のサブコマンドと `/status` の設定ボタンを置き換え、パネルのボタン、選択メニュー、modal の送信、確認の押下のすべてでこの関数を呼ぶ。`admin_role_id` そのものの変更だけは、この関数ではなく `ManageGuild` で判定する（委譲されたロールの持ち主が委譲先を付け替えられないようにするため）。
 
 **参照**:
@@ -107,8 +105,7 @@ function canManageGuildSettings(
 - [ ] `settingsAuthorization.ts` に共通認可関数と拒否文言を実装
 - [ ] `/config` の書き込み系 handler すべてを共通関数に切り替える（`free-only`・`llm-details`・`auto-reply add|remove` を新たに対象へ含める）
 - [ ] `/status` のボタン（`status_set:<key>` と旧形式の `status_toggle_*`）を共通関数に切り替える
-- [ ] `messageCreate` で共通関数を評価し、`IToolContext.canManageGuildSettings` まで渡す
-- [ ] テスト追加（`admin_role_id` の設定時と未設定時、ロールを持たない `ManageGuild` 保持者、`permissions` が取れない場合、ボタン入口での拒否、tool コンテキストへの受け渡し）
+- [ ] テスト追加（`admin_role_id` の設定時と未設定時、ロールを持たない `ManageGuild` 保持者、`permissions` が取れない場合、ボタン入口での拒否）
 - [ ] `docs/changes/permissions/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
