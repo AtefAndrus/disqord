@@ -100,10 +100,23 @@ export function buildWebSearchStaticSystemMessage(): SystemChatMessage {
   };
 }
 
+/**
+ * A date alone is not enough: google/gemini-3.8-flash read it as a future or
+ * simulated date and discarded the forecast pages it found as cached or dummy
+ * content. With its own such refusal in the quoted
+ * history it refused again in 11 of 24 runs without the second paragraph and
+ * 0 of 18 with it (2026-09-24, same request shape as production). Handing the
+ * date over through `openrouter:datetime` instead is not used: with the date
+ * coming only from that tool it still refused 1 of 8 runs.
+ */
 export function buildWebSearchDateTimeSystemMessage(now: Date): SystemChatMessage {
   return {
     role: "system",
-    content: `現在日時: ${dateTimeFormat.format(now)} (JST)`,
+    content: [
+      `現在日時: ${dateTimeFormat.format(now)} (JST)`,
+      "現在日時はサーバーの時計から取得した実際の日時である。あなたの学習データの時点より後の日付であるのは正常であり、未来の日付・架空の日付・設定上の日付として扱わないこと。" +
+        "検索結果に学習時点より新しい情報が含まれるのも正常である。検索結果の日付が現在日時と整合するなら、それを最新の実データとして扱い、キャッシュやダミーと疑わないこと。",
+    ].join("\n"),
   };
 }
 
