@@ -16,7 +16,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 
 ## 依存 / 関連 change
 
-- 先行: [権限管理](../permissions/design.md) — `/stats` のうち他のメンバーの使用量を見る操作は同 change の共通認可関数で判定する。同じ `guild_settings` を触るが、本 change は列を足さない
+- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — `/stats` のうち他のメンバーの使用量を見る操作は同 change の共通認可関数で判定する。同じ `guild_settings` を触るが、本 change は列を足さない
 - 連携: [スケジュール実行（cron）](../cron/design.md) — ジョブの実行も `usage_logs` に記録し、`user_id` にはジョブの登録者を入れる
 - 連携: [OAuth BYOK](../oauth-byok/design.md) — どのキーで支払ったか（ユーザー / Guild / デフォルト）を `key_source` 列に記録する。同 change より先に実装した場合、列は `default` だけを取る
 
@@ -45,7 +45,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 | トークン列の名前 | `prompt_tokens` / `completion_tokens` | 内部の usage 型は Chat Completions の名前を使う（`src/types/index.ts` の `ChatCompletionResponse.usage`）。Responses API の `input_tokens` / `output_tokens` はクライアントの境界で変換済みであり、列名を内部型に揃えると変換が要らない |
 | 不明な値 | NULL で保存する | 内部の usage 型では、報告されなかった項目は欠落しており、0 とは区別される。`cost` を 0 で埋めると「無料だった」と「不明」が見分けられない |
 | 停止・失敗した応答 | 行は記録し、`usage_complete = 0` を付けてトークンとコストの合計から除く | 停止時は進行中のターンの usage が届かない（`src/bot/events/messageCreate.ts:417` のコメント）。記録される値は完了済みのターンの分だけで、実際の消費より少ない。合計に混ぜると過少になり、捨てると停止率が出せない |
-| `/stats` の認可 | 自分の統計は誰でも見られる。サーバー全体・モデル別・他のメンバーの統計は [権限管理](../permissions/design.md) の共通認可関数を満たすメンバーだけ | 他のメンバーの利用量とコストは、そのメンバーの行動の記録でもある |
+| `/stats` の認可 | 自分の統計は誰でも見られる。サーバー全体・モデル別・他のメンバーの統計は [ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数を満たすメンバーだけ | 他のメンバーの利用量とコストは、そのメンバーの行動の記録でもある |
 | 表示形式 | 他のコマンド応答と同じ Components V2 のコンテナ | コマンドの応答は Components V2 に統一済みで、Embed を使う応答は無い |
 
 ## Design

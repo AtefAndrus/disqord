@@ -17,7 +17,8 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 
 ## 依存 / 関連 change
 
-- 先行: [権限管理](../permissions/design.md) — `/config release-channel` の認可に、同 change の設定変更の共通認可関数を使う
+- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — 通知先の設定と解除の認可に、同 change の共通認可関数を使う
+- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 通知先の設定は同 change の「管理」ページの項目として足す
 
 ## Goals / Non-Goals
 
@@ -44,7 +45,7 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 | 初回の起動 | 記録が無ければ、動いている版が `x.y.z` で、その節がちょうど 1 つあって壊れていないことを確かめてから、動いている版を記録する。通知はしない。確かめられなければ記録しない。DB を作り直した場合も同じである | この機能を入れた版で、過去の全版の変更点を一度に流さない |
 | 版の比較 | 数値 3 つの `x.y.z` だけを扱い、数値の組として比べる。prerelease や build の付いた版は扱わず、通知しない。動いている版の方が新しければ、記録より新しく動いている版以下の節をすべて、古い順に通知し（最新の版の通知がチャンネルの一番下に来る）、記録を動いている版に進める。古いか同じなら何もせず、記録も下げない | 複数の版を飛ばして起動した場合も、同梱した CHANGELOG にある節は抜けなく伝える。記録を下げないので、ロールバックの後に元の版へ戻しても通知し直さない |
 | 記録の更新と送信の順 | CHANGELOG の全版の節と表示をトランザクションの外で組み立てておき、1 つの IMMEDIATE トランザクションの中で記録を読み、送る版の範囲（記録より新しく、動いている版以下）をその値から選び、記録を動いている版に進めて commit する。送るのは commit した後である。範囲の中で見つかった節が 1 つでも壊れているか、動いている版の節が無ければ、記録を進めずにエラーをログに残し、何も送らない。版の番号は飛ぶことがある（1.3.4 の次は 1.4.0）ので、途中の版の節が丸ごと消えている場合は、そもそもリリースされなかった版と区別できず、検出しない。記録の値が `x.y.z` として読めなければ、ログに残して何もせず、記録を消したり初期化したりしない。届くことは保証せず、処理済みの版を自動で送り直さない（Discord の REST クライアントが要求単位で行う再送は別である） | 送信の途中で落ちて再起動を繰り返したときに、同じ通知が何度も流れるより、一部のサーバーに届かない方が害が小さい。取りこぼしても `/release-note` で読める。送る範囲をトランザクションの中で読んだ記録から選ぶので、同じ DB を使う 2 つのプロセスが同時に起動しても、同じ版を 2 回送らない。範囲の中の版の節が 1 つでも壊れたまま記録を進めると、その版の機会が失われるので、範囲ごと止める。届くまで送り直すには、サーバーごと・版ごと・ページごとの進み具合を持つ必要があり、情報の通知には見合わない |
-| 通知先の設定 | サブコマンドグループ `/config release-channel` に `set channel:<channel>` と `off` を置く。どちらもギルド設定の変更なので、[権限管理](../permissions/design.md) の設定変更の共通認可関数で認可する。設定できるのはテキストチャンネルとアナウンスチャンネルだけで、設定の時点で bot の `ViewChannel` と `SendMessages` も確かめる。列は `release_announce_channel_id` とし、古い列 `release_channel_id` の値は写さない | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
+| 通知先の設定 | [設定パネル](../config-panel/design.md) の「管理」ページに、通知先を 1 件選ぶ Channel Select と「解除」ボタンを置く。空のときは「通知しない」と表示する。どちらもギルド設定の変更なので、[ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数で、選択と押下のたびに認可する。設定できるのはテキストチャンネルとアナウンスチャンネルだけで、Channel Select の `channel_types` をこの 2 種に絞ったうえで、保存の前にも種別を確かめる。設定の時点で bot の `ViewChannel` と `SendMessages` も確かめ、満たさなければ保存せずに押した本人にだけ理由を返す。列は `release_announce_channel_id` とし、古い列 `release_channel_id` の値は写さない | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
 | 送信の条件 | 送信の直前に、チャンネルがその guild のものであること、チャンネルの種別と、bot がそのチャンネルで `ViewChannel` と `SendMessages` を持つことを確かめ、無ければ送らない。送信の失敗はサーバーごとに受け止めて、残りのサーバーへの送信を続ける。版、サーバー、ページ、結果をログに残す。チャンネルが消えていれば設定はそのままにする | 1 つのサーバーの失敗で他のサーバーへの通知を止めない |
 | 表示 | Components V2 の Container に `## DisQord v1.6.0 をリリースしました` と節の本文を入れる。本文は見出しとページの footer の分を差し引いたうえで、チャット返信と同じ `splitTextIntoMessages`（`src/utils/chatContainerBuilder.ts`。文字数とバイト数の両方の上限を守る）でページに分ける。複数の版は版ごとに別のメッセージにする。通知、`/release-note` の返信、追加のページのすべてに `IsComponentsV2` の flag と `allowedMentions: { parse: [] }` を付ける | 日本語は 4000 字より前にバイト数の上限に届く。CHANGELOG の行は PR のタイトルそのままなので、`@everyone` やロールのメンションが入っていても通知しないようにする |
 | `/release-note` | 引数 `version` は任意で、CHANGELOG にある版を autocomplete で出す（入力中の文字列で全版を絞り込んでから、新しい順に 25 個まで）。候補に出ない版も、入力すれば表示できる。省略時は動いている版。節が無い、壊れている、または CHANGELOG が読めなければ、その旨の notice を返す。返信は ephemeral にしない | 他の人にも見せたい情報である |
@@ -58,7 +59,8 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 - 修正: `src/db/schema.ts` — `bot_state` テーブルと `release_announce_channel_id` 列
 - 新規: `src/db/repositories/botState.ts` — `bot_state` の読み書き
 - 修正: `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/types/index.ts` — 通知先の設定
-- 修正: `src/bot/commands/config.ts` / `src/bot/commands/index.ts`（新しいコマンドの登録） / `src/bot/commands/handlers.ts` / `src/bot/events/interactionCreate.ts` — `/config release-channel` と `/release-note`、autocomplete
+- 修正: `src/utils/configPanel.ts` / `src/bot/events/configPanelHandler.ts` — 「管理」ページの通知先の Channel Select と「解除」ボタン、種別と送信権限の確認
+- 修正: `src/bot/commands/index.ts`（新しいコマンドの登録） / `src/bot/commands/handlers.ts` / `src/bot/events/interactionCreate.ts` — `/release-note` と autocomplete
 - 修正: `src/utils/statusMessage.ts` — `/status` に通知先を表示する
 - 修正: `src/index.ts` — `ready` の後に announcer を呼ぶ
 - 修正: `Dockerfile` / `.dockerignore` — `CHANGELOG.md` をイメージに入れる
@@ -78,7 +80,7 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 - [ ] CHANGELOG をイメージに入れ、節の切り出しと版の比較を実装する
 - [ ] `bot_state` と `release_announce_channel_id` を足す
 - [ ] 起動時の通知を実装する
-- [ ] `/config release-channel` と `/status` の表示を足す
+- [ ] 設定パネルの「管理」ページの通知先の項目と、`/status` の表示を足す
 - [ ] `/release-note` と autocomplete を足す
 - [ ] 手動確認: 開発環境で記録を古い版に書き換えて起動し、設定したチャンネルに通知が出ることを確かめる
 - [ ] `docs/changes/release-announcement/` 削除（リリース完了時、git 履歴がアーカイブ）

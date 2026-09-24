@@ -17,7 +17,7 @@ summary: "返答のページを書き換えて同じ発言に答え直す再生�
 
 - 先行（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の本文は DB に保存せず、応答のたびに Discord から読む（`src/services/conversationWindow.ts`）。DB には返答の管理記録（`reply_records` と `reply_pages`、`src/db/schema.ts`）だけがあり、記録は発言 1 件につき 1 行で、発言の message ID が主キーである。本 change はこの記録の状態遷移と、窓に入れるかの判定（`src/services/messageEligibility.ts`）の上に載る
 - 連携: [code-execution](../code-execution/design.md) — 実行結果のメッセージは回答と同じ生成に属する。再生成と取り消しでは、置き換えられる生成の実行結果メッセージを削除する。コンテナは生成ごとに採番されるので、再生成が前の生成のコンテナを引き継ぐことは無い
-- 連携: [permissions](../permissions/design.md) — 再生成と取り消しの認可は「元の発言者本人または `ManageMessages`」であり、同 change の設定変更権限とは別の軸である
+- 連携: [ギルド設定変更の共通認可](../permissions/design.md) — 再生成と取り消しの認可は「元の発言者本人または `ManageMessages`」であり、同 change の設定変更権限とは別の軸である
 - 連携: [usage-stats](../usage-stats/design.md) — 再生成の usage と cost も計上対象である
 
 ## Goals / Non-Goals
@@ -48,7 +48,7 @@ summary: "返答のページを書き換えて同じ発言に答え直す再生�
 | 取り消しの方法 | bot が返答ページを削除し、`reply_records` と `reply_pages` の行は残す | 記録に登録されたページが見つからないと、窓の判定はそのやり取り（発言と返答）を外部削除として窓から外す（`messageEligibility.ts` の `classifyNotFoundMessage`）。削除だけで元の発言も文脈から外れ、スキーマの変更も要らない。ページを「取り消し済み」の表示へ書き換える方式は、書き換えた本文が返答として窓に入るので除外用の状態を別に足す必要があり、採らない |
 | 取り消しの対象 | 記録が残っている返答すべて。生成中の返答は対象外（停止してから取り消す） | 取り消しはモデレータがページを消すのと同じ結果になり、後の回答への影響もそれと変わらない。生成中の取り消しを受けると、停止と削除とページ送信の順序を調停する必要が生じる |
 | 操作の入口 | 返答の記録（`reply_records`）がある完了した返答の最終ページに、「再生成」と「取り消し」のボタンを付ける。`customId` には元の発言の ID を入れる | 生成中に付く停止ボタン（`stop_response_<発言 ID>`、`interactionCreate.ts`）と同じ形で、再起動後も記録から対象を引ける。3 秒以内に `deferUpdate()` で応答し、結果は bot トークンでのメッセージ編集で反映する |
-| 対象にする guild | 会話履歴（`/config history`）が有効な guild だけ。無効な guild の返答にはボタンを付けない | 記録は履歴が有効なときにしか作られない（`src/bot/events/messageCreate.ts` の `createPending` と `appendPage` は `settings.historyEnabled` のときだけ動く）。履歴が無効なら返答は以後の文脈に入らないので、取り消しで文脈から外す意味も無い。履歴と独立に記録を作る案は、記録の 24 時間の TTL と窓の判定を履歴の無い guild にまで持ち込むので採らない |
+| 対象にする guild | 会話履歴の設定が有効な guild だけ。無効な guild の返答にはボタンを付けない | 記録は履歴が有効なときにしか作られない（`src/bot/events/messageCreate.ts` の `createPending` と `appendPage` は `settings.historyEnabled` のときだけ動く）。履歴が無効なら返答は以後の文脈に入らないので、取り消しで文脈から外す意味も無い。履歴と独立に記録を作る案は、記録の 24 時間の TTL と窓の判定を履歴の無い guild にまで持ち込むので採らない |
 | 認可 | 元の発言者本人（`interaction.user.id` が発言の author）か、`ManageMessages` を持つメンバー。満たさなければ ephemeral で断る | 共有チャンネルでは、ボタンは他人にも見えて押せる。他人の質問への回答を書き換えたり消したりできないようにする |
 | 同時実行 | 再生成も取り消しも、Discord への書き込みの前に記録を `completed`、`stopped`、`failed` のいずれかから `pending` へ CAS で移し、成功した操作だけが進む。記録が `pending` のあいだの操作は断る。再生成の生成は `ChatService` の `activeRequests` に元の発言 ID で登録する | 同じ CAS を両方の操作が取るので、再生成中の取り消しや、同時に押された再生成は片方だけが進む。停止ボタンがそのまま再生成を止められる |
 

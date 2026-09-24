@@ -17,7 +17,8 @@ OAuth PKCE でユーザーまたは Guild 管理者が自分の OpenRouter ア�
 
 - 連携: [使用量統計](../usage-stats/design.md) — どのキーが支払ったか（user / guild / default）を記録する列が要る。本 change のキー解決結果がその値の出どころになる
 - 連携: [設定階層化](../settings-hierarchy/design.md) — ユーザー → Guild → デフォルトという解決順序は似ているが、API キーは設定値ではなく秘密情報なので、テーブルも解決ロジックも分けたままにする
-- 連携: [権限](../permissions/design.md) — `/connect guild` と `/disconnect guild` の認可は同 change の `admin_role_id` 契約に従う
+- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — `/connect guild` と `/disconnect guild` の認可は同 change の共通認可関数 `canManageGuildSettings` で判定する
+- 関連: [設定パネル（/config の再構成）](../config-panel/design.md) — `/connect` と `/disconnect` は同 change のパネルに載せず、独立したコマンドのままにする
 - 連携: [コード実行](../code-execution/design.md) — コンテナは API キーの workspace に scope されるので、生成ファイルの取得は、その生成に使ったのと同じキーで行う必要がある
 
 ## Goals / Non-Goals
@@ -137,7 +138,7 @@ resolveApiKey(userId, guildId):
 | ---------- | ---- | -------- |
 | `runToolLoop()` の `llmClient.chatStream()`（`src/llm/toolLoop.ts:527`）。`ChatService.runChatLoop()`（`src/services/chatService.ts:416`）が `llmClient` を渡す | 応答生成 | `resolveApiKey(ctx.userId, guildId)` の結果 |
 | `ChatService.generateResponse()` の `llmClient.chat()`（`src/services/chatService.ts:205`） | 非 streaming の応答生成 | 同上。ただし `src/` 内に呼び出し元がないので、キー解決を足すか、メソッドごと削除するかを実装時に決める |
-| `/status` の `llmClient.getCredits()`（`src/bot/commands/handlers.ts:173`）と、`/status` のトグル操作後の再描画（`src/bot/events/interactionCreate.ts:356`） | 残クレジット表示（`GET /api/v1/key`） | Guild キーがあれば Guild キー、なければデフォルトキー。`/status` は Ephemeral ではないので、ユーザーキーの残高はここに出さず `/connect status` で本人にだけ見せる |
+| `/status` の `llmClient.getCredits()`（`src/bot/commands/handlers.ts:173`）と、`/status` のボタン操作後の再描画（`src/bot/events/interactionCreate.ts:356`） | 残クレジット表示（`GET /api/v1/key`） | Guild キーがあれば Guild キー、なければデフォルトキー。`/status` は Ephemeral ではないので、ユーザーキーの残高はここに出さず `/connect status` で本人にだけ見せる。[設定パネル](../config-panel/design.md) の描き直しは DB の設定だけで行い残高を取りに行かないので、キーの選択は要らない |
 | `ModelService` の `listModelsWithPricing()`（`src/services/modelService.ts:65`） | 全 Guild で共有するモデル一覧キャッシュ | デフォルトキー。キャッシュは 1 つなので、キーごとに引き直さない |
 | `OpenRouterClient.listModels()`（`src/llm/openrouter.ts:1226`） | モデル ID 一覧 | クライアント内部から `listModelsWithPricing()` を呼ぶだけで、外部の呼び出し元はない。キーは生成元クライアントのものになる |
 
@@ -260,14 +261,13 @@ interface IApiKeyRepository {
 
 ```text
 /connect user       -- 自分の OpenRouter アカウントを接続
-/connect guild      -- Guild 用の OpenRouter アカウントを接続（admin_role_id 契約で認可）
+/connect guild      -- Guild 用の OpenRouter アカウントを接続（canManageGuildSettings で認可）
 /connect status     -- 自分と Guild の接続状態と、自分のキーの残高を Ephemeral で表示
 /disconnect user    -- 自分の接続を解除
-/disconnect guild   -- Guild の接続を解除（admin_role_id 契約で認可）
+/disconnect guild   -- Guild の接続を解除（canManageGuildSettings で認可）
 ```
 
-`/connect guild` と `/disconnect guild` の認可は、[権限管理](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。
-権限管理は本 change より先に実装する。
+`/connect guild` と `/disconnect guild` の認可は、[ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。
 
 ### セキュリティ考慮事項
 
