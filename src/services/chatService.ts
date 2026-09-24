@@ -500,9 +500,10 @@ function buildDateTimeSystemMessage(now: Date, webSearchEnabled: boolean): ChatM
  * from `view_attachment` with HTTP 400 ("Corrupted thought signature"),
  * whether the image came back in the tool output or in a user message. With
  * `openrouter:web_search` or this tool in the request the same turn succeeded
- * (2026-09-24, 2 of 2 and 3 of 3).
- * This one is free, and with the date already in the system prompt the
- * models called it only when asked for the time of day.
+ * (2026-09-24, 3 of 3 each, against 0 of 3 without a server tool).
+ * The tool has no charge beyond token usage, and with the date already in the
+ * system prompt the models called it in 2 of 48 requests, both asking for the
+ * time of day.
  */
 const DATETIME_SERVER_TOOL: ServerTool = {
   type: "openrouter:datetime",
