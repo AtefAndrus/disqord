@@ -313,6 +313,9 @@ describe("ChatService", () => {
     expect(request.messages[2]?.content).toContain("[m1] Prior: before");
     expect(request.messages[2]?.content).toContain("添付 m1/1: PDF");
     expect(request.messages[4]?.content).toContain("現在日時");
+    expect(request.messages[4]?.content).toContain(
+      "未来の日付・架空の日付・設定上の日付として扱わない",
+    );
     expect(request.messages[5]?.content).toBe("[current] Current: now");
   });
 
