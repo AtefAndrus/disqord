@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.7.0] - 2026-09-24
+
+
+### Added
+
+- Web 検索の有無にかかわらず現在日時をモデルに渡す (#157)
+
+
+### Fixed
+
+- 現在日時が実際の日時であることをモデルに明示する (#156)
+- Web 検索が無効でも過去の画像を開いた後の応答が失敗しないようにする (#158)
+
+
+### Documentation
+
+- E2e のモデル別の観測をシナリオの横へ移す (#155)
+- E2e のギルド設定を DB で切り替えられることを書く (#159)
+
+
 ## [1.6.0] - 2026-09-23
 
 
@@ -420,6 +440,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.7.0]: https://github.com/AtefAndrus/disqord/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/AtefAndrus/disqord/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AtefAndrus/disqord/compare/v1.3.4...v1.4.0
