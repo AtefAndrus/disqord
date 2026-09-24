@@ -299,6 +299,7 @@ describe("createMessageCreateHandler", () => {
 
     const mockGuildSettings = {
       guildId: "guild-123",
+      adminRoleId: null,
       defaultModel: "test-model:fixture",
       freeModelsOnly: false,
       showLlmDetails: true,
@@ -471,6 +472,7 @@ describe("createMessageCreateHandler", () => {
         mockSettingsService.getGuildSettings = mock(() =>
           Promise.resolve({
             guildId: "guild-123",
+            adminRoleId: null,
             defaultModel: "test-model",
             freeModelsOnly: false,
             showLlmDetails: false,

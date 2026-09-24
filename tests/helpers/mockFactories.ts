@@ -102,6 +102,7 @@ export function createMockTweetService(): ITweetService {
 export function createMockGuildSettings(overrides?: Partial<GuildSettings>): GuildSettings {
   return {
     guildId: "test-guild-id",
+    adminRoleId: null,
     defaultModel: "test-model:fixture",
     freeModelsOnly: false,
     showLlmDetails: true,

@@ -5,6 +5,7 @@ export type MessageId = string;
 
 export interface GuildSettings {
   guildId: GuildId;
+  adminRoleId: string | null;
   defaultModel: string;
   freeModelsOnly: boolean;
   showLlmDetails: boolean;

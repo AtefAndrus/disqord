@@ -46,6 +46,7 @@ const TRIGGER_MESSAGE_ID = "400000000000000000";
 
 const settings: GuildSettings = {
   guildId: "100000000000000000",
+  adminRoleId: null,
   defaultModel: DEMO_MODEL,
   freeModelsOnly: true,
   showLlmDetails: false,
@@ -71,9 +72,9 @@ const HELP_TEXT = `**使い方:**
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
-- \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
-- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
-- \`/config history <on|off>\` - 会話履歴の切り替え（サーバーの管理権限が必要）
+- \`/config web-search <on|off>\` - Web検索の切り替え
+- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え
+- \`/config history <on|off>\` - 会話履歴の切り替え
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;

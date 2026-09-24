@@ -34,6 +34,7 @@ export interface IGuildSettingsRepository {
 
 interface RawGuildSettings {
   guildId: GuildId;
+  adminRoleId: string | null;
   defaultModel: string;
   freeModelsOnly: number;
   showLlmDetails: number;
@@ -59,6 +60,7 @@ function parseAutoReplyChannels(raw: string | null): string[] {
 function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
   return {
     guildId: raw.guildId,
+    adminRoleId: raw.adminRoleId ?? null,
     defaultModel: raw.defaultModel,
     freeModelsOnly: Boolean(raw.freeModelsOnly),
     showLlmDetails: Boolean(raw.showLlmDetails ?? 1),
@@ -72,7 +74,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
   };
 }
 
-const SELECT_ROW = `SELECT guild_id as guildId, default_model as defaultModel, free_models_only as freeModelsOnly,
+const SELECT_ROW = `SELECT guild_id as guildId, admin_role_id as adminRoleId, default_model as defaultModel, free_models_only as freeModelsOnly,
   show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
   web_search_enabled as webSearchEnabled, reasoning_display_enabled as reasoningDisplayEnabled,
   twitter_expand_enabled as twitterExpandEnabled,

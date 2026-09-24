@@ -4,13 +4,17 @@ import type {
   ContainerBuilder,
   Interaction,
 } from "discord.js";
-import { PermissionFlagsBits } from "discord.js";
 import packageJson from "../../../package.json";
 import { SettingsConflictError, SettingsRuleError } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
+import {
+  canManageGuildSettings,
+  settingsActorFromInteraction,
+  settingsPermissionDeniedMessage,
+} from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
 import {
   buildErrorContainer,
@@ -20,11 +24,7 @@ import {
 } from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
 import { metrics } from "../../utils/metrics";
-import {
-  buildStatusMessage,
-  parseStatusSetCustomId,
-  type StatusSwitch,
-} from "../../utils/statusMessage";
+import { buildStatusMessage, parseStatusSetCustomId } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 
 /**
@@ -37,36 +37,6 @@ function settingsErrorContainer(error: unknown): ContainerBuilder | undefined {
   return error instanceof SettingsConflictError || error instanceof SettingsRuleError
     ? buildErrorContainer(error.userMessage, "設定エラー")
     : undefined;
-}
-
-function permissionDeniedNotice(
-  key: Extract<StatusSwitch, "web_search" | "twitter_expand" | "history" | "reasoning_display">,
-): {
-  message: string;
-  title: string;
-} {
-  switch (key) {
-    case "web_search":
-      return {
-        message: "Web検索の設定には「サーバーの管理」権限が必要です。",
-        title: "Web検索設定",
-      };
-    case "twitter_expand":
-      return {
-        message: "ツイート展開の設定には「サーバーの管理」権限が必要です。",
-        title: "ツイート展開設定",
-      };
-    case "history":
-      return {
-        message: "会話履歴の設定には「サーバーの管理」権限が必要です。",
-        title: "会話履歴設定",
-      };
-    case "reasoning_display":
-      return {
-        message: "推論内容の表示設定には「サーバーの管理」権限が必要です。",
-        title: "推論表示設定",
-      };
-  }
 }
 
 export interface CommandHandlers {
@@ -250,19 +220,19 @@ async function handleButtonInteraction(
     }
 
     const statusChange = parseStatusSetCustomId(customId);
-    if (
-      (statusChange?.key === "web_search" ||
-        statusChange?.key === "twitter_expand" ||
-        statusChange?.key === "history" ||
-        statusChange?.key === "reasoning_display") &&
-      !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)
-    ) {
-      const notice = permissionDeniedNotice(statusChange.key);
-      await interaction.reply(
-        toNoticePayload(buildErrorContainer(notice.message, notice.title), true),
-      );
-      return;
+    const isSettingsWrite =
+      statusChange !== undefined ||
+      customId === "status_toggle_free_only" ||
+      customId === "status_toggle_llm_details";
+    if (isSettingsWrite) {
+      const settings = await settingsService.getGuildSettings(interaction.guildId);
+      if (!canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
+        const message = settingsPermissionDeniedMessage(settings);
+        await interaction.reply(toNoticePayload(buildErrorContainer(message, "設定の変更"), true));
+        return;
+      }
     }
+
     // Every branch that re-renders /status waits on OpenRouter (model checks,
     // credits) before it can update, which can pass Discord's 3-second
     // deadline; acknowledging first keeps the interaction valid.
