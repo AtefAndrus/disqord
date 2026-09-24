@@ -19,9 +19,8 @@ bot のプロセスが生成の途中で終了すると、「生成中...」と�
 
 ## 依存 / 関連 change
 
-- 要見直し: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) は、会話の本文を DB に保存せず、応答のたびに Discord から読み、それより前と過去の添付はモデルが `read_earlier_messages` / `view_attachment` で取りに行く。DB に残るのは本文を持たない返答の管理記録（`reply_records` / `reply_pages`）だけである。本 design のうち `sessions` / `turns` / `turn_messages`、`PersistedContentPart`、`stripHistoricalMedia()`、DB の削除同期を前提にした記述は、同 change の実装後に前提から設計し直す
-- 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 停止表示（`buildStoppedContainer`）と、updater の確定処理を使う
-- 連携: [対話UX改善（会話履歴）](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 同 change は `pending` の exchange を永続化する。終了時に中断した exchange をどの状態で残すかを合わせる必要がある
+- 前提（実装済み）: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 停止表示（`buildStoppedContainer`）と、updater の確定処理を使う
+- 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 返答ごとの管理記録（`reply_records` / `reply_pages`）を DB に持つ。終了時の後始末は、この記録の状態も確定させる（下の「現状」）
 
 ## Goals / Non-Goals
 
@@ -39,11 +38,21 @@ bot のプロセスが生成の途中で終了すると、「生成中...」と�
 
 ### 現状
 
-`src/index.ts` の `shutdown()` は、HTTP サーバの停止、`client.destroy()`、DB のクローズ、ログの flush を順に行って `process.exit(0)` する。
+`src/index.ts` の `shutdown()` は、返答記録の定期掃除（`ttlSweepRunner`）の停止、HTTP サーバの停止、`client.destroy()`、DB のクローズ、ログの flush を順に行って `process.exit(0)` する。
 進行中のリクエストには触れない。
 
 `ChatService` は進行中のリクエストを `activeRequests`（message ID → `AbortController`）で持っており、停止ボタンは `cancelRequest(messageId)` でこれを中断する。
-中断された生成は `messageCreate` 側が `cancelled` として受け取り、停止表示に書き換える。
+中断された生成は `messageCreate` 側が `cancelled` として受け取り、停止表示に書き換えたうえで、返答記録を `finalize(..., "stopped")` で確定させる。
+
+生成の途中で終了すると、返答記録は `pending` のまま DB に残る。
+次の起動時に `markPendingFailed()` がこれを `failed` にし（`src/index.ts` の起動処理）、`failed` の記録を持つ bot の返信は会話の窓から外れる（`src/services/messageEligibility.ts` の `recordStatusReason`）。
+記録の側は現状でも次の起動で整うが、チャンネルの表示は「生成中...」のまま残る。
+終了時に停止ボタンと同じ経路を通せば、記録は `stopped` で確定し、その返信は次の会話の窓にも入る。
+このため、後始末は `db.close()` より前に終える必要がある。
+
+本番のコンテナは Dockerfile の exec 形式の `CMD ["bun", "run", "src/index.ts"]` で起動するので、シェルを挟まず bun のプロセスがシグナルを直接受ける。
+`docker stop` は SIGTERM を送り、既定では 10 秒後に SIGKILL を送る（Docker の `docker container stop` の文書）。
+本番へのデプロイは `.github/workflows/deploy.yml` から Coolify に依頼する形で、Coolify が古いコンテナを止めるときの猶予は確かめていない（Open Questions）。
 
 ### 方針の候補
 
@@ -53,7 +62,7 @@ bot のプロセスが生成の途中で終了すると、「生成中...」と�
 決める必要があるのは次の点である。
 
 - `ChatService` に「全件を中断し、完了を待てる」入口をどう持たせるか（現状の `cancelRequest` は 1 件ずつで、完了を待つ手段が無い）
-- 待つ時間の上限（コンテナの停止猶予より短くする必要がある。Docker の既定は 10 秒）
+- 待つ時間の上限（コンテナの停止猶予より短くする必要がある。`docker stop` の既定は 10 秒）
 - 停止表示の文言を、ユーザが止めた場合と区別するか（「再起動のため中断しました」など）
 
 ### 変更対象ファイル
@@ -70,4 +79,9 @@ bot のプロセスが生成の途中で終了すると、「生成中...」と�
 
 ## Open Questions / Risks
 
-- `client.destroy()` より前に Discord への編集を終える必要がある。期限内に終わらなかった分は、現状と同じく「生成中...」のまま残る
+- `client.destroy()` より前に Discord への編集を、`db.close()` より前に返答記録の確定を終える必要がある。期限内に終わらなかった分は、現状と同じく表示は「生成中...」のまま残り、記録は次の起動で `failed` になる
+- **Coolify の停止猶予とローリング更新（未検証）**: Coolify が古いコンテナを止めるときに SIGTERM から SIGKILL までの猶予を何秒とするか、新しいコンテナを起動してから古いコンテナを止めるか（その間は 2 つの bot が同じトークンで動く）を確かめていない。待つ時間の上限を決める前に、本番の設定と Coolify の文書で確かめる
+
+## 参照
+
+- [docker container stop](https://docs.docker.com/reference/cli/docker/container/stop/) — SIGTERM の後、猶予（Linux のコンテナで既定 10 秒）を過ぎると SIGKILL を送る

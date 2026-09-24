@@ -11,14 +11,14 @@ summary: "カスタム絵文字、スタンプ、GIF の埋め込みをモデル
 
 Discord の会話では、文字の代わりにカスタム絵文字、スタンプ、GIF で反応することが多い。
 いまの bot はこれらをほとんど読めない。
-本文中のカスタム絵文字は `<:name:id>` という生の表記のままモデルへ渡り、スタンプ（`sticker_items`）と、Tenor などのリンクから Discord が作る GIF の埋め込み（`embeds` の `type: "gifv"`）は捨てている。
+本文中のカスタム絵文字は `<:name:id>` という生の表記のままモデルへ渡り、スタンプ（`sticker_items`）と、GIF サービスのリンクから Discord が作る GIF の埋め込み（`embeds` の `type: "gifv"`）は捨てている。
 そのため、スタンプだけのメッセージで bot を呼ぶと、本文が空とみなされて「メッセージを入力してください」のエラーになる。
 また、モデルはサーバーにどのカスタム絵文字があるかを知らず、絵文字を書くには `<:name:id>` の ID まで要るので、返信でサーバーの絵文字を使えない。
 
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓は Discord のメッセージを正規化してモデルへ渡し、過去の添付は `view_attachment` で開く。本 change はその正規化と `view_attachment` の対象を広げる
-- 連携: [discord-tool](../discord-tool/design.md) — 同 change の `add_reaction` もカスタム絵文字を名前で引く。共有するのは、絵文字の一覧から名前で 1 つを選ぶ処理だけである。本 change の 5 分の保持と 50 個の上限は `add_reaction` には使わず、`add_reaction` は同 change のとおり実行の直前に REST で全件を取り直す
+- 連携: [discord-tool](../discord-tool/design.md) — 同 change の `add_reaction` もカスタム絵文字を名前で引く。共有するのは、絵文字の一覧から名前で 1 つを選ぶ処理だけである。本 change の 5 分の保持と 50 個の上限は `add_reaction` には使わず、`add_reaction` は同 change のとおり実行の直前に REST で全件を取り直す。どちらも相手の実装を前提にしないので、別々にリリースでき、先に出す側が名前で引く処理を作る
 
 ## Goals / Non-Goals
 
@@ -38,6 +38,7 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 - アニメーションの内容をモデルに見せること（アニメーション絵文字は静止画の URL で取る。GIF のサムネイルはアニメーションのこともあり、既存の画像と同じく変換せずに渡すので、モデルが何フレーム目を見るかはモデルとプロバイダ次第である）
 - 絵文字の画像の枚数を設定で変えること
 - 他のサーバーのカスタム絵文字を返信で使うこと
+- アプリケーション絵文字（bot のアプリケーションが持ち、どのサーバーでも使える絵文字）を返信で使うこと（画像を用意して登録し、名前と用途を管理する運用が別に要る。本 change は、そのサーバーの利用者が見慣れた絵文字を bot も使えるようにすることを目的にする）
 
 ## Decisions
 
@@ -51,7 +52,7 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 | 画像の取得先 | カスタム絵文字は Discord CDN の `emojis/<id>.webp`、スタンプは `stickers/<id>.png`（GIF 形式は `media.discordapp.net/stickers/<id>.gif`）、GIF は埋め込みのサムネイルの `proxy_url` だけを取得する。取得してよいホストは `cdn.discordapp.com`、`media.discordapp.net`、Discord のメディアプロキシ（`images-ext-<n>.discordapp.net`）に限り、redirect のたびに宛先のホストを確かめる。`proxy_url` が無い、または許可したホストでないときは、`thumbnail.url` に切り替えず表記だけにする | `thumbnail.url` は埋め込み元のサイトの URL で、任意のホストを指しうる。既存の `view_attachment` も取得先を Discord の CDN に限っている（`src/services/conversationWindow.ts` の `isDiscordCdnHost`）。絵文字は WebP で上げられたものが PNG では取れず、WebP はどの絵文字でも取れる |
 | 返信での絵文字 | 返信の本文をページに分ける前に、単独で書かれた `:name:` のうち guild のカスタム絵文字の名前に一致するものを `<:name:id>`（アニメーションは `<a:name:id>`）に置き換える。コードブロック、インラインコード、既にある `<...>` の Discord の表記（メンション、絵文字、タイムスタンプ）、URL（自動リンクと Markdown のリンク先）の中は置き換えない。`:name:` の前後が英数字や `_` のときも置き換えない | モデルに ID を書かせない。一致しない `:name:` はそのまま残るので、誤った絵文字にはならない。既存の表記や URL の中を置き換えると、`<<:ok:id>id>` のような壊れた表記やリンク切れになる |
 | モデルへの絵文字一覧 | guild のカスタム絵文字の名前を、system メッセージに最大 50 個まで並べる。置き換えにも同じ一覧を使う。bot が使えない絵文字（利用ロールの制限があり bot がそのロールを持たないもの、`available: false` のもの）は除く | 名前を知らないとモデルは使えない。数百個あるサーバーでも token を抑える |
-| 絵文字一覧の鮮度 | 一覧は `guild.emojis.fetch()` で REST から取り、guild ごとに 5 分だけ手元に持つ。gateway のキャッシュは使わない | bot は `GuildExpressions` intent を持たないので、起動後の絵文字の追加、変更、削除はキャッシュに届かない。intent を足しても、discord.js 14.26.5 は `available` だけが変わった更新をキャッシュに反映しない（`GuildEmoji#equals` が `available` を比べない）。REST の一覧は 1 回の取得で全部が新しくなり、5 分の保持で応答ごとの取得を避ける |
+| 絵文字一覧の鮮度 | 一覧は `guild.emojis.fetch()` で REST から取り、guild ごとに 5 分だけ手元に持つ。gateway のキャッシュは使わない | bot は `GuildExpressions` intent を持たないので、起動後の絵文字の追加、変更、削除はキャッシュに届かない。intent を足しても、discord.js 14.27.0 は `available` だけが変わった更新をキャッシュに反映しない（`GUILD_EMOJIS_UPDATE` の生のデータと比べる `GuildEmoji#equals` の分岐が `available` を比べない）。REST の一覧は 1 回の取得で全部が新しくなり、5 分の保持で応答ごとの取得を避ける |
 
 ## Design
 
@@ -69,7 +70,9 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 ### 実装内容
 
 - ページの分割は、`<:name:id>` と `<a:name:id>` を 1 つの塊として扱い、途中で切らない。いまの splitter はコードブロックだけを守り、普通の文は文字単位で切るので、表記がページの境目にかかると `<:ok:` と `123456789012345678>` に分かれて絵文字として表示されない。
-- GIF の埋め込みは、Discord がメッセージの作成より後に `messageUpdate` で付けることがある。bot を呼んだメッセージの本文に `tenor.com` か `giphy.com` の URL があり、`gifv` の埋め込みがまだ無いときに限り、1.5 秒待ってからメッセージを REST で 1 回取り直す。それでも無ければ URL のまま扱う。その他の URL では待たない。
+- GIF の埋め込みは、Discord がメッセージの作成より後に `messageUpdate` で付けることがある。bot を呼んだメッセージの本文に GIF サービス（`klipy.com`、`tenor.com`、`giphy.com`）の URL があり、`gifv` の埋め込みがまだ無いときに限り、1.5 秒待ってからメッセージを REST で 1 回取り直す。それでも無ければ URL のまま扱う。その他の URL では待たない。
+- 待つかどうかをホストで決めず、URL があれば必ず待つ形は採らない。ニュースや SNS のリンクを含むメッセージのすべてで応答が 1.5 秒遅れるためである。一覧に無いホストの GIF は、埋め込みが間に合わなければ URL のまま渡るだけで、誤った内容にはならない。ホストの一覧は 1 つの定数に置き、GIF の提供元が変わったときに直す箇所をそこだけにする。
+- Google は Tenor API を 2026-06-30 に終了し、Discord の GIF の検索は Klipy に移ったと報道されている（参照の報道記事）。Discord 自身の発表は確かめておらず（未検証）、Klipy の GIF を選んだときに本文に入る URL のホストも確かめていない（Open Questions）。
 - 置き換えは、ページの分割より前の本文に掛ける。置き換えると `:ok:` が `<:ok:123456789012345678>` になって文字数とバイト数が増えるので、分割した後のページに掛けると 1 メッセージの上限を超えうる。ストリーミング中も、分割のたびに置き換えた本文を使う。途中まで届いた `:name` は一致しないのでそのまま表示され、`:` が閉じた時点で絵文字になる。
 - bot 自身の過去の返信を窓に読み戻すときも、`<:name:id>` を `:name:` に戻し、絵文字を `view_attachment` の番号に並べる。bot の返信は `normalizeBotReply()` が人のメッセージとは別に正規化するので、カスタム絵文字の置き換えと番号付けは、人のメッセージと bot の返信の両方から呼ぶ共通の関数にする。
 - bot を呼んだメッセージの本文には、カスタム絵文字の `:name:`、スタンプと GIF の表記を、入力の検査より前に入れる。スタンプや GIF だけのメッセージも本文があるものとして扱い、「メッセージを入力してください」で断らない。
@@ -92,9 +95,11 @@ Discord の会話では、文字の代わりにカスタム絵文字、スタン
 
 - **テスト bot からのスタンプ送信（未検証）**: bot は guild のスタンプを `sticker_ids` で送れるが、テスト用のサーバーにスタンプが無ければ e2e で確かめられない。無ければ e2e を GIF とカスタム絵文字に絞り、スタンプは手動確認にする。
 - **絵文字の名前の重複**: 同じ名前のカスタム絵文字が複数あるときは、置き換えに最初のものを使う。一覧にも 1 つだけ出す。
+- **GIF のリンクのホストと埋め込み（未検証）**: Discord の GIF 選択で Klipy の GIF を送ったときに本文へ入る URL のホストと、その URL に `gifv` の埋め込みが付くかを確かめていない。Tenor API の終了後に、既存の `tenor.com` のリンクが今も `gifv` として展開されるかも確かめていない。実装時に開発サーバーで両方を送り、待つホストの一覧を実際に合わせる。
 
 ## 参照
 
 - [Discord Sticker Resource](https://discord.com/developers/docs/resources/sticker) — `format_type`（PNG / APNG / LOTTIE / GIF）
 - [Discord Image Formatting](https://discord.com/developers/docs/reference#image-formatting) — `emojis/<id>.png`、`stickers/<id>.png`、GIF 形式のスタンプの URL
 - [Discord Message Resource](https://discord.com/developers/docs/resources/message) — `sticker_items`、埋め込みの `type: "gifv"`、`IS_COMPONENTS_V2` のメッセージに `sticker_ids` を付けられないこと
+- Tenor API の終了と Discord の GIF 検索の移行（報道。Discord の一次情報ではない）: [Shacknews](https://www.shacknews.com/article/149852/google-tenor-api-service-discontinued-twitter-discord-whatsapp-bluesky)、[PiunikaWeb](https://piunikaweb.com/2026/01/14/discord-gif-search-change-tenor-api-shutdown/)

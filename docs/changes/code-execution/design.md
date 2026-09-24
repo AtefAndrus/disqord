@@ -23,15 +23,15 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — shell server tool は Responses API と Messages API でしか使えず、Chat Completions では 400 になる。`usage.cost_details.server_tool_cost` と `usage.server_tool_use_details` の parser と集計も同 change が用意する
-- 先行: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `runToolLoop()` の `serverTools` 引数が server tool を毎ターンの `tools` へ載せる
-- 連携: [OpenRouter サーバツール群](../server-tools/design.md) / [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — server tool の item を client が呼び出し側へ渡す経路（後述の `StreamServerToolChunk`）と、1 発言あたりの server tool 実行回数の予算（後述）を共有する。最初に実装する change が作り、後続はそれを使う
+- 前提（実装済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — shell server tool は Responses API と Messages API でしか使えず、Chat Completions では 400 になる。client は `POST /responses` を使い、`usage.cost_details.server_tool_cost` と `usage.server_tool_use_details` を読み込んでいる（footer にはまだ出していない）
+- 前提（実装済み）: [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — `runToolLoop()` の `serverTools` 引数が server tool を毎ターンの `tools` へ載せ、`requestFields` が全ターン共通のリクエストフィールドを渡す
+- 前提（実装済み）: [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — server tool を載せたリクエストの失敗時の再試行（後述）と、1 発言あたりの server tool 実行回数の予算を共有する相手である
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 実行の進捗と結果は V2 updater の tool block hook に描画する
-- 先行: [出力マルチモーダル対応](../multimodal-output/design.md) — 添付、component 数、合計バイト数の予算をまとめて配分する layout planner を使う。同 change より先に実装する場合は、同等の planner を本 change で実装し、同 change がそれを引き取る
+- 連携: [画像生成](../image-generation/design.md) — 添付、component 数、合計バイト数の予算をまとめて配分する planner（`ResponseLayoutPlanner`）と、検証済みのバイト列を渡す生成物の型を同 change が定義する。本 change はそれを再利用し、本 change が先に実装される場合は、同 change の仕様どおりに planner を実装する
 - 連携: [権限管理](../permissions/design.md) — 2 つのトグルの変更は、同 change の設定変更の共通認可契約に従う
-- 連携: [回答の再生成・編集/undo・compaction](../conversation-regeneration/design.md) — 実行結果のメッセージは回答と同じ生成に属する。生成が失効したときの公開の停止と、結果メッセージの削除の契約を共有する（後述）
+- 連携: [回答の再生成と取り消し](../conversation-regeneration/design.md) — 実行結果のメッセージは回答と同じ生成に属する。生成が失効したときの公開の停止と、結果メッセージの扱いは同 change に従う（後述）
 - 連携: [使用統計](../usage-stats/design.md) — サンドボックス課金（`server_tool_cost`）を保存対象に含める
-- 関連: [対話UX改善（会話履歴）](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 同 change が `session_id` を送り始めると、`container_auto` のコンテナ ID が会話単位に変わる。本 change はコンテナ ID を明示するので影響を受けない（Decisions 参照）
+- 関連: [OAuth BYOK](../oauth-byok/design.md) — コンテナは API キーの workspace に scope されるので、利用者の鍵で生成した場合のファイル取得は、生成に使ったのと同じ鍵で行う必要がある
 
 ## Goals / Non-Goals
 
@@ -67,26 +67,28 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | engine | `"openrouter"` に固定する | 既定の `"auto"` は OpenAI のモデルで OpenAI 自身の hosted shell を使い、出力 item が `shell_call` になる。engine を固定すれば、どのモデルでも item の形（`openrouter:shell`）、コンテナとファイルの API、課金が同じになる |
 | tool の渡し方 | `runToolLoop()` の `serverTools` に載せる。`IClientTool` は作らない | 実行は OpenRouter 側で完結し、Bot が受け取るのは結果の item だけである。client tool として包むと、実行の往復が 1 ターン増え、引数検証や timeout の実装が二重になる |
 | コンテナの単位 | `environment: { type: "container_reference", container_id: "run_<messageId>_<乱数 8 桁の 16 進>" }`。ID は `runToolLoop()` の開始時に一度だけ採番し、その生成の全ターンで使う | `runToolLoop()` は client tool を挟むと同じ生成の中で複数回リクエストする。`container_auto` は、`session_id` が無く、再送した会話に過去の `container_id` も含まれない場合、リクエストごとに別コンテナになり、ターンをまたぐとファイルが消える。message ID だけを ID にしない理由は、同じ発言に対する再生成（[conversation-regeneration](../conversation-regeneration/design.md)）やリトライが同じコンテナに当たり、前回の生成のファイルや実行中のコマンドを引き継いでしまうこと、その間に guild がネットワークのトグルを変えていると 409 になることである。ID は 1〜40 文字の英数字と `_` `-` という制約を満たす（`run_` + 最大 20 桁 + `_` + 8 桁 = 最大 33 文字） |
-| `container_auto` を使わない理由 | 同上 | `container_auto` は `session_id` があると `sess_<session_id>` をコンテナ ID にする。[対話UX改善](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) が `session_id` を送り始めた時点で、コンテナが暗黙に会話単位へ変わり、途中でネットワークのトグルを変えた guild のリクエストが 409 になる。コンテナの寿命を他 change のフィールドに左右させない |
+| `container_auto` を使わない理由 | 同上 | `container_auto` は `session_id` があると `sess_<session_id>` をコンテナ ID にする。Bot は会話履歴を読む設定の guild で、チャンネルごとの会話ウィンドウに対応する UUID を `session_id` として送っている（`chatService.ts` の `runChatLoop` が `requestFields` に載せる）。`container_auto` にすると、コンテナが暗黙にこの会話単位になり、途中でネットワークのトグルを変えた guild のリクエストが 409 になる。コンテナの寿命を別の目的のフィールドに左右させない |
 | ネットワーク既定 | `network_policy` を送らない（= `disabled`） | 最小権限。実測でも既定のコンテナから `pypi.org` へは接続できなかった |
-| ネットワーク許可時 | `{ type: "allowlist", allowed_domains: [...] }`。既定の一覧は `pypi.org` / `files.pythonhosted.org` / `registry.npmjs.org`。一覧に書けるのは完全一致のホスト名だけで、`*` を含む項目は起動時に拒否する | OpenRouter の allowlist は glob を受け付け、`*.*` のような項目は事実上すべての公開ホストを許す。`*` 単体だけを弾いても無制限の egress は防げないので、glob 自体を受け付けない。このトグルが許すのは「一覧のホストへの通信」であり、用途をパッケージ取得に限定する手段は無い。パッケージのインストールは任意コードの実行を伴うため、コード実行とは別のトグルで意識して許可する |
+| ネットワーク許可時 | `{ type: "allowlist", allowed_domains: [...] }`。既定の一覧は `pypi.org` / `files.pythonhosted.org` / `registry.npmjs.org`。一覧に書けるのは完全一致のホスト名だけで、`*` を含む項目は起動時に拒否する | OpenRouter の allowlist は glob を受け付け、docs は `["*"]` を無制限の egress の指定として案内している。`*.*` のような項目も事実上すべての公開ホストを許す。`*` 単体だけを弾いても無制限の egress は防げないので、glob 自体を受け付けない。このトグルが許すのは「一覧のホストへの通信」であり、用途をパッケージ取得に限定する手段は無い。パッケージのインストールは任意コードの実行を伴うため、コード実行とは別のトグルで意識して許可する |
 | policy とコンテナの整合 | 1 回の生成の間は最初のターンで決めた policy を使い続ける | policy はコンテナ起動時に固定され、稼働中のコンテナへ別の policy を送ると 409 になる。guild 設定は `runToolLoop()` の開始時に一度だけ読み、`serverTools` を凍結して全ターンへ同じものを送る（foundation の既存の契約）。コンテナ ID も生成ごとに新しいので、別の生成の policy と衝突しない |
 | 有効化ゲート | `guild_settings.code_execution_enabled`（既定 0）と `code_execution_network_enabled`（既定 0）。前者が 1 のときだけ shell tool を載せ、両方が 1 のときだけ allowlist を付ける。どちらも新しい生成を始めるときの入口の制御であり、実行中の生成は止めない | 課金と第三者サンドボックスの利用を伴うので opt-in にする。`serverTools` は生成の開始時に凍結するので、トグルを off にしても進行中の生成の残りのターンには効かない。止めたい場合は停止ボタンを使う |
-| トグルの認可 | 2 つのトグルの変更は [権限管理](../permissions/design.md) の共通認可契約（`admin_role_id`）に従う。同 change が未実装の間は、handler で `ManageGuild` 権限を要求する | 現行の `/config` の handler は guild 内であることしか確認しておらず、同じ作りで足すと一般メンバーが課金を伴う実行と外部通信を有効化できてしまう |
+| トグルの認可 | 2 つのトグルの変更は [権限管理](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。権限管理は本 change より先に実装する | 課金を伴う実行と外部通信を一般メンバーが有効化できないようにする |
+| `/status` での切り替え | 2 つのトグルは `/status` に状態を表示するが、切り替えのボタンは置かず、`/config` だけで変更する | 有効化の前に、実行内容が OpenRouter のサンドボックスに渡り 30 日保持されるという確認文（セキュリティとプライバシー）を読ませる必要がある。`/status` のボタンは 1 回の押下で切り替わり、確認文を挟めない |
 | グローバルな無効化 | 環境変数 `CODE_EXECUTION_ENABLED`（既定 `false`）。`false` なら guild 設定に関係なく tool を載せない。環境変数は起動時に読むので、切り替えには Bot の再起動が要る | beta の tool であり、挙動や課金が変わったときに、再ビルドや guild ごとの設定変更なしで止められるようにする |
-| 1 発言あたりの実行回数 | `runToolLoop()` に server tool の実行回数の予算（既定 8）を持たせる。各ターンのリクエストに残り予算を `max_tool_calls` として載せ、ターンの usage の `server_tool_use_details.tool_calls_requested` を予算から引く。usage にこの値が無いターンは、そのターンに送った `max_tool_calls` の全量を消費したものとして扱う。予算が尽きたターン以降は server tool を `tools` から外す。`max_tool_calls` と `stop_server_tools_when` は loop が所有するフィールドに加え、`requestFields` から取り除く | `max_tool_calls` は 1 HTTP リクエストの上限であり、`runToolLoop()` は 1 発言で、tool を実行できるリクエストを最大 4 回送る（5 回目は `tool_choice: "none"` の最終ターンで、`tools` は載るが実行はされない）。固定値をそのまま全ターンへ送ると 1 発言の上限はその 4 倍になる。`max_tool_calls` は shell だけでなく全 server tool の合計に効くので、予算は shell ではなく loop が持ち、[Web 検索](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) など他の server tool と共有する。回数が報告されないターンを 0 回と見なすと、実行したのに予算が減らないので、報告が無い場合は安全側に倒す。`stop_server_tools_when` は指定すると `max_tool_calls` が無視されるので、呼び出し側から指定できないようにする |
-| 自動リトライとの関係 | shell を載せたリクエストは自動で再送しない。[Web 検索](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) は、検索起因のエラーのときに `web_search` だけを外して同じリクエストを 1 回再試行する設計だが、shell が載っている場合は shell も外して再試行する。失敗した試行は、そのターンに送った `max_tool_calls` の全量を予算から消費したものとして扱う | 失敗したリクエストが、検索の前に shell のコマンドを実行し終えていることがある。shell を残して再送すると、同じコンテナに対する変更が二重に行われ、課金も二重になる。失敗した試行の usage は得られないので、回数は安全側に倒して数える |
+| 1 発言あたりの実行回数 | `runToolLoop()` に server tool の実行回数の予算（既定 8）を持たせる。各ターンのリクエストに残り予算を `max_tool_calls` として載せ、ターンの usage の `server_tool_use_details.tool_calls_requested` を予算から引く。usage にこの値が無いターンは、そのターンに送った `max_tool_calls` の全量を消費したものとして扱う。予算が尽きたターン以降は server tool を `tools` から外す。`max_tool_calls` と `stop_server_tools_when` は loop が所有するフィールドに加え、`requestFields` から取り除く | `max_tool_calls` は 1 HTTP リクエストの上限であり、`runToolLoop()` は 1 発言で、tool を実行できるリクエストを最大 4 回送る（5 回目は `tool_choice: "none"` の最終ターンで、`tools` は載るが実行はされない）。固定値をそのまま全ターンへ送ると 1 発言の上限はその 4 倍になる。`max_tool_calls` は shell だけでなく全 server tool の合計に効くので、予算は shell ではなく loop が持ち、[Web 検索](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) など他の server tool と共有する。Web 検索が無効で client tool を載せるリクエストには `openrouter:datetime` が常に載っており（`chatService.ts` の `runChatLoop`）、モデルがこれを呼んだ回数も `tool_calls_requested` に含まれて予算を減らす。回数が報告されないターンを 0 回と見なすと、実行したのに予算が減らないので、報告が無い場合は安全側に倒す。`stop_server_tools_when` は指定すると `max_tool_calls` が無視されるので、呼び出し側から指定できないようにする |
+| 自動リトライとの関係 | shell を載せたリクエストを、shell を載せたまま再送しない。`chatService.ts` の `generateChatResponse` は、何も表示しておらず client tool も実行していない失敗に限って、ツイートの画像を外した再試行と、Web 検索を外した再試行をそれぞれ 1 回まで行う。shell が載っている場合は、この 2 つの再試行のどちらでも shell も外す。失敗した試行は、そのターンに送った `max_tool_calls` の全量を予算から消費したものとして扱う | 失敗したリクエストが、検索の前に shell のコマンドを実行し終えていることがある。shell を残して再送すると、同じコンテナに対する変更が二重に行われ、課金も二重になる。失敗した試行の usage は得られないので、回数は安全側に倒して数える |
 | 待ち時間の上限 | `runToolLoop()` の `STREAM_WALL_TIMEOUT_MS`（1 ターン 600 秒）に任せる。これは Bot が待つ時間の上限であり、課金の上限ではない | HTTP リクエストを中断したあと、コンテナ側で実行中や実行待ちのコマンドが止まるか、課金がいつ止まるかは未検証である（Open Questions）。1 call は最大 100 コマンドを順に実行でき、timeout はコマンドごとに掛かるので、中断後の実行時間を Bot 側からは制限できない。課金が中断時点で止まると仮定した場合、1 ターンの上限は 600 秒 × $0.0001 = 約 $0.06 になる |
 | コマンドの timeout と出力上限 | モデルが指定する `timeout_ms` / `max_output_length` と、OpenRouter 側の上限（300 秒、65,536 文字）に任せる | Bot からは個々のコマンドに介入できない。Bot 側の上限は wall-clock と `max_tool_calls` で掛ける |
-| 結果の受け取り | `response.output_item.added` / `done` のうち `item.type` が `openrouter:` で始まるものを、新しい正規化チャンク `StreamServerToolChunk` として yield する。検証は 3 層に分ける: client は item の外形、tool ごとの normalizer は tool 固有の中身、publisher は正規化済みのデータの表示だけを担う | 現行の client は server tool の item を heartbeat として捨てている。進捗表示と結果表示の両方に item が要る。中身の形は server tool ごとに違い、client に全種類の形を持たせると、server tool を足すたびに client を触ることになる |
+| 結果の受け取り | `response.output_item.added` / `done` のうち `item.type` が `openrouter:` で始まるものを、新しい正規化チャンク `StreamServerToolChunk` として yield する。検証は 3 層に分ける: client は item の外形、tool ごとの normalizer は tool 固有の中身、publisher は正規化済みのデータの表示だけを担う | 現行の client（`src/llm/openrouter.ts`）は、完了した `openrouter:web_search` の item から検索語と結果の URL だけを読み、それ以外の server tool の item（`openrouter:datetime` など）は heartbeat として捨てている。進捗表示と結果表示の両方に item が要る。中身の形は server tool ごとに違い、client に全種類の形を持たせると、server tool を足すたびに client を触ることになる |
 | 進捗表示と結果の公開 | 生成中は進捗だけを表示する。updater に `beginServerToolBlock(key, type)` と `endServerToolBlock(key, type, outcome)` を足し、`added` で「コード実行中」、`done` で「完了（n コマンド、うち失敗 m）」に変える。`key` は `<ターン番号>:<output_index>`。コマンド、出力、ファイルを含む実行結果は、`runToolLoop()` が返ったあとにまとめて公開する | 実行結果を生成と並行して公開すると、ファイルの取得と Discord への送信が、本文の確定（finalization）やキャンセルと競合する。短い回答では取得が終わる前に生成が終わり、結果が出るかどうかが取得の速さで決まってしまう。生成のあとに順に公開すれば、この競合は起きない。結果が出るのが回答の完了後になる点は受け入れる。既存の `beginToolBlock(name)` / `endToolBlock(name, render)` は tool 名しか受け取らず、同じ生成の中の複数の実行を区別できないので、client tool 用にそのまま残し、server tool 用の hook を別に足す |
 | idle timeout | 変更しない | 実測で、コマンド実行中は約 0.4 秒間隔で SSE コメント行が流れ、最大の空白は約 4 秒だった。client はコメント行を heartbeat として yield するので、100 秒のコマンドでも `STREAM_IDLE_TIMEOUT_MS`（90 秒）は発火しない |
 | 生成ファイルの扱い | ファイルは個々の shell call の成果物ではなく、公開の時点でコンテナから取得できた内容として扱う。全 call の `files[]` をパスで重複排除し、すべての shell の実行が検証済みの結果で終わった生成（`finishReason` が `stop` で、`aborted` で閉じた block が無い）でだけ、`GET /api/v1/containers/{container_id}/files/{file_id}/content` で一度ずつ取得する。それ以外の生成では、コマンドと出力は公開するがファイルは公開しない | `file_id` はパスを符号化したもので、内容の版を指さない。ある call が作ったファイルを後の call が上書きすると、前の call の参照からも新しい内容が返る。call ごとの表示にファイルを付けると、表示と中身が食い違いうる。`error` で終わった生成（timeout や中断）と、`response.incomplete` で打ち切られた生成では、コンテナ側でコマンドがまだ動いている可能性があり、書き込み中のファイルを取得しうるので、ファイルの公開を省く。loop の `status: "final"` は `finishReason` が `length` や `content_filter` の場合も含むので、`final` であることだけを実行完了の根拠にしない。版つきの取得手段は API に無い |
-| 表示の割り付け | 2 段階で行う。取得の前に、`GET /api/v1/containers/{container_id}/files/{file_id}` のメタデータでサイズを調べ、添付 10 件と合計バイト数の枠に収まるファイルを選ぶ。取得と検証のあと、[出力マルチモーダル対応](../multimodal-output/design.md) の layout planner に検証済みのバイト列を渡して、Container とメッセージの列を確定する。PNG / JPEG は `MediaGallery`、それ以外は `File`。枠から漏れた分は件数だけを本文に示す | 同 change の planner は取得と検証が済んだバイト列を入力にする契約で、`files[]` の参照にはサイズが含まれない。取得の前に選ばないと、表示しないファイルまで取得することになる。添付 10 件と文字数の splitter だけでは、1 つの Container が有効になることも保証できない。SVG は client の inline 描画が安定しないので `File` にする |
+| 公開するファイルの候補 | 各 call の `files[]` だけを候補にし、コンテナのファイル一覧（`GET /api/v1/containers/{container_id}/files`）は使わない | 一覧はコンテナ内の全ファイルを辞書順に返し、生成物とインストールしたパッケージなどを区別できない。`files[]` は OpenAPI 定義上、その call が作成または変更したファイルを新しい順に最大 10 件までしか挙げないので、1 call で多数のファイルに触れると先に書いたファイルが候補から漏れる（Open Questions） |
+| 表示の割り付け | 2 段階で行う。取得の前に、`GET /api/v1/containers/{container_id}/files/{file_id}` のメタデータでサイズを調べ、添付 10 件と合計バイト数の枠に収まるファイルを選ぶ。取得と検証のあと、[画像生成](../image-generation/design.md) の planner に検証済みのバイト列を渡して、Container とメッセージの列を確定する。PNG / JPEG は `MediaGallery`、それ以外は `File`。枠から漏れた分は件数だけを本文に示す | 同 change の planner は取得と検証が済んだバイト列を入力にする契約で、`files[]` の参照にはサイズが含まれない。取得の前に選ばないと、表示しないファイルまで取得することになる。添付 10 件と文字数の splitter だけでは、1 つの Container が有効になることも保証できない。SVG は client の inline 描画が安定しないので `File` にする |
 | コマンドと出力の表示 | コマンド、stdout、stderr をそれぞれコードブロックで表示し、長いものは `File` 添付へ逃がす。フェンスを壊さないための加工は publisher が行う: 表示用の文字列では、3 個以上連続するバッククォートの間にゼロ幅スペース（U+200B）を挟む。加工していない全文は `File` 添付で取得できる | 既存の splitter は 3 連バッククォートのフェンスをチャンク境界で閉じて開き直すだけで、任意の出力に含まれるバッククォートからフェンスを守る機能は無い |
-| mention の抑止 | 実行結果を含むメッセージはすべて `allowedMentions: { parse: [] }` で送る | サンドボックスの出力に `@everyone` やロール mention を書かせて ping を発火させる経路を塞ぐ。`TextDisplay` は embed の description と違い mention を発火する |
+| mention の抑止 | 実行結果を含むメッセージも、既存の payload builder（`chatContainerBuilder.ts` の `toComponentsV2Payload` などで、`allowedMentions: { parse: [] }` を常に含む）を通して送る | サンドボックスの出力に `@everyone` やロール mention を書かせて ping を発火させる経路を塞ぐ。`TextDisplay` は embed の description と違い mention を発火する。結果メッセージだけを別経路で組み立てると、この抑止が漏れうる |
 | キャンセル | 停止ボタンは既存どおり `AbortSignal` で HTTP リクエストを中断する。キャンセルされた生成では実行結果を公開しない | Bot から実行中のコマンドを直接止める API は無い。中断後にコンテナ側のコマンドが止まるか、課金がいつ止まるかは未検証（Open Questions）。結果の公開は生成が返ったあとに行うので、停止ボタンの対象にはならない。公開には全体の期限を置く（後述） |
-| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、OpenAPI 定義の入力の union（`Inputs`）も `OutputShellServerToolItem` を含むので、shell の item を `input` に再送することはスキーマ上正しい（2026-09-23 に確認）。wire では実測していない（Phase D で確認する） |
+| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、loop の中の履歴（`ChatMessage[]`、`ToolLoopResult.history` として返る）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、OpenAPI 定義の入力の union（`Inputs`）も `OutputShellServerToolItem` を含むので、shell の item を `input` に再送することはスキーマ上正しい（2026-09-23 に確認）。wire では実測していない（Tasks「planned へ進む条件」で確認する） |
 | 会話履歴への載せ方 | 生成が終わったあとの会話履歴には、assistant の本文だけを入れる | 内部 DTO（`ChatMessage`）に server tool の item を表す型が無く、コンテナも生成ごとに新しくなる。次の発言でモデルが参照できるのは前回の本文だけである（Open Questions） |
 | 課金の表示 | `usage.cost_details.server_tool_cost` を footer に `Server tools: $…` として出す。値が報告されなかった場合は 0 と表示せず、項目ごと出さない | この値は shell に限らず、計量課金される server tool 全体の合計である。shell 以外の server tool と併用したときに内訳は分からないので、shell の費用として表示しない。実測では 126 秒の実行で推論コストの約 3 倍だった |
 
@@ -177,7 +179,7 @@ export type StreamServerToolChunk = {
 `index` は `response.output_item` の `output_index`、`type` は item の `type`（`openrouter:shell` など）そのままである。
 `finished` は必ず item を持つ。
 
-client は `item.type` が `openrouter:` で始まる `output_item.added` / `done` をこのチャンクへ写像し、それ以外の item（`message`、`reasoning` など）は現行どおり heartbeat にする。
+client は `item.type` が `openrouter:` で始まる `output_item.added` / `done` をこのチャンクへ写像し、それ以外の item は現行どおりに扱う（`reasoning` は推論の表示へ渡し、`message` などは heartbeat にする）。`openrouter:web_search` の item から検索の情報を読む現行の処理は、このチャンクへの写像と並べて残す。
 client は item の外形だけを検証する: item が object であること、`type` が文字列であること、`output_index` が function call と同じ範囲の非負整数であること、`done` が同じ `output_index` の `added` に対応し、同じ `type` を持つこと、同じ `output_index` に `done` が二度届かないこと。
 違反は function call と同じく protocol error にする。
 中身（shell なら `action` / `output` / `files` / `container_id`）は server tool ごとに形が違うので、tool ごとの normalizer が検証する（次節）。
@@ -208,6 +210,8 @@ shell の場合は `type` / `status` / `call_id` / `container_id` / `action.comm
 後者は検証エラーではなく正常な失敗応答なので、`error` を 1,000 文字までに切り詰めて保持し、表示と再送の両方に使う。
 表示では、コマンドの非ゼロ終了、コマンドの timeout、サンドボックス自体の失敗を別の文言にする。
 item の `container_id` と、`files[]` の各参照の `container_id` は、Bot がこの生成のために採番した ID と一致しなければならない。
+ただし OpenAPI 定義では item の `container_id` は省略可能で、実行の前に失敗した item には無いことがある。
+実行の前の失敗で `container_id` が無い item は失敗応答として受け入れ、その item からはファイルを取得しない。
 一致しない item は検証失敗として扱い、一致しない参照は `files[]` から落とす。
 コンテナは Bot の API キーの workspace 全体で共有される名前空間にあり、OpenRouter 側の隔離は guild どうしを分けない。
 応答に含まれる ID をそのまま取得先に使うと、別の guild の生成のコンテナが取得の対象になりうる。
@@ -253,10 +257,11 @@ export interface ServerToolItemMessage {
 }
 ```
 
-生成が終わって会話履歴へ返すときは、この型のメッセージを取り除く。
+生成が終わって `ToolLoopResult.history` として返すときは、この型のメッセージを取り除く。
+以後の発言の文脈は Discord から組み直すので、shell の item が次の応答へ持ち越されることは無い。
 
 再送する item は、OpenAPI 定義の `Inputs` が受け付ける `OutputShellServerToolItem` の形に合わせる（スキーマ上の確認で、wire では実測していない）。
-item の再送が API に受け付けられなかった場合の代替は、Phase D の結果を見て設計する。
+item の再送が API に受け付けられなかった場合の代替は、Tasks「planned へ進む条件」の結果を見て設計する。
 その場合も、コマンドの出力を `system` メッセージへ入れることはしない。
 出力は信頼できないデータであり、指示としての優先度を与えないためである。
 
@@ -318,7 +323,7 @@ function calling に対応しないモデルで shell が実際に動くかは�
 - ファイルの取得は 1 件ずつ順に行い、1 件あたりの期限（`CODE_EXECUTION_FILE_DEADLINE_MS`）と、公開全体の期限（`CODE_EXECUTION_PUBLISH_DEADLINE_MS`）を置く。全体の期限に達したら、送信済みのメッセージを残し、残りは「表示を打ち切りました」と示して終える
 - 公開は本文の確定のあとに始まるので、finalization が結果メッセージを書き換えたり削除したりすることは無い。結果メッセージは updater の本文の列（`messages`）には入れない
 - 結果メッセージは、回答と同じ生成に属するものとして、送信のたびにメッセージ ID を生成の記録へ足す。publisher は 1 メッセージを送る前ごとに、その生成がまだ有効かを確認し、失効していれば残りを送らずに終える
-- 元の発言の削除と、再生成による世代の置き換えでは、結果メッセージを削除する。[undo](../conversation-regeneration/design.md) では削除しない。同 change は、undo でメッセージを消さずに取り消し表示へ編集し、redo で復元する契約を採っており、削除は redo の資格を壊すためである。結果メッセージも undo では取り消し表示へ編集する。ただし redo では復元しない。会話履歴が保持するのは assistant の本文だけで、コンテナのファイルを取り直しても公開時と同じ内容になる保証が無いので、実行結果は復元できない成果物と定義する。この例外は同 change の design にも書く必要がある（Open Questions）。同 change が未実装の間に失効させうるのは元の発言の削除だけであり、その場合の削除は本 change が実装する。送信の途中で失効した場合、送信が完了したメッセージは完了の時点でもう一度有効性を確認し、失効していれば削除する（一時的に見えることまでは防げない）
+- 元の発言の削除では、結果メッセージを削除する。[回答の再生成と取り消し](../conversation-regeneration/design.md) の再生成と取り消しでも、置き換えられる生成の結果メッセージを回答のページと同じく削除する。実行結果はコンテナのファイルを取り直しても公開時と同じ内容になる保証が無いので、一度取り消した結果を復元する操作は提供しない。同 change が未実装の間に失効させうるのは元の発言の削除だけであり、その場合の削除は本 change が実装する。送信の途中で失効した場合、送信が完了したメッセージは完了の時点でもう一度有効性を確認し、失効していれば削除する（一時的に見えることまでは防げない）
 
 ### 環境変数
 
@@ -330,7 +335,12 @@ function calling に対応しないモデルで shell が実際に動くかは�
 | `CODE_EXECUTION_FILE_MAX_BYTES` | `9437184` | 取得して添付する 1 ファイルの上限 |
 | `CODE_EXECUTION_FILE_DEADLINE_MS` | `15000` | 1 ファイルの取得に掛ける時間の上限 |
 | `CODE_EXECUTION_PUBLISH_DEADLINE_MS` | `60000` | 1 回の生成の実行結果の公開（取得と送信）全体に掛ける時間の上限 |
-| `CODE_EXECUTION_ATTACHMENT_MAX_BYTES` | `26214400` | 1 回の生成で添付するファイルの合計バイト数の上限 |
+| `CODE_EXECUTION_ATTACHMENT_MAX_BYTES` | `25165824` | 1 回の生成で添付するファイルの合計バイト数の上限（24 MiB） |
+
+添付の上限は Discord の制約から決める。
+1 ファイルの既定の上限は 20 MiB、1 リクエストの合計は 25 MiB である（2026-09-24 に Discord の API リファレンスで確認）。
+1 リクエストの合計にはファイル本体のほかに multipart の境界と JSON の payload（components）も含まれるので、ファイルの合計をちょうど 25 MiB にすると上限を超えうる。
+そのため合計の既定を 24 MiB とし、1 MiB を payload の余裕に残す。
 
 ### DB スキーマ
 
@@ -358,9 +368,10 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 - 新規: `src/bot/shellResultPublisher.ts` — 実行結果の表示用の要素への変換、ファイルの選択と取得、結果メッセージの送信、期限
 - 新規: `src/llm/containerFileClient.ts` — コンテナのファイル取得（サイズ上限つきの bounded read）
 - 修正: `src/services/chatService.ts` — guild 設定に応じて `serverTools` と `requestFields` を組み立てる
-- 修正: V2 updater と `src/utils/chatContainerBuilder.ts` — `beginServerToolBlock` / `endServerToolBlock` による進捗表示、footer の `Server tools:` 表示
+- 修正: `src/bot/events/streamingUpdater.ts` と `src/utils/chatContainerBuilder.ts` — `beginServerToolBlock` / `endServerToolBlock` による進捗表示、footer の `Server tools:` 表示
 - 修正: `src/bot/events/messageCreate.ts` — 本文の確定のあとに、生成の結果に応じて実行結果を公開する
 - 修正: `src/bot/commands/config.ts` と handler — 2 つのトグルと、その認可
+- 修正: `src/utils/statusMessage.ts` — 2 つのトグルの状態の表示（切り替えのボタンは置かない）
 - 修正: `src/db/` — migration と repository
 - 修正: `src/config/envVars.ts` — 上表の環境変数
 
@@ -374,9 +385,18 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 ## Tasks
 
+### planned へ進む条件
+
+設計は次の 2 つの前提に依存しており、どちらも実測していない（Open Questions）。
+数セントで済む実 API のリクエストで確かめ、成り立てば status を `planned` にする。
+成り立たない場合は、コンテナの単位と生成の途中の文脈の設計をやり直す。
+
+- [ ] `container_reference` で同じ ID を指定した、1 回の生成の中の複数のリクエストが、同じコンテナのファイルを共有すること
+- [ ] shell の item（`OutputShellServerToolItem` の形）を次のリクエストの `input` に再送でき、モデルがその実行の内容を参照できること
+
 ### Phase A: server tool item の受け渡し
 
-- [ ] `StreamServerToolChunk` を追加し、client で `openrouter:` 接頭辞の item を写像する。外形の違反（`added` の無い `done`、`type` の食い違い、二重の `added` や `done`、完了した index の再利用、長すぎる `type`、追跡数の超過）が protocol error になること、それ以外の item が heartbeat のままであることをテストで固定
+- [ ] `StreamServerToolChunk` を追加し、client で `openrouter:` 接頭辞の item を写像する。外形の違反（`added` の無い `done`、`type` の食い違い、二重の `added` や `done`、完了した index の再利用、長すぎる `type`、追跡数の超過）が protocol error になること、既存の reasoning item と function call の処理が変わらないこと、どの処理にも当たらない item が heartbeat のままであることをテストで固定
 - [ ] `MAX_SSE_FRAME_BYTES` を 4 MiB にし、上限を超える shell item が protocol error になることをフィクスチャで固定
 - [ ] updater に `beginServerToolBlock` / `endServerToolBlock` を足し、`runToolLoop()` から `<ターン番号>:<index>` を key にして呼ぶ。閉じられなかった block を `aborted` で閉じる
 - [ ] `runToolLoop()` に server tool の実行回数の予算を実装する（残り予算を `max_tool_calls` に載せる、usage から引く、報告が無いターンは全量を消費、尽きたら server tool を外す、`max_tool_calls` と `stop_server_tools_when` を `requestFields` から取り除く）
@@ -395,15 +415,15 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 - [ ] updater の進捗表示（実行中、完了、中断）
 - [ ] `shellResultPublisher` の表示（成否の判定、表示用の要素への変換、バッククォートの加工）
 - [ ] `containerFileClient`（メタデータの取得、サイズ上限、期限）と、取得前のファイルの選択
-- [ ] layout planner による割り付け（[出力マルチモーダル対応](../multimodal-output/design.md) が未実装なら本 change で実装する。検証済みのバイト列を入力にする契約は同 change に合わせる）
+- [ ] planner による割り付け（[画像生成](../image-generation/design.md) が未実装なら、同 change の仕様どおりに本 change で実装する）
 - [ ] `messageCreate` での公開。すべての実行が完了した `stop` の生成ではファイルまで、`length` / `content_filter` / 未完了の実行あり / `error` ではコマンドと出力だけが公開され、`cancelled` では公開されないこと、公開全体の期限で打ち切られること、本文の確定が結果メッセージに触れないこと、生成が失効したら残りを送らず送信済みの結果メッセージを削除することをテストで固定
-- [ ] `allowedMentions: { parse: [] }`（返信では既存どおり `repliedUser: false`）
+- [ ] 結果メッセージを既存の payload builder で組み立て、`allowedMentions: { parse: [] }` が付くことをテストで固定
 - [ ] footer の `Server tools:` 表示
 - [ ] `bun run preview` に実行中、成功、失敗、timeout、中断、添付ありの fixture を追加
 
 ### Phase D: 検証とリリース
 
-- [ ] 実 API で確認する: function calling に対応しないモデルで shell が動くか、`container_reference` で 1 回の生成の複数リクエストが同じコンテナを使うこと、返る `container_id` が採番した ID と同じ文字列であること、shell の item を `input` に再送できること、許可時に `python3 -m pip install` が通ること、`max_tool_calls` が全 server tool の合計に効くこと
+- [ ] 実 API で確認する: function calling に対応しないモデルで shell が動くか、返る `container_id` が採番した ID と同じ文字列であること、許可時に `python3 -m pip install` が通ること、`max_tool_calls` が全 server tool の合計に効くこと
 - [ ] 停止ボタンで中断したあとのコンテナ側の挙動と課金を確認する（Open Questions）
 - [ ] Discord 上で確認する: 計算、`matplotlib` による画像生成、長い出力の添付化、失敗するコマンド、timeout、実行中の停止
 - [ ] README に、課金とデータの取り扱いを追記
@@ -413,14 +433,15 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 - **中断後の課金に上限を置けない**: HTTP リクエストを中断したとき、実行中や実行待ちのコマンドが止まるか、課金の時計がいつ止まるかは確認できていない。ドキュメントは「レスポンスが完了したとき」に止まるとしか述べていない。1 call は最大 100 コマンドを順に実行でき、timeout はコマンドごとなので、止まらない場合の実行時間は Bot 側から制限できない。課金の確かな上限は、OpenRouter 側で止まることを Phase D で確認できた場合にだけ言える。確認できなければ、OpenRouter の API キーに設定するクレジット上限を唯一の確かな上限として README に書く
 - **完了しないリクエスト**: `pip install` を含む複数コマンドの call が 16 分たっても完了しなかった事例が 1 回ある（原因未特定）。Bot 側は 600 秒の wall-clock で待つのをやめるが、その間の課金は発生し、中断後の課金は上の項目のとおり不明である
-- **実測していない前提が 2 つある**: 実測はすべて `container_auto` で行った。`container_reference` で 1 回の生成の複数リクエストがファイルを共有できることと、shell の item を `input` に再送できることは、ドキュメントの記述と OpenAPI 定義（`Inputs` が `OutputShellServerToolItem` を含む）に基づく設計であり、Phase D で確認する。後者が受け付けられない場合の代替は Decisions「生成の途中の文脈」に書いた
+- **実測していない前提が 2 つある**: 実測はすべて `container_auto` で行った。`container_reference` で 1 回の生成の複数リクエストがファイルを共有できることと、shell の item を `input` に再送できることは、ドキュメントの記述と OpenAPI 定義（`Inputs` が `OutputShellServerToolItem` を含む）に基づく設計である。どちらもコンテナの単位と生成の途中の文脈の設計を支えるので、Tasks「planned へ進む条件」で実装より先に確かめる
+- **生成ファイルの候補の漏れ**: 各 call の `files[]` は、その call が作成または変更したファイルを新しい順に最大 10 件までしか挙げない（OpenAPI 定義の `OutputShellServerToolItem.files`）。`pip install` のように多数のファイルに触れるコマンドと同じ call で画像を書くと、画像が候補から漏れうる。漏れが実際に起きるか、起きる場合にコンテナのファイル一覧から出力用のディレクトリだけを読むなどの代替を採るかは、Phase D の Discord 上の確認で判断する
 - **beta**: server tool は beta で、API と挙動は変わりうる。item の中身を normalizer で検証し、想定外の形なら結果表示だけを諦めて本文は返す。外形が崩れた場合と 4 MiB を超えた場合はターンがエラーになる。`CODE_EXECUTION_ENABLED` と再起動で全体を止められる
 - **実行環境は選べない**: イメージ、言語のバージョン、CPU とメモリは OpenRouter が決める。`gcc` が無いので、コンパイルを要する Python パッケージはインストールできないことがある
 - **in-region endpoint では使えない**: shell とコンテナは `openrouter.ai` でのみ動き、`eu.` / `us.` の endpoint では拒否される。現行の Bot は `openrouter.ai` を使っているので影響は無い
 - **コンテナの sleep**: コンテナは 5 分の idle で sleep し、再開時に復元されるのは home 配下のファイルだけである。1 発言の途中で client tool が 5 分以上かかった場合、インストール済みのパッケージやプロセスは失われる
 - **生成ファイルは取得した時点の内容になる**: ある実行が作ったファイルを後の実行が上書きした場合、表示されるのは上書き後の内容だけである。実行ごとの版を取得する手段は API に無い
 - **実行結果は回答のあとに出る**: 生成中に見えるのは進捗だけで、コマンドや出力は回答が完了してから表示される。長い実行では、ユーザは結果を見ないまま回答を読み始めることになる
-- **undo / redo との契約が未調整**: 実行結果を「redo で復元しない成果物」とする例外は、[回答の再生成・undo](../conversation-regeneration/design.md) の design にまだ書かれていない。結果メッセージと生成の対応づけ、Bot 自身による削除を外部削除と区別する扱いも含めて、同 change と合わせる必要がある
+- **再生成と取り消しとの対応づけ**: 結果メッセージを回答と同じ生成に属するものとして記録する方法は、[回答の再生成と取り消し](../conversation-regeneration/design.md) の設計と合わせて決める。同 change は取り消しを外部削除と同じ判定で窓から外すので、結果メッセージの削除も窓の判定を乱さない形にする
 - **履歴に実行結果が残らない**: 次の発言でモデルが参照できるのは前回の本文だけである。「さっきのスクリプトを直して」のような依頼では、モデルは本文に書かれた範囲でしか前回を知らない。会話単位の持続コンテナ（将来別 change）と合わせて扱う
 
 ## 参照

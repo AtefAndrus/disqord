@@ -1,6 +1,6 @@
 ---
 title: "設定階層化 + LLMパラメータ + カスタムプロンプト"
-status: planned
+status: investigating
 priority: medium
 summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト"
 ---
@@ -9,49 +9,90 @@ summary: "guild/channel/user 設定階層 + LLM パラメータ + カスタム�
 
 ## Why
 
-現在の設定はGuild単位のみで、チャンネルやユーザごとの使い分けができない。例えば、技術チャンネルではコード特化モデル、雑談チャンネルでは汎用モデルを使いたいケースに対応できない。また、temperatureなどのLLMパラメータやシステムプロンプトのカスタマイズ手段がない。
+Bot の設定は Guild 単位でしか持てず、チャンネルやユーザーごとに使い分けられない。
+例えば、技術チャンネルではコード向けのモデル、雑談チャンネルでは汎用モデルを使うといった運用ができない。
+temperature などの LLM パラメータや、システムプロンプトを変える手段もない。
 
 ## 依存 / 関連 change
 
-- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す配管は同 change が用意する。あわせて送信可能なパラメータ集合が狭まる（後述）
-- 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort / token 上限は本 change の階層的 LLM parameter で解決し、推論本文を表示するかどうかは reasoning-output 側の独立設定で扱う。
+- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す経路（`IToolLoopParams.requestFields`）は同 change が用意した。あわせて送信できるパラメータ集合が Chat Completions より狭い（後述）
+- 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort と token 上限は本 change の LLM パラメータで解決し、推論本文を表示するかどうかは同 change が入れた Guild 設定 `reasoning_display_enabled` で扱う
+- 連携: [権限](../permissions/design.md) — guild スコープと channel スコープへの書き込みは同 change の `admin_role_id` 契約で認可する
+- 連携: [OAuth BYOK](../oauth-byok/design.md) — ユーザーが自分のキーで払う場合に `free_models_only` を課すかは、両 change のどちらかで決める必要がある
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Guild/Channel/User単位で設定を上書き可能にする
-- LLMパラメータ（temperature, top_pなど）をモデルごとに最適化
-- カスタムシステムプロンプトを各スコープで設定可能にする
+- モデル、LLM パラメータ、カスタムシステムプロンプトを Guild / Channel / User の各スコープで上書きできる
+- モデルごとの既定パラメータを考慮して LLM パラメータを解決する
+- Guild が課す制約（`free_models_only`）を、下位スコープの上書きで迂回できないようにする
 
 **Non-Goals:**
 
-- ロール単位の設定（複雑性が高すぎる）
+- ロール単位の設定（解決順序にロール間の優先度が加わり、複雑になりすぎる）
+- 既存の Guild 設定トグル（Web 検索、会話履歴など）の階層化
 - パラメータのプリセット機能
 - プロンプトのバージョン管理
-- reasoning 本文の取得・表示 UI（[reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) が担当）
+- reasoning 本文の取得と表示 UI（[reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) が実装済み）
 
 ## Decisions
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 設定優先順位 | User > Channel > Guild > Model Default | 細粒度が粗粒度を上書き |
-| パラメータ形式 | JSON文字列（SQLiteカラム） | 柔軟性が高く、スキーマ変更不要 |
-| NULL値の扱い | 上位設定を継承 | 明示的な設定のみ上書き |
+| 階層化する設定 | モデル、LLM パラメータ、システムプロンプトの 3 つ | チャンネルやユーザーで使い分けたい動機があるのはこの 3 つである。既存のトグルを Guild 専用に残す理由は設計メモ「階層化する設定と Guild 専用の設定」に書く |
+| 設定優先順位 | User > Channel > Guild > モデル既定値 | 細かいスコープが粗いスコープを上書きする |
+| Guild 制約との関係 | `free_models_only` は解決後のモデルに常に適用し、違反する上書きは飛ばす | ユーザーやチャンネルの上書きで有料モデルを選べると、Guild が費用を抑えるために有効にした制約が意味を失う |
+| ユーザー設定の単位 | Guild ごと（`guild_id`, `user_id`） | Guild の制約や運用方針は Guild ごとに違い、ある Guild 向けのプロンプトが別の Guild で適切とは限らない |
+| 書き込みの認可 | guild と channel は `admin_role_id` 契約、user は本人のみ | guild と channel の設定は他のメンバーの応答を変える。user の設定は本人の応答だけを変える |
+| NULL 値の扱い | 上位スコープを継承 | 明示的に設定した項目だけを上書きする |
+| パラメータ形式 | JSON 文字列（SQLite カラム） | 送信できるパラメータが増えてもスキーマを変えずに済む |
+| パラメータの許可リスト | 本 change が持つ対応表のキー | Models API の `supported_parameters` は Chat Completions の名前を返し、Responses API で送れる名前と一致しない |
+| カスタムプロンプトの置き場所 | Responses の `input` 先頭の system メッセージ | 設計メモ「プロンプトの置き場所と順序」に書く |
 
 ## Design
 
-### 設定階層化
+### 階層化する設定と Guild 専用の設定
 
-**変更対象ファイル**:
+`guild_settings` の各カラム（`src/db/schema.ts:13-98`）を次のように扱う。
 
-- `src/db/schema.ts` - `channel_settings`, `user_settings`テーブル追加、`llm_params`カラム追加
-- `src/db/repositories/` - 新規Repository追加
-- `src/services/settingsService.ts` - 階層解決ロジック
-- `src/services/modelService.ts` - デフォルトパラメータ取得
-- `src/llm/openrouter.ts` - パラメータ適用
+| カラム | 扱い | 理由 |
+| ------ | ---- | ---- |
+| `default_model` | 階層化（Guild の値になる） | 本 change の主目的である |
+| `llm_params`（新規） | 階層化 | 同上 |
+| `system_prompt`（新規） | 階層化 | 同上 |
+| `free_models_only` | Guild 専用。解決後のモデルに対する制約として働く | 費用を抑えるための Guild の方針であり、下位スコープで緩められると意味がない |
+| `web_search_enabled` | Guild 専用 | 検索ごとに課金されるので、費用の方針として Guild が決める |
+| `history_enabled` | Guild 専用 | 会話履歴を読むかどうかは、その Guild のプライバシー方針として決める |
+| `reasoning_display_enabled` | Guild 専用 | 推論本文を表示するかは、チャンネルに出る内容の方針として決める |
+| `show_llm_details` | Guild 専用 | 表示の好みであり、階層化の需要が出たら別 change で扱う |
+| `twitter_expand_enabled` | Guild 専用 | 同上 |
+| `auto_reply_channels` | Guild 専用 | 値そのものがチャンネルの一覧なので、チャンネル単位の上書きと重なる |
 
-**DBスキーマ変更**:
+Guild 専用のトグルは、`/config` と `/status` のボタン（`src/utils/statusMessage.ts`、`src/bot/events/interactionCreate.ts`）で切り替える現在の仕組みをそのまま使う。
+
+### 解決順序と Guild 制約
+
+各項目を User → Channel → Guild の順に見て、最初に NULL でない値を使う。
+LLM パラメータだけは JSON のキー単位でマージし、モデル既定値の上に Guild、Channel、User の順に重ねる。
+
+モデルは解決した後に Guild 制約を当てる。
+Guild の `free_models_only` が有効で、User または Channel で解決したモデルが無料でない場合は、そのスコープを飛ばして次のスコープのモデルを使う。
+Guild のモデルも解決時に同じく確かめる。
+`free_models_only` を有効にする時点の確認（`src/services/settingsService.ts` の `assertCanEnableFreeOnly`）はその時点の価格に対するもので、後でモデルが有料に変わると Guild のモデルも制約を満たさなくなる。
+Guild のモデルまで制約を満たさない場合はリクエストを送らず、管理者に `/model set` で無料モデルを選び直すよう促すエラーを返す。
+書き込み時にも、channel や user のモデルを `ModelService.validateModelSelection(model, freeModelsOnly)` で検証する。
+それでも解決時に確かめるのは、上書きを保存した後に `free_models_only` が有効になる場合や、モデルが有料に変わる場合があるからである。
+
+解決結果のモデルは、`ChatService.generateChatResponse` が現在 `settings.defaultModel` を使っているすべての箇所（ツイート展開の画像対応判定、モデル詳細の取得、リクエストの組み立て）と、`messageCreate` のモデル名表示と画像対応判定で使う。
+`generateChatResponse` の `ctx`（`ChatRequestContext`）はすでに `channelId` と `userId` を持つので、解決に必要な情報は揃っている。
+
+### 書き込みの認可
+
+- guild スコープと channel スコープ: [権限管理](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で認可する。権限管理は本 change より先に実装する。
+- user スコープ: 本人が自分の設定だけを書き換えられる。解決時に Guild 制約が常に勝つので、本人の上書きで Guild の費用方針を迂回することはできない。
+
+### DB スキーマ変更
 
 ```sql
 CREATE TABLE channel_settings (
@@ -64,124 +105,153 @@ CREATE TABLE channel_settings (
 );
 
 CREATE TABLE user_settings (
-    user_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     model TEXT,
     system_prompt TEXT,
-    llm_params TEXT  -- JSON
+    llm_params TEXT,  -- JSON
+    PRIMARY KEY (guild_id, user_id),
+    FOREIGN KEY (guild_id) REFERENCES guild_settings(guild_id)
 );
 
 ALTER TABLE guild_settings ADD COLUMN llm_params TEXT;
 ALTER TABLE guild_settings ADD COLUMN system_prompt TEXT;
 ```
 
-### LLMパラメータ
+DB は `PRAGMA foreign_keys = ON` で開く（`src/db/index.ts:11`）が、`guild_settings` の行は最初の書き込み時に作られる（`GuildSettingsRepository.update` の `insertDefaultRow`）。
+そのため channel や user の設定を書く前に、Guild の既定行を同じトランザクションで作っておく必要がある。
 
-**Phase 1: モデルごとのデフォルトパラメータ**:
+### /status の表示
 
-1. `/api/v1/models` APIレスポンスに含まれる`default_parameters`を使用（**型は `object | null`**。OpenRouter docs の例では `null` のモデルもあるため、取得側で `default_parameters ?? {}` の null ガードをしてからマージする。object の場合の中身は `temperature` / `top_p` / `top_k` / `frequency_penalty` / `presence_penalty` / `repetition_penalty`、いずれも nullable）
-2. `ModelService`でキャッシュ時に保存
-3. `chatService`がモデルのデフォルトパラメータを取得して適用
-4. `supported_parameters`（enum 配列）でモデルが受け付けるパラメータを判定。現行 enum には `temperature` / `top_p` / `top_k` / `min_p` / `top_a` / `frequency_penalty` / `presence_penalty` / `repetition_penalty` / `max_tokens` / `logit_bias` / `logprobs` / `top_logprobs` / `seed` / `response_format` / `structured_outputs` / `stop` / `tools` / `tool_choice` / `parallel_tool_calls` / `reasoning` / `reasoning_effort` / `include_reasoning` / **`web_search_options`** / **`verbosity`** 等が含まれる（実装時に最新を確認）
+`/status` は Ephemeral ではない返信なので、Guild の設定と Guild 専用トグルを現在どおり表示する。
+実行したチャンネルに channel スコープの上書きがあれば、そのモデルと、プロンプトとパラメータが設定されているかどうかを 1 項目として加える。
+user スコープの値は `/status` には出さず、本人が `/prompt show` や `/config params show` で Ephemeral で確かめる。
 
-**`supported_parameters` をそのまま許可リストにできない（重要）:**
+### 変更対象ファイル
 
-[Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) 後、送信できるパラメータ集合は Models API が返す名前と一致しない。
+- 修正: `src/db/schema.ts` — `channel_settings`, `user_settings` テーブル追加、`guild_settings` へのカラム追加
+- 新規: `src/db/repositories/` — channel と user の設定 Repository
+- 修正: `src/services/settingsService.ts` — 階層解決と Guild 制約の適用
+- 修正: `src/services/modelService.ts` — モデル既定パラメータの取得
+- 修正: `src/services/chatService.ts` — 解決済みのモデル、パラメータ、プロンプトの適用
+- 修正: `src/bot/events/messageCreate.ts` — 解決済みモデルでの表示と画像対応判定
+- 修正: `src/bot/commands/` — `/model set` の scope、`/config params`、`/prompt`
+- 修正: `src/utils/statusMessage.ts` — channel 上書きの表示
 
-- Responses に無いもの: `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `response_format` / `seed` / `stop` / `top_a` / `prediction`。これらは許可リストに載っていても送れない
-- 名前が違うもの: `max_tokens` / `max_completion_tokens` は Responses では `max_output_tokens`
-- `supported_parameters` は Chat Completions のパラメータ名を返す。全 445 モデル中 432 件が `max_tokens` を返し、`max_completion_tokens` を返すのは 63 件である（2026-09-18 に `GET /api/v1/models` で確認）
+---
 
-したがって `z.literal([...supported_parameters])` で許可リストを組む方針は成立しない。
-**能力判定に使う名前（Models API が返す名前）と、実際に送信する名前の対応表**を本 change が持ち、対応表に無いパラメータは設定できないものとして扱う。
-対応表は、ユーザ設定の検証と、リクエスト組み立ての両方が参照する単一の定義にする。
+### LLM パラメータ
 
-**Phase 2: ユーザー設定可能パラメータ**:
+**モデルごとの既定パラメータ**:
 
-- `/config params set <json>` - パラメータをJSON形式で設定
-- `/config params reset` - デフォルトに戻す
-- `/config params show` - 現在の設定を表示
+1. `GET /api/v1/models` のレスポンスに含まれる `default_parameters` を使う。型は `object | null` なので、取得側で `default_parameters ?? {}` としてからマージする。object の場合の中身は `temperature` / `top_p` / `top_k` / `frequency_penalty` / `presence_penalty` / `repetition_penalty` で、いずれも nullable である。
+2. `ModelService` がモデル一覧をキャッシュするときに一緒に保存する。
+3. `repetition_penalty` は Responses API で送れない（後述）ので、既定値に含まれていてもマージの対象から外す。
 
-**マージロジック**:
+**送信できるパラメータと対応表**:
 
-1. モデルのデフォルトパラメータを取得
-2. Guild設定でマージ
-3. Channel設定でマージ
-4. User設定でマージ
-5. `supported_parameters`でバリデーション
+Responses API（`POST /api/v1/responses`、`ResponsesRequest`）で送れるパラメータの集合は、Models API の `supported_parameters` が返す名前と一致しない。
 
-**JSON パラメータの zod バリデーション（実装方針）:**
+- Responses に無いもの: `logit_bias` / `logprobs` / `min_p` / `repetition_penalty` / `response_format` / `seed` / `stop` / `top_a`。これらは `supported_parameters` に載っていても送れない。
+- 名前や位置が違うもの: `max_tokens` / `max_completion_tokens` は `max_output_tokens`、`reasoning_effort` は `reasoning.effort`、`verbosity` は `text.verbosity` になる。
+- `supported_parameters` は Chat Completions のパラメータ名を返す。全 445 モデル中 432 件が `max_tokens` を返し、`max_completion_tokens` を返すのは 63 件である（2026-09-18 に `GET /api/v1/models` で確認）。
 
-- `llm_params TEXT`（JSON 文字列）の検証では、zod v4 の `z.json()`（**存在はするが「任意の JSON 値」用のバリデータで、文字列のパースはしない**）は使わない。`JSON.parse` を **transform 内で素のまま呼ぶと throw が Zod に捕捉されない**点に注意する（公式: "Transform functions should never throw"。`safeParse` でも `SyntaxError` が外に飛ぶ）。次のいずれかにする:
-  - (a) catch して issue 化: `z.string().transform((s, ctx) => { try { return JSON.parse(s); } catch { ctx.addIssue({ code: "custom", message: "invalid JSON" }); return z.NEVER; } }).pipe(z.object({ temperature: z.number().min(0).max(2).optional(), top_p: z.number().optional(), /* ... */ }))`
-  - (b) transform を使わず、先に `JSON.parse` を自前 try/catch してから `z.object({...}).safeParse(parsed)` で検証する（こちらの方が単純）。
-- モデルが受け付けるキーの絞り込みは `z.literal([...supported_parameters])` 由来の許可リストで行うと型推論も union になり安全。
-- zod v4 はパース性能が向上しており、階層マージ後の最終バリデーションを安価に行える。
+そこで本 change は、能力判定に使う名前（Models API が返す名前）と、実際に送信するフィールドの対応表を持つ。
 
-**参照**:
+| 設定キー | 能力判定に使う `supported_parameters` の名前 | 送信先（`ResponsesRequest`） |
+| -------- | ------------------------------------------ | ---------------------------- |
+| `temperature` | `temperature` | `temperature` |
+| `top_p` | `top_p` | `top_p` |
+| `top_k` | `top_k` | `top_k` |
+| `presence_penalty` | `presence_penalty` | `presence_penalty` |
+| `frequency_penalty` | `frequency_penalty` | `frequency_penalty` |
+| `max_output_tokens` | `max_tokens` または `max_completion_tokens` | `max_output_tokens` |
+| `reasoning_effort` | `reasoning` または `reasoning_effort` | `reasoning.effort` |
+| `reasoning_max_tokens` | `reasoning` | `reasoning.max_tokens` |
+| `verbosity` | `verbosity` | `text.verbosity` |
 
-- [OpenRouter Chat Completions](https://openrouter.ai/docs/api/api-reference) - チャットパラメータ（temperature、top_pなど）は`/api/v1/chat/completions`のリクエストボディに含める
-- [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/get-models) - `/api/v1/models`で`default_parameters`（temperature/top_p/top_k/frequency_penalty/presence_penalty/repetition_penalty）と`supported_parameters`（enum 配列）を取得。`?supported_parameters=tools` でフィルタも可
-- [Zod v4](https://zod.dev/v4) - JSON 文字列は素の `transform(JSON.parse)` だと throw が Zod に捕捉されないため、上記 (a)（catch して `ctx.addIssue` + `z.NEVER`）または (b)（事前 try/catch → `z.object().safeParse`）で検証する。`z.json()` は任意 JSON 値用で文字列パースはしない。`z.literal([...])` で許可キー集合を定義
+対応表のキーだけが設定できるパラメータであり、表に無いキーは書き込み時に拒否する。
+リクエストを組み立てるときは、解決したパラメータのうち、使うモデルの `supported_parameters` に対応する名前があるものだけを送る。
+対応表は、ユーザー設定の検証とリクエストの組み立ての両方が参照する単一の定義にする。
+`reasoning` は、`reasoning_display_enabled` が有効なときに `ChatService` が `{ summary: "auto" }` を設定している（`src/services/chatService.ts`）ので、`reasoning.effort` と `reasoning.max_tokens` はこのオブジェクトにマージする。
+`temperature` などのトップレベルのフィールドは `IToolLoopParams.requestFields` で渡し、`runToolLoop()` がリクエスト body に展開する（`src/llm/toolLoop.ts:1037`）。
 
-**設計メモ**:
+**コマンド**:
 
-- 優先順位: User > Channel > Guild > Model Default > OpenRouter Default
-- NULL値は上位設定を継承
-- 無効なパラメータはバリデーションで拒否
+- `/model set <model> [scope]` — scope は `guild`（既定）/ `channel` / `user`
+- `/config params set <scope> <json>` — パラメータを JSON で設定
+- `/config params reset <scope>` — そのスコープの設定を消して上位を継承させる
+- `/config params show` — 解決後の値と、各キーがどのスコープ由来かを Ephemeral で表示
+
+**JSON パラメータの検証**:
+
+- `llm_params TEXT`（JSON 文字列）は、先に `JSON.parse` を自前の try/catch で呼び、その結果を `z.object({...}).strict().safeParse(parsed)` で検証する。`z.object` のキーは対応表から作り、`.strict()` で表に無いキーを拒否する。
+- `z.string().transform(JSON.parse)` とは書かない。transform 内の throw は Zod に捕捉されず、`safeParse` でも `SyntaxError` が外に出る。
+- zod v4 の `z.json()` は任意の JSON 値を検証するバリデータで、文字列をパースしないので使わない。
 
 ---
 
 ### カスタムシステムプロンプト
-
-**変更対象ファイル**:
-
-- `src/bot/commands/prompt.ts` - `prompt`コマンド追加
-- `src/bot/commands/handlers.ts` - promptハンドラー追加
-- `src/services/settingsService.ts` - プロンプト取得・設定ロジック
-- `src/services/chatService.ts` - システムプロンプトの適用
 
 **コマンド設計**:
 
 ```text
 /prompt set <scope> <prompt>
   - scope: guild | channel | user
-  - prompt: システムプロンプト（最大2000文字）
+  - prompt: システムプロンプト（最大 2000 文字）
 
 /prompt show [scope]
-  - scope省略時: 現在の有効なプロンプトを表示（優先順位適用後）
-  - scope指定時: 指定スコープのプロンプトのみ表示
+  - scope 省略時: 解決後に有効なプロンプトを表示
+  - scope 指定時: 指定スコープのプロンプトだけを表示
 
 /prompt reset [scope]
-  - scope省略時: ユーザー設定をリセット
-  - scope指定時: 指定スコープの設定をリセット
+  - scope 省略時: 自分のユーザー設定をリセット
+  - scope 指定時: 指定スコープの設定をリセット
 ```
 
-**デフォルトシステムプロンプト**:
+どのスコープにもプロンプトが設定されていなければ、カスタムプロンプトは送らない（現在と同じリクエストになる）。
+最大長の 2000 文字は、`/prompt show` で 1 メッセージに収まる長さとして決める。
 
-```text
-You are a helpful AI assistant in a Discord server.
-- Keep responses concise and clear
-- Use Discord-supported markdown only (no H4+, tables, horizontal rules)
-- Be respectful and informative
-```
+**プロンプトの置き場所と順序**:
 
-**設計メモ**:
+`ChatService` は現在、Bot 自身の指示をすべて `role: "system"` のメッセージとして組み立て、`OpenRouterClient` がそれを Responses の `input` に system 項目として並べる（`src/llm/openrouter.ts` の `toResponsesInput`）。
+会話履歴ありのリクエストの `input` は、次の順に並ぶ（`src/services/chatService.ts` の `buildHistoryMessages`）。
 
-- 優先順位: User > Channel > Guild > Default
-- NULL値は上位プロンプトを継承
-- プロンプトは全メッセージの先頭に追加（`role: "system"`）
-- 最大長: 2000文字（Discord制限を考慮）
+1. 先頭の system メッセージ: Web 検索の固定指示（検索が有効なとき）、会話履歴を非信頼データとして扱う安全指示（`buildConversationSafetyMessage`、履歴があるとき）
+2. 引用する会話履歴と返信先
+3. 末尾の system メッセージ: ツイート展開の指示（展開したとき）、現在日時（`buildDateTimeSystemMessage`、常に）
+4. 今回のユーザー発言
 
-**参照**:
+カスタムプロンプトは 1 の先頭に system メッセージとして置く。
+Bot 自身の安全指示と日時指示はその後ろに来るので、カスタムプロンプトがそれらより後に読まれて打ち消す並びにはならない。
+リクエストごとに変わらない内容を先頭に集める現在の並びも崩さない。
 
-- [OpenRouter Chat API](https://openrouter.ai/docs/api-reference) - システムプロンプトは`messages`配列の最初に`{role: "system", content: "..."}`として送信
+Responses の `instructions` フィールドに入れる方法は採らない。
+OpenRouter が `instructions` と `input` 内の system 項目を、OpenAI 以外のプロバイダーでどう合成して渡すかは未検証であり、Bot の指示の置き場所が二つに分かれると、その順序を Bot 側で決められなくなる。
 
 ## Tasks
 
-- [ ] `channel_settings`, `user_settings`テーブル追加
-- [ ] 階層解決ロジック（settingsService）実装
-- [ ] Phase 1: モデルデフォルトパラメータの取得・適用
-- [ ] Phase 2: `/config params`サブコマンド実装
-- [ ] `/prompt`コマンド実装（set/show/reset）
-- [ ] システムプロンプトの適用ロジック
+- [ ] フォルダ分割の要否を決める（Open Questions 参照）
+- [ ] `channel_settings`, `user_settings` テーブル追加と `guild_settings` へのカラム追加
+- [ ] 階層解決と Guild 制約の適用（`SettingsService`）
+- [ ] `ChatService` と `messageCreate` で解決済みモデルを使う
+- [ ] `/model set` の scope 対応と書き込み時の認可
+- [ ] モデル既定パラメータの取得と保存（`ModelService`）
+- [ ] パラメータ対応表と検証、リクエストへの適用
+- [ ] `/config params` サブコマンド
+- [ ] `/prompt` コマンド（set / show / reset）とプロンプトの適用
+- [ ] `/status` に channel 上書きを表示
 - [ ] `docs/changes/settings-hierarchy/` 削除（リリース完了時、git 履歴がアーカイブ）
+
+## Open Questions / Risks
+
+- このフォルダは、設定階層化、LLM パラメータ、カスタムプロンプトの 3 機能を束ねている。LLM パラメータとカスタムプロンプトは、階層化なしでも Guild スコープだけで先に出荷できる。一方、両者の scope 指定と解決ロジックは階層化に依存するので、先に Guild だけで出すと、後から scope を足すときにコマンドと保存先をもう一度変えることになる。3 機能を同じリリースで出すならこのフォルダのままでよく、LLM パラメータやカスタムプロンプトを Guild スコープだけで先に出すなら、そのリリース単位でフォルダを分けることを勧める。
+- スレッドでの解決: スレッドのメッセージの `channelId` はスレッドの ID である。スレッドに channel スコープの設定が無いとき、親チャンネルの設定を継承するかを決める必要がある。
+- `default_parameters` を明示的に送ることと、送らずにプロバイダーの既定に任せることで結果が変わるかは未検証である。変わらないなら、モデル既定値のマージは `/config params show` の表示のためだけに使い、送信からは外せる。
+- [OAuth BYOK](../oauth-byok/design.md) で、ユーザーが自分のキーで支払うときにも `free_models_only` を適用するか。適用しないなら、Guild 制約を当てる条件に「解決したキーが Guild またはデフォルトのキーであること」を加える。
+
+## 参照
+
+- [OpenRouter OpenAPI 定義](https://openrouter.ai/openapi.json) — `ResponsesRequest`（`temperature`, `top_p`, `top_k`, `presence_penalty`, `frequency_penalty`, `max_output_tokens`, `top_logprobs`, `text`, `reasoning`, `instructions`。`logit_bias`, `seed`, `stop` は無い）と `DefaultParameters`
+- [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/get-models) — `default_parameters` と `supported_parameters`
+- [Zod v4](https://zod.dev/v4)

@@ -28,7 +28,7 @@ bun run e2e        # drive the real bot through Discord with a tester bot (not i
 - Data access goes through a repository, business logic through a service, and dependencies are passed by constructor injection.
 - Give functions explicit return types, use `import type` for type-only imports, and do not use `any`.
 - Biome owns formatting and import order. Do not hand-tune either.
-- Replies longer than a Discord message must go through the splitter in `src/utils/message.ts` rather than a new length check.
+- Replies longer than a Discord message must go through `splitTextIntoMessages` in `src/utils/chatContainerBuilder.ts` rather than a new length check.
 
 ## Generated files
 

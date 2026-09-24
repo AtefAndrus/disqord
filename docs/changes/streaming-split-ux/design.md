@@ -62,3 +62,7 @@ updater は 2 秒ごとに、その時点の全文を `splitTextIntoMessages` �
 - [ ] 実装とユニットテスト
 - [ ] `bun run preview` と `bun run e2e long` で見た目と分割結果を確認する
 - [ ] `docs/changes/streaming-split-ux/` 削除（リリース完了時、git 履歴がアーカイブ）
+
+## Open Questions / Risks
+
+- **確定時の推論表示による境界のずれ**: `/config reasoning-display` が有効で推論のテキストが返ったとき、確定時の分割は 1 ページ目から推論表示の分（`reasoningReserve()`）を差し引く（`src/bot/events/messageCreate.ts` の最終描画）。生成中の分割はこの分を差し引かないので、確定の瞬間に 1 ページ目の末尾が 2 ページ目へ移り、以後のページの境界もずれる。生成中と確定時では footer の分の差し引き（生成中は「生成中」の表示、確定時は詳細情報の footer）も異なる。確定時の境界を生成中に合わせる方針を採るなら、この 2 つの差をどう吸収するかも決める必要がある。
