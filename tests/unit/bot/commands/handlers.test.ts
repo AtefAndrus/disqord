@@ -12,7 +12,7 @@ import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
 import { SettingsRuleError } from "../../../../src/errors";
-import { ModelService } from "../../../../src/services/modelService";
+import { type IModelService, ModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
 import {
   createMockGuildSettings,
@@ -31,6 +31,10 @@ function createInteraction(model?: string): {
   const editReply = mock(() => Promise.resolve());
   const interaction = {
     guildId: "guild-1",
+    member: null,
+    memberPermissions: {
+      has: mock((permission: bigint) => permission === PermissionFlagsBits.ManageGuild),
+    },
     options: {
       getString: mock(() => model),
     },
@@ -151,6 +155,77 @@ describe("Components V2 command replies", () => {
     );
     expect(repliedText(list.reply)).toContain("自動応答チャンネルは設定されていません。");
   });
+});
+
+describe("config settings authorization", () => {
+  type ConfigWriteHandlerName =
+    | "configFreeOnly"
+    | "configLlmDetails"
+    | "configWebSearch"
+    | "configReasoningDisplay"
+    | "configTwitterExpand"
+    | "configHistory"
+    | "configAutoReplyAdd"
+    | "configAutoReplyRemove";
+  const writeHandlers: ConfigWriteHandlerName[] = [
+    "configFreeOnly",
+    "configLlmDetails",
+    "configWebSearch",
+    "configReasoningDisplay",
+    "configTwitterExpand",
+    "configHistory",
+    "configAutoReplyAdd",
+    "configAutoReplyRemove",
+  ];
+
+  test.each(writeHandlers)(
+    "%s rejects an unauthorized member before writes or model lookup",
+    async (name) => {
+      const llmClient = createMockLLMClient();
+      const settingsService = createMockSettingsService();
+      const modelService = {
+        isFreeModel: mock(() => Promise.resolve(true)),
+      } as unknown as IModelService;
+      const handlers = createCommandHandlers(
+        llmClient,
+        settingsService,
+        modelService,
+        "perplexity",
+      );
+      const value = name === "configAutoReplyRemove" ? "channel-1" : "on";
+      const { interaction, reply } = createInteraction(value);
+      Object.assign(interaction, {
+        member: null,
+        memberPermissions: { has: mock(() => false) },
+      });
+      if (name === "configAutoReplyAdd") {
+        Object.assign(interaction.options, { getChannel: mock(() => ({ id: "channel-1" })) });
+      }
+
+      await handlers[name](interaction);
+
+      for (const write of [
+        settingsService.setFreeModelsOnly,
+        settingsService.toggleFreeModelsOnly,
+        settingsService.setShowLlmDetails,
+        settingsService.toggleShowLlmDetails,
+        settingsService.addAutoReplyChannel,
+        settingsService.removeAutoReplyChannel,
+        settingsService.setWebSearchEnabled,
+        settingsService.setReasoningDisplayEnabled,
+        settingsService.setTwitterExpandEnabled,
+        settingsService.setHistoryEnabled,
+      ]) {
+        expect(write).not.toHaveBeenCalled();
+      }
+      expect(modelService.isFreeModel).not.toHaveBeenCalled();
+      expect(llmClient.listModelsWithPricing).not.toHaveBeenCalled();
+      expect(repliedText(reply)).toContain("## ⚠️ 設定の変更");
+      expect(repliedText(reply)).toContain("この設定の変更には「サーバーの管理」権限が必要です。");
+      const payload = reply.mock.calls[0]?.[0] as { flags?: number };
+      expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+    },
+  );
 });
 
 describe("model command handlers", () => {

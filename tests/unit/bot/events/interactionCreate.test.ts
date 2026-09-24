@@ -21,6 +21,7 @@ import { createMockGuildSettings, createMockSettingsService } from "../../../hel
 interface ButtonInteractionFixture {
   customId: string;
   guildId: string | null;
+  member: null;
   memberPermissions: { has: ReturnType<typeof mock> };
   isAutocomplete: () => boolean;
   isButton: () => boolean;
@@ -42,6 +43,7 @@ function buttonInteraction(
   const fixture: ButtonInteractionFixture = {
     customId,
     guildId,
+    member: null,
     memberPermissions: {
       has: mock((permission: bigint) =>
         hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
@@ -204,7 +206,7 @@ describe("interactionCreate: status_set buttons", () => {
     (llmClient.getCredits as ReturnType<typeof mock>).mockImplementation(
       () => new Promise((resolve) => (resolveCredits = resolve)),
     );
-    const interaction = buttonInteraction("status_set:llm_details:on");
+    const interaction = buttonInteraction("status_set:llm_details:on", "guild-1", true);
 
     const pending = handler(interaction as never);
     await Bun.sleep(0);
@@ -220,15 +222,10 @@ describe("interactionCreate: status_set buttons", () => {
     "%s を %s に設定し、status message を更新する",
     async (key, enabled) => {
       const { handler, settingsService, modelService } = createStatusHarness();
-      const privileged =
-        key === "web_search" ||
-        key === "twitter_expand" ||
-        key === "history" ||
-        key === "reasoning_display";
       const interaction = buttonInteraction(
         `status_set:${key}:${enabled ? "on" : "off"}`,
         "guild-1",
-        privileged,
+        true,
       );
 
       await handler(interaction as never);
@@ -263,38 +260,47 @@ describe("interactionCreate: status_set buttons", () => {
     },
   );
 
-  test.each(["web_search", "twitter_expand", "history", "reasoning_display"] as const)(
-    "%s の権限がない場合は設定を変えず、既存の文言でephemeral応答する",
-    async (key) => {
-      const { handler, settingsService } = createStatusHarness();
-      const interaction = buttonInteraction(`status_set:${key}:on`);
+  const deniedSettingsButtons: string[] = [
+    ...STATUS_SWITCHES.map((key) =>
+      key === "free_only" ? "status_set:free_only:off" : `status_set:${key}:on`,
+    ),
+    "status_toggle_free_only",
+    "status_toggle_llm_details",
+  ];
+
+  test.each(deniedSettingsButtons)(
+    "%s rejects an unauthorized member before deferring or writing",
+    async (customId) => {
+      const { handler, settingsService, modelService, llmClient } = createStatusHarness();
+      const interaction = buttonInteraction(customId);
 
       await handler(interaction as never);
 
       expect(interaction.update).not.toHaveBeenCalled();
       expect(interaction.editReply).not.toHaveBeenCalled();
+      expect(interaction.deferUpdate).not.toHaveBeenCalled();
       expectComponentsV2(interaction.reply, true);
-      if (key === "web_search") {
-        expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
-        expect(responseText(interaction.reply)).toContain(
-          "Web検索の設定には「サーバーの管理」権限が必要です。",
-        );
-      } else if (key === "twitter_expand") {
-        expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
-        expect(responseText(interaction.reply)).toContain(
-          "ツイート展開の設定には「サーバーの管理」権限が必要です。",
-        );
-      } else if (key === "history") {
-        expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
-        expect(responseText(interaction.reply)).toContain(
-          "会話履歴の設定には「サーバーの管理」権限が必要です。",
-        );
-      } else {
-        expect(settingsService.setReasoningDisplayEnabled).not.toHaveBeenCalled();
-        expect(responseText(interaction.reply)).toContain(
-          "推論内容の表示設定には「サーバーの管理」権限が必要です。",
-        );
+      expect(responseText(interaction.reply)).toContain("## ⚠️ 設定の変更");
+      expect(responseText(interaction.reply)).toContain(
+        "この設定の変更には「サーバーの管理」権限が必要です。",
+      );
+      for (const write of [
+        settingsService.setFreeModelsOnly,
+        settingsService.toggleFreeModelsOnly,
+        settingsService.setShowLlmDetails,
+        settingsService.toggleShowLlmDetails,
+        settingsService.addAutoReplyChannel,
+        settingsService.removeAutoReplyChannel,
+        settingsService.setWebSearchEnabled,
+        settingsService.setReasoningDisplayEnabled,
+        settingsService.setTwitterExpandEnabled,
+        settingsService.setHistoryEnabled,
+      ]) {
+        expect(write).not.toHaveBeenCalled();
       }
+      expect(modelService.isFreeModel).not.toHaveBeenCalled();
+      expect(modelService.refreshCache).not.toHaveBeenCalled();
+      expect(llmClient.getCredits).not.toHaveBeenCalled();
     },
   );
 
@@ -336,7 +342,7 @@ describe("interactionCreate: status_set buttons", () => {
       {} as IChatService,
       "perplexity",
     );
-    const interaction = buttonInteraction("status_set:free_only:on");
+    const interaction = buttonInteraction("status_set:free_only:on", "guild-1", true);
 
     await handler(interaction as never);
 
@@ -379,7 +385,7 @@ describe("interactionCreate: status の旧ボタン", () => {
   });
 
   test("status_toggle_free_only は従来どおり反転し、更新後は新しいレイアウトになる", async () => {
-    const interaction = buttonInteraction("status_toggle_free_only");
+    const interaction = buttonInteraction("status_toggle_free_only", "guild-1", true);
 
     await handler(interaction as never);
 
@@ -389,7 +395,7 @@ describe("interactionCreate: status の旧ボタン", () => {
   });
 
   test("status_toggle_llm_details は従来どおり反転し、更新後は新しいレイアウトになる", async () => {
-    const interaction = buttonInteraction("status_toggle_llm_details");
+    const interaction = buttonInteraction("status_toggle_llm_details", "guild-1", true);
 
     await handler(interaction as never);
 

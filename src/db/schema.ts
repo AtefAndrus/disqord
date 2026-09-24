@@ -96,6 +96,18 @@ export function applyMigrations(db: Database): void {
     `);
   }
 
+  // Migration: Add the optional guild settings administrator role
+  const columnsAfterHistory = db
+    .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+    .all();
+  const hasAdminRoleId = columnsAfterHistory.some((c) => c.name === "admin_role_id");
+  if (!hasAdminRoleId) {
+    db.run(`
+      ALTER TABLE guild_settings
+      ADD COLUMN admin_role_id TEXT
+    `);
+  }
+
   const turnsTable = db
     .query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turns'",

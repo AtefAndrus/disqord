@@ -1,14 +1,19 @@
-import {
-  type AutocompleteInteraction,
-  type ChatInputCommandInteraction,
-  type InteractionReplyOptions,
-  PermissionFlagsBits,
+import type {
+  AutocompleteInteraction,
+  ChatInputCommandInteraction,
+  InteractionReplyOptions,
 } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
+import {
+  canManageGuildSettings,
+  settingsActorFromInteraction,
+  settingsPermissionDeniedMessage,
+} from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
+import type { GuildSettings } from "../../types";
 import {
   buildErrorContainer,
   buildSuccessNoticeContainer,
@@ -38,6 +43,24 @@ export function createCommandHandlers(
   modelService: IModelService,
   webSearchEngine: WebSearchEngine,
 ): CommandHandlers {
+  /**
+   * Replies with the denial itself, so a handler only returns when this yields
+   * nothing; the settings come back because the check had to read them.
+   */
+  async function authorizedSettings(
+    interaction: ChatInputCommandInteraction,
+    guildId: string,
+  ): Promise<GuildSettings | undefined> {
+    const settings = await settingsService.getGuildSettings(guildId);
+    if (canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
+      return settings;
+    }
+    await interaction.reply(
+      errorNotice(settingsPermissionDeniedMessage(settings), "設定の変更", true),
+    );
+    return undefined;
+  }
+
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
       const helpText = `**使い方:**
@@ -53,13 +76,15 @@ export function createCommandHandlers(
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
-- \`/config web-search <on|off>\` - Web検索の切り替え（サーバーの管理権限が必要）
-- \`/config reasoning-display <on|off>\` - 推論内容の表示切り替え（サーバーの管理権限が必要）
-- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え（サーバーの管理権限が必要）
-- \`/config history <on|off>\` - 会話履歴の切り替え（サーバーの管理権限が必要）
+- \`/config web-search <on|off>\` - Web検索の切り替え
+- \`/config reasoning-display <on|off>\` - 推論内容の表示切り替え
+- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え
+- \`/config history <on|off>\` - 会話履歴の切り替え
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
-- \`/config auto-reply list\` - 自動応答チャンネル一覧`;
+- \`/config auto-reply list\` - 自動応答チャンネル一覧
+
+\`/config\` の設定変更には「サーバーの管理」権限が必要です。`;
 
       await interaction.reply(successNotice(helpText, "DisQord ヘルプ"));
     },
@@ -194,12 +219,14 @@ export function createCommandHandlers(
         return;
       }
 
-      const enabled = interaction.options.getString("enabled", true) === "on";
+      const settings = await authorizedSettings(interaction, interaction.guildId);
+      if (!settings) return;
 
+      const enabled = interaction.options.getString("enabled", true) === "on";
       if (enabled) {
         // The service rejects a paid model, or a model replaced while this
         // one was being checked, against the settings as stored.
-        const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
+        const { defaultModel } = settings;
         const isFree = await modelService.isFreeModel(defaultModel);
         await settingsService.setFreeModelsOnly(interaction.guildId, true, {
           model: defaultModel,
@@ -224,6 +251,8 @@ export function createCommandHandlers(
         return;
       }
 
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
+
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setShowLlmDetails(interaction.guildId, enabled);
 
@@ -241,15 +270,7 @@ export function createCommandHandlers(
         return;
       }
 
-      // Checked here rather than with setDefaultMemberPermissions, which would
-      // gate every /config subcommand. The permissions change replaces this
-      // with its admin_role_id check.
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        await interaction.reply(
-          errorNotice("Web検索の設定には「サーバーの管理」権限が必要です。", "Web検索設定", true),
-        );
-        return;
-      }
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
@@ -270,16 +291,7 @@ export function createCommandHandlers(
         return;
       }
 
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        await interaction.reply(
-          errorNotice(
-            "推論内容の表示設定には「サーバーの管理」権限が必要です。",
-            "推論表示設定",
-            true,
-          ),
-        );
-        return;
-      }
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
@@ -297,16 +309,7 @@ export function createCommandHandlers(
         return;
       }
 
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        await interaction.reply(
-          errorNotice(
-            "ツイート展開の設定には「サーバーの管理」権限が必要です。",
-            "ツイート展開設定",
-            true,
-          ),
-        );
-        return;
-      }
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
@@ -325,12 +328,7 @@ export function createCommandHandlers(
         return;
       }
 
-      if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-        await interaction.reply(
-          errorNotice("会話履歴の設定には「サーバーの管理」権限が必要です。", "会話履歴設定", true),
-        );
-        return;
-      }
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
 
       const enabled = interaction.options.getString("enabled", true) === "on";
       await settingsService.setHistoryEnabled(interaction.guildId, enabled);
@@ -348,6 +346,8 @@ export function createCommandHandlers(
         return;
       }
 
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
+
       const channel = interaction.options.getChannel("channel", true);
       await settingsService.addAutoReplyChannel(interaction.guildId, channel.id);
 
@@ -361,6 +361,8 @@ export function createCommandHandlers(
         await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
         return;
       }
+
+      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
 
       const channelId = interaction.options.getString("channel", true);
       const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channelId);

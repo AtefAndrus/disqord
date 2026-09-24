@@ -101,11 +101,11 @@ function canManageGuildSettings(
 
 ## Tasks
 
-- [ ] `guild_settings` に `admin_role_id` 列を追加（schema / types / repository）
-- [ ] `settingsAuthorization.ts` に共通認可関数と拒否文言を実装
-- [ ] `/config` の書き込み系 handler すべてを共通関数に切り替える（`free-only`・`llm-details`・`auto-reply add|remove` を新たに対象へ含める）
-- [ ] `/status` のボタン（`status_set:<key>` と旧形式の `status_toggle_*`）を共通関数に切り替える
-- [ ] テスト追加（`admin_role_id` の設定時と未設定時、ロールを持たない `ManageGuild` 保持者、`permissions` が取れない場合、ボタン入口での拒否）
+- [x] `guild_settings` に `admin_role_id` 列を追加（schema / types / repository）
+- [x] `settingsAuthorization.ts` に共通認可関数と拒否文言を実装
+- [x] `/config` の書き込み系 handler すべてを共通関数に切り替える（`free-only`・`llm-details`・`auto-reply add|remove` を新たに対象へ含める）
+- [x] `/status` のボタン（`status_set:<key>` と旧形式の `status_toggle_*`）を共通関数に切り替える
+- [x] テスト追加（`admin_role_id` の設定時と未設定時、ロールを持たない `ManageGuild` 保持者、`permissions` が取れない場合、ボタン入口での拒否）
 - [ ] `docs/changes/permissions/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
