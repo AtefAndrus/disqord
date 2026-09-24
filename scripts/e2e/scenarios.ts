@@ -5,7 +5,7 @@ import {
   extractComponentsV2Footer,
   type RawDiscordMessage,
 } from "../../src/utils/discordMessageNormalizer";
-import { buildDigitsPng, buildPdfData, PDF_DATA, PNG_DATA } from "./fixtures";
+import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
 
 export interface DiscordMessage {
   id: string;
@@ -237,6 +237,23 @@ function hasUsageFooter(reply: Reply): string[] {
     : ["the last page has no usage footer with Tokens and Provider"];
 }
 
+function checkNumberLines(reply: Reply): string[] {
+  const numbers = reply.body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^\d+$/.test(line));
+  const gap = Array.from({ length: LONG_LINE_COUNT }, (_, i) => String(i + 1)).findIndex(
+    (expected, i) => numbers[i] !== expected,
+  );
+  if (gap !== -1) {
+    return [`line ${gap + 1} of the numbers is ${numbers[gap] ?? "missing"}, not ${gap + 1}`];
+  }
+  if (numbers.length > LONG_LINE_COUNT) {
+    return [`${numbers.length} numbered lines arrived, expected ${LONG_LINE_COUNT}`];
+  }
+  return [];
+}
+
 function checkPages(reply: Reply): string[] {
   const last = (lastPageFooter(reply) ?? "").match(/ページ (\d+)\/(\d+)/);
   if (!last) return ["the last page has no page footer (ページ n/m)"];
@@ -259,9 +276,14 @@ const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 // 数字だけにする: 画像から読ませるので、見間違えやすい英字を入れない。
 // 先頭を 0 にしない: 数として答えると先頭の 0 が落ち、正しく読めていても落ちる。
-const VIEW_IMAGE_TOKEN = String(
-  100_000 + ((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 900_000),
-);
+function randomSixDigits(): string {
+  return String(100_000 + ((crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % 900_000));
+}
+/** Exported so that the unit tests can build a reply that reads the image correctly. */
+export const IMAGE_TOKEN = randomSixDigits();
+const VIEW_IMAGE_TOKEN = randomSixDigits();
+/** One line per number, enough to fill a page (3800 characters) and part of a second. */
+export const LONG_LINE_COUNT = 1200;
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -281,11 +303,18 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // Numbered lines rather than an essay: the length is fixed instead of up
+    // to the model, and a line lost or repeated at a page break shows up as a
+    // gap in the sequence.
     name: "long",
-    prompt:
-      "[e2e] 日本の四季それぞれについて各1500字以上、合計6000字以上の随筆を書いて。途中にPythonのコードブロックを1つ入れて。",
+    prompt: `[e2e] 1 から ${LONG_LINE_COUNT} までの数字を 1 行に 1 つずつ、省略せずに書いて。500 の行の次には print("hello") だけの Python のコードブロックを入れて。ほかには何も書かないで。`,
     timeoutMs: 300_000,
-    check: (reply) => [...checkPages(reply), ...hasUsageFooter(reply)],
+    check: (reply) => [
+      ...checkPages(reply),
+      ...checkNumberLines(reply),
+      ...(reply.body.includes('print("hello")') ? [] : ["the reply has no Python code block"]),
+      ...hasUsageFooter(reply),
+    ],
   },
   {
     // A thematic break must reach Discord as a Separator with a divider (the
@@ -314,15 +343,15 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: "image",
-    // Made-up tokens the model can only choose between by seeing the color
-    // (a bare /red/ also matches "An image is required"). The prompt names
-    // every token, so a reply that names more than one proves nothing.
-    prompt:
-      "[e2e] この画像を塗りつぶしている色が赤なら COLOR-RED、青なら COLOR-BLUE、画像が見えなければ NO-IMAGE とだけ答えて。",
-    files: [{ name: "square.png", type: "image/png", data: PNG_DATA }],
+    // A number drawn fresh on every run, not a choice the prompt lists: a
+    // model that cannot see the image has nothing to pick from, and guessing
+    // six digits passes one run in 900,000.
+    prompt: "[e2e] この画像に書かれた 6 桁の数字を「数字: 」に続けて1行で答えて。",
+    files: [{ name: "digits.png", type: "image/png", data: buildDigitsPng(IMAGE_TOKEN) }],
     check: (reply) => [
-      ...(reply.body.includes("COLOR-RED") ? [] : ["the reply is not COLOR-RED"]),
-      ...(/NO-IMAGE|COLOR-BLUE/.test(reply.body) ? ["the reply also names another answer"] : []),
+      ...(reply.body.includes(IMAGE_TOKEN)
+        ? []
+        : [`the reply does not contain the number ${IMAGE_TOKEN} drawn in the image`]),
       ...hasUsageFooter(reply),
     ],
   },
