@@ -88,7 +88,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | コマンドと出力の表示 | コマンド、stdout、stderr をそれぞれコードブロックで表示し、長いものは `File` 添付へ逃がす。フェンスを壊さないための加工は publisher が行う: 表示用の文字列では、3 個以上連続するバッククォートの間にゼロ幅スペース（U+200B）を挟む。加工していない全文は `File` 添付で取得できる | 既存の splitter は 3 連バッククォートのフェンスをチャンク境界で閉じて開き直すだけで、任意の出力に含まれるバッククォートからフェンスを守る機能は無い |
 | mention の抑止 | 実行結果を含むメッセージも、既存の payload builder（`chatContainerBuilder.ts` の `toComponentsV2Payload` などで、`allowedMentions: { parse: [] }` を常に含む）を通して送る | サンドボックスの出力に `@everyone` やロール mention を書かせて ping を発火させる経路を塞ぐ。`TextDisplay` は embed の description と違い mention を発火する。結果メッセージだけを別経路で組み立てると、この抑止が漏れうる |
 | キャンセル | 停止ボタンは既存どおり `AbortSignal` で HTTP リクエストを中断する。キャンセルされた生成では実行結果を公開しない | Bot から実行中のコマンドを直接止める API は無い。中断後にコンテナ側のコマンドが止まるか、課金がいつ止まるかは未検証（Open Questions）。結果の公開は生成が返ったあとに行うので、停止ボタンの対象にはならない。公開には全体の期限を置く（後述） |
-| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、永続する会話履歴（`ChatMessage[]`）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、OpenAPI 定義の入力の union（`Inputs`）も `OutputShellServerToolItem` を含むので、shell の item を `input` に再送することはスキーマ上正しい（2026-09-23 に確認）。wire では実測していない（Tasks「planned へ進む条件」で確認する） |
+| 生成の途中の文脈 | 同じ生成の後続ターンへは、shell の item を正規化したものを `input` に再送する。`runToolLoop()` は、loop の中の履歴（`ChatMessage[]`、`ToolLoopResult.history` として返る）とは別に、その生成の間だけ保持する item の列を持つ | shell の実行のあとにモデルが client tool を呼ぶと、loop は assistant の tool call と tool の結果だけを履歴に足して再リクエストする。shell のコマンド、出力、終了状態は次のリクエストに含まれず、コンテナにファイルは残っているのに、モデルは自分が何を実行したかを知らない状態になる。Containers のドキュメントは「再送された会話の中の直近の `container_id`」に言及しており、OpenAPI 定義の入力の union（`Inputs`）も `OutputShellServerToolItem` を含むので、shell の item を `input` に再送することはスキーマ上正しい（2026-09-23 に確認）。wire では実測していない（Tasks「planned へ進む条件」で確認する） |
 | 会話履歴への載せ方 | 生成が終わったあとの会話履歴には、assistant の本文だけを入れる | 内部 DTO（`ChatMessage`）に server tool の item を表す型が無く、コンテナも生成ごとに新しくなる。次の発言でモデルが参照できるのは前回の本文だけである（Open Questions） |
 | 課金の表示 | `usage.cost_details.server_tool_cost` を footer に `Server tools: $…` として出す。値が報告されなかった場合は 0 と表示せず、項目ごと出さない | この値は shell に限らず、計量課金される server tool 全体の合計である。shell 以外の server tool と併用したときに内訳は分からないので、shell の費用として表示しない。実測では 126 秒の実行で推論コストの約 3 倍だった |
 
@@ -255,7 +255,8 @@ export interface ServerToolItemMessage {
 }
 ```
 
-生成が終わって会話履歴へ返すときは、この型のメッセージを取り除く。
+生成が終わって `ToolLoopResult.history` として返すときは、この型のメッセージを取り除く。
+以後の発言の文脈は Discord から組み直すので、shell の item が次の応答へ持ち越されることは無い。
 
 再送する item は、OpenAPI 定義の `Inputs` が受け付ける `OutputShellServerToolItem` の形に合わせる（スキーマ上の確認で、wire では実測していない）。
 item の再送が API に受け付けられなかった場合の代替は、Tasks「planned へ進む条件」の結果を見て設計する。

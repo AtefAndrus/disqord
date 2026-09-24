@@ -79,6 +79,7 @@ CREATE TABLE usage_logs (
     reasoning_tokens INTEGER,               -- completion_tokens_details.reasoning_tokens
     web_search_requests INTEGER,            -- server_tool_use_details.web_search_requests
     cost REAL,                              -- USD。NULL = 不明
+    server_tool_cost REAL,                  -- cost のうち server tool の分（cost_details.server_tool_cost）。NULL = 不明
     key_source TEXT NOT NULL DEFAULT 'default' CHECK(key_source IN ('user','guild','default')),
     latency_ms INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -93,6 +94,7 @@ CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 - `server_tool_use_details` は server tool が一度も起動しなかったリクエストでは usage から省かれる。この場合 `web_search_requests` は NULL（未起動）とし、0 回と区別する。
 - `usage_complete` は `outcome = 'completed'` で、かつ全ターンが usage と `cost` を報告したときだけ 1 にする。
 - `AggregatedUsage` は、どれか 1 ターンでも報告した項目を残す（`src/llm/toolLoop.ts` の型の説明）。0.10 ドルを報告したターンと `cost` の無いターンを合算すると `cost: 0.10` になり、合計が完全かどうかは合算値から分からない。そこで `runToolLoop()` が、ターン数と `cost` を報告したターン数を `ToolLoopResult` に返すようにし、両者が一致しないときは `usage_complete = 0` にする（`cost` は報告された分の合計として保存し、合計の集計からは除く）。
+- tool ループの外で別に課金される呼び出し（[画像生成](../image-generation/design.md) の Images API）も同じ扱いにする。呼び出し数と費用を報告した呼び出し数を数え、報告された費用を `cost` に足してから 1 回で記録する。1 件でも費用が報告されなければ `usage_complete = 0` にする。
 
 ### コマンド設計
 

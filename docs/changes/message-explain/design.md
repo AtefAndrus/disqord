@@ -95,7 +95,7 @@ discord.js は対象メッセージもキャッシュへ上書きで合成して
 
 - 本文（`content`）。
 - Components V2 のテキスト。Container と Section の内側まで辿り、TextDisplay の本文を出現順に集める。ボタンなどの操作部品は含めない。
-- embed のテキスト。title、description、各 field の name と value、footer を集める。この bot の `/status` のように、情報を field に置く embed があるためである。
+- embed のテキスト。title、description、各 field の name と value、footer を集める。他の bot の返信には、情報を field に置く embed があるためである。
 - 添付の画像と PDF。`attachments` に加え、Components V2 の MediaGallery、Thumbnail、File のうち `attachment_id` を持つ項目（アップロードされたファイル）を集める。Discord は `attachments` を「embed や component から参照されていないファイル」と定めている（`developers/resources/message.mdx` の Message Structure）ので、`attachments` だけでは component に表示したファイルが漏れる。`attachment_id` の無い外部 URL と、embed の画像は含めない。embed の画像はアップロードと外部 URL を区別できず、外部の任意の URL を bot が取得することになるためである。
 - 集めた添付は、既存の `parseAttachments()` に通し、通常のチャット経路と同じ形式とサイズの制限を掛ける。`parseAttachments()` は今は discord.js の `Attachment` の `Collection` を受け取るので、名前、URL、MIME、サイズだけを持つ形を受け取るように引数の型を広げる。
 
