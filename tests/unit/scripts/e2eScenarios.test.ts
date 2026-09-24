@@ -5,7 +5,8 @@ import {
   IMAGE_TOKEN,
   isFinished,
   isStreaming,
-  LONG_LINE_COUNT,
+  LONG_NUMBER_COUNT,
+  LONG_NUMBERS_PER_LINE,
   modelOf,
   SCENARIOS,
   snapshotKey,
@@ -289,24 +290,31 @@ describe("e2e scenarios: check", () => {
 
   test("long: 最終ページの footer が n/n で、メッセージ数と一致しなければ通らない", () => {
     const code = '```python\nprint("hello")\n```';
-    const all = Array.from({ length: LONG_LINE_COUNT }, (_, i) => i + 1);
+    const all = Array.from({ length: LONG_NUMBER_COUNT }, (_, i) => i + 1);
+    const lines = (numbers: number[]): string => {
+      const rows: string[] = [];
+      for (let i = 0; i < numbers.length; i += LONG_NUMBERS_PER_LINE) {
+        rows.push(numbers.slice(i, i + LONG_NUMBERS_PER_LINE).join(" "));
+      }
+      return rows.join("\n");
+    };
     // 本文は通る内容にして、footer だけで落ちることを確かめる
     const pages = (footers: string[]): DiscordMessage[] =>
       footers.map((footer, i) =>
-        page(String(i + 1), i === 0 ? [all.join("\n"), code] : ["本文"], footer),
+        page(String(i + 1), i === 0 ? [lines(all), code] : ["本文"], footer),
       );
-    const numbered = (lines: number[]): DiscordMessage[] => {
-      const half = Math.floor(lines.length / 2);
+    const numbered = (numbers: number[]): DiscordMessage[] => {
+      const half = Math.floor(numbers.length / 2);
       return [
-        page("1", [lines.slice(0, half).join("\n"), code], "ページ 1/2"),
-        page("2", [lines.slice(half).join("\n")], `ページ 2/2 | ${USAGE}`),
+        page("1", [lines(numbers.slice(0, half)), code], "ページ 1/2"),
+        page("2", [lines(numbers.slice(half))], `ページ 2/2 | ${USAGE}`),
       ];
     };
     expect(check("long", numbered(all))).toEqual([]);
     expect(check("long", pages(["ページ 1/3", "ページ 2/3", `ページ 3/3 | ${USAGE}`]))).toEqual([]);
-    // ページの境目で 1 行欠けた・重複した・途中で打ち切った
-    expect(check("long", numbered(all.filter((n) => n !== LONG_LINE_COUNT / 2)))).not.toEqual([]);
-    expect(check("long", numbered([...all, LONG_LINE_COUNT]))).not.toEqual([]);
+    // ページの境目で 1 つ欠けた・重複した・途中で打ち切った
+    expect(check("long", numbered(all.filter((n) => n !== LONG_NUMBER_COUNT / 2)))).not.toEqual([]);
+    expect(check("long", numbered([...all, LONG_NUMBER_COUNT]))).not.toEqual([]);
     expect(check("long", numbered(all.slice(0, 800)))).not.toEqual([]);
     // メッセージ数と usage は揃っているが、最後のページ番号が n/n でない
     expect(check("long", pages(["ページ 1/3", "ページ 2/3", `ページ 2/3 | ${USAGE}`]))).not.toEqual(

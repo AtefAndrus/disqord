@@ -237,19 +237,20 @@ function hasUsageFooter(reply: Reply): string[] {
     : ["the last page has no usage footer with Tokens and Provider"];
 }
 
-function checkNumberLines(reply: Reply): string[] {
+function checkNumbers(reply: Reply): string[] {
   const numbers = reply.body
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => /^\d+$/.test(line));
-  const gap = Array.from({ length: LONG_LINE_COUNT }, (_, i) => String(i + 1)).findIndex(
+    .filter((line) => /^\d+( +\d+)*$/.test(line))
+    .flatMap((line) => line.split(/ +/));
+  const gap = Array.from({ length: LONG_NUMBER_COUNT }, (_, i) => String(i + 1)).findIndex(
     (expected, i) => numbers[i] !== expected,
   );
   if (gap !== -1) {
-    return [`line ${gap + 1} of the numbers is ${numbers[gap] ?? "missing"}, not ${gap + 1}`];
+    return [`number ${gap + 1} in the reply is ${numbers[gap] ?? "missing"}, not ${gap + 1}`];
   }
-  if (numbers.length > LONG_LINE_COUNT) {
-    return [`${numbers.length} numbered lines arrived, expected ${LONG_LINE_COUNT}`];
+  if (numbers.length > LONG_NUMBER_COUNT) {
+    return [`${numbers.length} numbers arrived, expected ${LONG_NUMBER_COUNT}`];
   }
   return [];
 }
@@ -282,8 +283,10 @@ function randomSixDigits(): string {
 /** Exported so that the unit tests can build a reply that reads the image correctly. */
 export const IMAGE_TOKEN = randomSixDigits();
 const VIEW_IMAGE_TOKEN = randomSixDigits();
-/** One line per number, enough to fill a page (3800 characters) and part of a second. */
-export const LONG_LINE_COUNT = 1200;
+/** Enough numbers to fill a page (3800 characters) and part of a second. */
+export const LONG_NUMBER_COUNT = 1200;
+/** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
+export const LONG_NUMBERS_PER_LINE = 20;
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -303,15 +306,15 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    // Numbered lines rather than an essay: the length is fixed instead of up
-    // to the model, and a line lost or repeated at a page break shows up as a
-    // gap in the sequence.
+    // A run of numbers rather than an essay: the length is fixed instead of
+    // up to the model, and text lost or repeated at a page break shows up as
+    // a gap in the sequence.
     name: "long",
-    prompt: `[e2e] 1 から ${LONG_LINE_COUNT} までの数字を 1 行に 1 つずつ、省略せずに書いて。500 の行の次には print("hello") だけの Python のコードブロックを入れて。ほかには何も書かないで。`,
+    prompt: `[e2e] 1 から ${LONG_NUMBER_COUNT} までの数字を、1 行に ${LONG_NUMBERS_PER_LINE} 個ずつ半角スペースで区切って、省略せずに書いて。500 で終わる行の次には print("hello") だけの Python のコードブロックを入れて。ほかには何も書かないで。`,
     timeoutMs: 300_000,
     check: (reply) => [
       ...checkPages(reply),
-      ...checkNumberLines(reply),
+      ...checkNumbers(reply),
       ...(reply.body.includes('print("hello")') ? [] : ["the reply has no Python code block"]),
       ...hasUsageFooter(reply),
     ],
