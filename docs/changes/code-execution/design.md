@@ -393,7 +393,7 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT
 
 ### Phase A: server tool item の受け渡し
 
-- [ ] `StreamServerToolChunk` を追加し、client で `openrouter:` 接頭辞の item を写像する。外形の違反（`added` の無い `done`、`type` の食い違い、二重の `added` や `done`、完了した index の再利用、長すぎる `type`、追跡数の超過）が protocol error になること、それ以外の item が heartbeat のままであることをテストで固定
+- [ ] `StreamServerToolChunk` を追加し、client で `openrouter:` 接頭辞の item を写像する。外形の違反（`added` の無い `done`、`type` の食い違い、二重の `added` や `done`、完了した index の再利用、長すぎる `type`、追跡数の超過）が protocol error になること、既存の reasoning item と function call の処理が変わらないこと、どの処理にも当たらない item が heartbeat のままであることをテストで固定
 - [ ] `MAX_SSE_FRAME_BYTES` を 4 MiB にし、上限を超える shell item が protocol error になることをフィクスチャで固定
 - [ ] updater に `beginServerToolBlock` / `endServerToolBlock` を足し、`runToolLoop()` から `<ターン番号>:<index>` を key にして呼ぶ。閉じられなかった block を `aborted` で閉じる
 - [ ] `runToolLoop()` に server tool の実行回数の予算を実装する（残り予算を `max_tool_calls` に載せる、usage から引く、報告が無いターンは全量を消費、尽きたら server tool を外す、`max_tool_calls` と `stop_server_tools_when` を `requestFields` から取り除く）

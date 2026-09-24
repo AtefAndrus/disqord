@@ -41,7 +41,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 | 統計の保存先 | SQLite の新テーブル `usage_logs` | 既存の DB を使える。`reply_records` は Discord 上のページ管理のための表で、スケジュール実行のように返答ページを持たない実行を載せられない |
 | メッセージ内容の保存 | 保存しない | 個人情報保護 |
 | ログの保持期間 | 永続（削除機能は将来検討） | 長期トレンド分析を可能にする |
-| 記録する箇所 | チャットは `chatService.generateChatResponse` が tool ループの結果を受け取った直後。スケジュール実行は [cron](../cron/design.md) の `chatService.generateScheduledResponse` が OpenRouter の応答を受け取った直後 | tool ループの結果（`ToolLoopResult`）は完了・停止・エラーのどれでも `usage` を持つ。Discord への描画や配信が後で失敗してもクレジットは消費済みなので、描画結果を待つ `messageCreate` 側ではなくここで記録する。cron と本 change のどちらが後に実装されても、後の側が `generateScheduledResponse` の記録を実装する |
+| 記録する箇所 | チャットは `chatService.generateChatResponse` が再試行を含めた最終の結果を決めた直後に 1 回だけ記録する。Web 検索やツイート画像の失敗でループ全体をやり直すと 1 回の応答に複数の tool ループの結果ができ、現在のコードは各試行の usage を `addUsage` で合算して最終の結果に載せている（失敗した試行の費用も含む）。ターン数と `cost` を報告したターン数も同じく全試行で合算する。スケジュール実行は [cron](../cron/design.md) の `chatService.generateScheduledResponse` が OpenRouter の応答を受け取った直後 | tool ループの結果（`ToolLoopResult`）は完了・停止・エラーのどれでも `usage` を持つ。Discord への描画や配信が後で失敗してもクレジットは消費済みなので、描画結果を待つ `messageCreate` 側ではなくここで記録する。cron と本 change のどちらが後に実装されても、後の側が `generateScheduledResponse` の記録を実装する |
 | トークン列の名前 | `prompt_tokens` / `completion_tokens` | 内部の usage 型は Chat Completions の名前を使う（`src/types/index.ts` の `ChatCompletionResponse.usage`）。Responses API の `input_tokens` / `output_tokens` はクライアントの境界で変換済みであり、列名を内部型に揃えると変換が要らない |
 | 不明な値 | NULL で保存する | 内部の usage 型では、報告されなかった項目は欠落しており、0 とは区別される。`cost` を 0 で埋めると「無料だった」と「不明」が見分けられない |
 | 停止・失敗した応答 | 行は記録し、`usage_complete = 0` を付けてトークンとコストの合計から除く | 停止時は進行中のターンの usage が届かない（`src/bot/events/messageCreate.ts:417` のコメント）。記録される値は完了済みのターンの分だけで、実際の消費より少ない。合計に混ぜると過少になり、捨てると停止率が出せない |
@@ -54,7 +54,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 
 - 修正: `src/db/schema.ts` — `usage_logs` テーブル追加
 - 新規: `src/db/repositories/usageRepository.ts` — 使用ログの追加と集計クエリ
-- 修正: `src/services/chatService.ts` — tool ループの結果を受け取った直後に記録する
+- 修正: `src/services/chatService.ts` — 再試行を含めた最終の結果を決めた直後に 1 回記録する
 - 修正: `src/llm/toolLoop.ts` — `ToolLoopResult` にターン数と `cost` を報告したターン数を足す
 - 新規: `src/services/statsService.ts` — 統計の集計
 - 新規: `src/bot/commands/stats.ts` — `/stats` コマンド
