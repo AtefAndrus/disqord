@@ -4,7 +4,6 @@ import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
 import type { ToolRegistry } from "../llm/tools/registry";
 import {
-  buildWebSearchDateTimeSystemMessage,
   buildWebSearchServerTool,
   buildWebSearchStaticSystemMessage,
   type WebSearchEngine,
@@ -260,7 +259,7 @@ export class ChatService implements IChatService {
       ];
       const volatileSystemMessages: ChatMessage[] = [
         ...(expansion && expansion.textParts.length > 0 ? [buildTweetSystemMessage()] : []),
-        ...(settings.webSearchEnabled ? [buildWebSearchDateTimeSystemMessage(new Date())] : []),
+        buildDateTimeSystemMessage(new Date(), settings.webSearchEnabled),
       ];
       const buildWithoutHistory = (): ChatCompletionRequest =>
         buildChatRequest(settings.defaultModel, input, tweetParts, [
@@ -446,6 +445,49 @@ export class ChatService implements IChatService {
     this.activeRequests.delete(requestId);
     return true;
   }
+}
+
+const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  weekday: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+/**
+ * Sent on every request, with or without web search: without a date,
+ * google/gemini-3.8-flash and openai/gpt-6-luna answered the weekday and the
+ * days until Christmas correctly in 0 of 12 runs and the year in 2 of 6,
+ * against 18 of 18 with it (2026-09-24, no search).
+ *
+ * A date alone is not enough: google/gemini-3.8-flash read it as a future or
+ * simulated date and discarded the forecast pages it found as cached or dummy
+ * content. With its own such refusal in the quoted history it refused again
+ * in 11 of 24 runs without the search paragraph and 0 of 18 with it (same
+ * request shape as production). Handing the date over through
+ * `openrouter:datetime` instead is not used: with the date coming only from
+ * that tool it still refused 1 of 8 runs.
+ *
+ * Without search, a date makes models extrapolate: asked for the latest
+ * iPhone, both models named a model they cannot know in some runs. The
+ * knowledge-cutoff paragraph made all 6 runs say how current their knowledge
+ * is instead. It is not sent with search, where it would argue against
+ * trusting newer search results.
+ */
+function buildDateTimeSystemMessage(now: Date, webSearchEnabled: boolean): ChatMessage {
+  return {
+    role: "system",
+    content: [
+      `現在日時: ${dateTimeFormat.format(now)} (JST)`,
+      "現在日時はサーバーの時計から取得した実際の日時である。あなたの学習データの時点より後の日付であるのは正常であり、未来の日付・架空の日付・設定上の日付として扱わないこと。" +
+        (webSearchEnabled
+          ? "検索結果に学習時点より新しい情報が含まれるのも正常である。検索結果の日付が現在日時と整合するなら、それを最新の実データとして扱い、キャッシュやダミーと疑わないこと。"
+          : "\n学習データの時点より後に起きた出来事や発表をあなたは知らない。最新の情報を問われたら、知っているのはいつ時点までの情報かを明示し、それ以降のことを推測で断定しないこと。"),
+    ].join("\n"),
+  };
 }
 
 function buildConversationSafetyMessage(): ChatMessage {
