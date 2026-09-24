@@ -204,7 +204,14 @@ describe("conversation-context request construction", () => {
       ChatCompletionRequest,
       AbortSignal,
     ];
-    expect(request).toEqual(buildChatRequest("test-model:fixture", { text: "question" }));
+    const expected = buildChatRequest("test-model:fixture", { text: "question" });
+    expect(request).toEqual({
+      ...expected,
+      messages: [
+        { role: "system", content: expect.stringContaining("現在日時") },
+        ...expected.messages,
+      ],
+    });
   });
 
   test("does not retry without web search after a client tool was invoked", async () => {

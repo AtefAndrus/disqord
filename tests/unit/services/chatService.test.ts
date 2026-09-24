@@ -316,6 +316,8 @@ describe("ChatService", () => {
     expect(request.messages[4]?.content).toContain(
       "未来の日付・架空の日付・設定上の日付として扱わない",
     );
+    expect(request.messages[4]?.content).toContain("検索結果の日付が現在日時と整合するなら");
+    expect(request.messages[4]?.content).not.toContain("あなたは知らない");
     expect(request.messages[5]?.content).toBe("[current] Current: now");
   });
 
@@ -403,6 +405,12 @@ describe("ChatService", () => {
       {
         model: "test-model:fixture",
         messages: [
+          {
+            role: "system",
+            content: expect.stringContaining(
+              "学習データの時点より後に起きた出来事や発表をあなたは知らない",
+            ),
+          },
           {
             role: "user",
             content: [
@@ -575,7 +583,15 @@ describe("ChatService", () => {
     expect(fixture.tweetService.expandTweets).not.toHaveBeenCalled();
     expect(fixture.llmClient.chatStream.mock.calls[0]?.[0]).toEqual({
       model: "test-model:fixture",
-      messages: [{ role: "user", content: "https://x.com/example/status/20" }],
+      messages: [
+        {
+          role: "system",
+          content: expect.stringContaining(
+            "学習データの時点より後に起きた出来事や発表をあなたは知らない",
+          ),
+        },
+        { role: "user", content: "https://x.com/example/status/20" },
+      ],
     });
   });
 
@@ -718,7 +734,7 @@ describe("ChatService", () => {
     }
   });
 
-  test("ツイートURLが無ければ展開せず、system messageもpartsも足さない", async () => {
+  test("ツイートURLが無ければ展開せず、ツイート用のsystem messageもpartsも足さない", async () => {
     const fixture = createFixture();
 
     await fixture.chatService.generateChatResponse(
@@ -733,7 +749,15 @@ describe("ChatService", () => {
     expect(fixture.tweetService.expandTweets).not.toHaveBeenCalled();
     expect(fixture.llmClient.chatStream.mock.calls[0]?.[0]).toEqual({
       model: "test-model:fixture",
-      messages: [{ role: "user", content: "通常の質問" }],
+      messages: [
+        {
+          role: "system",
+          content: expect.stringContaining(
+            "学習データの時点より後に起きた出来事や発表をあなたは知らない",
+          ),
+        },
+        { role: "user", content: "通常の質問" },
+      ],
     });
   });
 
