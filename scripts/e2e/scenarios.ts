@@ -131,7 +131,7 @@ function reasoningProblems(message: DiscordMessage | undefined): string[] {
   );
   if (index === -1) {
     return [
-      "the first message shows no reasoning (is reasoning display enabled and does the model return reasoning text?)",
+      "the first message shows no reasoning (is reasoning display enabled, and does the model return reasoning text rather than only encrypted reasoning?)",
     ];
   }
   const reasoning = children[index];
@@ -375,7 +375,10 @@ export const SCENARIOS: Scenario[] = [
     // Requires `/config reasoning-display on`, `/config history on`, and a
     // model/provider that returns displayable reasoning. The tool call makes
     // the loop send the first turn's reasoning items back to OpenRouter, so
-    // a rejected resend shows up as an error reply here.
+    // a rejected resend shows up as an error reply here. Observed
+    // 2026-09-24: z-ai/glm-5.3-flash returned reasoning text on every reply,
+    // while google/gemini-3.8-flash and openai/gpt-6-luna often returned only
+    // encrypted reasoning, which fails the check without a code fault.
     name: "reasoning",
     manual: true,
     toolName: "read_earlier_messages",
@@ -472,7 +475,8 @@ export const SCENARIOS: Scenario[] = [
     // The image path of view_attachment returns the picture as an
     // input_image part, which some models behind OpenRouter drop silently,
     // so a failure here can be the model rather than the code: the FAIL
-    // line names the model that answered.
+    // line names the model that answered. Observed 2026-09-23:
+    // openai/gpt-6-luna dropped the image, google/gemini-3.8-flash read it.
     name: "view-image",
     manual: true,
     toolName: "view_attachment",
@@ -486,7 +490,9 @@ export const SCENARIOS: Scenario[] = [
     check: (reply) => [
       ...(reply.body.includes(VIEW_IMAGE_TOKEN)
         ? []
-        : [`the reply does not contain the number ${VIEW_IMAGE_TOKEN} drawn in the image`]),
+        : [
+            `the reply does not contain the number ${VIEW_IMAGE_TOKEN} drawn in the image (rerun on a model known to read tool-returned images before treating this as a regression)`,
+          ]),
       ...hasUsageFooter(reply),
     ],
   },
