@@ -472,9 +472,9 @@ const dateTimeFormat = new Intl.DateTimeFormat("ja-JP", {
  * that tool it still refused 1 of 8 runs.
  *
  * Without search, a date makes models extrapolate: asked for the latest
- * iPhone, both models named a model they cannot know in some runs. The
- * knowledge-cutoff paragraph made all 6 runs say how current their knowledge
- * is instead. It is not sent with search, where it would argue against
+ * iPhone, both models named a model they cannot know in 7 of 12 runs. With
+ * the knowledge-cutoff paragraph all 6 runs said they could not confirm
+ * anything newer than what they knew instead. It is not sent with search, where it would argue against
  * trusting newer search results.
  */
 function buildDateTimeSystemMessage(now: Date, webSearchEnabled: boolean): ChatMessage {
