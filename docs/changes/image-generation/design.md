@@ -60,7 +60,7 @@ planner は画像に限らない生成物を扱う形にし、[コード実行](
 | tool の結果としてモデルへ返す内容 | 成否、生成したファイル名、改訂されたプロンプトがあればそれ。画像そのものと URL は返さない | モデルが本文に URL や base64 を書き写す経路を作らない。画像をモデルに見せる必要は無く、見せると入力トークンの費用が増える |
 | 生成物の境界 | producer は検証済みのバイト列だけを `ResponseArtifact` にする。planner と描画は URL、data URL、base64 文字列を受け取らない | 出所を失った共通層では、取得先の検証やサイズの強制を producer ごとに適用できない |
 | MIME | magic byte で PNG / JPEG / WebP / GIF を判定して `MediaGallery` に入れる。それ以外（SVG を含む）は `File` として扱う | 応答の `media_type` は省略されうる（OpenAPI 定義の `ImageGenerationResponse`）。SVG は Discord client のインライン表示が安定しない |
-| 代替テキスト | 生成に使ったプロンプトを Unicode code point 単位で最大 1024 文字に切り詰め、切り詰めたときは末尾に省略記号を置く | `MediaGallery` の item の description は最大 1024 文字で、超えると message の送信や編集全体が失敗する |
+| 代替テキスト | 生成に使ったプロンプトを、省略記号を含めて UTF-16 code unit で 1024 以内に収まるよう、code point の途中で切らずに切り詰める。切り詰めたときは末尾に省略記号を置く | `MediaGallery` の item の description は最大 1024 文字で、超えると message の送信や編集全体が失敗する。`@discordjs/builders` の検証は JavaScript の `string.length`（UTF-16 code unit）で数えるので、code point で 1024 に収めても補助面の文字が多いと超える |
 | ファイル名 | `img_<生成の requestId>_<連番>.<拡張子>` の ASCII 名にする | 同名の添付による `attachment://` 参照の衝突を防ぎ、編集の再試行で同じ生成物を識別するため |
 | ストリーミング中の表示 | 生成中は「画像を生成中」の進捗だけを出し、画像は回答の確定時に最後のページへ添付する | 途中のページ編集のたびに画像を再アップロードすると、通信量と rate limit の消費が増える |
 | 成功判定 | 本文か生成物のどちらかが 1 つでもあれば成功とし、両方が空ならエラー表示にする | 画像だけを返した回答を「（応答なし）」と表示しないため |
@@ -89,7 +89,7 @@ OpenRouter から画像を得る方法は 3 つあり、どれも OpenAPI 定義
 2 つ目は、モデルに URL が渡ることである。
 モデルがその URL を本文に書き写すと、期限付きの URL が返信に残る。
 3 つ目は、回数の制御である。
-server tool の実行はリクエスト直下の `max_tool_calls` を消費し、その上限は Web 検索と、Web 検索が無効なときに常に載せている `openrouter:datetime` と共有される（`src/services/chatService.ts` の `runChatLoop`）。
+server tool の実行はリクエスト直下の `max_tool_calls` を消費し、その上限は Web 検索と、Web 検索が無効で、会話履歴があり、モデルが tool に対応するときに載せている `openrouter:datetime` と共有される（`src/services/chatService.ts` の `serverTools` の組み立て）。
 画像の枚数だけを縛る手段は無い。
 
 (c) を採らない理由は、会話のモデルが画像出力に対応している場合にしか使えないことである。

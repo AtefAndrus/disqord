@@ -210,6 +210,8 @@ shell の場合は `type` / `status` / `call_id` / `container_id` / `action.comm
 後者は検証エラーではなく正常な失敗応答なので、`error` を 1,000 文字までに切り詰めて保持し、表示と再送の両方に使う。
 表示では、コマンドの非ゼロ終了、コマンドの timeout、サンドボックス自体の失敗を別の文言にする。
 item の `container_id` と、`files[]` の各参照の `container_id` は、Bot がこの生成のために採番した ID と一致しなければならない。
+ただし OpenAPI 定義では item の `container_id` は省略可能で、実行の前に失敗した item には無いことがある。
+実行の前の失敗で `container_id` が無い item は失敗応答として受け入れ、その item からはファイルを取得しない。
 一致しない item は検証失敗として扱い、一致しない参照は `files[]` から落とす。
 コンテナは Bot の API キーの workspace 全体で共有される名前空間にあり、OpenRouter 側の隔離は guild どうしを分けない。
 応答に含まれる ID をそのまま取得先に使うと、別の guild の生成のコンテナが取得の対象になりうる。
