@@ -1,7 +1,6 @@
 ---
 name: release
-description: Run the DisQord release process when explicitly invoked.
-disable-model-invocation: true
+description: Run the DisQord release process when cutting a new version (e.g. `/release 1.5.0`).
 argument-hint: "[version e.g. 1.5.0]"
 ---
 
