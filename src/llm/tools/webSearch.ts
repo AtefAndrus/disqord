@@ -102,8 +102,8 @@ export function buildWebSearchStaticSystemMessage(): SystemChatMessage {
 
 /**
  * A date alone is not enough: google/gemini-3.8-flash read it as a future or
- * simulated date past its training data and discarded the forecast pages it
- * found as cached or dummy content. With its own such refusal in the quoted
+ * simulated date and discarded the forecast pages it found as cached or dummy
+ * content. With its own such refusal in the quoted
  * history it refused again in 11 of 24 runs without the second paragraph and
  * 0 of 18 with it (2026-09-24, same request shape as production). Handing the
  * date over through `openrouter:datetime` instead is not used: with the date
