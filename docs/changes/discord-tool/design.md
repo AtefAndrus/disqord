@@ -16,7 +16,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
-- 連携: [権限管理](../permissions/design.md) — 設定を変える操作の認可（`ManageGuild`）は同 change の契約に従う
+- 連携: [権限管理](../permissions/design.md) — `/config discord-tools` の認可は、同 change の設定変更の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
+- 関連: [会話の分岐 (fork)](../fork/design.md) — 分岐先としてスレッドを作り、分岐元との関係を記録する。スレッドの作成は本 change の `create_thread` と同じ処理を使える
 
 ## Goals / Non-Goals
 
@@ -39,7 +40,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 
 **将来別 change 候補:**
 
-- メッセージ検索（`GET /guilds/{id}/messages/search`）: 2026-03-19 から bot でも使える。窓の外の話題を時期を問わず引けるが、bot と依頼者の双方が読めるチャンネルに絞る制御、NSFW の除外、index 作成中の 202 への再試行が要るので別に設計する。discord.js 14.26.5 にはメソッドが無く、`client.rest` で `Routes.guildMessagesSearch` を呼ぶ
+- メッセージ検索（`GET /guilds/{id}/messages/search`）: 2026-03-19 から bot でも使える。窓の外の話題を時期を問わず引けるが、bot と依頼者の双方が読めるチャンネルに絞る制御、NSFW の除外、index 作成中の 202 への再試行が要るので別に設計する。discord.js 14.27.0 にはメソッドが無く、`client.rest` で `Routes.guildMessagesSearch` を呼ぶ
 - イベントの作成（`guild.scheduledEvents.create`、`CREATE_EVENTS`）: 「土曜に集まろう」を Discord のイベントにする
 - ピン一覧とチャンネル情報の読み取り: 副作用が無く、文脈の補強になる
 - メンバー検索（`guild.members.search`）: メンバー情報を外に出す同意の設計が要る
@@ -54,7 +55,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 | 有効化の単位 | `/config discord-tools on\|off` で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
 | 対象メッセージの指定 | 会話の窓の参照（`m7`）で受け取り、省略時は bot を呼んだメッセージとする。会話履歴が off の guild では、bot を呼んだメッセージだけを対象にできる | モデルに生のメッセージ ID を書かせない。窓に無いメッセージは操作できない |
 | 権限の確認 | Discord を変える呼び出しはすべて `discordActionService` の 1 つの認可関数を通し、各操作の実行の直前に、bot と依頼したメンバーの両方が下の「共通の確認」と操作ごとの権限を満たすときだけ実行する | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。確認を操作ごとに書くと、閲覧権限、タイムアウト、非公開スレッドの参加といった前提の抜けが操作ごとに生じるので、1 か所に集める |
-| 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.26.5 の `Message#pinnable` の実装に合わせる |
+| 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.27.0 の `Message#pinnable` の実装に合わせる |
 | 失敗の返し方 | 権限不足（`50013`、`50001`）は足りない権限名を、対象が無い（`10008` など）は対象が無いことを、それ以外は一般的な失敗を、短い JSON でモデルに返す | 権限と not-found を混ぜると、モデルがユーザに誤った対処を伝える |
 | 1 応答あたりの上限 | リアクションは 3 個、投票・スレッド・ピンは各 1 回 | モデルが繰り返し呼んでチャンネルを荒らさないようにする。上限を超えた呼び出しは実行せず、上限に達したことを返す |
 | 投票の送り方 | Components V2 を使わない別のメッセージとして、bot を呼んだメッセージへの返信で送る | `IS_COMPONENTS_V2` のメッセージには `poll` を付けられない |
@@ -96,7 +97,7 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - 新規: `src/llm/tools/discord/addReaction.ts` / `createPoll.ts` / `createThread.ts` / `pinMessage.ts` — 各 tool の schema、`validate`、handler
 - 新規: `src/services/discordActionService.ts` — discord.js を呼ぶ実装。対象メッセージの解決、bot と依頼者の権限確認、Discord のエラーの分類、1 応答あたりの上限を持つ
 - 修正: `src/llm/tools/registry.ts` — `IToolContext` に、応答ごとに作る Discord 操作の窓口（`DiscordToolContext`）を足す。tool は discord.js を直接触らない
-- 修正: `src/services/conversationWindow.ts` — 窓の参照（`m7`）からメッセージ ID を引く関数を `ConversationToolContext` に足す
+- 修正: `src/llm/tools/registry.ts` / `src/services/conversationWindow.ts` — 窓の参照（`m7`）からメッセージ ID を引く関数を `ConversationToolContext`（`registry.ts` で定義）に足し、`conversationWindow.ts` で実装する
 - 修正: `src/services/chatService.ts` / `src/bot/events/messageCreate.ts` — 設定が有効な guild で `DiscordToolContext` を作って ctx に載せる
 - 修正: `src/index.ts` — 4 つの tool を登録する
 - 修正: `src/db/schema.ts` / `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/bot/commands/config.ts` — `discord_tools_enabled` の列、setter、`/config discord-tools`、`/status` の表示
@@ -141,4 +142,4 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 
 - [Discord API change log](https://github.com/discord/discord-api-docs/blob/main/developers/change-log.mdx) — `PIN_MESSAGES` の分離（2025-08-20）と適用開始日（2026-02-23）、Search Guild Messages（2026-03-19）
 - [Discord Poll Resource](https://discord.com/developers/docs/resources/poll) — 投票の文字数と期間の上限
-- discord.js 14.26.5 のソース — `Message#pinnable`（`structures/Message.js`）、`GuildTextThreadManager#create` がアナウンスチャンネルで種別を無視する分岐（`managers/GuildTextThreadManager.js`）
+- discord.js 14.27.0 のソース — `Message#pinnable`（`structures/Message.js`）、`GuildTextThreadManager#create` がアナウンスチャンネルで種別を無視する分岐（`managers/GuildTextThreadManager.js`）

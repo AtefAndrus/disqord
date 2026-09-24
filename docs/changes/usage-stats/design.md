@@ -2,7 +2,7 @@
 title: "使用統計"
 status: planned
 priority: low
-summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
+summary: "サーバー/ユーザー/モデル別の使用量とコストを記録し /stats で表示する"
 ---
 
 # 使用統計
@@ -10,24 +10,26 @@ summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
 ## Why
 
 利用状況の可視化手段がなく、コスト管理やモデル選択の最適化ができない。
+現状、OpenRouter が返す `usage` は応答のフッター表示に使うだけで（`src/bot/events/messageCreate.ts:443-449`）、どこにも保存しない。
+応答ごとの記録である `reply_records` も、状態とページ数しか持たない（`src/db/schema.ts:114-123`）。
 サーバー・ユーザー・モデル別の使用量とコストを記録して `/stats` で表示する。
 
 ## 依存 / 関連 change
 
-- 関連: [権限管理](../permissions/design.md) — 同じ `guild_settings` を触るが、リリース単位としては独立。`/stats` の実行権限は同 change の共通認可契約に従う
-- 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — usage のフィールド名と、ターンをまたぐ集計対象は同 change が確定する。本 change は確定した集計結果を保存する側
-- 関連: [対話UX改善（会話履歴）](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — cache read / write トークンの計上先は本 change の `usage_logs`
-- 関連: [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — server tool の実行回数（`usage.server_tool_use_details`）の計上先は本 change の `usage_logs`
+- 先行: [権限管理](../permissions/design.md) — `/stats` のうち他のメンバーの使用量を見る操作は同 change の共通認可関数で判定する。同じ `guild_settings` を触るが、本 change は列を足さない
+- 連携: [スケジュール実行（cron）](../cron/design.md) — ジョブの実行も `usage_logs` に記録し、`user_id` にはジョブの登録者を入れる
+- 連携: [OAuth BYOK](../oauth-byok/design.md) — どのキーで支払ったか（ユーザー / Guild / デフォルト）を `key_source` 列に記録する。同 change より先に実装した場合、列は `default` だけを取る
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- サーバー/ユーザー/モデル別の使用統計を記録・表示する
+- 応答 1 回ごとの使用量とコストを記録する（通常の応答とスケジュール実行の両方）
+- サーバー/ユーザー/モデル別の統計を `/stats` で表示する
+- 停止・失敗した応答の不完全な使用量が合計値を歪めないようにする
 
 **Non-Goals:**
 
-- 権限管理（[権限管理](../permissions/design.md)）
 - ユーザーごとの使用量制限（レートリミット）
 - 課金・請求システム
 - リアルタイムダッシュボード
@@ -36,36 +38,48 @@ summary: "サーバー/ユーザー/モデル別の使用統計（/stats）"
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 統計の保存先 | SQLite（usage_logs） | 既存DBインフラを活用 |
+| 統計の保存先 | SQLite の新テーブル `usage_logs` | 既存の DB を使える。`reply_records` は Discord 上のページ管理のための表で、スケジュール実行のように返答ページを持たない実行を載せられない |
 | メッセージ内容の保存 | 保存しない | 個人情報保護 |
-| ログの保持期間 | 永続（削除機能は将来検討） | 長期トレンド分析を可能に |
+| ログの保持期間 | 永続（削除機能は将来検討） | 長期トレンド分析を可能にする |
+| 記録する箇所 | `chatService.generateChatResponse` が tool ループの結果を受け取った直後 | tool ループの結果（`ToolLoopResult`）は完了・停止・エラーのどれでも `usage` を持つ。Discord への描画が後で失敗してもクレジットは消費済みなので、描画結果を待つ `messageCreate` 側ではなくここで記録する |
+| トークン列の名前 | `prompt_tokens` / `completion_tokens` | 内部の usage 型は Chat Completions の名前を使う（`src/types/index.ts` の `ChatCompletionResponse.usage`）。Responses API の `input_tokens` / `output_tokens` はクライアントの境界で変換済みであり、列名を内部型に揃えると変換が要らない |
+| 不明な値 | NULL で保存する | 内部の usage 型では、報告されなかった項目は欠落しており、0 とは区別される。`cost` を 0 で埋めると「無料だった」と「不明」が見分けられない |
+| 停止・失敗した応答 | 行は記録し、`usage_complete = 0` を付けてトークンとコストの合計から除く | 停止時は進行中のターンの usage が届かない（`src/bot/events/messageCreate.ts:417` のコメント）。記録される値は完了済みのターンの分だけで、実際の消費より少ない。合計に混ぜると過少になり、捨てると停止率が出せない |
+| `/stats` の認可 | 自分の統計は誰でも見られる。サーバー全体・モデル別・他のメンバーの統計は [権限管理](../permissions/design.md) の共通認可関数を満たすメンバーだけ | 他のメンバーの利用量とコストは、そのメンバーの行動の記録でもある |
+| 表示形式 | 他のコマンド応答と同じ Components V2 のコンテナ | コマンドの応答は Components V2 に統一済みで、Embed を使う応答は無い |
 
 ## Design
 
-**変更対象ファイル**:
+### 変更対象ファイル
 
-- `src/db/schema.ts` - `usage_logs`テーブル追加
-- `src/db/repositories/usageRepository.ts` - 使用ログのCRUD
-- `src/services/chatService.ts` - リクエスト完了時にログ記録
-- `src/services/statsService.ts` - 統計集計ロジック
-- `src/bot/commands/stats.ts` - `/stats`コマンド追加
-- `src/bot/commands/handlers.ts` - statsハンドラー追加
+- 修正: `src/db/schema.ts` — `usage_logs` テーブル追加
+- 新規: `src/db/repositories/usageRepository.ts` — 使用ログの追加と集計クエリ
+- 修正: `src/services/chatService.ts` — tool ループの結果を受け取った直後に記録する
+- 新規: `src/services/statsService.ts` — 統計の集計
+- 新規: `src/bot/commands/stats.ts` — `/stats` コマンド
+- 修正: `src/bot/commands/index.ts` / `src/bot/commands/handlers.ts` — `/stats` の登録とハンドラ
 
-**DBスキーマ変更**:
+### DB スキーマ変更
 
 ```sql
 CREATE TABLE usage_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,                  -- 依頼者。スケジュール実行ではジョブの登録者
     channel_id TEXT NOT NULL,
-    model TEXT NOT NULL,
-    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    completion_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens INTEGER NOT NULL DEFAULT 0,
-    cost REAL NOT NULL DEFAULT 0,          -- USD
-    latency_ms INTEGER NOT NULL DEFAULT 0,
-    stopped INTEGER NOT NULL DEFAULT 0,     -- 0: 完了, 1: 停止
+    source TEXT NOT NULL CHECK(source IN ('chat','cron')),
+    model TEXT NOT NULL,                    -- 実際に応答したモデル。不明なら要求したモデル
+    outcome TEXT NOT NULL CHECK(outcome IN ('completed','stopped','failed')),
+    usage_complete INTEGER NOT NULL CHECK(usage_complete IN (0,1)),
+    prompt_tokens INTEGER,                  -- NULL = 不明
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    cached_tokens INTEGER,                  -- prompt_tokens_details.cached_tokens
+    reasoning_tokens INTEGER,               -- completion_tokens_details.reasoning_tokens
+    web_search_requests INTEGER,            -- server_tool_use_details.web_search_requests
+    cost REAL,                              -- USD。NULL = 不明
+    key_source TEXT NOT NULL DEFAULT 'default' CHECK(key_source IN ('user','guild','default')),
+    latency_ms INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -74,77 +88,56 @@ CREATE INDEX idx_usage_user ON usage_logs(user_id, created_at);
 CREATE INDEX idx_usage_model ON usage_logs(model, created_at);
 ```
 
-**コマンド設計**:
+- 記録する値は tool ループが全ターンを合算した `AggregatedUsage`（`src/llm/toolLoop.ts`）から取る。
+- `server_tool_use_details` は server tool が一度も起動しなかったリクエストでは usage から省かれる。この場合 `web_search_requests` は NULL（未起動）とし、0 回と区別する。
+- `usage_complete` は `outcome = 'completed'` かつ usage を受け取れたときだけ 1 にする。
+
+### コマンド設計
 
 ```text
-/stats server [period]
-  - period: today | week | month | all (デフォルト: month)
-  - サーバー全体の統計を表示
-
 /stats user [user] [period]
-  - user省略時: 自分の統計
-  - period: today | week | month | all (デフォルト: month)
-  - ユーザー別統計を表示
-
+  - user 省略時: 自分の統計。他のメンバーを指定するには認可が要る
+/stats server [period]
+  - サーバー全体の統計（認可が要る）
 /stats model [model] [period]
-  - model省略時: 全モデル比較
-  - period: today | week | month | all (デフォルト: month)
-  - モデル別統計を表示
+  - model 省略時: 全モデル比較（認可が要る）
+
+period: today | week | month | all（既定: month）
 ```
 
-**表示項目**:
+### 表示項目
 
 | 統計項目 | 説明 |
 | -------- | ---- |
-| リクエスト数 | 総リクエスト回数 |
-| トークン数 | prompt/completion/total |
-| 推定コスト | USD換算 |
-| 平均レイテンシ | ms |
-| 停止率 | 停止ボタンでキャンセルされた割合 |
-| 上位モデル | 使用頻度が高いモデルTOP3 |
-| 上位ユーザー | 使用頻度が高いユーザーTOP3（server統計のみ） |
+| リクエスト数 | 総数と、停止・失敗の件数 |
+| トークン数 | prompt / completion / total（`usage_complete = 1` の行だけを合計） |
+| 推定コスト | USD（`usage_complete = 1` かつ `cost` が非 NULL の行だけを合計し、コスト不明の件数を併記する） |
+| 平均レイテンシ | ms（完了した応答のみ） |
+| 停止率 | 停止ボタンで止めた割合 |
+| 上位モデル | 使用頻度が高いモデル TOP3 |
+| 上位ユーザー | 使用頻度が高いユーザー TOP3（server 統計のみ） |
 
-**実装内容**:
+### 設計メモ
 
-1. **ログ記録タイミング**:
-   - `chatService.generateResponseStream()`完了時
-   - 停止ボタンでキャンセルされた場合も記録（`stopped=1`）
-
-2. **統計集計**:
-   - SQLの`GROUP BY`と集約関数で集計
-   - 期間フィルタは`created_at`で絞り込み
-
-3. **表示形式**:
-   - Embed形式で表示
-   - フィールドに各統計項目を配置
-   - グラフは不要（テキストベースで十分）
-
-**ストレージ見積もり**:
-
-- 1レコード: 約200バイト
-- 月間10,000リクエスト: 約2MB
-- 年間: 約24MB（SQLite制限内で十分）
-
-**設計メモ**:
-
-- ログは永続保存（削除機能は将来検討）
-- 個人情報保護: メッセージ内容は保存しない
-- コスト計算: OpenRouterレスポンスの`usage`から取得。**`usage.cost` は無料モデルでは 0、ストリーミング前段チャンク等では欠落し得る**（公式に「null」と明記はされていない）ため、記録時は `cost ?? 0` でガードする（`usage_logs.cost REAL NOT NULL DEFAULT 0` は null 非許容なので明示フォールバックが必要）
-- `usage` は全レスポンスで自動返却される。[Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) 後は `usage: { include: true }` に相当するフィールド自体が存在しない
-- 記録対象は、同 change が `AggregatedUsage` に載せるフィールドから選ぶ。基本トークンと `cost` のほか、`prompt_tokens_details.cached_tokens` / `cache_write_tokens`、`completion_tokens_details.reasoning_tokens`、`cost_details`、`server_tool_use_details`（server tool の実行回数）が候補になる
-- `server_tool_use_details` は server tool が一度も起動しなかったリクエストでは usage から省かれる。未起動と 0 回を区別するなら、値ではなくキーの有無で判定する
-- パフォーマンス: インデックスで集計クエリを高速化
+- 集計は SQL の `GROUP BY` と集約関数で行い、期間は `created_at` で絞る。
+- ストレージ見積もり: 1 レコード約 200 バイト。月 10,000 リクエストで約 2MB、年約 24MB で、SQLite の運用上問題にならない。
+- 合計値の下に「停止・失敗 N 件の使用量は含まない」と表示し、合計が全消費ではないことを読み手に伝える。
 
 **参照**:
 
-- [OpenRouter Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) - レスポンスの`usage`オブジェクトに`prompt_tokens`, `completion_tokens`, `total_tokens`, optional な `cost` が含まれる。`usage:{include:true}` は deprecated（自動返却）
-- [SQLite Aggregate Functions](https://www.sqlite.org/lang_aggfunc.html) - `SUM()`, `AVG()`, `COUNT()`で統計集計
+- [OpenRouter Usage Accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting) - レスポンスの `usage` に含まれる項目
+- [SQLite Aggregate Functions](https://www.sqlite.org/lang_aggfunc.html) - `SUM()` / `AVG()` / `COUNT()`
 
 ## Tasks
 
 - [ ] `usage_logs` テーブル追加
 - [ ] `usageRepository` 実装
-- [ ] `chatService` にログ記録追加
-- [ ] `statsService` 実装
-- [ ] `/stats` コマンド実装（server/user/model）
+- [ ] `chatService.generateChatResponse` に記録を追加（完了・停止・エラーの 3 経路）
+- [ ] `statsService` 実装（不完全な行を合計から除く）
+- [ ] `/stats` コマンド実装（server / user / model、認可の判定を含む）
+- [ ] テスト追加（停止時の `usage_complete = 0`、不明なコストの NULL 保存と集計での除外、他メンバーの統計の認可）
 - [ ] `docs/changes/usage-stats/` 削除（リリース完了時、git 履歴がアーカイブ）
+
+## Open Questions / Risks
+
+- **停止・失敗時のコストの推定**: 停止した応答のうち完了済みターンの分は分かるが、進行中のターンの分は分からない。OpenRouter の generation 取得（`GET /api/v1/generation`）は停止時に 404 を返す（`src/bot/events/messageCreate.ts:417` のコメント）ため、後から補完する手段は今のところ無い。

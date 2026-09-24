@@ -14,8 +14,8 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 
 ## 依存 / 関連 change
 
-- 連携: [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — 時事的な背景や新しい用語の解説は検索があると正確になる。この change は検索なしで出し、web-search の server tool が chat 経路に載った時点で解説経路にも同じものを渡す。
-- 連携: [permissions](../permissions/design.md) — 誰がこのコマンドを使えるかの制限は permissions の共通認可契約に従う。この change 単独では全員が使える。
+- 前提（実装済み）: [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — `/config web-search` が有効なサーバーでは、`generateChatResponse()` が検索の server tool を付ける。解説経路も同じ関数を通るので、時事的な背景や新しい用語の解説にも同じ設定で検索が使われる。
+- 連携: [permissions](../permissions/design.md) — 解説の実行はギルド設定の変更ではないので、同 change の設定変更の共通認可関数は呼ばない。同 change のチャンネル制限を解説コマンドにも掛けるかは Open Questions に置く。
 
 ## Goals / Non-Goals
 
@@ -41,14 +41,14 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 | 返信の公開範囲 | ephemeral | 質問したこと自体を他の参加者に見せず、チャンネルにも残さない。解説を共有したい場合は通常のメンションで聞ける |
 | 解説の材料 | 対象メッセージ（本文、V2 のテキスト、embed のテキスト、添付）、転送メッセージの snapshot、返信先 1 件の本文 | 返信先は「何への発言か」という背景そのものである。それより前の履歴は Non-Goals のとおり含めない |
 | 返信先を取得できないとき | 返信先なしで解説を続け、返信先を読めなかったことを解説の末尾に注記する | 返信先は補助の材料であり、削除や権限不足で取れないことを理由に対象メッセージの解説まで止める必要はない |
-| 指示の渡し方 | `ChatUserInput` に任意の `systemPrompt` を足し、`system` メッセージとして先頭に置く | Responses API への変換は `system` を扱える（`src/llm/openrouter.ts:425`）。専用の service を作ると model 解決と tool loop の呼び出しが二重になる |
+| 指示の渡し方 | `ChatUserInput` に任意の `systemPrompt` を足し、`system` メッセージとして全メッセージの先頭に置く。既存の system メッセージ（web 検索の指示、現在日時）はその後ろに続ける | Responses API への変換は `system` を扱える（`src/llm/openrouter.ts:501`）。専用の service を作ると model 解決と tool loop の呼び出しが二重になる。解説の指示は要求全体の役割を決めるものでコマンドごとに固定なので、要求ごとに変わる現在日時より前に置き、固定の内容を前、変わる内容を後ろに並べる既存の順（`src/services/chatService.ts:257-264`）に合わせる |
 | モデル | サーバーの既定モデル（`/model set`） | `/config free-only` を含む既存の設定がそのまま効く。解説専用のモデル設定は、必要になった時点で settings-hierarchy に載せる |
 | 返信の描画 | 既存のストリーミング描画を、送信先を差し替えられる形にして再利用する | 分割、停止表示、エラー時の後始末は既に `messageCreate.ts` と `streamingUpdater.ts` にある。interaction 用に書き直すと同じ論理が二重になる |
 | 停止ボタンの ID | `interaction.id` を requestId にする | `stop_response_<id>` の処理は ID の出どころを問わないので、ボタン側は変更不要である |
-| 15 分の期限への備え | `interaction.createdTimestamp` から 13 分を締め切りとし、処理全体をこの締め切りと競争させる。締め切りが来たら送信先を閉じ、停止表示を 1 回だけ書く | interaction token は 15 分で失効し、以後は返信を編集できない。今は tool が未登録で 1 turn（最大 10 分）で終わるが、tool が載ると最大 5 turn になり期限を超えうる。段階ごとの確認ではなく送信先を閉じる形にする理由は「締め切りとエラー処理」に書いた。2 分の余裕は停止表示の描画に充てる |
+| 15 分の期限への備え | `interaction.createdTimestamp` から 13 分を締め切りとし、処理全体をこの締め切りと競争させる。締め切りが来たら送信先を閉じ、停止表示を 1 回だけ書く | interaction token は 15 分で失効し、以後は返信を編集できない。解説経路は会話の窓を渡さないので client tool が提示されず、1 turn（最大 10 分）で終わるが、将来 client tool を渡すと最大 5 turn になり期限を超えうる。段階ごとの確認ではなく送信先を閉じる形にする理由は「締め切りとエラー処理」に書いた。2 分の余裕は停止表示の描画に充てる |
 | ログの token | logger が行を書き出す直前に、interaction と webhook の URL の token を伏せる | token を含む経路は解説の描画、defer、停止ボタンにまたがる。全てのログが通る 1 か所で伏せれば、経路ごとの対処が要らない |
 | エラー時の返信 | 解説経路は専用の try/catch を持ち、エラー表示は必ず ephemeral の返信で出す | `interactionCreate.ts` の既存の catch は chat input の分岐の中にあり、その返信は `Ephemeral` を付けていない。解説の失敗をチャンネルの全員に見せないためである |
-| 利用制限 | `default_member_permissions` を設定しない | 権限の設計は permissions change が持つ。先にこの change で独自の制限を入れると、後で共通契約へ移すときに二重になる |
+| 利用制限 | `default_member_permissions` を設定せず、全員が使える | 解説は本人にだけ見える返信を出すだけで、ギルド設定もチャンネルの表示も変えない。利用者やチャンネルを絞りたいサーバーは、Discord のサーバー設定（連携サービス）でコマンドごとの利用権限を変えられる |
 | README のコマンド一覧 | 生成スクリプトは chat input コマンドだけを表にし、解説コマンドは README に手書きで 1 行足す | message command は API が `description` を受け付けないため、生成の元になる説明文が無い。1 件のために説明文の置き場を新設するほどではない |
 
 ## Design
@@ -58,11 +58,11 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 - 新規: `src/bot/commands/explain.ts` — `ContextMenuCommandBuilder` による定義と、解説用のシステムプロンプト。
 - 新規: `src/bot/events/explainCommand.ts` — message command の interaction を受けて材料を組み立て、chat service を呼んで ephemeral 返信へ描画する。
 - 修正: `src/bot/commands/index.ts` — `commandDefinitions` に解説コマンドを加える。登録は既存の `rest.put(Routes.applicationCommands(...))` がそのまま行う。
-- 修正: `src/bot/events/interactionCreate.ts` — `isChatInputCommand()` の判定より前に `isMessageContextMenuCommand()` の分岐を置く。今は chat input 以外を無言で捨てている（52 行目）。この分岐は既存の try/catch の外に出るので、エラー処理は `explainCommand.ts` が持つ。
-- 修正: `src/services/chatService.ts` — `ChatUserInput.systemPrompt` を受け、`buildChatMessages()` で `system` メッセージを先頭に置く。
+- 修正: `src/bot/events/interactionCreate.ts` — `isChatInputCommand()` の判定より前に `isMessageContextMenuCommand()` の分岐を置く。今は chat input 以外を無言で捨てている（116-118 行目）。この分岐は既存の try/catch の外に出るので、エラー処理は `explainCommand.ts` が持つ。
+- 修正: `src/services/chatService.ts` — `ChatUserInput.systemPrompt` を受け、`generateChatResponse()` が組み立てる先頭の system メッセージ（`leadingSystemMessages`）のさらに前に置く。
 - 修正: `src/services/attachmentParser.ts` — `parseAttachments()` が名前、URL、MIME、サイズだけを持つ添付を受け取れるようにする。
 - 修正: `src/bot/events/streamingUpdater.ts`、`src/bot/events/messageCreate.ts` — Discord への書き込み（編集、追加送信、削除）を送信先の差し替え口経由にし、最終描画、停止表示、エラー時の後始末の関数を両経路から使える場所へ移す。
-- 修正: `src/utils/logger.ts` — `Error` の内容を残す形で直列化し、書き出す行から interaction と webhook の URL の token を伏せる。
+- 修正: `src/utils/logger.ts` — 書き出す行から interaction と webhook の URL の token を伏せる。
 - 修正: `src/llm/toolLoop.ts` — updater の callback の例外を `console` へ直接出している箇所を logger 経由にする。
 - 修正: `scripts/generate-readme.ts` — `generateCommandTable()` に渡す前に chat input 以外を除く。
 - 修正: `src/bot/commands/handlers.ts` — `/help` の手書きのコマンド一覧に解説コマンドを 1 行足す。
@@ -73,7 +73,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 1. interaction を受けたら、3 秒以内に `deferReply({ flags: Ephemeral })` を返す。defer に失敗したら、LLM は呼ばずにログだけ残して終える。失敗には、interaction が無効か期限切れだと Discord が返した場合と、通信の失敗で Discord が受け付けたか分からない場合があり、後者では token が使える可能性もある。それでも終えるのは、受け付けられたか分からない応答の上に解説を出す手順を持たないためである。ログにはこの 2 種類を区別して残す。
 2. 材料を集める（取得元と範囲は次の小節「解説の材料」）。添付を `parseAttachments()` に通し、画像があれば既存の `isMultimodalCapable()` でモデルの対応を確かめる。
 3. テキストも添付も無ければ、「解説できる内容がありません」を返して終える。添付の拒否やモデル非対応も、通常のチャット経路と同じ文言で返す。
-4. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id` である。
+4. 締め切りを過ぎていなければ、その判定に続けて同期的に、解説用のシステムプロンプトと材料を `generateChatResponse()` に渡す。requestId は `interaction.id`、5 番目の引数の `ctx` は `{ channelId: interaction.channelId, userId: interaction.user.id }` である。`conversation` は渡さないので、`read_earlier_messages` と `view_attachment` は登録されていても提示されない（両 tool の `isEnabled` が `ctx.conversation` を要求し、`generateChatResponse()` も `conversation` が無いと tool の対応を調べない）。
 5. 描画は interaction 用の送信先を使う。1 通目は `editReply()` で Components V2 にし、2 通目以降は `followUp({ flags: Ephemeral | IsComponentsV2 })` で足し、編集と削除は interaction token の webhook 経由で行う。
 
 システムプロンプトには、対象メッセージに出てくる専門用語、略語、固有名詞、前提知識を取り出して短く説明すること、発言の意図の推測は必要な範囲にとどめること、確かでない点は確かでないと書くことを指示する。
@@ -84,7 +84,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 材料は、discord.js のメッセージのキャッシュではなく、REST で取得した API の生のメッセージ（`APIMessage`）から取り出す。
 対象メッセージは `client.rest.get(Routes.channelMessage(channelId, messageId))` で取得し、転送の snapshot はその応答の `message_snapshots` を使う。
 Discord は snapshot を転送した時点の内容で固定し、転送元の変更を反映しないと定めている（`developers/resources/message.mdx` の Message Reference Types）。
-一方 discord.js は、転送元のチャンネルがキャッシュにあると snapshot をそのキャッシュに登録し（`node_modules/discord.js/src/structures/Message.js:463`）、既存のキャッシュのメッセージへ上書きで合成する（`node_modules/discord.js/src/managers/CachedManager.js:46`）。
+一方 discord.js は、転送元のチャンネルがキャッシュにあると snapshot をそのキャッシュに登録し（`node_modules/discord.js/src/structures/Message.js:474`）、既存のキャッシュのメッセージへ上書きで合成する（`node_modules/discord.js/src/managers/CachedManager.js:50`）。
 snapshot は一部の項目だけを持つので、省略された項目（`components` など）にはキャッシュにある転送元の今の内容が残る（`node_modules/discord.js/src/structures/Message.js:152`）。
 これを材料にすると、利用者が見ていない転送元の内容が解説に混ざる。利用者が転送元のチャンネルを読めない場合は、読めない内容を解説経由で知ることになる。
 対象メッセージの取得に失敗したら（bot の `READ_MESSAGE_HISTORY` の不足など）、解説せずに、メッセージを読めなかったことと理由を ephemeral のエラーで返す。
@@ -101,9 +101,9 @@ discord.js は対象メッセージもキャッシュへ上書きで合成して
 
 転送メッセージ（`message_reference.type` が Forward）は snapshot の内容を使い、転送元を取りに行かない。
 返信先は、メッセージが `MessageType.Reply` で、`message_reference.type` が Default のときだけ取得する。
-Discord は `type` の省略を Default と定めているが、discord.js は省略時に `undefined` のまま渡す（`node_modules/discord.js/src/structures/Message.js:376`）ので、`type ?? MessageReferenceType.Default` で比べる。
+Discord は `type` の省略を Default と定めているが、discord.js は省略時に `undefined` のまま渡す（`node_modules/discord.js/src/structures/Message.js:380`）ので、`type ?? MessageReferenceType.Default` で比べる。
 取得は対象メッセージと同じく REST の `Routes.channelMessage()` で上限時間つきの 1 回だけ行う。
-`fetchReference()` は使わない。キャッシュ済みのチャンネルを前提とし（`node_modules/discord.js/src/structures/Message.js:798`）、`force` を付けずに取得するので、キャッシュにある返信先を今の権限や削除の有無を確かめずにそのまま返す（`node_modules/discord.js/src/managers/MessageManager.js:104-108`）。
+`fetchReference()` は使わない。キャッシュ済みのチャンネルを前提とし（`node_modules/discord.js/src/structures/Message.js:830`）、`force` を付けずに取得するので、キャッシュにある返信先を今の権限や削除の有無を確かめずにそのまま返す（`node_modules/discord.js/src/managers/MessageManager.js:104-108`）。
 取得に失敗（削除済み、`VIEW_CHANNEL` や `READ_MESSAGE_HISTORY` の不足、ボイスチャンネルのテキストでの `CONNECT` の不足、タイムアウト）したら返信先なしで続け、解説の末尾にその旨を注記する。
 返信先から使うのはテキストだけで、添付は含めない。
 
@@ -124,25 +124,25 @@ interaction 版の送信先は、表示の待ち行列と削除の待ち行列�
 - 表示の待ち行列は、編集、追加送信、3 の停止表示を受け持つ。閉じる前に受け付けた編集や追加送信は必ず停止表示より先に終わり、後から完了して停止表示を上書きすることがない。
 - 削除の待ち行列は、余ったメッセージの削除と、取り残されたメッセージの削除を受け持つ。表示の待ち行列はこちらの完了を待たない。削除には時間の上限を置かない。
 - どちらの待ち行列も、1 件が失敗しても後続を実行する。
-- interaction 版では、削除に失敗したメッセージを中立化の表示に書き換えず、ログだけ残す。中立化は表示の書き込みであり、削除の待ち行列へ渡したメッセージには表示を書かない規則と両立しないためである。残るのは本人にだけ見える ephemeral のメッセージで、停止ボタンが残っていても押せば「既に完了している」旨が返るだけである（`src/bot/events/interactionCreate.ts:155-168`）。チャンネル版は既存の中立化をそのまま使う。
+- interaction 版では、削除に失敗したメッセージを中立化の表示に書き換えず、ログだけ残す。中立化は表示の書き込みであり、削除の待ち行列へ渡したメッセージには表示を書かない規則と両立しないためである。残るのは本人にだけ見える ephemeral のメッセージで、停止ボタンが残っていても押せば「既に完了している」旨が返るだけである（`src/bot/events/interactionCreate.ts:234-249`）。チャンネル版は既存の中立化をそのまま使う。
 
 2 本に分けて保証できるのは、停止表示がアプリの中で削除の完了を待たないことまでである。
-discord.js は REST の要求を rate limit の bucket ごとに 1 本の列で送る（`node_modules/@discordjs/rest/dist/index.js:975`、`1334`）ので、削除と編集が同じ bucket に入れば、停止表示の編集は discord.js の中で削除の後に回る。
+discord.js は REST の要求を rate limit の bucket ごとに 1 本の列で送る（`node_modules/@discordjs/rest/dist/index.js:946`、`1375`）ので、削除と編集が同じ bucket に入れば、停止表示の編集は discord.js の中で削除の後に回る。
 interaction token の経路で削除と編集が bucket を共有するかは確かめていない。
 共有していれば、締め切りの前に始まった削除の rate limit の待ちが 2 分の余裕を使い切り、停止表示が届かないことがありうる。
 
 2 本の待ち行列が同じメッセージを同時に扱わないように、表示中のメッセージの一覧は送信先が持ち、メッセージは削除の待ち行列へ渡した時点でこの一覧から外す。
 以後、停止表示を含む表示の書き込みはそのメッセージを対象にしない。
 閉じた後に完了した追加送信（停止ボタン付きの新しいメッセージ、または最終描画の続きのページ）は、表示中の一覧に加えず、そのまま削除の待ち行列へ渡す。
-既存の finalize 後の後始末（`src/bot/events/streamingUpdater.ts:125-139`）と同じ扱いを、閉じた送信先の中で行う形である。
+既存の finalize 後の後始末（`src/bot/events/streamingUpdater.ts:131-143`）と同じ扱いを、閉じた送信先の中で行う形である。
 表示の書き込みの直列化は、interaction token の経路の rate limit が分からない間、同時に複数の表示の書き込みを出さない効果もある。
 
 締め切りに負けた本体の処理は走り続けうるが、その結果は捨てる。
 準備の途中で締め切りが来ると、残りの準備（モデル情報や添付の取得）は最後まで走りうる。
-これは許容する。準備が行うのは、Discord や OpenRouter からの読み取り、bot の中のキャッシュ更新、未登録のサーバーでの既定設定の保存（`src/services/settingsService.ts:20-36`）で、どれも利用者に見える出力も課金も伴わず、締め切りに関係なくいずれ行われてよい処理だからである。
+これは許容する。準備が行うのは、Discord や OpenRouter からの読み取り、bot の中のキャッシュ更新、未登録のサーバーでの既定設定の保存（`src/services/settingsService.ts:63-65`）で、どれも利用者に見える出力も課金も伴わず、締め切りに関係なくいずれ行われてよい処理だからである。
 締め切り後に本体が利用者に影響を与えうるのは、送信先への書き込み（閉じているので何もしない）と生成の開始だけである。
 生成の開始は、締め切りの判定と `generateChatResponse()` の呼び出しを同期的に続けて置くことで防ぐ。
-`generateChatResponse()` は最初の `await` より前に requestId を登録する（`src/services/chatService.ts:193-194`）ので、判定を通った直後に締め切りが来ても 2 の `cancelRequest()` が効く。
+`generateChatResponse()` は最初の `await` より前に requestId を登録する（`src/services/chatService.ts:219-220`）ので、判定を通った直後に締め切りが来ても 2 の `cancelRequest()` が効く。
 締め切り後に本体で起きたエラーはログだけに残し、通常のエラー表示は出さない。
 これらの書き込みも best effort で、token の失効による失敗はログだけ残して諦める。
 タイマーは `finally` で必ず解除する。
@@ -163,19 +163,19 @@ interaction token の経路で削除と編集が bucket を共有するかは確
 ### ログに interaction token を残さない
 
 interaction への応答は URL に token を含む経路（`/interactions/<id>/<token>/callback` と `/webhooks/<application id>/<token>/...`）で書き込むので、その経路の情報をそのままログに出すと token が残る。
-discord.js の `DiscordAPIError` と `HTTPError` は `url` を持ち、REST の rate limit 情報は `url` に加えて `majorParameter` にも `<application id>/<token>` を入れる（`node_modules/@discordjs/rest/dist/index.js:1464-1467`）。
-この経路は解説の描画だけでなく、defer、停止ボタンの `deferUpdate()`、その失敗時の返信でも通り、既存のコードは Discord のエラーをそのまま logger へ渡している（`src/bot/events/streamingUpdater.ts:147`、`src/bot/events/interactionCreate.ts:239` など）。
+discord.js の `DiscordAPIError` と `HTTPError` は `url` を持ち、REST の rate limit 情報は `url` に加えて `majorParameter` にも `<application id>/<token>` を入れる（`node_modules/@discordjs/rest/dist/index.js:1499-1502`）。
+この経路は解説の描画だけでなく、defer、停止ボタンの `deferUpdate()`、その失敗時の返信でも通り、既存のコードは Discord のエラーをそのまま logger へ渡している（`src/bot/events/streamingUpdater.ts:153`、`src/bot/events/interactionCreate.ts:370` など）。
 
-そこで、logger が行を書き出す直前（`src/utils/logger.ts` の `log()` で、`JSON.stringify` した後の 1 行）に、`/interactions/<数字>/<token>` と `/webhooks/<数字>/<token>` の token 部分を `:token` に置き換える。
-Discord のエラーに触れうるログがこの 1 か所を通るように、`src/llm/toolLoop.ts` で `console` へ直接出している箇所（183、189、766 行目の callback の例外と、318 行目の警告）を logger 経由に改める。
+logger は `Error` を `name`、`message`、`code`、`status` だけのオブジェクトに直して書き出す（`src/utils/logger.ts` の `serializeError`）ので、logger へ渡した Discord のエラーの `url` はログに出ない。
+token が出るのは logger を通らない出力である。
+`src/llm/toolLoop.ts` は updater の callback の例外を `console.error` へそのまま渡しており（229、235、834 行目）、`console` はエラーの列挙可能な項目をすべて表示するので、`url` の token がコンソールに出る。
 updater は Discord へ書き込むので、その例外は token を含む URL を持ちうる。
-logger を通らない残りの `console.error` は `src/utils/logFile.ts` のファイル書き込みの失敗だけで、Discord のエラーを受け取らない。
-こうすれば、エラーの種類や呼び出し元ごとに対処しなくてよい。
+そこで、この 3 箇所と 364 行目の警告を logger 経由に改める。
+logger を通らない残りの `console` 出力は、エラーの名前だけか固定の文言を出すもの（`src/services/replyRecordService.ts`、`src/services/conversationWindow.ts` など）と、ログファイルの書き込みの失敗（`src/utils/logFile.ts`）で、Discord のエラーの `url` を出さない。
 
-ただし今の logger は素の `Error` を `{}` として書き出す（設計メモ）ので、`console.error` から logger へ移すだけでは callback の例外の内容が消える。
-そこで logger の直列化で `Error` を `name`、`message`、`stack` と列挙可能な項目（`DiscordAPIError` の `url`、`status`、`code` など）を持つオブジェクトに直し、その後の 1 行に token の置き換えを掛ける。
-既存の `logger.error(..., { error })` の呼び出しも、これでエラーの内容が残るようになる。
-置き換えは文字列に対して行うので、URL がエラーの `url` と `message` のどちらに入っていても伏せられる。
+加えて、logger が行を書き出す直前（`src/utils/logger.ts` の `log()` で、`JSON.stringify` した後の 1 行）に、`/interactions/<数字>/<token>` と `/webhooks/<数字>/<token>` の token 部分を `:token` に置き換える。
+`Error` 以外の `meta` はそのまま `JSON.stringify` されるので、URL を含むオブジェクトを渡す呼び出し元が現れても、この 1 か所で伏せられる。
+置き換えは文字列に対して行うので、URL がどの項目に入っていても効く。
 管理 API のログ取得（[docs/admin-api.md](../../admin-api.md)）はこの logger が書いたログファイルを返すので、同じく伏せた後の行になる。
 
 rate limit 情報の `majorParameter` は `<application id>/<token>` だけで経路の接頭辞を持たず、この置き換えでは伏せられない。
@@ -184,7 +184,7 @@ rate limit 情報の `majorParameter` は `<application id>/<token>` だけで�
 ### 送信先の差し替え口
 
 `DiscordStreamingUpdater` と `messageCreate.ts` の描画関数は、`Message#edit`、`message.channel.send`、`Message#delete` を直接呼んでいる。
-discord.js の `Message#edit` はチャンネルのメッセージ API を呼ぶ（`node_modules/discord.js/src/structures/Message.js:839-842`）ので、interaction の返信を編集するには interaction token の webhook 経路へ切り替える必要がある。
+discord.js の `Message#edit` はチャンネルのメッセージ API を呼ぶ（`node_modules/discord.js/src/structures/Message.js:867-870`）ので、interaction の返信を編集するには interaction token の webhook 経路へ切り替える必要がある。
 そこで、編集、追加送信、削除の 3 操作と停止ボタンに埋める requestId を持つ送信先を定義し、チャンネル版（既存の挙動）と interaction 版の 2 実装を置く。
 ephemeral メッセージをチャンネル API で編集できるかは確かめていないが、この設計は文書化された webhook 経路だけを使うので、その可否に依存しない。
 
@@ -192,7 +192,11 @@ ephemeral メッセージをチャンネル API で編集できるかは確か�
 メンション経路のエラー表示（`message.reply()` による別メッセージ）は描画の一部ではないので、差し替え口に入れず `messageCreate.ts` に残す。
 interaction 版で元応答の削除を求められたとき（後始末でテキストが空の場合など）は、削除せず中立化の表示に置き換える。
 
-表示中のメッセージの一覧は、今は `DiscordStreamingUpdater` が持ち（`messages`）、`messageCreate.ts` の描画関数がその配列に `push` し、添字で走査しながら余りを削除している（`src/bot/events/messageCreate.ts:285-293`、`399-424`）。
+チャンネル版の updater は、送ったメッセージを返答記録（`reply_records` / `reply_pages`）のページとして記録する callback（`OnBotMessageSent`）と、削除とともに記録からページを外す callback（`DeleteOwnMessage`）を受け取る（`src/bot/events/streamingUpdater.ts:15-16`、`95-96`）。
+interaction 版は ephemeral メッセージを返答記録に入れず、ページの記録は何もしない callback にし、削除は webhook 経路の削除だけを行う。
+返答記録は会話の窓が bot の返信を読み戻すためのもので、ephemeral メッセージはチャンネルの履歴に現れず窓に入らないので、記録しても読まれない。
+
+表示中のメッセージの一覧は、今は `DiscordStreamingUpdater` が持ち（`messages`）、`messageCreate.ts` の描画関数がその配列に `push` し、添字で走査しながら余りを削除している（`src/bot/events/messageCreate.ts:529-543`）。
 差し替え後はこの一覧の持ち主を送信先に一本化し、描画関数は一覧を直接変更しない。
 描画関数は、追加送信が一覧に加わったか（閉じた後に完了して捨てられたか）を送信先の返り値で受け取り、余りの削除は走査の前に一覧の写しを取ってから依頼する。
 同じ配列を走査しながら要素を外すと、隣り合う余りのメッセージを飛ばすためである。
@@ -206,16 +210,17 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 - Message Content intent が無いアプリでも、message command の対象メッセージの本文は受け取れる（`developers/events/gateway.mdx` の Message Content Intent）。この bot は intent を持っているので、どちらでも本文は届く。
 - deferred 応答で付けられるフラグは `EPHEMERAL` だけで、Components V2 にするには Edit Original Interaction Response で `IS_COMPONENTS_V2` を付ける（`developers/interactions/receiving-and-responding.mdx`）。
 - followup は `EPHEMERAL` と `IS_COMPONENTS_V2` を同時に付けて送れ、followup の編集と削除の endpoint もある（同ファイルの Followup Messages）。
-- interaction token は 15 分有効で、最初の応答は 3 秒以内に返す必要がある（同ファイル）。
+- interaction token は 15 分有効で、最初の応答は 3 秒以内に返す必要がある（同ファイル）。followup の送信と、元応答（`@original`）や followup の編集と削除は、interaction token を含む webhook の endpoint で行う（同ファイルの Followup Messages と Endpoints）。
+- 「Interactions webhooks share the same rate limit properties as normal webhooks.」とあり、同ファイルの Endpoints の endpoint はアプリのグローバルなレート制限に縛られない（同ファイル）。2026-09-24 に同リポジトリの main で再確認した。
 - メッセージの取得には `VIEW_CHANNEL` と `READ_MESSAGE_HISTORY` が要り、ボイスチャンネルではさらに `CONNECT` が要る（`developers/resources/message.mdx` の Get Channel Message）。
 
 コードで確認した事項は次のとおりである。
 
-- `ContextMenuCommandBuilder` に名前 `解説する`、`type: 3`、`contexts: [Guild]` を与えると `{"name":"解説する","type":3,"contexts":[0]}` を出力し、検証で弾かれない（discord.js 14.26.5 で実行して確認）。
+- `ContextMenuCommandBuilder` に名前 `解説する`、`type: 3`、`contexts: [Guild]` を与えると `{"name":"解説する","type":3,"contexts":[0]}` を出力し、検証で弾かれない（discord.js 14.27.0 で実行して確認）。
 - その JSON を今の `generateCommandTable()` に渡すと、説明欄が `undefined` の行 ``| `/解説する` | undefined |`` ができる（同上）。生成スクリプトで chat input 以外を除く理由である。
-- tool registry は空のまま渡されており（`src/index.ts:45-48`）、1 turn のストリームの上限は 10 分である（`src/llm/toolLoop.ts:130`）。
-- `chatService` が requestId を登録するのは `generateChatResponse()` の実行中だけで、呼び出し元の最終描画に入る前に外す（`src/services/chatService.ts:193-233`）。`cancelRequest()` だけでは締め切りを守れず、送信先を閉じる必要がある理由である。
-- logger は `meta` を `JSON.stringify` するだけで（`src/utils/logger.ts:13`）、素の `Error` は `message` と `stack` が列挙されないため `{}` になる（`logger.error("x", { error: new Error("detail") })` を実行して確認）。`DiscordAPIError` や `HTTPError` は `url` などを列挙可能な項目として持つので、今の logger でも token を含む `url` が書き出される。
+- tool registry には `read_earlier_messages` と `view_attachment` が登録されている（`src/index.ts:58-60`）。どちらも `isEnabled` が `ctx.conversation` を要求し（`src/llm/tools/readEarlierMessages.ts:19-21` など）、`generateChatResponse()` は `input.conversation` が無いと tool の対応を調べず `supportsTools` を false のままにする（`src/services/chatService.ts:272-291`）ので、会話の窓を渡さない解説経路では提示されない。1 turn のストリームの上限は 10 分である（`src/llm/toolLoop.ts:138`）。
+- `chatService` が requestId を登録するのは `generateChatResponse()` の実行中だけで、呼び出し元の最終描画に入る前に外す（`src/services/chatService.ts:219-398`）。`cancelRequest()` だけでは締め切りを守れず、送信先を閉じる必要がある理由である。
+- logger は `Error` を `name`、`message`、`code`、`status` だけにして書き出す（`src/utils/logger.ts:11-26`）。偽の token を含む URL を持つ `DiscordAPIError` と `HTTPError` を `logger.error()` に渡すと、行に token は出ず、同じエラーを `console.error()` に渡すと token が出る（どちらも実行して確認）。
 
 ### テスト
 
@@ -252,9 +257,10 @@ interaction 版で元応答の削除を求められたとき（後始末でテ�
 ## Open Questions / Risks
 
 - 締め切り時の停止表示は、削除と同じ REST の bucket に入る場合に届かないことがある（「締め切りとエラー処理」）。届かなくても、token の失効後に残るのは本人にだけ見える生成途中の表示である。
-- interaction token 経由の編集のレート制限は確かめていない。discord.js は 429 を内部で待って再試行し、アプリのログには出ないので、手動確認で `rateLimited` イベントと表示の遅れを見て判断する。遅れが大きければ、解説経路だけ編集の間隔を広げる。
+- interaction token 経由の書き込みは、通常の webhook と同じ性質のレート制限を受け、アプリ全体のグローバルなレート制限には数えられない（設計メモ）。具体的な上限は文書に無く、応答のヘッダでしか分からない。discord.js は 429 を内部で待って再試行し、アプリのログには出ないので、2 秒ごとのストリーミングの編集がこの上限に収まるかは、手動確認で `rateLimited` イベントと表示の遅れを見て判断する。遅れが大きければ、解説経路だけ編集の間隔を広げる。
 - 対象メッセージの投稿者ではない利用者が、そのメッセージを OpenRouter へ送れる。これはメンションで本文を貼り付けた場合と同じだが、右クリック一つでできるようになる。
-- 利用制限が無いので、利用の多いサーバーでは OpenRouter の消費が増える。permissions change が入るまでは `/model set` で安いモデルを選ぶことで抑える。
+- 利用制限が無いので、利用の多いサーバーでは OpenRouter の消費が増える。ユーザーごとの使用量制限は permissions の範囲にも無いので、Discord のサーバー設定でコマンドの利用者を絞るか、`/model set` で安いモデルを選ぶことで抑える。
+- **チャンネル制限との関係（要決定）**: permissions のチャンネル制限が入ったとき、許可チャンネルの外のメッセージに対する解説を断るかを決めていない。解説は本人にだけ見えチャンネルに何も残さないが、OpenRouter の消費は通常の返信と同じく生じる。
 
 ## 参照
 
