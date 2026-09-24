@@ -78,7 +78,9 @@ LLM パラメータだけは JSON のキー単位でマージし、モデル既�
 
 モデルは解決した後に Guild 制約を当てる。
 Guild の `free_models_only` が有効で、User または Channel で解決したモデルが無料でない場合は、そのスコープを飛ばして次のスコープのモデルを使う。
-Guild のモデルは、`free_models_only` を有効にする時点で無料であることを確かめている（`src/services/settingsService.ts` の `assertCanEnableFreeOnly`）ので、最終的に Guild のモデルに落ちれば制約を満たす。
+Guild のモデルも解決時に同じく確かめる。
+`free_models_only` を有効にする時点の確認（`src/services/settingsService.ts` の `assertCanEnableFreeOnly`）はその時点の価格に対するもので、後でモデルが有料に変わると Guild のモデルも制約を満たさなくなる。
+Guild のモデルまで制約を満たさない場合はリクエストを送らず、管理者に `/model set` で無料モデルを選び直すよう促すエラーを返す。
 書き込み時にも、channel や user のモデルを `ModelService.validateModelSelection(model, freeModelsOnly)` で検証する。
 それでも解決時に確かめるのは、上書きを保存した後に `free_models_only` が有効になる場合や、モデルが有料に変わる場合があるからである。
 
