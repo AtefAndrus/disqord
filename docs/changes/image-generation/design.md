@@ -22,7 +22,8 @@ planner は画像に限らない生成物を扱う形にし、[コード実行](
 - 前提（実装済み）: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) と [tool-calling-foundation](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/tool-calling-foundation/design.md) — client tool の登録と実行、server tool の送出、`usage` の parser がある
 - 前提（実装済み）: [推論の表示](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/reasoning-output/design.md) — `reasoning.md` の `File` 添付と、編集時の添付の消去を実装済みで、planner はこの添付と同じメッセージに生成物を並べる
 - 連携: [コード実行](../code-execution/design.md) — 生成ファイルの表示に本 change の planner を使う。どちらが先に実装されても、planner は本 change の仕様どおりに実装する
-- 連携: [権限管理](../permissions/design.md) — 画像生成のトグルの変更は同 change の共通認可契約に従う
+- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — 画像生成のトグルの変更は同 change の共通認可関数で判定する
+- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 画像生成のトグルは同 change の「機能」ページの項目として足す
 - 連携: [使用統計](../usage-stats/design.md) — 画像生成の費用を保存対象に含める
 
 ## Goals / Non-Goals
@@ -55,8 +56,8 @@ planner は画像に限らない生成物を扱う形にし、[コード実行](
 | 画像生成のモデル | 環境変数 `IMAGE_GENERATION_MODEL` で Bot 全体に 1 つ決める | 会話のモデル（`/model`）とは別物であり、画像モデルの料金は 1 枚あたりで会話のモデルと桁が違う。guild ごとの選択は需要を見てから別 change で扱う |
 | 1 回の生成で作る枚数 | handler 1 回につき `n = 1`、1 回の生成（1 回の `runToolLoop()`）で最大 `IMAGE_GENERATION_MAX_IMAGES`（既定 4）枚。上限に達した後の呼び出しは生成せずに上限到達を tool の結果として返す | client loop の `MAX_TOOL_CALLS_PER_TURN` と `MAX_TURNS` だけでは 1 回の生成で 30 枚を超えうる。1 枚ずつ呼ばせると、上限の判定と失敗の切り分けが 1 枚単位になる |
 | 有効化ゲート | `guild_settings.image_generation_enabled`（既定 0）と、環境変数 `IMAGE_GENERATION_ENABLED`（既定 `false`） | 1 枚ごとに課金されるので opt-in にする。環境変数は、料金や挙動が変わったときに guild の設定を触らずに止めるためのもの |
-| トグルの認可 | [権限管理](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する | 1 枚ごとに課金されるので、ほかの `/config` の書き込みと同じく一般メンバーには切り替えさせない。権限管理は本 change より先に実装する |
-| `/status` での切り替え | Web 検索と同じく `/status` からも切り替えられるようにする（ボタンの押下も同じ共通認可関数で判定する） | 課金を伴う点は Web 検索と同じで、外部へのデータの持ち出しは会話のモデルへの送信の範囲を超えない |
+| トグルの認可 | [ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する | 1 枚ごとに課金されるので、ほかのギルド設定の書き込みと同じく一般メンバーには切り替えさせない |
+| トグルの置き場所 | [設定パネル](../config-panel/design.md) の「機能」ページに、Web 検索と同じ 1 回の押下で切り替わる on/off の項目として置く。確認の 2 段は挟まない。`/status` は状態を表示するだけにする | 課金を伴う点は Web 検索と同じで、外部へのデータの持ち出しは会話のモデルへの送信の範囲を超えないので、有効化の前に読ませる確認文が要らない |
 | tool の結果としてモデルへ返す内容 | 成否、生成したファイル名、改訂されたプロンプトがあればそれ。画像そのものと URL は返さない | モデルが本文に URL や base64 を書き写す経路を作らない。画像をモデルに見せる必要は無く、見せると入力トークンの費用が増える |
 | 生成物の境界 | producer は検証済みのバイト列だけを `ResponseArtifact` にする。planner と描画は URL、data URL、base64 文字列を受け取らない | 出所を失った共通層では、取得先の検証やサイズの強制を producer ごとに適用できない |
 | MIME | magic byte で PNG / JPEG / WebP / GIF を判定して `MediaGallery` に入れる。それ以外（SVG を含む）は `File` として扱う | 応答の `media_type` は省略されうる（OpenAPI 定義の `ImageGenerationResponse`）。SVG は Discord client のインライン表示が安定しない |
@@ -197,7 +198,7 @@ Images API の費用は Responses API の `usage` とは別の応答で届くの
 ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL DEFAULT 0;
 ```
 
-切り替えは `/config image-generation enabled:<on|off>` と `/status` のトグルで行う。
+切り替えは [設定パネル](../config-panel/design.md) の「機能」ページの on/off で行う。`/status` は現在の値を表示する。
 
 | 変数 | 既定 | 用途 |
 | ---- | ---- | ---- |
@@ -215,7 +216,8 @@ ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL 
 - 修正: `src/services/chatService.ts` — tool の有効化条件、画像費用の合算
 - 修正: `src/utils/chatContainerBuilder.ts` — `MediaGallery` と生成物の `File`、警告の `TextDisplay`、footer の `Images:`、編集の payload
 - 修正: `src/bot/events/messageCreate.ts` — plan に従った送信と編集、再試行
-- 修正: `src/bot/commands/` の `/config` と handler、`src/utils/statusMessage.ts` と `src/bot/events/interactionCreate.ts` — トグルと認可
+- 修正: `src/utils/configPanel.ts` と `src/bot/events/configPanelHandler.ts` — 「機能」ページの項目と認可
+- 修正: `src/utils/statusMessage.ts` — 状態の表示
 - 修正: `src/db/` と `src/config/envVars.ts` — 列と環境変数
 - 修正: `scripts/` の preview fixture — 画像 1 枚、10 枚超、警告あり、推論の添付と同居
 
@@ -228,7 +230,7 @@ ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL 
 - [ ] `generate_image` の handler（枚数の上限、decode 前後のサイズ、magic byte、失敗の警告化）とテスト
 - [ ] `ResponseLayoutPlanner`（component 数、`MediaGallery` の 10 件、添付 10 件、合計サイズ、`reasoning.md` との同居、Separator の数、警告の予算）とテスト
 - [ ] `chatContainerBuilder` と `messageCreate` の送信、編集、再試行とテスト
-- [ ] `guild_settings` の列、`/config` と `/status` のトグル、認可、環境変数
+- [ ] `guild_settings` の列、設定パネルの「機能」ページの項目、`/status` の表示、認可、環境変数
 - [ ] footer の費用の合算と `Images:`
 - [ ] `bun run preview` の fixture を足す
 - [ ] `bun run e2e` に画像生成のシナリオを足すかを決める（1 回ごとに画像の費用がかかる）
@@ -239,7 +241,7 @@ ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL 
 
 - **wire 形は未実測**: Images API の応答は OpenAPI 定義と docs の例でしか見ていない。`media_type` が省略される場合は magic byte だけで判定する
 - **server tool を採らない判断の前提**: (a) の output item に `imageB64` が常に入るなら、URL の取得は不要になり、(a) の短所は回数の制御とモデルへの URL の受け渡しだけになる。実測で分かった場合も、回数の制御のために (b) を維持する見込みだが、そのときに比較し直す
-- **function calling に対応しないモデル**: そのモデルを選んだ guild では画像生成が効かない。`/config` と `/status` で、有効でも使えない状態であることを示すかを実装時に決める
+- **function calling に対応しないモデル**: そのモデルを選んだ guild では画像生成が効かない。設定パネルと `/status` で、有効でも使えない状態であることを示すかを実装時に決める
 - **費用の予測**: 1 枚の費用はモデルと `quality` / `size` で大きく変わる。上限の枚数と固定値を決めるまで、1 回の返信の最大費用は見積もれない
 - **生成物の寿命**: 永続保存しないので、Discord のメッセージが消えれば画像も消え、再生成しない限り再表示できない
 

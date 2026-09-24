@@ -16,7 +16,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
-- 連携: [権限管理](../permissions/design.md) — `/config discord-tools` の認可は、同 change の設定変更の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
+- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 有効化の切り替えは同 change の「機能」ページの項目として足す
+- 連携: [ギルド設定変更の共通認可](../permissions/design.md) — 有効化の切り替えの認可は、同 change の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
 - 関連: [会話の分岐 (fork)](../fork/design.md) — 分岐先としてスレッドを作り、分岐元との関係を記録する。スレッドの作成は本 change の `create_thread` と同じ処理を使える
 
 ## Goals / Non-Goals
@@ -52,7 +53,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 | -------- | ---- | ---- |
 | tool の形 | 1 操作を 1 tool として登録する | 操作ごとの JSON Schema の方が、1 つの tool の `action` enum に畳むよりモデルの選択が正確で、`isEnabled` も操作ごとに書ける |
 | v1 の操作 | リアクション、投票、スレッド作成、ピン留め | どれも REST だけで完結し、特権 intent を足さずに動く。結果は Discord 上で誰にでも見える。リアクションとピンは取り消せ、投票は作成者（bot）かメッセージを管理できる人が消せる。スレッドを消すには `ManageThreads` が要り、作った本人だけでは消せない |
-| 有効化の単位 | `/config discord-tools on\|off` で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
+| 有効化の単位 | [設定パネル](../config-panel/design.md) の「機能」ページの「Discord 操作」の on/off で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
 | 対象メッセージの指定 | 会話の窓の参照（`m7`）で受け取り、省略時は bot を呼んだメッセージとする。会話履歴が off の guild では、bot を呼んだメッセージだけを対象にできる | モデルに生のメッセージ ID を書かせない。窓に無いメッセージは操作できない |
 | 権限の確認 | Discord を変える呼び出しはすべて `discordActionService` の 1 つの認可関数を通し、各操作の実行の直前に、bot と依頼したメンバーの両方が下の「共通の確認」と操作ごとの権限を満たすときだけ実行する | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。確認を操作ごとに書くと、閲覧権限、タイムアウト、非公開スレッドの参加といった前提の抜けが操作ごとに生じるので、1 か所に集める |
 | 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.27.0 の `Message#pinnable` の実装に合わせる |
@@ -100,7 +101,7 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - 修正: `src/llm/tools/registry.ts` / `src/services/conversationWindow.ts` — 窓の参照（`m7`）からメッセージ ID を引く関数を `ConversationToolContext`（`registry.ts` で定義）に足し、`conversationWindow.ts` で実装する
 - 修正: `src/services/chatService.ts` / `src/bot/events/messageCreate.ts` — 設定が有効な guild で `DiscordToolContext` を作って ctx に載せる
 - 修正: `src/index.ts` — 4 つの tool を登録する
-- 修正: `src/db/schema.ts` / `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/bot/commands/config.ts` — `discord_tools_enabled` の列、setter、`/config discord-tools`、`/status` の表示
+- 修正: `src/db/schema.ts` / `src/db/repositories/guildSettings.ts` / `src/services/settingsService.ts` / `src/utils/configPanel.ts` / `src/utils/statusMessage.ts` — `discord_tools_enabled` の列、setter、設定パネルの「機能」ページの項目、`/status` の表示
 - 修正: `scripts/e2e/scenarios.ts` — 名前を指定して走るシナリオ
 - テスト: `tests/unit/llm/tools/discord/*.test.ts` / `tests/unit/services/discordActionService.test.ts`
 
@@ -120,13 +121,13 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 
 ### e2e
 
-`bun run e2e discord-tools` を名前を指定したときだけ走らせ、`/config discord-tools on` を要件にする。
+`bun run e2e discord-tools` を名前を指定したときだけ走らせ、テスト対象の guild で `discord_tools_enabled` が有効であること（設定パネルの「機能」ページ、または `guild_settings` の列の直接更新で切り替える）を要件にする。
 テスト bot が bot にリアクション、投票、スレッド作成、ピン留めを頼み、REST でそれぞれの結果（対象メッセージのリアクション、投票のメッセージ、スレッド、ピン一覧）を読んで確かめる。
 シナリオの最後に、作ったスレッドとピンを片付ける。
 
 ## Tasks
 
-- [ ] `discord_tools_enabled` の列と `/config discord-tools`、`/status` の表示を足す
+- [ ] `discord_tools_enabled` の列と、設定パネルの「機能」ページの項目、`/status` の表示を足す
 - [ ] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
 - [ ] 4 つの tool を実装して登録する
 - [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
