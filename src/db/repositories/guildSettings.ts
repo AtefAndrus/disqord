@@ -15,6 +15,7 @@ export type GuildSettingsChanges = Partial<
     | "historyEnabled"
     | "allowedChannels"
     | "adminRoleId"
+    | "releaseAnnounceChannelId"
   >
 >;
 
@@ -38,6 +39,7 @@ export interface IGuildSettingsRepository {
 interface RawGuildSettings {
   guildId: GuildId;
   adminRoleId: string | null;
+  releaseAnnounceChannelId: string | null;
   allowedChannels: string | null;
   settingsVersion: number;
   updatedBy: string | null;
@@ -67,6 +69,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
   return {
     guildId: raw.guildId,
     adminRoleId: raw.adminRoleId ?? null,
+    releaseAnnounceChannelId: raw.releaseAnnounceChannelId ?? null,
     allowedChannels:
       raw.allowedChannels === null ? null : parseAutoReplyChannels(raw.allowedChannels),
     settingsVersion: raw.settingsVersion,
@@ -90,6 +93,7 @@ const SELECT_ROW = `SELECT guild_id as guildId, admin_role_id as adminRoleId, de
   twitter_expand_enabled as twitterExpandEnabled,
   history_enabled as historyEnabled, allowed_channels as allowedChannels,
   settings_version as settingsVersion, updated_by as updatedBy,
+  release_announce_channel_id as releaseAnnounceChannelId,
   created_at as createdAt, updated_at as updatedAt
   FROM guild_settings WHERE guild_id = ?`;
 
@@ -192,7 +196,8 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
          SET default_model = ?, free_models_only = ?, show_llm_details = ?,
              auto_reply_channels = ?, web_search_enabled = ?, reasoning_display_enabled = ?,
              twitter_expand_enabled = ?, history_enabled = ?, updated_at = ?,
-             allowed_channels = ?, admin_role_id = ?, settings_version = ?, updated_by = ?
+             allowed_channels = ?, admin_role_id = ?, settings_version = ?, updated_by = ?,
+             release_announce_channel_id = ?
          WHERE guild_id = ?`,
       )
       .run(
@@ -209,6 +214,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         settings.adminRoleId,
         settings.settingsVersion,
         settings.updatedBy,
+        settings.releaseAnnounceChannelId,
         settings.guildId,
       );
   }

@@ -9,6 +9,11 @@ export interface ModelCheck {
 }
 
 export interface ISettingsService {
+  setReleaseAnnounceChannelId(
+    guildId: string,
+    channelId: string | null,
+    actorId?: string,
+  ): Promise<GuildSettings>;
   getGuildSettings(guildId: string): Promise<GuildSettings>;
   setGuildModel(guildId: string, check: ModelCheck, actorId?: string): Promise<GuildSettings>;
   setFreeModelsOnly(
@@ -53,6 +58,14 @@ function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | und
 
 export class SettingsService implements ISettingsService {
   constructor(private readonly repo: IGuildSettingsRepository) {}
+
+  async setReleaseAnnounceChannelId(
+    guildId: string,
+    releaseAnnounceChannelId: string | null,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ releaseAnnounceChannelId }), actorId);
+  }
 
   async getGuildSettings(guildId: string): Promise<GuildSettings> {
     return (await this.repo.findByGuildId(guildId)) ?? this.repo.update(guildId, () => ({}));

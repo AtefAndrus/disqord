@@ -26,6 +26,16 @@ function statusData(overrides: { freeModelsOnly?: boolean; showLlmDetails?: bool
 }
 
 describe("buildStatusMessage", () => {
+  test("リリース通知先と未設定時の状態を表示する", () => {
+    const data = statusData();
+    expect(statusTextDisplays(buildStatusMessage(data))).toContain(
+      "**リリース通知先**\n通知しない",
+    );
+    data.settings.releaseAnnounceChannelId = "channel";
+    expect(statusTextDisplays(buildStatusMessage(data))).toContain(
+      "**リリース通知先**\n<#channel>",
+    );
+  });
   test("Components V2 Container に状態と各設定の現在値を表示する", () => {
     const message = buildStatusMessage(
       statusData({

@@ -49,6 +49,7 @@ const TRIGGER_MESSAGE_ID = "400000000000000000";
 const settings: GuildSettings = {
   guildId: "100000000000000000",
   adminRoleId: null,
+  releaseAnnounceChannelId: "300000000000000000",
   allowedChannels: null,
   settingsVersion: 1,
   updatedBy: "200000000000000000",

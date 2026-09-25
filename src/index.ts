@@ -8,6 +8,7 @@ import { createMessageCreateHandler } from "./bot/events/messageCreate";
 import { onReady } from "./bot/events/ready";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
+import { BotStateRepository } from "./db/repositories/botState";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
@@ -19,6 +20,7 @@ import { ChatService } from "./services/chatService";
 import { ConversationWindowService } from "./services/conversationWindow";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
+import { createReleaseSender, ReleaseAnnouncer } from "./services/releaseAnnouncer";
 import { loadReleaseNotes } from "./services/releaseNotes";
 import { createReplyRecordCleanupRunner, ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
@@ -68,12 +70,13 @@ async function bootstrap(): Promise<void> {
     modelService,
   );
 
+  const releaseNotes = await loadReleaseNotes();
   const commandHandlers = createCommandHandlers(
     llmClient,
     settingsService,
     modelService,
     config.webSearchEngine,
-    await loadReleaseNotes(),
+    releaseNotes,
   );
 
   const client = await createBotClient();
@@ -117,7 +120,16 @@ async function bootstrap(): Promise<void> {
     config.webSearchEngine,
   );
 
-  client.once(Events.ClientReady, () => onReady(client));
+  const releaseAnnouncer = new ReleaseAnnouncer(
+    new BotStateRepository(db),
+    settingsService,
+    () => client.guilds.cache.keys(),
+    createReleaseSender(client),
+  );
+  client.once(Events.ClientReady, () => {
+    onReady(client);
+    void releaseAnnouncer.announce(packageJson.version, releaseNotes);
+  });
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
 

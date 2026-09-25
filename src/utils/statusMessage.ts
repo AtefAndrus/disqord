@@ -71,6 +71,11 @@ export function buildStatusMessage(data: StatusMessageData): {
 
   if (data.settings) {
     const settings = data.settings;
+    container.addTextDisplayComponents((td) =>
+      td.setContent(
+        `**リリース通知先**\n${settings.releaseAnnounceChannelId ? `<#${settings.releaseAnnounceChannelId}>` : "通知しない"}`,
+      ),
+    );
     container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
     container.addTextDisplayComponents((td) =>
       td.setContent(`**デフォルトモデル**\n\`${settings.defaultModel}\``),

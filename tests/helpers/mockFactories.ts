@@ -64,6 +64,9 @@ export function createMockSettingsService(): ISettingsService {
     createMockGuildSettings({ guildId, ...overrides });
   return {
     getGuildSettings: mock((guildId: string) => Promise.resolve(settings(guildId))),
+    setReleaseAnnounceChannelId: mock((guildId: string, releaseAnnounceChannelId: string | null) =>
+      Promise.resolve(settings(guildId, { releaseAnnounceChannelId })),
+    ),
     setGuildModel: mock((guildId: string, check: ModelCheck) =>
       Promise.resolve(settings(guildId, { defaultModel: check.model })),
     ),
@@ -106,6 +109,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
   return {
     guildId: "test-guild-id",
     adminRoleId: null,
+    releaseAnnounceChannelId: null,
     allowedChannels: null,
     settingsVersion: 0,
     updatedBy: null,

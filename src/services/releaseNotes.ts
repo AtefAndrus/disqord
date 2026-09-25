@@ -18,7 +18,7 @@ export interface Version {
 
 export type ReleaseSection =
   | { version: Version; date: string; body: string; status: "ok" }
-  | { version: Version; status: "duplicate" };
+  | { version: Version; status: "duplicate" | "invalid" };
 
 export interface ReleaseNotes {
   /** Newest first, each version once. */
@@ -63,6 +63,7 @@ interface RawSection {
   version: Version;
   date: string;
   lines: string[];
+  invalid?: boolean;
 }
 
 /**
@@ -92,8 +93,10 @@ export function parseChangelog(text: string): ReleaseNotes {
     }
     if (ANY_SECTION_HEADING.test(line)) {
       const heading = SECTION_HEADING.exec(line);
-      const version = heading ? parseVersion(heading[1] ?? "") : undefined;
-      current = version && heading ? { version, date: heading[2] ?? "", lines: [] } : undefined;
+      const version = parseVersion(/^## \[(\d+\.\d+\.\d+)\]/.exec(line)?.[1] ?? "");
+      current = version
+        ? { version, date: heading?.[2] ?? "", lines: [], invalid: !heading }
+        : undefined;
       if (current) sections.push(current);
       continue;
     }
@@ -107,7 +110,9 @@ export function parseChangelog(text: string): ReleaseNotes {
       key,
       byVersion.has(key)
         ? { version: raw.version, status: "duplicate" }
-        : { version: raw.version, date: raw.date, body: trimBlankLines(raw.lines), status: "ok" },
+        : raw.invalid
+          ? { version: raw.version, status: "invalid" }
+          : { version: raw.version, date: raw.date, body: trimBlankLines(raw.lines), status: "ok" },
     );
   }
   const ordered = [...byVersion.values()]
@@ -137,8 +142,11 @@ export function releaseNoteTitle(version: Version): string {
  * goes through `toNoticePayload`, which fixes `allowedMentions` to none,
  * because CHANGELOG lines are PR titles that may contain `@everyone`.
  */
-export function buildReleaseNotePages(version: Version, body: string): InteractionReplyOptions[] {
-  const title = releaseNoteTitle(version);
+export function buildReleaseNotePages(
+  version: Version,
+  body: string,
+  title = releaseNoteTitle(version),
+): InteractionReplyOptions[] {
   const text = body === "" ? EMPTY_SECTION_TEXT : body;
   const chunks = splitTextIntoMessages(
     text,

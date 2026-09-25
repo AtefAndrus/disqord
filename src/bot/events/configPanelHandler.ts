@@ -8,6 +8,7 @@ import {
 import { SettingsConflictError, SettingsRuleError } from "../../errors";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
+import { resolveReleaseChannel } from "../../services/releaseAnnouncer";
 import {
   canManageGuildSettings,
   settingsActorFromInteraction,
@@ -85,6 +86,10 @@ export async function handleConfigPanelInteraction(
       else options.allowedPage = action.index;
     } else {
       const valid =
+        (action.action === "release" &&
+          interaction.isChannelSelectMenu() &&
+          interaction.values.length === 1) ||
+        (action.action === "release-clear" && interaction.isButton()) ||
         (action.action === "set" && interaction.isButton()) ||
         (action.action === "add" &&
           interaction.isChannelSelectMenu() &&
@@ -105,7 +110,25 @@ export async function handleConfigPanelInteraction(
         return;
       }
       const actorId = interaction.user.id;
-      if (action.action === "role" || action.action === "clear") {
+      if (action.action === "release" || action.action === "release-clear") {
+        let channelId: string | null = null;
+        if (action.action === "release" && interaction.isChannelSelectMenu()) {
+          await interaction.deferUpdate();
+          try {
+            if (!interaction.guild) throw new Error("サーバー情報を取得できませんでした。");
+            channelId = (await resolveReleaseChannel(interaction.guild, interaction.values[0])).id;
+          } catch (error) {
+            await notice(error instanceof Error ? error.message : "通知先を確認できませんでした。");
+            return;
+          }
+          const latest = await settingsService.getGuildSettings(guildId);
+          if (!canManageGuildSettings(settingsActorFromInteraction(interaction), latest)) {
+            await notice(settingsPermissionDeniedMessage(latest));
+            return;
+          }
+        }
+        await settingsService.setReleaseAnnounceChannelId(guildId, channelId, actorId);
+      } else if (action.action === "role" || action.action === "clear") {
         if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
           await notice("管理ロールの変更には「サーバーの管理」権限が必要です。");
           return;
