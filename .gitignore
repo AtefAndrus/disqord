@@ -8,4 +8,5 @@ data
 
 # UI preview tool (generated screenshots + downloaded font)
 .preview
+.e2e-failures
 scripts/preview/fonts

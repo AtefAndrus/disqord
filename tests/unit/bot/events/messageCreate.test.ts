@@ -35,6 +35,7 @@ interface ContainerComponentJSON {
   id?: number;
   type: number;
   content?: string;
+  divider?: boolean;
   file?: { url?: string };
   components?: ContainerComponentJSON[];
 }
@@ -1397,6 +1398,27 @@ describe("createMessageCreateHandler", () => {
     expect(text).toContain(
       "```ts\nconst a = 1;\n```\n\n-# 検索結果\n- [A (a.test)](<https://a.test/>)",
     );
+  });
+
+  test("最終描画で、回答の --- だけの行は divider 付きの Separator になり、テキストに残らない", async () => {
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn("前半\n\n---\n\n後半"),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const container = toContainerJSON(lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>));
+    const bodySeparators = container.components.filter((c) => c.type === 14 && c.divider !== false);
+    expect(bodySeparators).toHaveLength(1);
+    const texts = extractTextContents(container);
+    expect(texts.some((t) => /^\s*---\s*$/mu.test(t))).toBe(false);
+    expect(texts.join("\n")).toContain("前半");
+    expect(texts.join("\n")).toContain("後半");
   });
 
   test("停止（cancelled）時、受信済みテキストがあればfooterに受信文字数を含める", async () => {
