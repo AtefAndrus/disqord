@@ -205,8 +205,9 @@ export function buildConfigPanel(
             .setCustomId(
               configCustomId({ action: "set", page: entry.page, key, enabled: !enabled }),
             )
-            .setLabel(`${entry.label}を${enabled ? "無効" : "有効"}にする`)
-            .setStyle(enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
+            .setLabel(enabled ? "無効にする" : "有効にする")
+            // Green marks a setting that is on, so the panel reads as a column of states.
+            .setStyle(enabled ? ButtonStyle.Success : ButtonStyle.Secondary),
         ),
     );
   }

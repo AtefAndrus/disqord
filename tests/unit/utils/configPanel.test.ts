@@ -87,6 +87,22 @@ describe("config custom IDs", () => {
 });
 
 describe("config pages", () => {
+  test("a switch that is on offers a green 無効にする, one that is off a grey 有効にする", () => {
+    const json = JSON.stringify(
+      buildConfigPanel(
+        "features",
+        createMockGuildSettings({ webSearchEnabled: true, historyEnabled: false }),
+      ),
+    );
+    const buttons = [
+      ...json.matchAll(/"custom_id":"cfg:features:set:([^"]+)","label":"([^"]+)","style":(\d)/g),
+    ].map(([, id, label, style]) => ({ id, label, style: Number(style) }));
+    expect(buttons).toEqual([
+      { id: "web_search:off", label: "無効にする", style: 3 },
+      { id: "history:on", label: "有効にする", style: 2 },
+    ]);
+  });
+
   test("an untouched guild does not claim a last change", () => {
     const settings = createMockGuildSettings({ updatedBy: null, settingsVersion: 0 });
     expect(JSON.stringify(buildConfigPanel("response", settings))).not.toContain("最終変更");
