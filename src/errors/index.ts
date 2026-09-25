@@ -173,3 +173,13 @@ export class SettingsRuleError extends AppError {
     super(message, userMessage, 409);
   }
 }
+
+/**
+ * A settings change the bot refused because of what the user asked for or a
+ * concurrent edit, not because anything failed. Callers log it as a warning.
+ */
+export function isSettingsRejection(
+  error: unknown,
+): error is SettingsConflictError | SettingsRuleError {
+  return error instanceof SettingsConflictError || error instanceof SettingsRuleError;
+}

@@ -6,7 +6,7 @@ import type {
   Interaction,
 } from "discord.js";
 import packageJson from "../../../package.json";
-import { SettingsConflictError, SettingsRuleError } from "../../errors";
+import { isSettingsRejection } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
@@ -31,7 +31,7 @@ import { handleConfigPanelInteraction } from "./configPanelHandler";
  * failures keep their generic reply.
  */
 function settingsErrorContainer(error: unknown): ContainerBuilder | undefined {
-  return error instanceof SettingsConflictError || error instanceof SettingsRuleError
+  return isSettingsRejection(error)
     ? buildErrorContainer(error.userMessage, "設定エラー")
     : undefined;
 }
@@ -143,7 +143,9 @@ export function createInteractionCreateHandler(
       }
     } catch (error) {
       metrics.increment("command.errors");
-      logger.error("Command execution failed", { error });
+      (isSettingsRejection(error) ? logger.warn : logger.error)("Command execution failed", {
+        error,
+      });
       try {
         const reply =
           interaction.replied || interaction.deferred
@@ -258,7 +260,10 @@ async function handleButtonInteraction(
 
     await interaction.editReply(message);
   } catch (error) {
-    logger.error("Button interaction failed", { error, customId: interaction.customId });
+    (isSettingsRejection(error) ? logger.warn : logger.error)("Button interaction failed", {
+      error,
+      customId: interaction.customId,
+    });
     try {
       const reply =
         interaction.replied || interaction.deferred

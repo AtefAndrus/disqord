@@ -10,10 +10,11 @@
  * 1 件の fixture が失敗しても run 全体は止めず、結果に error を載せて続行する。
  */
 
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import type { IFixture } from "./fixtures";
-import { FONT_PATH, PREVIEW_DIR } from "./paths";
+import { FONT_PATH, FONTCONFIG_PATH, PREVIEW_DIR, SYSTEM_FONTCONFIG_PATH } from "./paths";
 import { messagesToMarkup } from "./payloadToMarkup";
 
 function pageHtml(markup: string, fontBase64: string): string {
@@ -90,7 +91,15 @@ export async function renderFixtures(
   const fontBase64 = Buffer.from(await Bun.file(FONT_PATH).arrayBuffer()).toString("base64");
   const bundleJs = await bundleComponents();
 
-  const browser = await chromium.launch({ args: ["--no-sandbox"] });
+  // See fonts.conf: system fonts under /mnt (Windows fonts on WSL) stall font fallback.
+  // fonts.conf builds on the system configuration, so without it Chromium keeps its own
+  // lookup rather than one that finds no fonts at all.
+  const browser = await chromium.launch({
+    args: ["--no-sandbox"],
+    env: existsSync(SYSTEM_FONTCONFIG_PATH)
+      ? { ...process.env, FONTCONFIG_FILE: FONTCONFIG_PATH }
+      : process.env,
+  });
   const context = await browser.newContext({ deviceScaleFactor: 2 });
   const results: IRenderResult[] = [];
 

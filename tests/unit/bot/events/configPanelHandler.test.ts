@@ -260,10 +260,20 @@ describe("config panel interactions", () => {
     const before = await service.getGuildSettings("guild");
     const press = interaction("cfg:response:set:free_only:on");
     const errorLog = spyOn(console, "error").mockImplementation(() => {});
+    const warnLog = spyOn(console, "warn").mockImplementation(() => {});
+    // spyOn returns the spy an earlier test in this file left on console, calls included.
+    errorLog.mockClear();
+    warnLog.mockClear();
     try {
       await handler(press as unknown as Interaction);
+      // A refused change is the user's input, not a fault: logged as a warning.
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(String(warnLog.mock.calls[0]?.[0])).toContain(
+        "[WARN] Config panel interaction failed",
+      );
     } finally {
       errorLog.mockRestore();
+      warnLog.mockRestore();
     }
     expect(await service.getGuildSettings("guild")).toEqual(before);
     expect(press.editReply).not.toHaveBeenCalled();
