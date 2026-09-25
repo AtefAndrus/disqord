@@ -1,6 +1,6 @@
 ---
 title: "/release-note"
-status: in-progress
+status: implemented
 priority: medium
 summary: "/release-note [version] で、CHANGELOG.md にある任意の版（省略時は動いている版）の変更点を表示する"
 ---
@@ -79,7 +79,7 @@ interface ReleaseNotes {
 - [x] `/release-note` と autocomplete を足す
 - [x] preview に表示を足す
 - [x] テスト（実際の CHANGELOG.md での切り出し、先頭の節、末尾の注釈とリンク定義、`[Unreleased]`、重複、CRLF、コードブロックの中の見出し、閉じていないコードブロック、空の節、`v` 付きの入力、prerelease の拒否、autocomplete の絞り込みと 25 件の上限、日本語の複数ページ、メンションの抑止、CHANGELOG が読めない場合）
-- [ ] 手動確認: 開発用のサーバーで `/release-note` と `/release-note version:1.5.0` を実行し、表示と複数ページを確かめる
+- [x] 手動確認: 開発用のサーバーで `/release-note` と `/release-note version:1.5.0` を実行し、表示と複数ページを確かめる
 - [ ] `docs/changes/release-note/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
