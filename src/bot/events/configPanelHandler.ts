@@ -6,7 +6,7 @@ import {
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
-import { AppError, SettingsConflictError, SettingsRuleError } from "../../errors";
+import { AppError, isSettingsRejection, SettingsConflictError } from "../../errors";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import { resolveReleaseChannel } from "../../services/releaseAnnouncer";
@@ -149,7 +149,12 @@ export async function handleConfigPanelInteraction(
             if (!interaction.guild) throw new Error("サーバー情報を取得できませんでした。");
             channelId = (await resolveReleaseChannel(interaction.guild, interaction.values[0])).id;
           } catch (error) {
-            logger.error("Release destination validation failed", { guildId, error });
+            // An AppError is the chosen channel failing a check (type, permissions,
+            // or a fetch the resolver already logged as an error); anything else is a fault.
+            (error instanceof AppError ? logger.warn : logger.error)(
+              "Release destination validation failed",
+              { guildId, error },
+            );
             await notice(
               error instanceof AppError ? error.userMessage : "通知先を確認できませんでした。",
             );
@@ -285,11 +290,10 @@ export async function handleConfigPanelInteraction(
       );
     }
   } catch (error) {
-    logger.error("Config panel interaction failed", { error, customId: interaction.customId });
-    await notice(
-      error instanceof SettingsConflictError || error instanceof SettingsRuleError
-        ? error.userMessage
-        : "操作中にエラーが発生しました。",
-    );
+    (isSettingsRejection(error) ? logger.warn : logger.error)("Config panel interaction failed", {
+      error,
+      customId: interaction.customId,
+    });
+    await notice(isSettingsRejection(error) ? error.userMessage : "操作中にエラーが発生しました。");
   }
 }
