@@ -16,7 +16,7 @@ FROM base AS release
 # Copy with correct ownership for bun user
 COPY --from=install --chown=bun:bun /temp/prod/node_modules node_modules
 COPY --chown=bun:bun src ./src
-COPY --chown=bun:bun package.json .
+COPY --chown=bun:bun package.json CHANGELOG.md ./
 
 # Create data directory for SQLite (volume mount target)
 RUN mkdir -p /app/data && chown -R bun:bun /app/data

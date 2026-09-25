@@ -8,6 +8,7 @@
 
 import type { ContainerBuilder } from "discord.js";
 import type { ModelDetails } from "../../src/services/modelService";
+import { buildReleaseNotePages } from "../../src/services/releaseNotes";
 import type { GuildSettings } from "../../src/types";
 import {
   badgeText,
@@ -70,6 +71,7 @@ const HELP_TEXT = `**使い方:**
 - \`/model set <model>\` - モデルを変更
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
+- \`/release-note [version]\` - リリースノート（変更点）を表示
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config web-search <on|off>\` - Web検索の切り替え
@@ -78,6 +80,15 @@ const HELP_TEXT = `**使い方:**
 - \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
 - \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
 - \`/config auto-reply list\` - 自動応答チャンネル一覧`;
+
+const RELEASE_NOTE_BODY = (() => {
+  const items = Array.from(
+    { length: 100 },
+    (_, i) =>
+      `- 会話履歴を Discord から読み、窓の外は tool で取りに行く変更の ${i + 1} 番目の項目 (#${100 + i})`,
+  );
+  return `### Added\n\n${items.slice(0, 70).join("\n")}\n\n### Fixed\n\n${items.slice(70).join("\n")}`;
+})();
 
 const LONG_ANSWER = (() => {
   const para =
@@ -155,6 +166,18 @@ export function buildFixtures(): IFixture[] {
     title: "/help",
     note: "成功通知用 Components V2 Container: 見出し、太字、インラインコード",
     messages: packContainers([buildSuccessNoticeContainer(HELP_TEXT, "DisQord ヘルプ")]),
+  });
+
+  // /release-note（長い節が 2 ページに分かれる）
+  fixtures.push({
+    id: "release-note",
+    title: "/release-note",
+    note: "buildReleaseNotePages: 先頭ページだけに見出し、残りは follow-up",
+    messages: packContainers(
+      buildReleaseNotePages({ major: 1, minor: 5, patch: 0 }, RELEASE_NOTE_BODY).flatMap(
+        (page) => (page.components ?? []) as ContainerBuilder[],
+      ),
+    ),
   });
 
   // 4. /model set 確認（モデル詳細 Container）

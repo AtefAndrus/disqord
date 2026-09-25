@@ -84,6 +84,7 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
 | `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
 | `/config auto-reply list` | 自動応答チャンネル一覧を表示 |
+| `/release-note` | リリースノート（変更点）を表示 |
 <!-- AUTO:COMMANDS:END -->
 
 ## ライセンス

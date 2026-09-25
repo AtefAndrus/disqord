@@ -1,6 +1,6 @@
 ---
 title: "ギルド設定変更の共通認可"
-status: in-progress
+status: implemented
 priority: high
 summary: "ギルド設定を変更できるかの判定を共通関数 canManageGuildSettings（ManageGuild または admin_role_id のロール）にまとめ、既存のすべての書き込みの入口に掛ける"
 ---
