@@ -325,6 +325,7 @@ describe("createMessageCreateHandler", () => {
       setShowLlmDetails: mock(() => Promise.resolve()),
       addAllowedChannel: mock(() => Promise.resolve()),
       removeAllowedChannel: mock(() => Promise.resolve(true)),
+      changeChannelList: mock(() => Promise.resolve(mockGuildSettings)),
       setAdminRoleId: mock(() => Promise.resolve(mockGuildSettings)),
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),

@@ -29,6 +29,35 @@ import {
 } from "../../utils/configPanel";
 import { logger } from "../../utils/logger";
 
+/**
+ * The channels the select showed as checked when it was pressed, read from the
+ * message itself: the difference between these and the submitted values is what
+ * this person changed, whatever else has changed in the database since.
+ */
+function shownChannels(interaction: ChannelSelectMenuInteraction): string[] | undefined {
+  const find = (node: unknown): string[] | undefined => {
+    if (typeof node !== "object" || node === null) return undefined;
+    const part = node as {
+      custom_id?: string;
+      default_values?: { id: string }[];
+      components?: unknown[];
+      accessory?: unknown;
+    };
+    if (part.custom_id === interaction.customId)
+      return (part.default_values ?? []).map((v) => v.id);
+    for (const child of [...(part.components ?? []), part.accessory]) {
+      const found = find(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  for (const component of interaction.message.components) {
+    const found = find(component.toJSON());
+    if (found) return found;
+  }
+  return undefined;
+}
+
 type ConfigInteraction =
   | ButtonInteraction
   | StringSelectMenuInteraction
@@ -91,6 +120,7 @@ export async function handleConfigPanelInteraction(
           interaction.values.length === 1) ||
         (action.action === "release-clear" && interaction.isButton()) ||
         (action.action === "set" && interaction.isButton()) ||
+        (action.action === "edit" && interaction.isChannelSelectMenu()) ||
         (action.action === "add" &&
           interaction.isChannelSelectMenu() &&
           interaction.values.length === 1) ||
@@ -189,6 +219,21 @@ export async function handleConfigPanelInteraction(
             await settingsService.setHistoryEnabled(guildId, enabled, actorId);
             break;
         }
+      } else if (action.action === "edit" && interaction.isChannelSelectMenu()) {
+        const shown = shownChannels(interaction);
+        if (!shown) {
+          await notice("この操作は無効です。`/config` から開き直してください。");
+          return;
+        }
+        await settingsService.changeChannelList(
+          guildId,
+          action.list,
+          {
+            added: interaction.values.filter((id) => !shown.includes(id)),
+            removed: shown.filter((id) => !interaction.values.includes(id)),
+          },
+          actorId,
+        );
       } else if (action.action === "add" && interaction.isChannelSelectMenu()) {
         if (action.list === "auto")
           await settingsService.addAutoReplyChannel(guildId, interaction.values[0], actorId);

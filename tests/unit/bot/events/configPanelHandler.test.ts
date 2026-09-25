@@ -18,6 +18,7 @@ import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
 import {
+  buildConfigPanel,
   CONFIG_SWITCHES,
   type ConfigSwitch,
   configCustomId,
@@ -37,6 +38,7 @@ function interaction(
     guild: null as unknown,
     user: { id: "actor" },
     values,
+    message: { components: [] as { toJSON(): unknown }[] },
     roles: new Map<string, { managed: boolean }>(),
     member: { roles },
     memberPermissions: new PermissionsBitField(manage ? [PermissionFlagsBits.ManageGuild] : []),
@@ -221,7 +223,8 @@ describe("config panel interactions", () => {
       const press = interaction(`cfg:channels:remove:${list}:1:1`, "string", [`${list}-25`]);
       await handler(press as unknown as Interaction);
       const json = JSON.stringify(press.update.mock.calls[0]?.[0]);
-      expect(json).toContain(`"value":"${list}-0"`);
+      // 25 left: that list moves to the single select, the other still pages.
+      expect(json).toContain(`"id":"${list}-0"`);
       expect(json).toContain(`"value":"${list === "auto" ? "allowed" : "auto"}-25"`);
     },
   );
@@ -232,6 +235,8 @@ describe("config panel interactions", () => {
     ["cfg:response:set:twitter_expand:off", "button"],
     ["cfg:features:set:web_search:on", "button"],
     ["cfg:features:set:history:on", "button"],
+    ["cfg:channels:edit:auto", "channel"],
+    ["cfg:channels:edit:allowed", "channel"],
     ["cfg:channels:add:auto", "channel"],
     ["cfg:channels:remove:auto", "string"],
     ["cfg:channels:add:allowed", "channel"],
@@ -457,5 +462,60 @@ describe("config panel interactions", () => {
     expect(JSON.stringify(press.reply.mock.calls[0][0])).toContain("/config");
     expect(flags(press.reply.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
     expect(press.update).not.toHaveBeenCalled();
+  });
+  describe("single channel select", () => {
+    async function pressShown(list: "auto" | "allowed", values: string[]) {
+      const press = interaction(`cfg:channels:edit:${list}`, "channel", values);
+      press.message.components = buildConfigPanel(
+        "channels",
+        await service.getGuildSettings("guild"),
+      ).components;
+      return press;
+    }
+    test("checking adds and unchecking removes, as one write by the actor", async () => {
+      await service.changeChannelList("guild", "auto", { added: ["a", "b"], removed: [] });
+      const press = await pressShown("auto", ["b", "c"]);
+      await handler(press as unknown as Interaction);
+      const settings = await service.getGuildSettings("guild");
+      expect(settings.autoReplyChannels).toEqual(["b", "c"]);
+      expect(settings.settingsVersion).toBe(2);
+      expect(settings.updatedBy).toBe("actor");
+      expect(press.update).toHaveBeenCalledTimes(1);
+    });
+    test("a channel someone else added after the panel was drawn is kept", async () => {
+      await service.changeChannelList("guild", "auto", { added: ["a"], removed: [] });
+      const press = await pressShown("auto", ["a", "c"]);
+      await service.addAutoReplyChannel("guild", "other");
+      await handler(press as unknown as Interaction);
+      expect((await service.getGuildSettings("guild")).autoReplyChannels).toEqual([
+        "a",
+        "other",
+        "c",
+      ]);
+    });
+    test("unchecking every allowed channel lifts the restriction", async () => {
+      await service.changeChannelList("guild", "allowed", { added: ["x"], removed: [] });
+      const press = await pressShown("allowed", []);
+      await handler(press as unknown as Interaction);
+      expect((await service.getGuildSettings("guild")).allowedChannels).toBeNull();
+    });
+    test("a select the message no longer carries changes nothing", async () => {
+      await service.changeChannelList("guild", "auto", { added: ["a"], removed: [] });
+      const before = await service.getGuildSettings("guild");
+      const press = interaction("cfg:channels:edit:auto", "channel", []);
+      await handler(press as unknown as Interaction);
+      expect(await service.getGuildSettings("guild")).toEqual(before);
+      expect(flags(press.reply.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
+    });
+    test("lists over 25 keep the add and remove pair instead", async () => {
+      const ids = Array.from({ length: 26 }, (_, i) => `c${i}`);
+      await service.changeChannelList("guild", "auto", { added: ids, removed: [] });
+      const json = JSON.stringify(
+        buildConfigPanel("channels", await service.getGuildSettings("guild")),
+      );
+      expect(json).not.toContain("cfg:channels:edit:auto");
+      expect(json).toContain("cfg:channels:add:auto");
+      expect(json).toContain("cfg:channels:edit:allowed");
+    });
   });
 });

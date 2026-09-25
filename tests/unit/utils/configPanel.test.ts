@@ -189,7 +189,7 @@ describe("config pages", () => {
           { autoPage: 1 },
         ).components[0].toJSON(),
       ),
-    ).toContain('"value":"channel-0"');
+    ).toContain('"id":"channel-0"');
   });
   test("empty lists explain defaults and parent permission avoids a false warning", () => {
     const settings = createMockGuildSettings();
