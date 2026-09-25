@@ -13,6 +13,8 @@ export type GuildSettingsChanges = Partial<
     | "reasoningDisplayEnabled"
     | "twitterExpandEnabled"
     | "historyEnabled"
+    | "allowedChannels"
+    | "adminRoleId"
   >
 >;
 
@@ -27,14 +29,18 @@ export interface IGuildSettingsRepository {
   update(
     guildId: GuildId,
     mutate: (current: GuildSettings) => GuildSettingsChanges,
+    updatedBy?: string,
   ): Promise<GuildSettings>;
   delete(guildId: GuildId): Promise<boolean>;
-  setHistoryEnabled(guildId: GuildId, enabled: boolean): Promise<GuildSettings>;
+  setHistoryEnabled(guildId: GuildId, enabled: boolean, updatedBy?: string): Promise<GuildSettings>;
 }
 
 interface RawGuildSettings {
   guildId: GuildId;
   adminRoleId: string | null;
+  allowedChannels: string | null;
+  settingsVersion: number;
+  updatedBy: string | null;
   defaultModel: string;
   freeModelsOnly: number;
   showLlmDetails: number;
@@ -61,6 +67,10 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
   return {
     guildId: raw.guildId,
     adminRoleId: raw.adminRoleId ?? null,
+    allowedChannels:
+      raw.allowedChannels === null ? null : parseAutoReplyChannels(raw.allowedChannels),
+    settingsVersion: raw.settingsVersion,
+    updatedBy: raw.updatedBy,
     defaultModel: raw.defaultModel,
     freeModelsOnly: Boolean(raw.freeModelsOnly),
     showLlmDetails: Boolean(raw.showLlmDetails ?? 1),
@@ -78,7 +88,8 @@ const SELECT_ROW = `SELECT guild_id as guildId, admin_role_id as adminRoleId, de
   show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
   web_search_enabled as webSearchEnabled, reasoning_display_enabled as reasoningDisplayEnabled,
   twitter_expand_enabled as twitterExpandEnabled,
-  history_enabled as historyEnabled,
+  history_enabled as historyEnabled, allowed_channels as allowedChannels,
+  settings_version as settingsVersion, updated_by as updatedBy,
   created_at as createdAt, updated_at as updatedAt
   FROM guild_settings WHERE guild_id = ?`;
 
@@ -96,6 +107,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     immediate: (
       guildId: GuildId,
       mutate: (current: GuildSettings) => GuildSettingsChanges,
+      updatedBy?: string,
     ) => GuildSettings;
   };
 
@@ -104,7 +116,11 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     private readonly defaultModel: string,
   ) {
     this.updateInTransaction = this.db.transaction(
-      (guildId: GuildId, mutate: (current: GuildSettings) => GuildSettingsChanges) => {
+      (
+        guildId: GuildId,
+        mutate: (current: GuildSettings) => GuildSettingsChanges,
+        updatedBy?: string,
+      ): GuildSettings => {
         this.insertDefaultRow(guildId);
         const current = this.readRow(guildId);
         if (!current) {
@@ -112,7 +128,13 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         }
         const changes = mutate(current);
         if (Object.keys(changes).length === 0) return current;
-        const next: GuildSettings = { ...current, ...changes, updatedAt: new Date().toISOString() };
+        const next: GuildSettings = {
+          ...current,
+          ...changes,
+          updatedAt: new Date().toISOString(),
+          settingsVersion: current.settingsVersion + 1,
+          updatedBy: updatedBy ?? null,
+        };
         this.writeRow(next);
         return next;
       },
@@ -126,8 +148,9 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
   async update(
     guildId: GuildId,
     mutate: (current: GuildSettings) => GuildSettingsChanges,
+    updatedBy?: string,
   ): Promise<GuildSettings> {
-    return this.updateInTransaction.immediate(guildId, mutate);
+    return this.updateInTransaction.immediate(guildId, mutate, updatedBy);
   }
 
   async delete(guildId: GuildId): Promise<boolean> {
@@ -135,8 +158,12 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
     return result.changes > 0;
   }
 
-  async setHistoryEnabled(guildId: GuildId, enabled: boolean): Promise<GuildSettings> {
-    return this.updateInTransaction.immediate(guildId, () => ({ historyEnabled: enabled }));
+  async setHistoryEnabled(
+    guildId: GuildId,
+    enabled: boolean,
+    updatedBy?: string,
+  ): Promise<GuildSettings> {
+    return this.update(guildId, () => ({ historyEnabled: enabled }), updatedBy);
   }
 
   private readRow(guildId: GuildId): GuildSettings | null {
@@ -164,7 +191,8 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         `UPDATE guild_settings
          SET default_model = ?, free_models_only = ?, show_llm_details = ?,
              auto_reply_channels = ?, web_search_enabled = ?, reasoning_display_enabled = ?,
-             twitter_expand_enabled = ?, history_enabled = ?, updated_at = ?
+             twitter_expand_enabled = ?, history_enabled = ?, updated_at = ?,
+             allowed_channels = ?, admin_role_id = ?, settings_version = ?, updated_by = ?
          WHERE guild_id = ?`,
       )
       .run(
@@ -177,6 +205,10 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         settings.twitterExpandEnabled ? 1 : 0,
         settings.historyEnabled ? 1 : 0,
         settings.updatedAt,
+        settings.allowedChannels === null ? null : JSON.stringify(settings.allowedChannels),
+        settings.adminRoleId,
+        settings.settingsVersion,
+        settings.updatedBy,
         settings.guildId,
       );
   }

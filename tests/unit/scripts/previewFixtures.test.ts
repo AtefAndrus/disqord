@@ -84,22 +84,16 @@ describe("プレビュー fixture", () => {
     expect(section.accessory.type).toBe(ComponentType.Button);
   });
 
-  test("/status が V2 Container と設定ボタンを描画する", () => {
+  test("/status が設定の要約とパネルを開くボタンを描画する", () => {
     const fixture = findFixture("status-guild");
     const component = fixture.messages[0]?.components[0];
     if (component?.type !== ComponentType.Container) throw new Error("not a Container");
     const sections = component.components.filter((child) => child.type === ComponentType.Section);
 
     expect(textsOf(fixture, 0)[0]).toContain("## ステータス");
-    expect(sections).toHaveLength(6);
-    expect(
-      sections.some(
-        (section) =>
-          section.accessory.type === ComponentType.Button &&
-          "custom_id" in section.accessory &&
-          section.accessory.custom_id === "status_set:web_search:off",
-      ),
-    ).toBe(true);
+    expect(sections).toHaveLength(0);
+    expect(JSON.stringify(component)).toContain("cfg:open");
+    expect(JSON.stringify(component)).not.toContain("status_set:");
   });
 
   test("/help と /model list の TextDisplay は4,000文字以内で描画される", () => {
@@ -128,16 +122,14 @@ describe("プレビュー fixture", () => {
 
   test("error and success notices use Containers with their expected content", () => {
     const errorMarkup = messagesToMarkup(findFixture("error").messages);
-    const successMarkup = messagesToMarkup(findFixture("config-confirm").messages);
+    const successMarkup = messagesToMarkup(findFixture("auto-reply-list").messages);
 
     expect(errorMarkup).toContain('<discord-header level="2">');
     expect(errorMarkup).toContain("エラー</discord-header>");
     expect(errorMarkup).toContain("OpenRouter API がタイムアウトしました。");
     expect(successMarkup).toContain(
-      '<discord-header level="2">無料モデル限定設定</discord-header>',
+      '<discord-header level="2">自動応答チャンネル一覧</discord-header>',
     );
-    expect(successMarkup).toContain(
-      "無料モデル限定を <discord-bold>有効</discord-bold> にしました。",
-    );
+    expect(successMarkup).toContain("<discord-bold>自動応答チャンネル:</discord-bold>");
   });
 });

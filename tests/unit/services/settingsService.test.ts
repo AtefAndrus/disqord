@@ -69,7 +69,7 @@ describe("SettingsService", () => {
       await service.setTwitterExpandEnabled("g-twitter", false);
       await service.setGuildModel("g-model", PAID);
       await service.addAutoReplyChannel("g-ch", "c1");
-      expect(await service.toggleShowLlmDetails("g-toggle")).toBe(false);
+      await service.setShowLlmDetails("g-toggle", false);
       await service.setFreeModelsOnly("g-free", true, { model: DEFAULT_MODEL, isFree: true });
 
       expect((await repo.findByGuildId("g-llm"))?.showLlmDetails).toBe(false);
@@ -106,35 +106,6 @@ describe("SettingsService", () => {
         defaultModel: PAID.model,
       });
     });
-  });
-
-  describe("トグルは保存された値を反転する", () => {
-    test.each([true, false])("LLM 詳細表示を %p から 2 回同時に押すと元に戻る", async (initial) => {
-      await service.setShowLlmDetails(G, initial);
-
-      const results = await Promise.all([
-        service.toggleShowLlmDetails(G),
-        service.toggleShowLlmDetails(G),
-      ]);
-
-      expect(results).toEqual([!initial, initial]);
-      expect((await repo.findByGuildId(G))?.showLlmDetails).toBe(initial);
-    });
-
-    test.each([true, false])(
-      "無料モデル限定を %p から 2 回同時に押すと元に戻る",
-      async (initial) => {
-        await service.setGuildModel(G, FREE);
-        await service.setFreeModelsOnly(G, initial, FREE);
-
-        await Promise.all([
-          service.toggleFreeModelsOnly(G, FREE),
-          service.toggleFreeModelsOnly(G, FREE),
-        ]);
-
-        expect((await repo.findByGuildId(G))?.freeModelsOnly).toBe(initial);
-      },
-    );
   });
 
   describe("自動応答チャンネル", () => {

@@ -9,7 +9,7 @@
 <!-- AUTO:PROGRESS:START -->
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
-| [設定パネル（/config の再構成）](changes/config-panel/design.md) | 高 | planned | /config をサブコマンドの列から 1 つのコマンドにし、カテゴリ別の設定パネルと modal で設定を変える。チャンネル制限と管理ロールもここで設定できるようにする |
+| [設定パネル（/config の再構成）](changes/config-panel/design.md) | 高 | in-progress | /config をサブコマンドの列から 1 つのコマンドにし、カテゴリ別の設定パネルと modal で設定を変える。チャンネル制限と管理ロールもここで設定できるようにする |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |

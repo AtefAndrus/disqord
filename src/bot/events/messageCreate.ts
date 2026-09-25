@@ -236,6 +236,13 @@ export function createMessageCreateHandler(
 
     // Guild設定を取得して応答判定
     const settings = await settingsService.getGuildSettings(message.guild.id);
+    if (
+      settings.allowedChannels !== null &&
+      !settings.allowedChannels.includes(message.channel.id)
+    ) {
+      const parentId = message.channel.isThread() ? message.channel.parentId : null;
+      if (!parentId || !settings.allowedChannels.includes(parentId)) return;
+    }
     const { respond, isMention } = shouldRespond(message, botId, settings.autoReplyChannels);
 
     if (!respond) {

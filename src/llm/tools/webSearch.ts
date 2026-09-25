@@ -45,7 +45,7 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
 }
 
 /**
- * How searches are capped and billed, for the `/config web-search on` reply.
+ * How searches are capped and billed, shown when enabling web search in the config panel.
  * OpenRouter forwards `max_uses` to a provider's native search only for
  * Anthropic, and other native providers ignore it (WebSearchServerToolConfig
  * in openapi.json). `auto` uses native search when the model's provider has

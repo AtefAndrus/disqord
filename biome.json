@@ -16,6 +16,14 @@
     }
   },
   "files": {
-    "includes": ["**", "!!dist", "!!data", "!!node_modules", "!!.claude"]
+    "includes": [
+      "**",
+      "!!dist",
+      "!!data",
+      "!!node_modules",
+      "!!.claude",
+      "!!.preview",
+      "!!.e2e-failures"
+    ]
   }
 }

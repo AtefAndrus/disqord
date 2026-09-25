@@ -70,9 +70,12 @@ export function createMockSettingsService(): ISettingsService {
     setFreeModelsOnly: mock((guildId: string, freeModelsOnly: boolean, _check?: ModelCheck) =>
       Promise.resolve(settings(guildId, { freeModelsOnly })),
     ),
-    toggleFreeModelsOnly: mock((_guildId: string, _check: ModelCheck) => Promise.resolve(true)),
     setShowLlmDetails: mock((_guildId: string, _showLlmDetails: boolean) => Promise.resolve()),
-    toggleShowLlmDetails: mock((_guildId: string) => Promise.resolve(true)),
+    addAllowedChannel: mock(() => Promise.resolve()),
+    removeAllowedChannel: mock(() => Promise.resolve(true)),
+    setAdminRoleId: mock((guildId: string, adminRoleId: string | null) =>
+      Promise.resolve(settings(guildId, { adminRoleId })),
+    ),
     addAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve()),
     removeAutoReplyChannel: mock((_guildId: string, _channelId: string) => Promise.resolve(true)),
     setWebSearchEnabled: mock((guildId: string, webSearchEnabled: boolean) =>
@@ -103,6 +106,9 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
   return {
     guildId: "test-guild-id",
     adminRoleId: null,
+    allowedChannels: null,
+    settingsVersion: 0,
+    updatedBy: null,
     defaultModel: "test-model:fixture",
     freeModelsOnly: false,
     showLlmDetails: true,

@@ -17,39 +17,8 @@ interface StatusMessageData {
   version: string;
 }
 
-/** The on/off settings `/status` can switch. The key is part of the button's custom ID. */
-export const STATUS_SWITCHES = [
-  "free_only",
-  "llm_details",
-  "web_search",
-  "twitter_expand",
-  "history",
-  "reasoning_display",
-] as const;
-export type StatusSwitch = (typeof STATUS_SWITCHES)[number];
-
-const STATUS_SET_PREFIX = "status_set:";
-
-/**
- * The button names the value it sets rather than "toggle", so two quick
- * presses both land on that value instead of flipping it back.
- */
-export function statusSetCustomId(key: StatusSwitch, enabled: boolean): string {
-  return `${STATUS_SET_PREFIX}${key}:${enabled ? "on" : "off"}`;
-}
-
-export function parseStatusSetCustomId(
-  customId: string,
-): { key: StatusSwitch; enabled: boolean } | undefined {
-  if (!customId.startsWith(STATUS_SET_PREFIX)) return undefined;
-  const [key, value] = customId.slice(STATUS_SET_PREFIX.length).split(":");
-  if (!STATUS_SWITCHES.includes(key as StatusSwitch)) return undefined;
-  if (value !== "on" && value !== "off") return undefined;
-  return { key: key as StatusSwitch, enabled: value === "on" };
-}
-
 interface SwitchRow {
-  key: StatusSwitch;
+  key: string;
   label: string;
   enabled: boolean;
   /** Shown after 有効 when the setting is on. */
@@ -108,16 +77,7 @@ export function buildStatusMessage(data: StatusMessageData): {
     );
     for (const row of switchRows(settings, data.webSearchEngine)) {
       const state = row.enabled ? `有効${row.detail ? `（${row.detail}）` : ""}` : "無効";
-      container.addSectionComponents((section) =>
-        section
-          .addTextDisplayComponents((td) => td.setContent(`**${row.label}**\n${state}`))
-          .setButtonAccessory(
-            new ButtonBuilder()
-              .setCustomId(statusSetCustomId(row.key, !row.enabled))
-              .setLabel(row.enabled ? "無効にする" : "有効にする")
-              .setStyle(row.enabled ? ButtonStyle.Secondary : ButtonStyle.Success),
-          ),
-      );
+      container.addTextDisplayComponents((td) => td.setContent(`**${row.label}**\n${state}`));
     }
     container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
     container.addActionRowComponents(
@@ -127,8 +87,8 @@ export function buildStatusMessage(data: StatusMessageData): {
           .setLabel("モデルキャッシュ更新")
           .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
-          .setCustomId("status_auto_reply_list")
-          .setLabel("自動応答チャンネル一覧")
+          .setCustomId("cfg:open")
+          .setLabel("設定を開く")
           .setStyle(ButtonStyle.Secondary),
       ),
     );

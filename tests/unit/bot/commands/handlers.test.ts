@@ -12,7 +12,7 @@ import { createCommandHandlers } from "../../../../src/bot/commands/handlers";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
 import { SettingsRuleError } from "../../../../src/errors";
-import { type IModelService, ModelService } from "../../../../src/services/modelService";
+import { ModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
 import {
   createMockGuildSettings,
@@ -31,6 +31,7 @@ function createInteraction(model?: string): {
   const editReply = mock(() => Promise.resolve());
   const interaction = {
     guildId: "guild-1",
+    user: { id: "actor-1" },
     member: null,
     memberPermissions: {
       has: mock((permission: bigint) => permission === PermissionFlagsBits.ManageGuild),
@@ -69,6 +70,20 @@ function repliedText(reply: ReturnType<typeof mock>): string {
 }
 
 describe("Components V2 command replies", () => {
+  test("/config has no subcommands or default permission and opens publicly", async () => {
+    expect(configCommand.toJSON().options).toEqual([]);
+    expect(configCommand.toJSON().default_member_permissions).toBeUndefined();
+    const handlers = createCommandHandlers(
+      createMockLLMClient(),
+      createMockSettingsService(),
+      new ModelService(createMockLLMClient()),
+      "perplexity",
+    );
+    const { interaction, reply } = createInteraction();
+    await handlers.config(interaction);
+    expect((reply.mock.calls[0][0] as { flags: number }).flags).toBe(MessageFlags.IsComponentsV2);
+    expect(JSON.stringify(reply.mock.calls[0][0])).toContain("cfg:page");
+  });
   test("/help と /model list は4,000文字以内のContainerで返信する", async () => {
     const llmClient = createMockLLMClient();
     const handlers = createCommandHandlers(
@@ -129,103 +144,6 @@ describe("Components V2 command replies", () => {
     expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
     expect(payload.embeds).toEqual([]);
   });
-
-  test("auto-reply の追加・未登録削除・一覧もComponents V2で返信する", async () => {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    settingsService.removeAutoReplyChannel = mock(() => Promise.resolve(false));
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    const add = createInteraction();
-    Object.assign(add.interaction.options, { getChannel: mock(() => ({ id: "channel-1" })) });
-    const remove = createInteraction("channel-1");
-    const list = createInteraction();
-
-    await handlers.configAutoReplyAdd(add.interaction);
-    await handlers.configAutoReplyRemove(remove.interaction);
-    await handlers.configAutoReplyList(list.interaction);
-
-    expect(repliedText(add.reply)).toContain("<#channel-1> を自動応答チャンネルに追加しました。");
-    expect(repliedText(remove.reply)).toContain(
-      "<#channel-1> は自動応答チャンネルに設定されていません。",
-    );
-    expect(repliedText(list.reply)).toContain("自動応答チャンネルは設定されていません。");
-  });
-});
-
-describe("config settings authorization", () => {
-  type ConfigWriteHandlerName =
-    | "configFreeOnly"
-    | "configLlmDetails"
-    | "configWebSearch"
-    | "configReasoningDisplay"
-    | "configTwitterExpand"
-    | "configHistory"
-    | "configAutoReplyAdd"
-    | "configAutoReplyRemove";
-  const writeHandlers: ConfigWriteHandlerName[] = [
-    "configFreeOnly",
-    "configLlmDetails",
-    "configWebSearch",
-    "configReasoningDisplay",
-    "configTwitterExpand",
-    "configHistory",
-    "configAutoReplyAdd",
-    "configAutoReplyRemove",
-  ];
-
-  test.each(writeHandlers)(
-    "%s rejects an unauthorized member before writes or model lookup",
-    async (name) => {
-      const llmClient = createMockLLMClient();
-      const settingsService = createMockSettingsService();
-      const modelService = {
-        isFreeModel: mock(() => Promise.resolve(true)),
-      } as unknown as IModelService;
-      const handlers = createCommandHandlers(
-        llmClient,
-        settingsService,
-        modelService,
-        "perplexity",
-      );
-      const value = name === "configAutoReplyRemove" ? "channel-1" : "on";
-      const { interaction, reply } = createInteraction(value);
-      Object.assign(interaction, {
-        member: null,
-        memberPermissions: { has: mock(() => false) },
-      });
-      if (name === "configAutoReplyAdd") {
-        Object.assign(interaction.options, { getChannel: mock(() => ({ id: "channel-1" })) });
-      }
-
-      await handlers[name](interaction);
-
-      for (const write of [
-        settingsService.setFreeModelsOnly,
-        settingsService.toggleFreeModelsOnly,
-        settingsService.setShowLlmDetails,
-        settingsService.toggleShowLlmDetails,
-        settingsService.addAutoReplyChannel,
-        settingsService.removeAutoReplyChannel,
-        settingsService.setWebSearchEnabled,
-        settingsService.setReasoningDisplayEnabled,
-        settingsService.setTwitterExpandEnabled,
-        settingsService.setHistoryEnabled,
-      ]) {
-        expect(write).not.toHaveBeenCalled();
-      }
-      expect(modelService.isFreeModel).not.toHaveBeenCalled();
-      expect(llmClient.listModelsWithPricing).not.toHaveBeenCalled();
-      expect(repliedText(reply)).toContain("## ⚠️ 設定の変更");
-      expect(repliedText(reply)).toContain("この設定の変更には「サーバーの管理」権限が必要です。");
-      const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-      expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
-    },
-  );
 });
 
 describe("model command handlers", () => {
@@ -255,10 +173,14 @@ describe("model command handlers", () => {
     expect(currentPayload.embeds).toEqual([]);
     expect(current.deferReply).toHaveBeenCalledTimes(1);
     expect(current.reply).not.toHaveBeenCalled();
-    expect(settingsService.setGuildModel).toHaveBeenCalledWith("guild-1", {
-      model: "model-1",
-      isFree: true,
-    });
+    expect(settingsService.setGuildModel).toHaveBeenCalledWith(
+      "guild-1",
+      {
+        model: "model-1",
+        isFree: true,
+      },
+      "actor-1",
+    );
   });
 
   test("詳細取得不能でもcurrentのモデルページURLを表示する", async () => {
@@ -292,277 +214,6 @@ describe("model command handlers", () => {
     await handlers.modelCurrent(current.interaction);
 
     expect(repliedText(current.editReply)).toContain("<https://openrouter.ai/fallback/model>");
-  });
-});
-
-describe("config web-search handler", () => {
-  function createWebSearchInteraction(
-    value: "on" | "off",
-    hasManageGuild: boolean,
-  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
-    const { interaction, reply } = createInteraction(value);
-    Object.assign(interaction, {
-      memberPermissions: {
-        has: mock((permission: bigint) =>
-          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
-        ),
-      },
-    });
-    return { interaction, reply };
-  }
-
-  function createHandlers(): {
-    handlers: ReturnType<typeof createCommandHandlers>;
-    settingsService: ReturnType<typeof createMockSettingsService>;
-  } {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    return { handlers, settingsService };
-  }
-
-  test("サーバーの管理権限があれば有効化し、エンジンと料金の確認先を伝える", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createWebSearchInteraction("on", true);
-
-    await handlers.configWebSearch(interaction);
-
-    expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", true);
-    const description = repliedText(reply);
-    expect(description).toContain("perplexity");
-    expect(description).toContain("server-tools/web-search");
-  });
-
-  test("サーバーの管理権限があれば無効化する", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction } = createWebSearchInteraction("off", true);
-
-    await handlers.configWebSearch(interaction);
-
-    expect(settingsService.setWebSearchEnabled).toHaveBeenCalledWith("guild-1", false);
-  });
-
-  test("サーバーの管理権限がなければ設定を変えず、本人にだけ断る", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createWebSearchInteraction("on", false);
-
-    await handlers.configWebSearch(interaction);
-
-    expect(settingsService.setWebSearchEnabled).not.toHaveBeenCalled();
-    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
-    expect(repliedText(reply)).toContain("サーバーの管理");
-  });
-});
-
-describe("config reasoning-display handler", () => {
-  function createReasoningInteraction(
-    value: "on" | "off",
-    hasManageGuild: boolean,
-  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
-    const { interaction, reply } = createInteraction(value);
-    Object.assign(interaction, {
-      memberPermissions: {
-        has: mock((permission: bigint) =>
-          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
-        ),
-      },
-    });
-    return { interaction, reply };
-  }
-
-  function createHandlers(): {
-    handlers: ReturnType<typeof createCommandHandlers>;
-    settingsService: ReturnType<typeof createMockSettingsService>;
-  } {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    return { handlers, settingsService };
-  }
-
-  test.each(["on", "off"] as const)("ManageGuild の設定を %s に切り替える", async (value) => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createReasoningInteraction(value, true);
-
-    await handlers.configReasoningDisplay(interaction);
-
-    expect(settingsService.setReasoningDisplayEnabled).toHaveBeenCalledWith(
-      "guild-1",
-      value === "on",
-    );
-    expect(repliedText(reply)).toContain(value === "on" ? "有効" : "無効");
-  });
-
-  test("ManageGuild が無ければ設定を変えず、ephemeral error を返す", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createReasoningInteraction("on", false);
-
-    await handlers.configReasoningDisplay(interaction);
-
-    expect(settingsService.setReasoningDisplayEnabled).not.toHaveBeenCalled();
-    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
-  });
-
-  test("/config に reasoning-display subcommand を登録する", () => {
-    const subcommands = configCommand.toJSON().options ?? [];
-    expect(
-      subcommands.some((option) => "name" in option && option.name === "reasoning-display"),
-    ).toBe(true);
-  });
-});
-
-describe("config twitter-expand handler", () => {
-  function createTwitterExpandInteraction(
-    value: "on" | "off",
-    hasManageGuild: boolean,
-  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
-    const { interaction, reply } = createInteraction(value);
-    Object.assign(interaction, {
-      memberPermissions: {
-        has: mock((permission: bigint) =>
-          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
-        ),
-      },
-    });
-    return { interaction, reply };
-  }
-
-  function createHandlers(): {
-    handlers: ReturnType<typeof createCommandHandlers>;
-    settingsService: ReturnType<typeof createMockSettingsService>;
-  } {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    return { handlers, settingsService };
-  }
-
-  test("サーバーの管理権限があれば有効化する", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createTwitterExpandInteraction("on", true);
-
-    await handlers.configTwitterExpand(interaction);
-
-    expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", true);
-    expect(repliedText(reply)).toContain("ツイート展開を **有効** にしました。");
-  });
-
-  test("サーバーの管理権限があれば無効化する", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction } = createTwitterExpandInteraction("off", true);
-
-    await handlers.configTwitterExpand(interaction);
-
-    expect(settingsService.setTwitterExpandEnabled).toHaveBeenCalledWith("guild-1", false);
-  });
-
-  test("サーバーの管理権限がなければ設定を変えず、本人にだけ断る", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createTwitterExpandInteraction("on", false);
-
-    await handlers.configTwitterExpand(interaction);
-
-    expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
-    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
-    expect(repliedText(reply)).toContain("サーバーの管理");
-  });
-
-  test("DMでは設定を変えず、サーバー内限定のエラーを返す", async () => {
-    const { handlers, settingsService } = createHandlers();
-    const { interaction, reply } = createTwitterExpandInteraction("on", true);
-    Object.assign(interaction, { guildId: null });
-
-    await handlers.configTwitterExpand(interaction);
-
-    expect(settingsService.setTwitterExpandEnabled).not.toHaveBeenCalled();
-    expect(repliedText(reply)).toContain("サーバー内でのみ");
-  });
-});
-
-describe("config history handler", () => {
-  function createHistoryInteraction(
-    value: "on" | "off",
-    hasManageGuild: boolean,
-  ): { interaction: ChatInputCommandInteraction; reply: ReturnType<typeof mock> } {
-    const { interaction, reply } = createInteraction(value);
-    Object.assign(interaction, {
-      memberPermissions: {
-        has: mock((permission: bigint) =>
-          hasManageGuild ? permission === PermissionFlagsBits.ManageGuild : false,
-        ),
-      },
-    });
-    return { interaction, reply };
-  }
-
-  test("on stores the setting and explains storage, retention, and online deletion limits", async () => {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    const { interaction, reply } = createHistoryInteraction("on", true);
-
-    await handlers.configHistory(interaction);
-
-    expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", true);
-    expect(repliedText(reply)).toContain("会話履歴を **有効** にしました。");
-  });
-
-  test("off disables history without claiming that stored history was removed", async () => {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    const { interaction, reply } = createHistoryInteraction("off", true);
-
-    await handlers.configHistory(interaction);
-
-    expect(settingsService.setHistoryEnabled).toHaveBeenCalledWith("guild-1", false);
-    expect(repliedText(reply)).toContain("会話履歴を **無効** にしました。");
-  });
-
-  test("without ManageGuild it replies ephemerally and does not change the setting", async () => {
-    const llmClient = createMockLLMClient();
-    const settingsService = createMockSettingsService();
-    const handlers = createCommandHandlers(
-      llmClient,
-      settingsService,
-      new ModelService(llmClient),
-      "perplexity",
-    );
-    const { interaction, reply } = createHistoryInteraction("on", false);
-
-    await handlers.configHistory(interaction);
-
-    expect(settingsService.setHistoryEnabled).not.toHaveBeenCalled();
-    const payload = reply.mock.calls[0]?.[0] as { flags?: number };
-    expect(payload.flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
   });
 });
 

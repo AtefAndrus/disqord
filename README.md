@@ -56,13 +56,13 @@ docker run -d \
 <!-- AUTO:ENV_VARS:END -->
 
 ツイート展開は、投稿内で検出したツイート ID を `FXTWITTER_API_BASE` のホストへ送信して本文を取得する。
-ギルド単位で `/config twitter-expand off` を実行すると無効にできる。
+`/config` の「応答」ページで「ツイート展開を無効にする」を押すと、ギルド単位で無効にできる。
 `FXTWITTER_API_BASE` を変更すれば、自ホストした fxtwitter インスタンスを取得先に指定できる。
 
-`/config history on` を有効にすると、Botは同じチャンネルの直近の会話をDiscordから読み取り、窓に入った発言、reply先、および必要に応じてtoolで取得した過去の発言や添付ファイルをLLMへ送る。
+`/config` の「機能」ページで会話履歴を有効にすると、Botは同じチャンネルの直近の会話をDiscordから読み取り、窓に入った発言、reply先、および必要に応じてtoolで取得した過去の発言や添付ファイルをLLMへ送る。
 窓とtoolが参照できるのは現在の発言から24時間以内の範囲であり、添付ファイルの中身は質問への応答中だけ取得して次の発言へ持ち越さない。
 Discord上で既にLLMへ送られた内容は、後から発言や添付ファイルを削除しても送信済みの状態を取り消せない。
-`/config history off` にすると、以後の発言について過去の会話をLLMへ送らない。
+同じページで会話履歴を無効にすると、以後の発言について過去の会話をLLMへ送らない。
 
 ## コマンド一覧
 
@@ -75,15 +75,7 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | `/model set <model>` | デフォルトモデルを変更 |
 | `/model list` | OpenRouterのモデル一覧ページへ |
 | `/model refresh` | モデルキャッシュを更新 |
-| `/config free-only <enabled>` | 無料モデル限定の切り替え |
-| `/config llm-details <enabled>` | LLM詳細情報表示の切り替え |
-| `/config web-search <enabled>` | Web検索の切り替え（検索ごとに費用が発生） |
-| `/config reasoning-display <enabled>` | 推論内容の表示切り替え |
-| `/config twitter-expand <enabled>` | ツイート展開の切り替え |
-| `/config history <enabled>` | 会話履歴の切り替え |
-| `/config auto-reply add <channel>` | 自動応答チャンネルを追加 |
-| `/config auto-reply remove <channel>` | 自動応答チャンネルを削除 |
-| `/config auto-reply list` | 自動応答チャンネル一覧を表示 |
+| `/config` | 設定パネルを開く |
 | `/release-note` | リリースノート（変更点）を表示 |
 <!-- AUTO:COMMANDS:END -->
 

@@ -6,6 +6,9 @@ export type MessageId = string;
 export interface GuildSettings {
   guildId: GuildId;
   adminRoleId: string | null;
+  allowedChannels: ChannelId[] | null;
+  settingsVersion: number;
+  updatedBy: string | null;
   defaultModel: string;
   freeModelsOnly: boolean;
   showLlmDetails: boolean;

@@ -21,6 +21,45 @@ describe("GuildSettingsRepository", () => {
   });
 
   describe("findByGuildId", () => {
+    test("version and actor change only for nonempty mutations, including history", async () => {
+      const initial = await repo.update("guild", () => ({}));
+      expect(initial.settingsVersion).toBe(0);
+      expect(initial.updatedBy).toBeNull();
+      expect(initial.allowedChannels).toBeNull();
+      await repo.update(
+        "guild",
+        () => ({ allowedChannels: ["channel"], adminRoleId: "role" }),
+        "actor",
+      );
+      const changed = await repo.findByGuildId("guild");
+      if (!changed) throw new Error("missing guild");
+      expect(changed).toMatchObject({
+        settingsVersion: 1,
+        updatedBy: "actor",
+        allowedChannels: ["channel"],
+        adminRoleId: "role",
+      });
+      expect(await repo.update("guild", () => ({}), "ignored")).toEqual(changed);
+      expect(await repo.setHistoryEnabled("guild", true, "history-actor")).toMatchObject({
+        settingsVersion: 2,
+        updatedBy: "history-actor",
+        historyEnabled: true,
+      });
+      expect(await repo.update("guild", () => ({ showLlmDetails: false }))).toMatchObject({
+        settingsVersion: 3,
+        updatedBy: null,
+      });
+      await expect(
+        repo.update(
+          "guild",
+          () => {
+            throw new Error("rejected");
+          },
+          "bad",
+        ),
+      ).rejects.toThrow("rejected");
+      expect((await repo.findByGuildId("guild"))?.settingsVersion).toBe(3);
+    });
     test("存在しないギルドIDはnullを返す", async () => {
       const result = await repo.findByGuildId("non-existent-guild");
       expect(result).toBeNull();

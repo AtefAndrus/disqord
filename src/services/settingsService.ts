@@ -2,11 +2,7 @@ import type { IGuildSettingsRepository } from "../db/repositories/guildSettings"
 import { SettingsConflictError, SettingsRuleError } from "../errors";
 import type { GuildSettings } from "../types";
 
-/**
- * What the caller learned about a model before saving. Model metadata comes
- * from the OpenRouter API, so it is fetched outside the settings transaction;
- * the save then checks it against the settings as stored.
- */
+/** Model metadata is fetched outside the transaction, then checked against the stored model. */
 export interface ModelCheck {
   model: string;
   isFree: boolean;
@@ -14,27 +10,31 @@ export interface ModelCheck {
 
 export interface ISettingsService {
   getGuildSettings(guildId: string): Promise<GuildSettings>;
-  /** Throws SettingsRuleError when free-only is on and `check.isFree` is false. */
-  setGuildModel(guildId: string, check: ModelCheck): Promise<GuildSettings>;
-  /**
-   * Turning free-only on needs the check of the model it was validated
-   * against; throws SettingsConflictError if the stored model has changed
-   * since, and SettingsRuleError if that model is not free.
-   */
-  setFreeModelsOnly(guildId: string, enabled: boolean, check?: ModelCheck): Promise<GuildSettings>;
-  /** Flips free-only on the stored value; the same checks apply when it turns on. */
-  toggleFreeModelsOnly(guildId: string, check: ModelCheck): Promise<boolean>;
-  setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void>;
-  toggleShowLlmDetails(guildId: string): Promise<boolean>;
-  addAutoReplyChannel(guildId: string, channelId: string): Promise<void>;
-  removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean>;
-  setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings>;
+  setGuildModel(guildId: string, check: ModelCheck, actorId?: string): Promise<GuildSettings>;
+  setFreeModelsOnly(
+    guildId: string,
+    enabled: boolean,
+    check?: ModelCheck,
+    actorId?: string,
+  ): Promise<GuildSettings>;
+  setShowLlmDetails(guildId: string, enabled: boolean, actorId?: string): Promise<void>;
+  addAutoReplyChannel(guildId: string, channelId: string, actorId?: string): Promise<void>;
+  removeAutoReplyChannel(guildId: string, channelId: string, actorId?: string): Promise<boolean>;
+  addAllowedChannel(guildId: string, channelId: string, actorId?: string): Promise<void>;
+  removeAllowedChannel(guildId: string, channelId: string, actorId?: string): Promise<boolean>;
+  setAdminRoleId(guildId: string, roleId: string | null, actorId?: string): Promise<GuildSettings>;
+  setWebSearchEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
   setReasoningDisplayEnabled(
     guildId: string,
-    reasoningDisplayEnabled: boolean,
+    enabled: boolean,
+    actorId?: string,
   ): Promise<GuildSettings>;
-  setTwitterExpandEnabled(guildId: string, twitterExpandEnabled: boolean): Promise<GuildSettings>;
-  setHistoryEnabled(guildId: string, historyEnabled: boolean): Promise<GuildSettings>;
+  setTwitterExpandEnabled(
+    guildId: string,
+    enabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings>;
+  setHistoryEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {
@@ -51,12 +51,6 @@ function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | und
   }
 }
 
-/**
- * Every write goes through `repo.update`, whose `mutate` sees the stored row
- * inside the write transaction. A value computed from an earlier read (a
- * toggle's negation, an edited channel list, a model check) is decided in
- * `mutate`, never before it.
- */
 export class SettingsService implements ISettingsService {
   constructor(private readonly repo: IGuildSettingsRepository) {}
 
@@ -64,86 +58,146 @@ export class SettingsService implements ISettingsService {
     return (await this.repo.findByGuildId(guildId)) ?? this.repo.update(guildId, () => ({}));
   }
 
-  async setGuildModel(guildId: string, check: ModelCheck): Promise<GuildSettings> {
-    return this.repo.update(guildId, (current) => {
-      if (current.freeModelsOnly && !check.isFree) {
-        throw new SettingsRuleError(
-          `model ${check.model} is not free while free-only is on`,
-          `このサーバーは無料モデル限定に設定されています。モデル \`${check.model}\` は無料モデルではありません。`,
-        );
-      }
-      return { defaultModel: check.model };
-    });
+  async setGuildModel(
+    guildId: string,
+    check: ModelCheck,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(
+      guildId,
+      (current) => {
+        if (current.freeModelsOnly && !check.isFree) {
+          throw new SettingsRuleError(
+            `model ${check.model} is not free while free-only is on`,
+            `このサーバーは無料モデル限定に設定されています。モデル \`${check.model}\` は無料モデルではありません。`,
+          );
+        }
+        return { defaultModel: check.model };
+      },
+      actorId,
+    );
   }
 
   async setFreeModelsOnly(
     guildId: string,
     enabled: boolean,
     check?: ModelCheck,
+    actorId?: string,
   ): Promise<GuildSettings> {
-    return this.repo.update(guildId, (current) => {
-      if (enabled) assertCanEnableFreeOnly(current, check);
-      return { freeModelsOnly: enabled };
-    });
-  }
-
-  async toggleFreeModelsOnly(guildId: string, check: ModelCheck): Promise<boolean> {
-    const updated = await this.repo.update(guildId, (current) => {
-      const enabled = !current.freeModelsOnly;
-      if (enabled) assertCanEnableFreeOnly(current, check);
-      return { freeModelsOnly: enabled };
-    });
-    return updated.freeModelsOnly;
-  }
-
-  async setShowLlmDetails(guildId: string, showLlmDetails: boolean): Promise<void> {
-    await this.repo.update(guildId, () => ({ showLlmDetails }));
-  }
-
-  async toggleShowLlmDetails(guildId: string): Promise<boolean> {
-    const updated = await this.repo.update(guildId, (current) => ({
-      showLlmDetails: !current.showLlmDetails,
-    }));
-    return updated.showLlmDetails;
-  }
-
-  async addAutoReplyChannel(guildId: string, channelId: string): Promise<void> {
-    await this.repo.update(guildId, (current) =>
-      current.autoReplyChannels.includes(channelId)
-        ? {}
-        : { autoReplyChannels: [...current.autoReplyChannels, channelId] },
+    return this.repo.update(
+      guildId,
+      (current) => {
+        if (enabled) assertCanEnableFreeOnly(current, check);
+        return { freeModelsOnly: enabled };
+      },
+      actorId,
     );
   }
 
-  async removeAutoReplyChannel(guildId: string, channelId: string): Promise<boolean> {
+  async setShowLlmDetails(
+    guildId: string,
+    showLlmDetails: boolean,
+    actorId?: string,
+  ): Promise<void> {
+    await this.repo.update(guildId, () => ({ showLlmDetails }), actorId);
+  }
+
+  async addAutoReplyChannel(guildId: string, channelId: string, actorId?: string): Promise<void> {
+    await this.repo.update(
+      guildId,
+      (current) =>
+        current.autoReplyChannels.includes(channelId)
+          ? {}
+          : { autoReplyChannels: [...current.autoReplyChannels, channelId] },
+      actorId,
+    );
+  }
+
+  async removeAutoReplyChannel(
+    guildId: string,
+    channelId: string,
+    actorId?: string,
+  ): Promise<boolean> {
     let removed = false;
-    await this.repo.update(guildId, (current) => {
-      if (!current.autoReplyChannels.includes(channelId)) return {};
-      removed = true;
-      return { autoReplyChannels: current.autoReplyChannels.filter((id) => id !== channelId) };
-    });
+    await this.repo.update(
+      guildId,
+      (current) => {
+        if (!current.autoReplyChannels.includes(channelId)) return {};
+        removed = true;
+        return { autoReplyChannels: current.autoReplyChannels.filter((id) => id !== channelId) };
+      },
+      actorId,
+    );
     return removed;
   }
 
-  async setWebSearchEnabled(guildId: string, webSearchEnabled: boolean): Promise<GuildSettings> {
-    return this.repo.update(guildId, () => ({ webSearchEnabled }));
+  async addAllowedChannel(guildId: string, channelId: string, actorId?: string): Promise<void> {
+    await this.repo.update(
+      guildId,
+      (current) => {
+        const channels = current.allowedChannels ?? [];
+        return channels.includes(channelId) ? {} : { allowedChannels: [...channels, channelId] };
+      },
+      actorId,
+    );
+  }
+
+  async removeAllowedChannel(
+    guildId: string,
+    channelId: string,
+    actorId?: string,
+  ): Promise<boolean> {
+    let removed = false;
+    await this.repo.update(
+      guildId,
+      (current) => {
+        if (!current.allowedChannels?.includes(channelId)) return {};
+        removed = true;
+        const channels = current.allowedChannels.filter((id) => id !== channelId);
+        return { allowedChannels: channels.length ? channels : null };
+      },
+      actorId,
+    );
+    return removed;
+  }
+
+  async setAdminRoleId(
+    guildId: string,
+    adminRoleId: string | null,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ adminRoleId }), actorId);
+  }
+
+  async setWebSearchEnabled(
+    guildId: string,
+    webSearchEnabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ webSearchEnabled }), actorId);
   }
 
   async setReasoningDisplayEnabled(
     guildId: string,
     reasoningDisplayEnabled: boolean,
+    actorId?: string,
   ): Promise<GuildSettings> {
-    return this.repo.update(guildId, () => ({ reasoningDisplayEnabled }));
+    return this.repo.update(guildId, () => ({ reasoningDisplayEnabled }), actorId);
   }
 
   async setTwitterExpandEnabled(
     guildId: string,
     twitterExpandEnabled: boolean,
+    actorId?: string,
   ): Promise<GuildSettings> {
-    return this.repo.update(guildId, () => ({ twitterExpandEnabled }));
+    return this.repo.update(guildId, () => ({ twitterExpandEnabled }), actorId);
   }
 
-  async setHistoryEnabled(guildId: string, historyEnabled: boolean): Promise<GuildSettings> {
-    return this.repo.setHistoryEnabled(guildId, historyEnabled);
+  async setHistoryEnabled(
+    guildId: string,
+    historyEnabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ historyEnabled }), actorId);
   }
 }
