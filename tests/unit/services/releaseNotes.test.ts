@@ -135,8 +135,18 @@ describe("parseChangelog", () => {
     const versions = notes.versions();
     expect(versions.length).toBeGreaterThanOrEqual(15);
     expect(formatVersion(versions.at(-1) ?? v("0.0.0"))).toBe("1.0.0");
+    // Released sections do not change after the release, so these pin both ends.
+    expect(okBody(notes.section(v("1.7.0")))).toContain(
+      "- Web 検索の有無にかかわらず現在日時をモデルに渡す (#157)",
+    );
+    expect(
+      okBody(notes.section(v("1.0.0")))
+        .split("\n")
+        .at(-1),
+    ).toBe("- Bump @biomejs/biome from 2.3.8 to 2.3.9");
     for (const version of versions) {
       const body = okBody(notes.section(version));
+      expect(body).not.toBe("");
       expect(body).not.toContain("<!--");
       expect(body).not.toMatch(/^\[\d+\.\d+\.\d+\]: /m);
     }
@@ -166,7 +176,12 @@ describe("buildReleaseNotePages", () => {
   });
 
   test("every page is Components V2 and mentions nobody", () => {
-    const pages = buildReleaseNotePages(v("1.5.0"), "- @everyone を含む PR タイトル (#1)");
+    const body = Array.from(
+      { length: 150 },
+      (_, i) => `- @everyone を含む PR タイトルの例、会話履歴の変更 ${i} (#${i})`,
+    ).join("\n");
+    const pages = buildReleaseNotePages(v("1.5.0"), body);
+    expect(pages.length).toBeGreaterThan(1);
     for (const page of pages) {
       expect(page.allowedMentions).toEqual({ parse: [] });
       expect(Number(page.flags) & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
