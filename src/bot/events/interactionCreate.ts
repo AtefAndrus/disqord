@@ -73,7 +73,12 @@ export function createInteractionCreateHandler(
         interaction.isRoleSelectMenu()) &&
       interaction.customId.startsWith("cfg:")
     ) {
-      await handleConfigPanelInteraction(interaction, settingsService, modelService);
+      await handleConfigPanelInteraction(
+        interaction,
+        settingsService,
+        modelService,
+        webSearchEngine,
+      );
       return;
     }
 

@@ -61,8 +61,21 @@ export type ChannelList = "auto" | "allowed";
 export type ConfigAction =
   | { action: "open" | "page" }
   | { action: "set"; page: "response" | "features"; key: ConfigSwitch; enabled: boolean }
-  | { action: "add" | "remove"; page: "channels"; list: ChannelList }
-  | { action: "list"; page: "channels"; list: ChannelList; index: number }
+  | {
+      action: "add" | "remove";
+      page: "channels";
+      list: ChannelList;
+      autoPage?: number;
+      allowedPage?: number;
+    }
+  | {
+      action: "list";
+      page: "channels";
+      list: ChannelList;
+      index: number;
+      autoPage?: number;
+      allowedPage?: number;
+    }
   | { action: "role" | "clear"; page: "admin" };
 
 export function isConfigPage(value: string): value is ConfigPage {
@@ -73,9 +86,13 @@ export function configCustomId(action: ConfigAction): string {
   if (action.action === "open" || action.action === "page") return `cfg:${action.action}`;
   if (action.action === "set")
     return `cfg:${action.page}:set:${action.key}:${action.enabled ? "on" : "off"}`;
-  if (action.action === "list") return `cfg:channels:list:${action.list}:${action.index}`;
-  if (action.action === "add" || action.action === "remove")
-    return `cfg:channels:${action.action}:${action.list}`;
+  if (action.action === "list" || action.action === "add" || action.action === "remove") {
+    const positions =
+      action.autoPage === undefined && action.allowedPage === undefined
+        ? ""
+        : `:${action.autoPage ?? 0}:${action.allowedPage ?? 0}`;
+    return `cfg:channels:${action.action}:${action.list}${action.action === "list" ? `:${action.index}` : ""}${positions}`;
+  }
   return `cfg:admin:${action.action}`;
 }
 
@@ -98,6 +115,23 @@ export function parseConfigCustomId(value: string): ConfigAction | undefined {
     return { page, action, key: typedKey, enabled: state === "on" };
   }
   if (page === "channels" && (key === "auto" || key === "allowed")) {
+    const positionOffset = action === "list" ? 5 : 4;
+    if (
+      (action === "list" || action === "add" || action === "remove") &&
+      parts.length === positionOffset + 2
+    ) {
+      const positions = parts.slice(positionOffset);
+      if (
+        !positions.every(
+          (part) => /^(0|[1-9]\d*)$/.test(part) && Number.isSafeInteger(Number(part)),
+        )
+      )
+        return undefined;
+      const base = parseConfigCustomId(parts.slice(0, positionOffset).join(":"));
+      if (base && (base.action === "list" || base.action === "add" || base.action === "remove"))
+        return { ...base, autoPage: Number(positions[0]), allowedPage: Number(positions[1]) };
+      return undefined;
+    }
     if ((action === "add" || action === "remove") && parts.length === 4)
       return { page, action, list: key };
     if (
@@ -143,10 +177,12 @@ export function buildConfigPanel(
     ),
   );
   const changedAt = Math.floor(new Date(settings.updatedAt).getTime() / 1000);
+  const lastChange =
+    settings.updatedBy === null && settings.settingsVersion === 0
+      ? ""
+      : `最終変更: ${settings.updatedBy ? `<@${settings.updatedBy}> ` : ""}（<t:${changedAt}:R>）\n`;
   container.addTextDisplayComponents((text) =>
-    text.setContent(
-      `最終変更: ${settings.updatedBy ? `<@${settings.updatedBy}> ` : ""}（<t:${changedAt}:R>）\n## 設定 · ${CONFIG_PAGES[page]}`,
-    ),
+    text.setContent(`${lastChange}## 設定 · ${CONFIG_PAGES[page]}`),
   );
   for (const key of Object.keys(CONFIG_SWITCHES) as ConfigSwitch[]) {
     const entry = CONFIG_SWITCHES[key];
@@ -168,27 +204,28 @@ export function buildConfigPanel(
     );
   }
   if (page === "channels") {
+    const clampPage = (length: number, index = 0): number =>
+      Math.max(0, Math.min(Math.max(0, Math.ceil(length / 25) - 1), Math.floor(index)));
+    const positions = {
+      autoPage: clampPage(settings.autoReplyChannels.length, options.autoPage),
+      allowedPage: clampPage(settings.allowedChannels?.length ?? 0, options.allowedPage),
+    };
     for (const list of ["auto", "allowed"] as const) {
       const label = list === "auto" ? "自動応答チャンネル" : "許可チャンネル";
       const channels =
         list === "auto" ? settings.autoReplyChannels : (settings.allowedChannels ?? []);
       const maxPage = Math.max(0, Math.ceil(channels.length / 25) - 1);
-      const index = Math.max(
-        0,
-        Math.min(
-          maxPage,
-          Math.floor((list === "auto" ? options.autoPage : options.allowedPage) ?? 0),
-        ),
-      );
+      const index = list === "auto" ? positions.autoPage : positions.allowedPage;
       const visible = channels.slice(index * 25, (index + 1) * 25);
       const lines = visible.map((id) => {
-        const parentId = options.channel?.(id)?.parentId;
+        const channel = options.channel?.(id);
+        const parentId = channel?.parentId;
         const outside =
           list === "auto" &&
           settings.allowedChannels !== null &&
           !settings.allowedChannels.includes(id) &&
           !(parentId && settings.allowedChannels.includes(parentId));
-        return `<#${id}>${outside ? " — 許可チャンネル外のため応答しない" : ""}`;
+        return `<#${id}>${outside ? (channel ? " — 許可チャンネル外のため応答しない" : " — 親チャンネルが不明のため応答可否を確認できません") : ""}`;
       });
       container.addTextDisplayComponents((text) =>
         text.setContent(
@@ -198,7 +235,7 @@ export function buildConfigPanel(
       container.addActionRowComponents(
         new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
           new ChannelSelectMenuBuilder()
-            .setCustomId(configCustomId({ page, action: "add", list }))
+            .setCustomId(configCustomId({ page, action: "add", list, ...positions }))
             .setPlaceholder(`${label}を追加`)
             .setChannelTypes(ChannelType.GuildText, ChannelType.PublicThread)
             .setMinValues(1)
@@ -209,7 +246,7 @@ export function buildConfigPanel(
         container.addActionRowComponents(
           new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
             new StringSelectMenuBuilder()
-              .setCustomId(configCustomId({ page, action: "remove", list }))
+              .setCustomId(configCustomId({ page, action: "remove", list, ...positions }))
               .setPlaceholder(`${label}を削除`)
               .addOptions(
                 visible.map((id) => ({
@@ -225,13 +262,21 @@ export function buildConfigPanel(
           new ActionRowBuilder<ButtonBuilder>().addComponents(
             new ButtonBuilder()
               .setCustomId(
-                configCustomId({ page, action: "list", list, index: Math.max(0, index - 1) }),
+                configCustomId({
+                  page,
+                  action: "list",
+                  list,
+                  index: Math.max(0, index - 1),
+                  ...positions,
+                }),
               )
               .setLabel(`${label}: 前へ`)
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(index === 0),
             new ButtonBuilder()
-              .setCustomId(configCustomId({ page, action: "list", list, index: index + 1 }))
+              .setCustomId(
+                configCustomId({ page, action: "list", list, index: index + 1, ...positions }),
+              )
               .setLabel(`${label}: 次へ (${index + 1}/${maxPage + 1})`)
               .setStyle(ButtonStyle.Secondary)
               .setDisabled(index === maxPage),

@@ -12,6 +12,7 @@ import {
 } from "../../../../src/bot/events/interactionCreate";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../../src/db/schema";
+import { describeSearchBilling } from "../../../../src/llm/tools/webSearch";
 import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
@@ -35,6 +36,7 @@ function interaction(
     guild: null,
     user: { id: "actor" },
     values,
+    roles: new Map<string, { managed: boolean }>(),
     member: { roles },
     memberPermissions: new PermissionsBitField(manage ? [PermissionFlagsBits.ManageGuild] : []),
     isAutocomplete: () => false,
@@ -109,6 +111,10 @@ describe("config panel interactions", () => {
     await service.setAdminRoleId("guild", "admin");
     const first = interaction("cfg:features:set:history:on", "button", [], false, ["admin"]);
     await handler(first as unknown as Interaction);
+    expect((await service.getGuildSettings("guild")).historyEnabled).toBe(true);
+    expect((await service.getGuildSettings("guild")).updatedBy).toBe("actor");
+    expect(first.update).toHaveBeenCalledTimes(1);
+    expect(first.reply).not.toHaveBeenCalled();
     await service.setAdminRoleId("guild", "replacement");
     const before = await service.getGuildSettings("guild");
     const second = interaction("cfg:features:set:history:off", "button", [], false, ["admin"]);
@@ -140,6 +146,84 @@ describe("config panel interactions", () => {
     await handler(interaction("cfg:admin:clear") as unknown as Interaction);
     expect((await service.getGuildSettings("guild")).adminRoleId).toBeNull();
   });
+  test.each(["guild", "managed"])("rejects unsafe admin role %s privately", async (id) => {
+    const before = await service.getGuildSettings("guild");
+    const press = interaction("cfg:admin:role", "role", [id]);
+    press.roles.set(id, { managed: id === "managed" });
+    await handler(press as unknown as Interaction);
+    expect(await service.getGuildSettings("guild")).toEqual(before);
+    expect(press.update).not.toHaveBeenCalled();
+    expect(flags(press.reply.mock.calls[0]?.[0]) & MessageFlags.Ephemeral).toBeTruthy();
+    expect(JSON.stringify(press.reply.mock.calls[0][0])).toContain(
+      id === "guild" ? "@everyone" : "連携",
+    );
+  });
+  test("enabling native search explains its uncapped billing privately", async () => {
+    handler = createInteractionCreateHandler(
+      {} as CommandHandlers,
+      service,
+      model,
+      llm,
+      {} as IChatService,
+      "native",
+    );
+    const press = interaction("cfg:features:set:web_search:on");
+    await handler(press as unknown as Interaction);
+    expect((await service.getGuildSettings("guild")).webSearchEnabled).toBe(true);
+    expect(press.update).toHaveBeenCalledTimes(1);
+    expect(press.followUp).toHaveBeenCalledTimes(1);
+    expect(flags(press.followUp.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
+    expect(JSON.stringify(press.followUp.mock.calls[0][0])).toContain(
+      describeSearchBilling("native"),
+    );
+    const off = interaction("cfg:features:set:web_search:off");
+    await handler(off as unknown as Interaction);
+    expect(off.followUp).not.toHaveBeenCalled();
+  });
+  test.each(["auto", "allowed"])(
+    "%s add/remove and navigation preserve both lists",
+    async (list) => {
+      for (let i = 0; i < 60; i++) {
+        await service.addAutoReplyChannel("guild", `auto-${i}`);
+        await service.addAllowedChannel("guild", `allowed-${i}`);
+      }
+      const add = interaction(`cfg:channels:add:${list}:1:1`, "channel", ["extra"]);
+      await handler(add as unknown as Interaction);
+      expect(
+        (await service.getGuildSettings("guild"))[
+          list === "auto" ? "autoReplyChannels" : "allowedChannels"
+        ],
+      ).toContain("extra");
+      const remove = interaction(`cfg:channels:remove:${list}:1:1`, "string", [`${list}-26`]);
+      await handler(remove as unknown as Interaction);
+      for (const press of [add, remove]) {
+        const json = JSON.stringify(press.update.mock.calls[0]?.[0]);
+        expect(json).toContain('"value":"auto-25"');
+        expect(json).toContain('"value":"allowed-25"');
+        expect(json).not.toContain('"value":"auto-0"');
+        expect(json).not.toContain('"value":"allowed-0"');
+      }
+      const next = interaction(`cfg:channels:list:${list}:2:1:1`);
+      await handler(next as unknown as Interaction);
+      const json = JSON.stringify(next.update.mock.calls[0]?.[0]);
+      expect(json).toContain(`"value":"${list}-51"`);
+      expect(json).toContain(`"value":"${list === "auto" ? "allowed" : "auto"}-25"`);
+    },
+  );
+  test.each(["auto", "allowed"])(
+    "removing the final item on %s page clamps only that list",
+    async (list) => {
+      for (let i = 0; i < 26; i++) {
+        await service.addAutoReplyChannel("guild", `auto-${i}`);
+        await service.addAllowedChannel("guild", `allowed-${i}`);
+      }
+      const press = interaction(`cfg:channels:remove:${list}:1:1`, "string", [`${list}-25`]);
+      await handler(press as unknown as Interaction);
+      const json = JSON.stringify(press.update.mock.calls[0]?.[0]);
+      expect(json).toContain(`"value":"${list}-0"`);
+      expect(json).toContain(`"value":"${list === "auto" ? "allowed" : "auto"}-25"`);
+    },
+  );
   test.each([
     ["cfg:response:set:free_only:on", "button"],
     ["cfg:response:set:llm_details:off", "button"],

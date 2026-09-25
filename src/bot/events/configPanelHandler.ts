@@ -6,6 +6,7 @@ import {
   type StringSelectMenuInteraction,
 } from "discord.js";
 import { SettingsConflictError, SettingsRuleError } from "../../errors";
+import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import {
   canManageGuildSettings,
@@ -13,7 +14,11 @@ import {
   settingsPermissionDeniedMessage,
 } from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
-import { buildErrorContainer, toNoticePayload } from "../../utils/chatContainerBuilder";
+import {
+  buildErrorContainer,
+  buildSuccessNoticeContainer,
+  toNoticePayload,
+} from "../../utils/chatContainerBuilder";
 import {
   buildConfigPanel,
   type ConfigPage,
@@ -33,6 +38,7 @@ export async function handleConfigPanelInteraction(
   interaction: ConfigInteraction,
   settingsService: ISettingsService,
   modelService: IModelService,
+  webSearchEngine: WebSearchEngine,
 ): Promise<void> {
   const notice = async (message: string): Promise<void> => {
     const payload = toNoticePayload(buildErrorContainer(message, "設定エラー"), true);
@@ -60,6 +66,10 @@ export async function handleConfigPanelInteraction(
       },
     };
     const settings = await settingsService.getGuildSettings(guildId);
+    if (action.action === "list" || action.action === "add" || action.action === "remove") {
+      options.autoPage = action.autoPage;
+      options.allowedPage = action.allowedPage;
+    }
     if (action.action === "open" && interaction.isButton()) {
       await interaction.reply(buildConfigPanel(page, settings, options));
       return;
@@ -99,6 +109,17 @@ export async function handleConfigPanelInteraction(
         if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
           await notice("管理ロールの変更には「サーバーの管理」権限が必要です。");
           return;
+        }
+        if (action.action === "role" && interaction.isRoleSelectMenu()) {
+          const roleId = interaction.values[0];
+          if (roleId === guildId) {
+            await notice("@everyone は管理ロールに指定できません。");
+            return;
+          }
+          if (interaction.roles.get(roleId)?.managed) {
+            await notice("Bot や連携によって管理されるロールは管理ロールに指定できません。");
+            return;
+          }
         }
         await settingsService.setAdminRoleId(
           guildId,
@@ -159,6 +180,17 @@ export async function handleConfigPanelInteraction(
     );
     if (interaction.deferred) await interaction.editReply(payload);
     else await interaction.update(payload);
+    if (action.action === "set" && action.key === "web_search" && action.enabled) {
+      await interaction.followUp(
+        toNoticePayload(
+          buildSuccessNoticeContainer(
+            `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`,
+            "Web検索設定",
+          ),
+          true,
+        ),
+      );
+    }
   } catch (error) {
     logger.error("Config panel interaction failed", { error, customId: interaction.customId });
     await notice(
