@@ -11,7 +11,6 @@
 | ---- | ------ | ---------- | ---- |
 | [設定パネル（/config の再構成）](changes/config-panel/design.md) | 高 | planned | /config をサブコマンドの列から 1 つのコマンドにし、カテゴリ別の設定パネルと modal で設定を変える。チャンネル制限と管理ロールもここで設定できるようにする |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
-| [ギルド設定変更の共通認可](changes/permissions/design.md) | 高 | implemented | ギルド設定を変更できるかの判定を共通関数 canManageGuildSettings（ManageGuild または admin_role_id のロール）にまとめ、既存のすべての書き込みの入口に掛ける |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
 | [スケジュール実行（cron）](changes/cron/design.md) | 中 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
@@ -21,7 +20,6 @@
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
 | [リリース通知](changes/release-announcement/design.md) | 中 | planned | 起動時に動いている版を記録と比べ、新しい版なら CHANGELOG の該当する節を設定したチャンネルへ通知する |
-| [/release-note](changes/release-note/design.md) | 中 | implemented | /release-note \[version\] で、CHANGELOG.md にある任意の版（省略時は動いている版）の変更点を表示する |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | investigating | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |

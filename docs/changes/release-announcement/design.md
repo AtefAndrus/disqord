@@ -17,8 +17,8 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 
 ## 依存 / 関連 change
 
-- 先行: [/release-note](../release-note/design.md) — CHANGELOG の読み込み、節の切り出し、版の比較、表示の組み立てを同 change が持ち、本 change はそれを使う
-- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — 通知先の設定と解除の認可に、同 change の共通認可関数を使う
+- 先行: [/release-note](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/release-note/design.md) — CHANGELOG の読み込み、節の切り出し、版の比較、表示の組み立てを同 change が持ち、本 change はそれを使う
+- 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 通知先の設定と解除の認可に、同 change の共通認可関数を使う
 - 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 通知先の設定は同 change の「管理」ページの項目として足す
 
 ## Goals / Non-Goals
@@ -31,7 +31,7 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 **Non-Goals:**
 
 - GitHub の API やリリースページからノートを取ること
-- `/release-note`（[/release-note](../release-note/design.md) が扱う）
+- `/release-note`（[/release-note](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/release-note/design.md) が扱う）
 - 同じ版での再起動や再デプロイで通知し直すこと
 - ロールバックした版を通知すること
 - 通知先を設定したことをきっかけに、処理済みの版を遡って通知すること
@@ -41,14 +41,14 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
 | 通知の起点 | `ready` の後に、動いている版（`package.json` の `version`）と、DB に記録した最後に処理した版を比べる | 起動は新しい版が実際に動き出したことを表す。GitHub からの受け口が要らない |
-| ノートの出どころ | [/release-note](../release-note/design.md) が起動時に読む、イメージに同梱した `CHANGELOG.md` の節。切り出しの規則（壊れた節と重複の扱いを含む）も同 change に従う | リリースノートは CHANGELOG の節と同じ内容である。ネットワークや rate limit に依存しない |
+| ノートの出どころ | [/release-note](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/release-note/design.md) が起動時に読む、イメージに同梱した `CHANGELOG.md` の節。切り出しの規則（壊れた節と重複の扱いを含む）も同 change に従う | リリースノートは CHANGELOG の節と同じ内容である。ネットワークや rate limit に依存しない |
 | 記録の場所 | 新しいテーブル `bot_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)` の `last_processed_release_version` | サーバーごとではなく bot 全体で 1 つの値である。値は「この版までは通知の機会を使った」ことを表し、実際に届いたことは表さない。どのサーバーも通知先を設定していない版や、初回の起動で記録しただけの版も含む |
 | 初回の起動 | 記録が無ければ、動いている版が `x.y.z` で、その節がちょうど 1 つあって壊れていないことを確かめてから、動いている版を記録する。通知はしない。確かめられなければ記録しない。DB を作り直した場合も同じである | この機能を入れた版で、過去の全版の変更点を一度に流さない |
 | 版の比較 | 数値 3 つの `x.y.z` だけを扱い、数値の組として比べる。prerelease や build の付いた版は扱わず、通知しない。動いている版の方が新しければ、記録より新しく動いている版以下の節をすべて、古い順に通知し（最新の版の通知がチャンネルの一番下に来る）、記録を動いている版に進める。古いか同じなら何もせず、記録も下げない | 複数の版を飛ばして起動した場合も、同梱した CHANGELOG にある節は抜けなく伝える。記録を下げないので、ロールバックの後に元の版へ戻しても通知し直さない |
 | 記録の更新と送信の順 | CHANGELOG の全版の節と表示をトランザクションの外で組み立てておき、1 つの IMMEDIATE トランザクションの中で記録を読み、送る版の範囲（記録より新しく、動いている版以下）をその値から選び、記録を動いている版に進めて commit する。送るのは commit した後である。範囲の中で見つかった節が 1 つでも壊れているか、動いている版の節が無ければ、記録を進めずにエラーをログに残し、何も送らない。版の番号は飛ぶことがある（1.3.4 の次は 1.4.0）ので、途中の版の節が丸ごと消えている場合は、そもそもリリースされなかった版と区別できず、検出しない。記録の値が `x.y.z` として読めなければ、ログに残して何もせず、記録を消したり初期化したりしない。届くことは保証せず、処理済みの版を自動で送り直さない（Discord の REST クライアントが要求単位で行う再送は別である） | 送信の途中で落ちて再起動を繰り返したときに、同じ通知が何度も流れるより、一部のサーバーに届かない方が害が小さい。取りこぼしても `/release-note` で読める。送る範囲をトランザクションの中で読んだ記録から選ぶので、同じ DB を使う 2 つのプロセスが同時に起動しても、同じ版を 2 回送らない。範囲の中の版の節が 1 つでも壊れたまま記録を進めると、その版の機会が失われるので、範囲ごと止める。届くまで送り直すには、サーバーごと・版ごと・ページごとの進み具合を持つ必要があり、情報の通知には見合わない |
-| 通知先の設定 | [設定パネル](../config-panel/design.md) の「管理」ページに、通知先を 1 件選ぶ Channel Select と「解除」ボタンを置く。空のときは「通知しない」と表示する。どちらもギルド設定の変更なので、[ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数で、選択と押下のたびに認可する。設定できるのはテキストチャンネルとアナウンスチャンネルだけで、Channel Select の `channel_types` をこの 2 種に絞ったうえで、保存の前にも種別を確かめる。設定の時点で bot の `ViewChannel` と `SendMessages` も確かめ、満たさなければ保存せずに押した本人にだけ理由を返す。列は `release_announce_channel_id` とし、古い列 `release_channel_id` の値は写さない | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
+| 通知先の設定 | [設定パネル](../config-panel/design.md) の「管理」ページに、通知先を 1 件選ぶ Channel Select と「解除」ボタンを置く。空のときは「通知しない」と表示する。どちらもギルド設定の変更なので、[ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) の共通認可関数で、選択と押下のたびに認可する。設定できるのはテキストチャンネルとアナウンスチャンネルだけで、Channel Select の `channel_types` をこの 2 種に絞ったうえで、保存の前にも種別を確かめる。設定の時点で bot の `ViewChannel` と `SendMessages` も確かめ、満たさなければ保存せずに押した本人にだけ理由を返す。列は `release_announce_channel_id` とし、古い列 `release_channel_id` の値は写さない | 通知は既定で送らない。既存の DB には以前の機能の未使用の列 `release_channel_id` が値を持ったまま残っており（削除せずに参照だけ止めた）、同じ列を使うと古い設定が黙って蘇る |
 | 送信の条件 | 送信の直前に、チャンネルがその guild のものであること、チャンネルの種別と、bot がそのチャンネルで `ViewChannel` と `SendMessages` を持つことを確かめ、無ければ送らない。送信の失敗はサーバーごとに受け止めて、残りのサーバーへの送信を続ける。版、サーバー、ページ、結果をログに残す。チャンネルが消えていれば設定はそのままにする | 1 つのサーバーの失敗で他のサーバーへの通知を止めない |
-| 表示 | [/release-note](../release-note/design.md) と同じページの組み立て（`splitTextIntoMessages`、`IsComponentsV2`、`allowedMentions: { parse: [] }`）を使い、見出しだけを `## DisQord v1.6.0 をリリースしました` にする。複数の版は版ごとに別のメッセージにする | 表示とメンションの抑止を 2 か所で保たない |
+| 表示 | [/release-note](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/release-note/design.md) と同じページの組み立て（`splitTextIntoMessages`、`IsComponentsV2`、`allowedMentions: { parse: [] }`）を使い、見出しだけを `## DisQord v1.6.0 をリリースしました` にする。複数の版は版ごとに別のメッセージにする | 表示とメンションの抑止を 2 か所で保たない |
 
 ## Design
 
@@ -66,7 +66,7 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 
 ### 実装内容
 
-- CHANGELOG が読めなければ（[/release-note](../release-note/design.md) の読み込みが失敗していれば）、起動時の通知を行わずにログに残す。
+- CHANGELOG が読めなければ（[/release-note](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/release-note/design.md) の読み込みが失敗していれば）、起動時の通知を行わずにログに残す。
 - 起動時の処理（CHANGELOG の検証、DB の読み書き、送信）の失敗はすべて受け止めてログに残し、bot の起動を止めない。
 - 動いている版の節が無い、または範囲の中で見つかった節が壊れているときは、記録を進めずにエラーをログに残し、bot はそのまま動かす。記録が残っていれば、次に正しい節を含むイメージで起動したときに、その範囲をまとめて通知する。この間に通知先を設定したサーバーにも、その範囲が届く。
 - 前提として、本番で通知を送るプロセスは 1 つで、DB は永続化されている。開発環境は別の bot（別のトークン）と別のサーバーと別の DB を使う。本番と開発でトークンを共有すると同じ通知が 2 回届き、DB を共有すると一方の起動が他方の通知の機会を使ってしまう。古い DB のバックアップを戻すと、処理済みの版がまた通知される。

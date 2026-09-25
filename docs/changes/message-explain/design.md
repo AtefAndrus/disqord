@@ -15,7 +15,7 @@ summary: "メッセージの右クリックメニュー「アプリ → 解説�
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [web-search](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — Web 検索の設定が有効なサーバーでは、`generateChatResponse()` が検索の server tool を付ける。解説経路も同じ関数を通るので、時事的な背景や新しい用語の解説にも同じ設定で検索が使われる。
-- 関連: [ギルド設定変更の共通認可](../permissions/design.md) — 解説の実行はギルド設定の変更ではないので、同 change の共通認可関数は呼ばない。
+- 関連: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 解説の実行はギルド設定の変更ではないので、同 change の共通認可関数は呼ばない。
 - 連携: [設定パネル（/config の再構成）](../config-panel/design.md) — 同 change が定めるチャンネル制限（`allowed_channels`）は解説にも掛け、許可チャンネルの外のメッセージに対する解説は断る（理由は Open Questions / Risks の「チャンネル制限との関係」）。
 
 ## Goals / Non-Goals

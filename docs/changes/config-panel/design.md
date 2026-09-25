@@ -19,7 +19,7 @@ Discord のコマンド選択画面は、サブコマンドとサブコマンド
 
 ## 依存 / 関連 change
 
-- 先行: [権限管理](../permissions/design.md) — 共通認可関数 `canManageGuildSettings` を同 change が定める。本 change のすべての書き込みはこの関数で判定する
+- 先行: [権限管理](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 共通認可関数 `canManageGuildSettings` を同 change が定める。本 change のすべての書き込みはこの関数で判定する
 - 連携: [設定階層化 + LLMパラメータ + カスタムプロンプト](../settings-hierarchy/design.md) — プロンプトと LLM パラメータの編集は本 change のパネルと modal の形に載せる（「スコープ付き設定のページ」）
 - 連携: [画像生成](../image-generation/design.md) / [コード実行](../code-execution/design.md) / [Discord 操作ツール](../discord-tool/design.md) / [リリース通知](../release-announcement/design.md) — 各 change の設定は、サブコマンドではなく本 change のパネルの項目として足す
 - 関連: [メッセージの解説](../message-explain/design.md) — 許可チャンネルの外では解説を断る
@@ -84,7 +84,7 @@ ALTER TABLE guild_settings ADD COLUMN updated_by TEXT;                -- 最後�
 
 パネルの「最終変更」は `updated_by` と既存の `updated_at` から表示する。
 
-`admin_role_id` の列は [権限管理](../permissions/design.md) が加える。
+`admin_role_id` の列は [権限管理](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) が加える。
 `settings_version` は `guild_settings` の行を書き換えるたびに 1 増やす。
 版は行全体で 1 つとし、設定ごとには持たない。
 別の設定が変わっただけでも modal の送信が衝突として扱われるが、その場合は下書きを保ったまま開き直せば済み、設定ごとに版の列を持つより単純である。
@@ -142,7 +142,7 @@ modal が比べるのは、編集する値を持つ行の版である。[設定�
 
 ### 管理ロール
 
-- `admin_role_id` の意味と認可は [権限管理](../permissions/design.md) が定める。本 change はその設定の入口を「管理」ページに置く。
+- `admin_role_id` の意味と認可は [権限管理](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) が定める。本 change はその設定の入口を「管理」ページに置く。
 - 管理ロールの変更と解除は `ManageGuild` を持つメンバーだけができる。委譲されたロールの持ち主が委譲先を付け替えられないようにするためである。
 - ロールが削除されると、誰もそのロールを持たなくなるだけで、`ManageGuild` の持ち主は引き続き変更できる。
 

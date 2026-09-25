@@ -17,7 +17,7 @@ OAuth PKCE でユーザーまたは Guild 管理者が自分の OpenRouter ア�
 
 - 連携: [使用量統計](../usage-stats/design.md) — どのキーが支払ったか（user / guild / default）を記録する列が要る。本 change のキー解決結果がその値の出どころになる
 - 連携: [設定階層化](../settings-hierarchy/design.md) — ユーザー → Guild → デフォルトという解決順序は似ているが、API キーは設定値ではなく秘密情報なので、テーブルも解決ロジックも分けたままにする
-- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — `/connect guild` と `/disconnect guild` の認可は同 change の共通認可関数 `canManageGuildSettings` で判定する
+- 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — `/connect guild` と `/disconnect guild` の認可は同 change の共通認可関数 `canManageGuildSettings` で判定する
 - 関連: [設定パネル（/config の再構成）](../config-panel/design.md) — `/connect` と `/disconnect` は同 change のパネルに載せず、独立したコマンドのままにする
 - 連携: [コード実行](../code-execution/design.md) — コンテナは API キーの workspace に scope されるので、生成ファイルの取得は、その生成に使ったのと同じキーで行う必要がある
 
@@ -267,7 +267,7 @@ interface IApiKeyRepository {
 /disconnect guild   -- Guild の接続を解除（canManageGuildSettings で認可）
 ```
 
-`/connect guild` と `/disconnect guild` の認可は、[ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。
+`/connect guild` と `/disconnect guild` の認可は、[ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。
 
 ### セキュリティ考慮事項
 

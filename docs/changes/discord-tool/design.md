@@ -17,7 +17,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
 - 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 有効化の切り替えは同 change の「機能」ページの項目として足す
-- 連携: [ギルド設定変更の共通認可](../permissions/design.md) — 有効化の切り替えの認可は、同 change の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
+- 連携: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 有効化の切り替えの認可は、同 change の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
 - 関連: [会話の分岐 (fork)](../fork/design.md) — 分岐先としてスレッドを作り、分岐元との関係を記録する。スレッドの作成は本 change の `create_thread` と同じ処理を使える
 
 ## Goals / Non-Goals

@@ -17,7 +17,7 @@ temperature などの LLM パラメータや、システムプロンプトを変
 
 - 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す経路（`IToolLoopParams.requestFields`）は同 change が用意した。あわせて送信できるパラメータ集合が Chat Completions より狭い（後述）
 - 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort と token 上限は本 change の LLM パラメータで解決し、推論本文を表示するかどうかは同 change が入れた Guild 設定 `reasoning_display_enabled` で扱う
-- 先行: [ギルド設定変更の共通認可](../permissions/design.md) — guild スコープと channel スコープへの書き込みは同 change の共通認可関数 `canManageGuildSettings` で認可する
+- 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — guild スコープと channel スコープへの書き込みは同 change の共通認可関数 `canManageGuildSettings` で認可する
 - 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — プロンプトと LLM パラメータの編集は、同 change の「プロンプトとパラメータ」ページと本人にだけ見える「自分の設定」のパネルに載せる。`/config` はサブコマンドを持たないので、本 change はサブコマンドや別のスラッシュコマンドを足さない
 - 連携: [OAuth BYOK](../oauth-byok/design.md) — ユーザーが自分のキーで払う場合に `free_models_only` を課すかは、両 change のどちらかで決める必要がある
 
@@ -91,7 +91,7 @@ Guild のモデルまで制約を満たさない場合はリクエストを送�
 
 ### 書き込みの認可
 
-- guild スコープと channel スコープ: [ギルド設定変更の共通認可](../permissions/design.md) の共通認可関数 `canManageGuildSettings` で、書き込みのたびに認可する。パネルの「編集」の modal の送信と「上書きを削除」の押下、`/model set` の実行のすべてが対象である。
+- guild スコープと channel スコープ: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) の共通認可関数 `canManageGuildSettings` で、書き込みのたびに認可する。パネルの「編集」の modal の送信と「上書きを削除」の押下、`/model set` の実行のすべてが対象である。
 - user スコープ: 本人が自分の設定だけを書き換えられる。「自分の設定」のパネルは本人にだけ見える（ephemeral）ので、他のメンバーからは押せない。解決時に Guild 制約が常に勝つので、本人の上書きで Guild の費用方針を迂回することはできない。
 
 ### DB スキーマ変更

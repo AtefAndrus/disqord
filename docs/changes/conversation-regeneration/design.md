@@ -17,7 +17,7 @@ summary: "返答のページを書き換えて同じ発言に答え直す再生�
 
 - 先行（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の本文は DB に保存せず、応答のたびに Discord から読む（`src/services/conversationWindow.ts`）。DB には返答の管理記録（`reply_records` と `reply_pages`、`src/db/schema.ts`）だけがあり、記録は発言 1 件につき 1 行で、発言の message ID が主キーである。本 change はこの記録の状態遷移と、窓に入れるかの判定（`src/services/messageEligibility.ts`）の上に載る
 - 連携: [code-execution](../code-execution/design.md) — 実行結果のメッセージは回答と同じ生成に属する。再生成と取り消しでは、置き換えられる生成の実行結果メッセージを削除する。コンテナは生成ごとに採番されるので、再生成が前の生成のコンテナを引き継ぐことは無い
-- 連携: [ギルド設定変更の共通認可](../permissions/design.md) — 再生成と取り消しの認可は「元の発言者本人または `ManageMessages`」であり、同 change の設定変更権限とは別の軸である
+- 連携: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 再生成と取り消しの認可は「元の発言者本人または `ManageMessages`」であり、同 change の設定変更権限とは別の軸である
 - 連携: [usage-stats](../usage-stats/design.md) — 再生成の usage と cost も計上対象である
 
 ## Goals / Non-Goals

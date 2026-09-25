@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.8.0] - 2026-09-25
+
+
+### Added
+
+- ギルド設定のすべての変更に共通の認可を掛ける (#165)
+- /release-note で版ごとの変更点を表示する (#166)
+
+
+### Documentation
+
+- リリースの手動確認の確認対象を in-progress の design に限る (#162)
+- Design を現在の実装と外部 API に合わせて最新化し、統廃合する (#163)
+- /config を設定パネルにする design を起こし、関連 design を合わせる (#164)
+- /release-note の手動確認を完了にする (#167)
+
+
+### Testing
+
+- E2e の画像と長文のシナリオを偶然では通らない形にする (#161)
+
+
 ## [1.7.0] - 2026-09-24
 
 
@@ -440,6 +462,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.8.0]: https://github.com/AtefAndrus/disqord/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/AtefAndrus/disqord/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/AtefAndrus/disqord/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AtefAndrus/disqord/compare/v1.4.0...v1.5.0
