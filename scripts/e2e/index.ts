@@ -42,6 +42,22 @@ import {
 } from "./scenarios";
 
 const API = "https://discord.com/api/v10";
+const FAILURE_DIR = ".e2e-failures";
+
+/**
+ * The one-line `reply:` summary flattens whitespace and component
+ * boundaries, so it cannot tell a model that wrote something unexpected from
+ * a renderer that mishandled it. The saved pages keep both.
+ */
+async function saveFailedReply(name: string, reply: Reply): Promise<string> {
+  const path = `${FAILURE_DIR}/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  try {
+    await Bun.write(path, `${JSON.stringify(reply.messages, null, 2)}\n`);
+    return path;
+  } catch (error) {
+    return `not saved (${error instanceof Error ? error.message : error})`;
+  }
+}
 const POLL_INTERVAL_MS = 2_500;
 const REPLY_TIMEOUT_MS = 180_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
@@ -272,6 +288,7 @@ async function main(): Promise<number> {
           for (const problem of problems) console.log(`     - ${problem}`);
           console.log(`     reply: ${reply.body.replace(/\s+/g, " ").slice(0, 300)}`);
           console.log(`     footers: ${reply.footers.join(" / ").slice(0, 300)}`);
+          console.log(`     components: ${await saveFailedReply(scenario.name, reply)}`);
         }
       } catch (error) {
         failures++;

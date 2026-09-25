@@ -321,8 +321,11 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     // A thematic break must reach Discord as a Separator with a divider (the
-    // footer's Separator has none), not as literal `---` text.
+    // footer's Separator has none), not as literal `---` text. Named-only:
+    // whether it passes depends on the model writing `---` exactly as asked,
+    // and the conversion itself is covered by the messageCreate unit test.
     name: "separator",
+    manual: true,
     prompt:
       "[e2e] 「前半」と「後半」の2段落で返事をして。2段落の間には、--- だけの行を1行だけ入れて。",
     check: (reply) => [
