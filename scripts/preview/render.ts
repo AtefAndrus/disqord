@@ -13,7 +13,7 @@
 import { join } from "node:path";
 import { chromium } from "playwright";
 import type { IFixture } from "./fixtures";
-import { FONT_PATH, PREVIEW_DIR } from "./paths";
+import { FONT_PATH, FONTCONFIG_PATH, PREVIEW_DIR } from "./paths";
 import { messagesToMarkup } from "./payloadToMarkup";
 
 function pageHtml(markup: string, fontBase64: string): string {
@@ -90,7 +90,11 @@ export async function renderFixtures(
   const fontBase64 = Buffer.from(await Bun.file(FONT_PATH).arrayBuffer()).toString("base64");
   const bundleJs = await bundleComponents();
 
-  const browser = await chromium.launch({ args: ["--no-sandbox"] });
+  // See fonts.conf: system fonts under /mnt (Windows fonts on WSL) stall font fallback.
+  const browser = await chromium.launch({
+    args: ["--no-sandbox"],
+    env: { ...process.env, FONTCONFIG_FILE: FONTCONFIG_PATH },
+  });
   const context = await browser.newContext({ deviceScaleFactor: 2 });
   const results: IRenderResult[] = [];
 
