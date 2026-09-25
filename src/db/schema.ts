@@ -112,11 +112,14 @@ export function applyMigrations(db: Database): void {
     ["allowed_channels", "TEXT"],
     ["settings_version", "INTEGER NOT NULL DEFAULT 0"],
     ["updated_by", "TEXT"],
+    ["release_announce_channel_id", "TEXT"],
   ]) {
     if (!columnsAfterHistory.some((column) => column.name === name)) {
       db.run(`ALTER TABLE guild_settings ADD COLUMN ${name} ${definition}`);
     }
   }
+
+  db.run("CREATE TABLE IF NOT EXISTS bot_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
   const turnsTable = db
     .query<{ name: string }, []>(

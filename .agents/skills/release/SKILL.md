@@ -31,6 +31,12 @@ mise exec -- git-cliff --tag v<version> --output CHANGELOG.md
 
 Confirm the first release heading is `## [<version>]` rather than `## [Unreleased]`.
 
+Validate that the target version has exactly one valid section using the same parser as the startup announcement; stop if this command fails:
+
+```bash
+bun scripts/checkReleaseNotes.ts <version>
+```
+
 ## Step 3: Prune released change docs
 
 Delete every `docs/changes/<name>/` folder whose `design.md` has `status: implemented`, rewriting the links other documents make into those folders to permalinks at the current commit:

@@ -301,6 +301,7 @@ describe("createMessageCreateHandler", () => {
     const mockGuildSettings = {
       guildId: "guild-123",
       adminRoleId: null,
+      releaseAnnounceChannelId: null,
       allowedChannels: null,
       settingsVersion: 0,
       updatedBy: null,
@@ -317,6 +318,7 @@ describe("createMessageCreateHandler", () => {
     };
 
     mockSettingsService = {
+      setReleaseAnnounceChannelId: mock(() => Promise.resolve(mockGuildSettings)),
       getGuildSettings: mock(() => Promise.resolve(mockGuildSettings)),
       setGuildModel: mock(() => Promise.resolve(mockGuildSettings)),
       setFreeModelsOnly: mock(() => Promise.resolve(mockGuildSettings)),
@@ -478,6 +480,7 @@ describe("createMessageCreateHandler", () => {
           Promise.resolve({
             guildId: "guild-123",
             adminRoleId: null,
+            releaseAnnounceChannelId: null,
             allowedChannels: null,
             settingsVersion: 0,
             updatedBy: null,

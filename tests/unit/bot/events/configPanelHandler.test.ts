@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
+  ChannelType,
   type Interaction,
   MessageFlags,
   PermissionFlagsBits,
@@ -33,7 +34,7 @@ function interaction(
   const fixture = {
     customId,
     guildId: "guild",
-    guild: null,
+    guild: null as unknown,
     user: { id: "actor" },
     values,
     roles: new Map<string, { managed: boolean }>(),
@@ -235,6 +236,8 @@ describe("config panel interactions", () => {
     ["cfg:channels:remove:auto", "string"],
     ["cfg:channels:add:allowed", "channel"],
     ["cfg:channels:remove:allowed", "string"],
+    ["cfg:admin:release", "channel"],
+    ["cfg:admin:release-clear", "button"],
   ])("lost member permission rejects %s without editing the panel", async (id, kind) => {
     await service.addAutoReplyChannel("guild", "channel");
     await service.addAllowedChannel("guild", "channel");
@@ -283,6 +286,134 @@ describe("config panel interactions", () => {
       expect((await service.getGuildSettings("guild"))[field]).toEqual(list === "auto" ? [] : null);
     },
   );
+  test.each([
+    [
+      ChannelType.GuildText,
+      [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+      true,
+    ],
+    [
+      ChannelType.GuildAnnouncement,
+      [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+      true,
+    ],
+    [
+      ChannelType.PublicThread,
+      [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages],
+      false,
+    ],
+    [ChannelType.GuildText, [PermissionFlagsBits.ViewChannel], false],
+    [ChannelType.GuildText, [PermissionFlagsBits.SendMessages], false],
+  ] as const)(
+    "release destination validates type %s and permissions %s",
+    async (type, permissions, valid) => {
+      await service.setAdminRoleId("guild", "admin");
+      const before = await service.getGuildSettings("guild");
+      const press = Object.assign(
+        interaction("cfg:admin:release", "channel", ["channel"], false, ["admin"]),
+        {
+          guild: {
+            id: "guild",
+            channels: {
+              cache: new Map(),
+              fetch: mock(async () => ({
+                id: "channel",
+                guildId: "guild",
+                type,
+                permissionsFor: () => new PermissionsBitField([...permissions]),
+              })),
+            },
+            members: { fetchMe: mock(async () => ({})) },
+          },
+        },
+      );
+      await handler(press as unknown as Interaction);
+      const after = await service.getGuildSettings("guild");
+      if (valid) {
+        expect(after.releaseAnnounceChannelId).toBe("channel");
+        expect(after.settingsVersion).toBe(before.settingsVersion + 1);
+        expect(after.updatedBy).toBe("actor");
+        expect(press.editReply).toHaveBeenCalledTimes(1);
+        const clear = interaction("cfg:admin:release-clear", "button", [], false, ["admin"]);
+        await handler(clear as unknown as Interaction);
+        expect((await service.getGuildSettings("guild")).releaseAnnounceChannelId).toBeNull();
+        expect(clear.update).toHaveBeenCalledTimes(1);
+      } else {
+        expect(after).toEqual(before);
+        expect(press.editReply).not.toHaveBeenCalled();
+        expect(flags(press.followUp.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
+      }
+    },
+  );
+  test.each([
+    [50001, "Missing Access", "「チャンネルを見る」と「メッセージを送信」の権限が必要"],
+    [50013, "Missing Permissions", "「チャンネルを見る」と「メッセージを送信」の権限が必要"],
+    [10003, "Unknown Channel", "通知先のチャンネルが見つかりません"],
+    [0, "Unexpected API error", "通知先を確認できませんでした"],
+    [undefined, "Network failure", "通知先を確認できませんでした"],
+  ])(
+    "release destination fetch failure %s is localized without saving",
+    async (code, message, reason) => {
+      await service.setReleaseAnnounceChannelId("guild", "existing", "previous");
+      const before = await service.getGuildSettings("guild");
+      const errorLog = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const press = Object.assign(interaction("cfg:admin:release", "channel", ["channel"]), {
+          guild: {
+            id: "guild",
+            channels: {
+              fetch: async () => {
+                throw Object.assign(new Error(message), { code });
+              },
+            },
+          },
+        });
+        await handler(press as unknown as Interaction);
+        expect(await service.getGuildSettings("guild")).toEqual(before);
+        expect(press.editReply).not.toHaveBeenCalled();
+        expect(press.followUp).toHaveBeenCalledTimes(1);
+        const payload = press.followUp.mock.calls[0][0];
+        expect(flags(payload) & MessageFlags.Ephemeral).toBeTruthy();
+        expect(JSON.stringify(payload)).toContain(reason);
+        expect(JSON.stringify(payload)).not.toContain(message);
+        expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(message));
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
+  test("release destination rechecks authorization after fetching the channel", async () => {
+    await service.setAdminRoleId("guild", "admin");
+    const press = Object.assign(
+      interaction("cfg:admin:release", "channel", ["channel"], false, ["admin"]),
+      {
+        guild: {
+          id: "guild",
+          channels: {
+            cache: new Map(),
+            fetch: async () => {
+              await service.setAdminRoleId("guild", "replacement");
+              return {
+                id: "channel",
+                guildId: "guild",
+                type: ChannelType.GuildText,
+                permissionsFor: () =>
+                  new PermissionsBitField([
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.SendMessages,
+                  ]),
+              };
+            },
+          },
+          members: { fetchMe: async () => ({}) },
+        },
+      },
+    );
+    await handler(press as unknown as Interaction);
+    expect((await service.getGuildSettings("guild")).releaseAnnounceChannelId).toBeNull();
+    expect(press.editReply).not.toHaveBeenCalled();
+    expect(flags(press.followUp.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
+  });
   test("read operations are public and do not write", async () => {
     const open = interaction("cfg:open", "button", [], false);
     await handler(open as unknown as Interaction);

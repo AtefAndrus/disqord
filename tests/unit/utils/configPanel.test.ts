@@ -27,6 +27,8 @@ const actions: ConfigAction[] = [
   { action: "page" },
   { page: "admin", action: "role" },
   { page: "admin", action: "clear" },
+  { page: "admin", action: "release" },
+  { page: "admin", action: "release-clear" },
   ...(["auto", "allowed"] as const).flatMap((list): ConfigAction[] => [
     { page: "channels", action: "add", list },
     { page: "channels", action: "remove", list },
@@ -120,6 +122,18 @@ describe("config pages", () => {
       expect(json).toContain(`cfg:channels:list:${list}:0:1:1`);
       expect(json).toContain(`cfg:channels:list:${list}:2:1:1`);
     }
+  });
+  test("admin page exposes one text or announcement destination and the disabled clear button", () => {
+    const empty = JSON.stringify(buildConfigPanel("admin", createMockGuildSettings()));
+    expect(empty).toContain("通知しない");
+    expect(empty).toContain('"channel_types":[0,5]');
+    expect(empty).toContain('"min_values":1');
+    expect(empty).toContain('"max_values":1');
+    const selected = JSON.stringify(
+      buildConfigPanel("admin", createMockGuildSettings({ releaseAnnounceChannelId: "channel" })),
+    );
+    expect(selected).toContain("<#channel>");
+    expect(selected).toContain("cfg:admin:release-clear");
   });
   test.each(Object.keys(CONFIG_PAGES) as ConfigPage[])("%s has at most 40 components", (page) => {
     const channels = Array.from({ length: 80 }, (_, i) => `${100000000000000000n + BigInt(i)}`);

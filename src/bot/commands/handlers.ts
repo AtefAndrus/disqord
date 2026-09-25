@@ -229,10 +229,12 @@ export function createCommandHandlers(
         );
         return;
       }
-      if (section.status === "duplicate") {
+      if (section.status !== "ok") {
         await interaction.reply(
           errorNotice(
-            `${label} の節が CHANGELOG に 2 つあるため表示できません。`,
+            section.status === "duplicate"
+              ? `${label} の節が CHANGELOG に 2 つあるため表示できません。`
+              : `${label} の節が CHANGELOG で壊れているため表示できません。`,
             "リリースノート",
             true,
           ),

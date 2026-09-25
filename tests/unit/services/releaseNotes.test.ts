@@ -129,6 +129,18 @@ describe("parseChangelog", () => {
     expect(okBody(notes.section(v("1.0.0")))).toContain("## [0.9.0]");
   });
 
+  test("a malformed dated heading remains visible as invalid and participates in duplicates", () => {
+    const malformed = "## [1.2.0] - not-a-date\n- broken\n";
+    expect(parseChangelog(malformed).section(v("1.2.0"))).toEqual({
+      version: v("1.2.0"),
+      status: "invalid",
+    });
+    expect(parseChangelog(malformed + sample).section(v("1.2.0"))).toEqual({
+      version: v("1.2.0"),
+      status: "duplicate",
+    });
+  });
+
   test("parses the repository CHANGELOG", async () => {
     const notes = await loadReleaseNotes(REPO_CHANGELOG);
     if (!notes) throw new Error("CHANGELOG.md could not be read");

@@ -94,6 +94,14 @@ describe("/release-note", () => {
     expect(text).toContain("リリースノートを読み込めませんでした。");
     expect(flags & MessageFlags.Ephemeral).toBe(MessageFlags.Ephemeral);
   });
+
+  test("a malformed section is reported privately instead of rendered", async () => {
+    const { interaction, reply, followUp } = commandInteraction("1.0.0");
+    await handlersFor(parseChangelog("## [1.0.0] - invalid\n")).releaseNote(interaction);
+    expect(replyOf(reply).text).toContain("壊れているため表示できません");
+    expect(replyOf(reply).flags & MessageFlags.Ephemeral).toBe(MessageFlags.Ephemeral);
+    expect(followUp).not.toHaveBeenCalled();
+  });
 });
 
 describe("/release-note autocomplete", () => {

@@ -1,6 +1,6 @@
 ---
 title: "リリース通知"
-status: planned
+status: implemented
 priority: medium
 summary: "起動時に動いている版を記録と比べ、新しい版なら CHANGELOG の該当する節を設定したチャンネルへ通知する"
 ---
@@ -74,10 +74,10 @@ webhook を受ける公開の受け口と署名の秘密鍵が要らず、「実
 
 ## Tasks
 
-- [ ] `bot_state` と `release_announce_channel_id` を足す
-- [ ] 起動時の通知を実装する
-- [ ] 設定パネルの「管理」ページの通知先の項目と、`/status` の表示を足す
-- [ ] 手動確認: 開発環境で記録を古い版に書き換えて起動し、設定したチャンネルに通知が出ることを確かめる
+- [x] `bot_state` と `release_announce_channel_id` を足す
+- [x] 起動時の通知を実装する
+- [x] 設定パネルの「管理」ページの通知先の項目と、`/status` の表示を足す
+- [x] 手動確認: 開発環境で記録を古い版に書き換えて起動し、設定したチャンネルに通知が出ることを確かめる
 - [ ] `docs/changes/release-announcement/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

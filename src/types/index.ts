@@ -6,6 +6,7 @@ export type MessageId = string;
 export interface GuildSettings {
   guildId: GuildId;
   adminRoleId: string | null;
+  releaseAnnounceChannelId: ChannelId | null;
   allowedChannels: ChannelId[] | null;
   settingsVersion: number;
   updatedBy: string | null;

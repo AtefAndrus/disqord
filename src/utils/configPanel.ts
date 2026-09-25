@@ -76,7 +76,7 @@ export type ConfigAction =
       autoPage?: number;
       allowedPage?: number;
     }
-  | { action: "role" | "clear"; page: "admin" };
+  | { action: "role" | "clear" | "release" | "release-clear"; page: "admin" };
 
 export function isConfigPage(value: string): value is ConfigPage {
   return Object.hasOwn(CONFIG_PAGES, value);
@@ -142,7 +142,14 @@ export function parseConfigCustomId(value: string): ConfigAction | undefined {
     )
       return { page, action, list: key, index: Number(state) };
   }
-  if (page === "admin" && (action === "role" || action === "clear") && parts.length === 3)
+  if (
+    page === "admin" &&
+    (action === "role" ||
+      action === "clear" ||
+      action === "release" ||
+      action === "release-clear") &&
+    parts.length === 3
+  )
     return { page, action };
   return undefined;
 }
@@ -286,6 +293,30 @@ export function buildConfigPanel(
     }
   }
   if (page === "admin") {
+    container.addTextDisplayComponents((text) =>
+      text.setContent(
+        `### リリース通知先\n${settings.releaseAnnounceChannelId ? `<#${settings.releaseAnnounceChannelId}>` : "通知しない"}`,
+      ),
+    );
+    container.addActionRowComponents(
+      new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
+        new ChannelSelectMenuBuilder()
+          .setCustomId(configCustomId({ page, action: "release" }))
+          .setPlaceholder("リリース通知先を選択")
+          .setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement)
+          .setMinValues(1)
+          .setMaxValues(1),
+      ),
+    );
+    container.addActionRowComponents(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(configCustomId({ page, action: "release-clear" }))
+          .setLabel("リリース通知先を解除")
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(settings.releaseAnnounceChannelId === null),
+      ),
+    );
     container.addTextDisplayComponents((text) =>
       text.setContent(
         `### 管理ロール\n${settings.adminRoleId ? `<@&${settings.adminRoleId}>` : "`ManageGuild` の持ち主だけが変更できる"}\n管理ロールの変更と解除には「サーバーの管理」権限が必要です。`,
