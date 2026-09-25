@@ -1,11 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ComponentType, MessageFlags } from "discord.js";
-import {
-  buildStatusMessage,
-  parseStatusSetCustomId,
-  STATUS_SWITCHES,
-  statusSetCustomId,
-} from "../../../src/utils/statusMessage";
+import { buildStatusMessage } from "../../../src/utils/statusMessage";
 import { createMockGuildSettings } from "../../helpers/mockFactories";
 
 function statusTextDisplays(message: ReturnType<typeof buildStatusMessage>): string[] {
@@ -55,28 +50,6 @@ describe("buildStatusMessage", () => {
     expect(texts).toContain("**推論表示**\n無効");
   });
 
-  test("各設定の Section ボタンは現在値と反対の値を指定する", () => {
-    const message = buildStatusMessage(statusData());
-    const container = message.components[0]?.toJSON();
-    if (!container) throw new Error("Expected the status Container");
-    const sections = container.components.filter(
-      (component) => component.type === ComponentType.Section,
-    );
-
-    expect(
-      sections.map((section) =>
-        "custom_id" in section.accessory ? section.accessory.custom_id : undefined,
-      ),
-    ).toEqual([
-      "status_set:free_only:on",
-      "status_set:llm_details:off",
-      "status_set:web_search:on",
-      "status_set:twitter_expand:off",
-      "status_set:history:on",
-      "status_set:reasoning_display:on",
-    ]);
-  });
-
   test("ギルド設定がない場合は設定行と操作ボタンを表示しない", () => {
     const message = buildStatusMessage({
       credits: { remaining: Number.POSITIVE_INFINITY },
@@ -99,19 +72,5 @@ describe("buildStatusMessage", () => {
     expect(
       container.components.some((component) => component.type === ComponentType.ActionRow),
     ).toBe(false);
-  });
-
-  test.each(STATUS_SWITCHES.flatMap((key) => [[key, true] as const, [key, false] as const]))(
-    "%s の %s custom ID を解析する",
-    (key, enabled) => {
-      expect(statusSetCustomId(key, enabled)).toBe(`status_set:${key}:${enabled ? "on" : "off"}`);
-      expect(parseStatusSetCustomId(statusSetCustomId(key, enabled))).toEqual({ key, enabled });
-    },
-  );
-
-  test("未対応の custom ID を解析しない", () => {
-    expect(parseStatusSetCustomId("status_set:unknown:on")).toBeUndefined();
-    expect(parseStatusSetCustomId("status_set:history:maybe")).toBeUndefined();
-    expect(parseStatusSetCustomId("other_button")).toBeUndefined();
   });
 });

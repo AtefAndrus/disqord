@@ -329,6 +329,9 @@ function actionRowInnerToMarkup(
   return (row.components ?? [])
     .map((c) => {
       if (c.type === ComponentType.Button) return buttonToMarkup(c);
+      if (c.type === ComponentType.ChannelSelect || c.type === ComponentType.RoleSelect) {
+        return `<discord-string-select-menu placeholder="${escapeAttr(c.placeholder ?? "選択")}"></discord-string-select-menu>`;
+      }
       if (c.type === ComponentType.StringSelect) {
         const opts = (c.options ?? [])
           .map(
@@ -336,7 +339,8 @@ function actionRowInnerToMarkup(
               `<discord-string-select-menu-option label="${escapeAttr(o.label)}"></discord-string-select-menu-option>`,
           )
           .join("");
-        const placeholder = c.placeholder ? ` placeholder="${escapeAttr(c.placeholder)}"` : "";
+        const selected = c.options.find((option) => option.default)?.label ?? c.placeholder;
+        const placeholder = selected ? ` placeholder="${escapeAttr(selected)}"` : "";
         return `<discord-string-select-menu${placeholder}>${opts}</discord-string-select-menu>`;
       }
       return "";

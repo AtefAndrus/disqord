@@ -373,7 +373,7 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    // Manual because it passes only after `/config web-search on` in the
+    // Manual because it passes only after `/config → 機能 → Web 検索 enabled` in the
     // guild under test, and every search is billed. The GitHub release
     // bun-v1.4.0 was published 2026-08-20T14:07:21Z: a fixed answer, unlike
     // a "latest version" that moves with every release. Naming the tag and
@@ -396,7 +396,7 @@ export const SCENARIOS: Scenario[] = [
         lastPageFooter(reply) ?? "",
       )
         ? []
-        : ["the usage footer reports no web search (is /config web-search on?)"]),
+        : ["the usage footer reports no web search (is /config → 機能 → Web 検索 enabled?)"]),
       ...(/^-# 検索結果\n- \[.+\]\(<https?:\/\/[^>\s]+>\)$/m.test(reply.body)
         ? []
         : ["the reply lists no search results (the search returned nothing)"]),
@@ -407,7 +407,7 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    // Requires `/config reasoning-display on`, `/config history on`, and a
+    // Requires `/config → 応答 → 推論表示 enabled`, `/config → 機能 → 会話履歴 enabled`, and a
     // model/provider that returns displayable reasoning. The tool call makes
     // the loop send the first turn's reasoning items back to OpenRouter, so
     // a rejected resend shows up as an error reply here. Observed
@@ -429,7 +429,7 @@ export const SCENARIOS: Scenario[] = [
     // Paired with history-recall, which must run right after it. The
     // passphrase is new on every run, so only the stored history can supply
     // it: a model cannot know it, and an earlier run's value does not match.
-    // Needs `/config history on` in the guild under test.
+    // Needs `/config → 機能 → 会話履歴 enabled` in the guild under test.
     name: "history-set",
     manual: true,
     prompt: `[e2e] 合言葉は「${HISTORY_PASSPHRASE}」です。覚えておいて、「了解」とだけ返事をして。`,
@@ -443,7 +443,7 @@ export const SCENARIOS: Scenario[] = [
       ...(reply.body.includes(HISTORY_PASSPHRASE)
         ? []
         : [
-            `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config history on?)`,
+            `the reply does not contain the passphrase ${HISTORY_PASSPHRASE} (is /config → 機能 → 会話履歴 enabled?)`,
           ]),
       ...hasUsageFooter(reply),
     ],

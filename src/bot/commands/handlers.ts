@@ -5,7 +5,7 @@ import type {
 } from "discord.js";
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
-import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
+import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import {
   buildReleaseNotePages,
@@ -13,20 +13,14 @@ import {
   parseVersion,
   type ReleaseNotes,
 } from "../../services/releaseNotes";
-import {
-  canManageGuildSettings,
-  settingsActorFromInteraction,
-  settingsPermissionDeniedMessage,
-} from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
-import type { GuildSettings } from "../../types";
 import {
   buildErrorContainer,
   buildSuccessNoticeContainer,
-  formatAutoReplyChannelList,
   toNoticeEditPayload,
   toNoticePayload,
 } from "../../utils/chatContainerBuilder";
+import { buildConfigPanel } from "../../utils/configPanel";
 import { logger } from "../../utils/logger";
 import {
   buildModelDetailsContainer,
@@ -51,24 +45,6 @@ export function createCommandHandlers(
   /** Undefined when CHANGELOG.md could not be read at startup. */
   releaseNotes?: ReleaseNotes,
 ): CommandHandlers {
-  /**
-   * Replies with the denial itself, so a handler only returns when this yields
-   * nothing; the settings come back because the check had to read them.
-   */
-  async function authorizedSettings(
-    interaction: ChatInputCommandInteraction,
-    guildId: string,
-  ): Promise<GuildSettings | undefined> {
-    const settings = await settingsService.getGuildSettings(guildId);
-    if (canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
-      return settings;
-    }
-    await interaction.reply(
-      errorNotice(settingsPermissionDeniedMessage(settings), "設定の変更", true),
-    );
-    return undefined;
-  }
-
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
       const helpText = `**使い方:**
@@ -83,17 +59,9 @@ export function createCommandHandlers(
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/release-note [version]\` - リリースノート（変更点）を表示
-- \`/config free-only <on|off>\` - 無料モデル限定の切り替え
-- \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
-- \`/config web-search <on|off>\` - Web検索の切り替え
-- \`/config reasoning-display <on|off>\` - 推論内容の表示切り替え
-- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え
-- \`/config history <on|off>\` - 会話履歴の切り替え
-- \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
-- \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
-- \`/config auto-reply list\` - 自動応答チャンネル一覧
+- \`/config\` - 設定パネルを開く
 
-\`/config\` の設定変更には「サーバーの管理」権限が必要です。`;
+設定の変更には「サーバーの管理」権限または管理ロールが必要です。管理ロールの変更は「サーバーの管理」権限の持ち主だけが行えます。`;
 
       await interaction.reply(successNotice(helpText, "DisQord ヘルプ"));
     },
@@ -159,7 +127,11 @@ export function createCommandHandlers(
       // The check above used settings read before any await; the save
       // re-checks free-only against the stored settings.
       const isFree = await modelService.isFreeModel(model);
-      await settingsService.setGuildModel(interaction.guildId, { model, isFree });
+      await settingsService.setGuildModel(
+        interaction.guildId,
+        { model, isFree },
+        interaction.user.id,
+      );
 
       // モデル詳細情報を取得して表示
       const details = await modelService.getModelDetails(model);
@@ -222,169 +194,16 @@ export function createCommandHandlers(
       await interaction.editReply(message);
     },
 
-    async configFreeOnly(interaction: ChatInputCommandInteraction): Promise<void> {
+    async config(interaction: ChatInputCommandInteraction): Promise<void> {
       if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      const settings = await authorizedSettings(interaction, interaction.guildId);
-      if (!settings) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      if (enabled) {
-        // The service rejects a paid model, or a model replaced while this
-        // one was being checked, against the settings as stored.
-        const { defaultModel } = settings;
-        const isFree = await modelService.isFreeModel(defaultModel);
-        await settingsService.setFreeModelsOnly(interaction.guildId, true, {
-          model: defaultModel,
-          isFree,
-        });
-      } else {
-        await settingsService.setFreeModelsOnly(interaction.guildId, false);
-      }
-      await interaction.reply(
-        successNotice(
-          enabled
-            ? "無料モデル限定を **有効** にしました。"
-            : "無料モデル限定を **無効** にしました。",
-          "無料モデル限定設定",
-        ),
-      );
-    },
-
-    async configLlmDetails(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      await settingsService.setShowLlmDetails(interaction.guildId, enabled);
-
-      await interaction.reply(
-        successNotice(
-          `LLM詳細情報表示を **${enabled ? "有効" : "無効"}** にしました。`,
-          "LLM詳細設定",
-        ),
-      );
-    },
-
-    async configWebSearch(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
-
-      await interaction.reply(
-        successNotice(
-          enabled
-            ? `Web検索を **有効** にしました（エンジン: ${webSearchEngine}）。\n\n${describeSearchBilling(webSearchEngine)}1回あたりの料金はエンジンごとに異なります: <https://openrouter.ai/docs/guides/features/server-tools/web-search>`
-            : "Web検索を **無効** にしました。",
-          "Web検索設定",
-        ),
-      );
-    },
-
-    async configReasoningDisplay(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
-      await interaction.reply(
-        successNotice(
-          `推論内容の表示を **${enabled ? "有効" : "無効"}** にしました。`,
-          "推論表示設定",
-        ),
-      );
-    },
-
-    async configTwitterExpand(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
-
-      await interaction.reply(
-        successNotice(
-          enabled ? "ツイート展開を **有効** にしました。" : "ツイート展開を **無効** にしました。",
-          "ツイート展開設定",
-        ),
-      );
-    },
-
-    async configHistory(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const enabled = interaction.options.getString("enabled", true) === "on";
-      await settingsService.setHistoryEnabled(interaction.guildId, enabled);
-      await interaction.reply(
-        successNotice(
-          enabled ? "会話履歴を **有効** にしました。" : "会話履歴を **無効** にしました。",
-          "会話履歴設定",
-        ),
-      );
-    },
-
-    async configAutoReplyAdd(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const channel = interaction.options.getChannel("channel", true);
-      await settingsService.addAutoReplyChannel(interaction.guildId, channel.id);
-
-      await interaction.reply(
-        successNotice(`<#${channel.id}> を自動応答チャンネルに追加しました。`, "自動応答設定"),
-      );
-    },
-
-    async configAutoReplyRemove(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      if (!(await authorizedSettings(interaction, interaction.guildId))) return;
-
-      const channelId = interaction.options.getString("channel", true);
-      const removed = await settingsService.removeAutoReplyChannel(interaction.guildId, channelId);
-
-      if (removed) {
         await interaction.reply(
-          successNotice(`<#${channelId}> を自動応答チャンネルから削除しました。`, "自動応答設定"),
+          errorNotice("このコマンドはサーバー内でのみ使用できます。", undefined, true),
         );
-      } else {
-        await interaction.reply(
-          errorNotice(`<#${channelId}> は自動応答チャンネルに設定されていません。`, "自動応答設定"),
-        );
+        return;
       }
+      await interaction.reply(
+        buildConfigPanel("response", await settingsService.getGuildSettings(interaction.guildId)),
+      );
     },
 
     async releaseNote(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -442,27 +261,6 @@ export function createCommandHandlers(
         .map((version) => ({ name: `v${version}`, value: version }));
       await interaction.respond(choices);
     },
-
-    async configAutoReplyList(interaction: ChatInputCommandInteraction): Promise<void> {
-      if (!interaction.guildId) {
-        await interaction.reply(errorNotice("このコマンドはサーバー内でのみ使用できます。"));
-        return;
-      }
-
-      const settings = await settingsService.getGuildSettings(interaction.guildId);
-      const channels = settings.autoReplyChannels;
-
-      if (channels.length === 0) {
-        await interaction.reply(
-          successNotice("自動応答チャンネルは設定されていません。", "自動応答チャンネル一覧"),
-        );
-        return;
-      }
-
-      await interaction.reply(
-        successNotice(formatAutoReplyChannelList(channels), "自動応答チャンネル一覧"),
-      );
-    },
   };
 }
 
@@ -476,31 +274,6 @@ export async function handleAutocomplete(
     if (!guildId) {
       await interaction.respond([]);
       return;
-    }
-
-    // config auto-reply remove のAutocomplete
-    if (interaction.commandName === "config") {
-      const subcommandGroup = interaction.options.getSubcommandGroup(false);
-      const subcommand = interaction.options.getSubcommand();
-
-      if (subcommandGroup === "auto-reply" && subcommand === "remove") {
-        const focusedValue = interaction.options.getFocused().toLowerCase();
-        const settings = await settingsService.getGuildSettings(guildId);
-
-        const choices = settings.autoReplyChannels
-          .map((id) => {
-            const channel = interaction.guild?.channels.cache.get(id);
-            return {
-              name: channel ? `#${channel.name}` : `ID: ${id}`,
-              value: id,
-            };
-          })
-          .filter((choice) => choice.name.toLowerCase().includes(focusedValue))
-          .slice(0, 25);
-
-        await interaction.respond(choices);
-        return;
-      }
     }
 
     // model set のAutocomplete

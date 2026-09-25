@@ -301,6 +301,9 @@ describe("createMessageCreateHandler", () => {
     const mockGuildSettings = {
       guildId: "guild-123",
       adminRoleId: null,
+      allowedChannels: null,
+      settingsVersion: 0,
+      updatedBy: null,
       defaultModel: "test-model:fixture",
       freeModelsOnly: false,
       showLlmDetails: true,
@@ -317,9 +320,10 @@ describe("createMessageCreateHandler", () => {
       getGuildSettings: mock(() => Promise.resolve(mockGuildSettings)),
       setGuildModel: mock(() => Promise.resolve(mockGuildSettings)),
       setFreeModelsOnly: mock(() => Promise.resolve(mockGuildSettings)),
-      toggleFreeModelsOnly: mock(() => Promise.resolve(true)),
       setShowLlmDetails: mock(() => Promise.resolve()),
-      toggleShowLlmDetails: mock(() => Promise.resolve(true)),
+      addAllowedChannel: mock(() => Promise.resolve()),
+      removeAllowedChannel: mock(() => Promise.resolve(true)),
+      setAdminRoleId: mock(() => Promise.resolve(mockGuildSettings)),
       addAutoReplyChannel: mock(() => Promise.resolve()),
       removeAutoReplyChannel: mock(() => Promise.resolve(true)),
       setWebSearchEnabled: mock(() => Promise.resolve(mockGuildSettings)),
@@ -474,6 +478,9 @@ describe("createMessageCreateHandler", () => {
           Promise.resolve({
             guildId: "guild-123",
             adminRoleId: null,
+            allowedChannels: null,
+            settingsVersion: 0,
+            updatedBy: null,
             defaultModel: "test-model",
             freeModelsOnly: false,
             showLlmDetails: false,
@@ -740,6 +747,7 @@ describe("createMessageCreateHandler", () => {
 
     // 自動応答チャンネルに設定
     const mockGuildSettingsWithAutoReply = {
+      allowedChannels: null,
       guildId: "guild-123",
       defaultModel: "test-model:fixture",
       freeModelsOnly: false,
@@ -767,6 +775,41 @@ describe("createMessageCreateHandler", () => {
     await handler(mockMessage as never);
 
     expect(mockChatService.generateChatResponse).toHaveBeenCalled();
+  });
+
+  test.each([true, false])("許可外はメンション %p と自動応答の両方を拒否する", async (mention) => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    mockSettingsService.getGuildSettings = mock(async () => ({
+      ...settings,
+      allowedChannels: ["other"],
+      autoReplyChannels: [mockMessage.channel.id],
+    }));
+    mockMessage.mentions.has.mockReturnValue(mention);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    )(mockMessage as never);
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+    expect(mockReply).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  test.each(["parent", "channel-123"])("スレッドは %s の許可で応答する", async (allowed) => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    mockSettingsService.getGuildSettings = mock(async () => ({
+      ...settings,
+      allowedChannels: [allowed],
+      autoReplyChannels: ["parent"],
+    }));
+    Object.assign(mockMessage.channel, { isThread: () => true, parentId: "parent" });
+    mockMessage.mentions.has.mockReturnValue(false);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    )(mockMessage as never);
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
   test("長文応答は複数メッセージに分割される", async () => {

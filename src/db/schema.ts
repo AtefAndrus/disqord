@@ -108,6 +108,16 @@ export function applyMigrations(db: Database): void {
     `);
   }
 
+  for (const [name, definition] of [
+    ["allowed_channels", "TEXT"],
+    ["settings_version", "INTEGER NOT NULL DEFAULT 0"],
+    ["updated_by", "TEXT"],
+  ]) {
+    if (!columnsAfterHistory.some((column) => column.name === name)) {
+      db.run(`ALTER TABLE guild_settings ADD COLUMN ${name} ${definition}`);
+    }
+  }
+
   const turnsTable = db
     .query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turns'",

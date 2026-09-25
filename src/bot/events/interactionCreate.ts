@@ -11,11 +11,6 @@ import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
 import type { IModelService } from "../../services/modelService";
-import {
-  canManageGuildSettings,
-  settingsActorFromInteraction,
-  settingsPermissionDeniedMessage,
-} from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
 import {
   buildErrorContainer,
@@ -25,8 +20,9 @@ import {
 } from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
 import { metrics } from "../../utils/metrics";
-import { buildStatusMessage, parseStatusSetCustomId } from "../../utils/statusMessage";
+import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
+import { handleConfigPanelInteraction } from "./configPanelHandler";
 
 /**
  * A rejected settings change carries text meant for the user (a conflict
@@ -47,15 +43,7 @@ export interface CommandHandlers {
   modelList: (interaction: ChatInputCommandInteraction) => Promise<void>;
   modelRefresh: (interaction: ChatInputCommandInteraction) => Promise<void>;
   status: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configFreeOnly: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configLlmDetails: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configWebSearch: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configReasoningDisplay: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configTwitterExpand: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configHistory: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
-  configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  config: (interaction: ChatInputCommandInteraction) => Promise<void>;
   releaseNote: (interaction: ChatInputCommandInteraction) => Promise<void>;
   releaseNoteAutocomplete: (interaction: AutocompleteInteraction) => Promise<void>;
 }
@@ -67,7 +55,7 @@ export function createInteractionCreateHandler(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
-) {
+): (interaction: Interaction) => Promise<void> {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
       if (interaction.commandName === "release-note") {
@@ -75,6 +63,17 @@ export function createInteractionCreateHandler(
         return;
       }
       await handleAutocomplete(interaction, settingsService, modelService);
+      return;
+    }
+
+    if (
+      (interaction.isButton() ||
+        interaction.isStringSelectMenu() ||
+        interaction.isChannelSelectMenu() ||
+        interaction.isRoleSelectMenu()) &&
+      interaction.customId.startsWith("cfg:")
+    ) {
+      await handleConfigPanelInteraction(interaction, settingsService, modelService);
       return;
     }
 
@@ -130,46 +129,9 @@ export function createInteractionCreateHandler(
           break;
         }
 
-        case "config": {
-          const subcommandGroup = interaction.options.getSubcommandGroup(false);
-          const subcommand = interaction.options.getSubcommand();
-
-          if (subcommandGroup === "auto-reply") {
-            switch (subcommand) {
-              case "add":
-                await handlers.configAutoReplyAdd(interaction);
-                break;
-              case "remove":
-                await handlers.configAutoReplyRemove(interaction);
-                break;
-              case "list":
-                await handlers.configAutoReplyList(interaction);
-                break;
-            }
-          } else {
-            switch (subcommand) {
-              case "free-only":
-                await handlers.configFreeOnly(interaction);
-                break;
-              case "llm-details":
-                await handlers.configLlmDetails(interaction);
-                break;
-              case "web-search":
-                await handlers.configWebSearch(interaction);
-                break;
-              case "reasoning-display":
-                await handlers.configReasoningDisplay(interaction);
-                break;
-              case "twitter-expand":
-                await handlers.configTwitterExpand(interaction);
-                break;
-              case "history":
-                await handlers.configHistory(interaction);
-                break;
-            }
-          }
+        case "config":
+          await handlers.config(interaction);
           break;
-        }
 
         default:
           logger.warn("Unknown command", { commandName });
@@ -185,7 +147,7 @@ export function createInteractionCreateHandler(
         const settingsError = settingsErrorContainer(error);
         const container =
           settingsError ?? buildErrorContainer("コマンドの実行中にエラーが発生しました。");
-        await reply(toNoticePayload(container));
+        await reply(toNoticePayload(container, interaction.commandName === "config"));
       } catch (replyError) {
         logger.error("Failed to send error message", { replyError });
       }
@@ -230,78 +192,21 @@ async function handleButtonInteraction(
       return;
     }
 
-    const statusChange = parseStatusSetCustomId(customId);
-    const isSettingsWrite =
-      statusChange !== undefined ||
-      customId === "status_toggle_free_only" ||
-      customId === "status_toggle_llm_details";
-    if (isSettingsWrite) {
-      const settings = await settingsService.getGuildSettings(interaction.guildId);
-      if (!canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
-        const message = settingsPermissionDeniedMessage(settings);
-        await interaction.reply(toNoticePayload(buildErrorContainer(message, "設定の変更"), true));
-        return;
-      }
-    }
-
-    // Every branch that re-renders /status waits on OpenRouter (model checks,
-    // credits) before it can update, which can pass Discord's 3-second
-    // deadline; acknowledging first keeps the interaction valid.
     if (
-      statusChange ||
+      customId.startsWith("status_set:") ||
       customId === "status_toggle_free_only" ||
-      customId === "status_toggle_llm_details" ||
-      customId === "status_model_refresh"
+      customId === "status_toggle_llm_details"
     ) {
-      await interaction.deferUpdate();
+      await interaction.reply(
+        toNoticePayload(
+          buildSuccessNoticeContainer("設定の変更には /config を使ってください。", "設定パネル"),
+          true,
+        ),
+      );
+      return;
     }
-    if (statusChange) {
-      const { key, enabled } = statusChange;
-      switch (key) {
-        case "free_only":
-          if (enabled) {
-            const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
-            const isFree = await modelService.isFreeModel(defaultModel);
-            await settingsService.setFreeModelsOnly(interaction.guildId, true, {
-              model: defaultModel,
-              isFree,
-            });
-          } else {
-            await settingsService.setFreeModelsOnly(interaction.guildId, false);
-          }
-          break;
-        case "llm_details":
-          await settingsService.setShowLlmDetails(interaction.guildId, enabled);
-          break;
-        case "web_search":
-        case "twitter_expand":
-        case "history":
-        case "reasoning_display": {
-          if (key === "web_search") {
-            await settingsService.setWebSearchEnabled(interaction.guildId, enabled);
-          } else if (key === "twitter_expand") {
-            await settingsService.setTwitterExpandEnabled(interaction.guildId, enabled);
-          } else if (key === "history") {
-            await settingsService.setHistoryEnabled(interaction.guildId, enabled);
-          } else {
-            await settingsService.setReasoningDisplayEnabled(interaction.guildId, enabled);
-          }
-          break;
-        }
-      }
-    } else if (customId === "status_toggle_free_only") {
-      // The direction is decided on the stored value inside the service, so
-      // two presses at once flip twice. The model check is passed either
-      // way because only the service knows whether this press turns it on.
-      const { defaultModel } = await settingsService.getGuildSettings(interaction.guildId);
-      const isFree = await modelService.isFreeModel(defaultModel);
-      await settingsService.toggleFreeModelsOnly(interaction.guildId, {
-        model: defaultModel,
-        isFree,
-      });
-    } else if (customId === "status_toggle_llm_details") {
-      await settingsService.toggleShowLlmDetails(interaction.guildId);
-    } else if (customId === "status_model_refresh") {
+    if (customId === "status_model_refresh") {
+      await interaction.deferUpdate();
       await modelService.refreshCache();
     } else if (customId === "status_auto_reply_list") {
       // 自動応答チャンネル一覧は別メッセージで表示

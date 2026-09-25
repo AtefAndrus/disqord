@@ -24,6 +24,7 @@ import {
   STREAMING_LABEL,
   splitTextIntoMessages,
 } from "../../src/utils/chatContainerBuilder";
+import { buildConfigPanel, CONFIG_PAGES, type ConfigPage } from "../../src/utils/configPanel";
 import { getColorForModel } from "../../src/utils/embedBuilder";
 import { buildModelDetailsContainer } from "../../src/utils/modelDetailsContainer";
 import { buildStatusMessage } from "../../src/utils/statusMessage";
@@ -48,6 +49,9 @@ const TRIGGER_MESSAGE_ID = "400000000000000000";
 const settings: GuildSettings = {
   guildId: "100000000000000000",
   adminRoleId: null,
+  allowedChannels: null,
+  settingsVersion: 1,
+  updatedBy: "200000000000000000",
   defaultModel: DEMO_MODEL,
   freeModelsOnly: true,
   showLlmDetails: false,
@@ -72,14 +76,7 @@ const HELP_TEXT = `**使い方:**
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/release-note [version]\` - リリースノート（変更点）を表示
-- \`/config free-only <on|off>\` - 無料モデル限定の切り替え
-- \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
-- \`/config web-search <on|off>\` - Web検索の切り替え
-- \`/config twitter-expand <on|off>\` - ツイート展開の切り替え
-- \`/config history <on|off>\` - 会話履歴の切り替え
-- \`/config auto-reply add <channel>\` - 自動応答チャンネルを追加
-- \`/config auto-reply remove <channel>\` - 自動応答チャンネルを削除
-- \`/config auto-reply list\` - 自動応答チャンネル一覧`;
+- \`/config\` - 設定パネルを開く`;
 
 const RELEASE_NOTE_BODY = (() => {
   const items = Array.from(
@@ -130,6 +127,14 @@ function buildFinalMessages(text: string, metadata: FinalMetadata): ContainerBui
 
 export function buildFixtures(): IFixture[] {
   const fixtures: IFixture[] = [];
+  for (const page of Object.keys(CONFIG_PAGES) as ConfigPage[]) {
+    fixtures.push({
+      id: `config-${page}`,
+      title: `/config · ${CONFIG_PAGES[page]}`,
+      note: "公開の設定パネル",
+      messages: packContainers(buildConfigPanel(page, settings).components),
+    });
+  }
 
   // 1. /status（ギルド内・ボタンあり）
   const statusGuild = buildStatusMessage({
@@ -229,26 +234,16 @@ export function buildFixtures(): IFixture[] {
     ]),
   });
 
-  // 7. /config auto-reply list
+  // 7. 既存の /status に残る一覧ボタン
   fixtures.push({
     id: "auto-reply-list",
-    title: "/config auto-reply list",
+    title: "旧 /status の自動応答チャンネル一覧",
     note: "成功通知 Container: 太字、箇条書き、複数チャンネルメンション",
     messages: packContainers([
       buildSuccessNoticeContainer(
         "**自動応答チャンネル:**\n- <#300000000000000000>\n- <#300000000000000001>\n- <#300000000000000002>",
         "自動応答チャンネル一覧",
       ),
-    ]),
-  });
-
-  // 8. /config 設定変更の確認
-  fixtures.push({
-    id: "config-confirm",
-    title: "/config free-only 確認",
-    note: "成功通知 Container: 文中の太字強調",
-    messages: packContainers([
-      buildSuccessNoticeContainer("無料モデル限定を **有効** にしました。", "無料モデル限定設定"),
     ]),
   });
 
