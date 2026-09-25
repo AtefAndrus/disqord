@@ -76,6 +76,7 @@ export function createMockSettingsService(): ISettingsService {
     setShowLlmDetails: mock((_guildId: string, _showLlmDetails: boolean) => Promise.resolve()),
     addAllowedChannel: mock(() => Promise.resolve()),
     removeAllowedChannel: mock(() => Promise.resolve(true)),
+    changeChannelList: mock((guildId: string) => Promise.resolve(settings(guildId))),
     setAdminRoleId: mock((guildId: string, adminRoleId: string | null) =>
       Promise.resolve(settings(guildId, { adminRoleId })),
     ),

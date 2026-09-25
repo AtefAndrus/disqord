@@ -2,6 +2,7 @@ import {
   type ButtonInteraction,
   type ChannelSelectMenuInteraction,
   PermissionFlagsBits,
+  RESTJSONErrorCodes,
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
@@ -28,6 +29,34 @@ import {
   parseConfigCustomId,
 } from "../../utils/configPanel";
 import { logger } from "../../utils/logger";
+
+/**
+ * Whether unchecking this channel can be taken as the presser's choice. The
+ * client cannot show a channel the presser is not allowed to see, so it drops
+ * out of the submitted values without anyone removing it; such a channel stays.
+ * A deleted channel has nothing to keep and goes.
+ */
+async function removableBy(
+  interaction: ChannelSelectMenuInteraction,
+  channelId: string,
+): Promise<boolean> {
+  const guild = interaction.guild;
+  if (!guild) return false;
+  const channel =
+    guild.channels.cache.get(channelId) ??
+    (await guild.channels
+      .fetch(channelId)
+      .catch((error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === RESTJSONErrorCodes.UnknownChannel
+          ? null
+          : undefined,
+      ));
+  if (channel === null) return true;
+  if (!channel) return false;
+  return channel.permissionsFor(interaction.user.id)?.has(PermissionFlagsBits.ViewChannel) === true;
+}
 
 type ConfigInteraction =
   | ButtonInteraction
@@ -67,6 +96,7 @@ export async function handleConfigPanelInteraction(
       },
     };
     const settings = await settingsService.getGuildSettings(guildId);
+    let staleEdit = false;
     if (action.action === "list" || action.action === "add" || action.action === "remove") {
       options.autoPage = action.autoPage;
       options.allowedPage = action.allowedPage;
@@ -91,6 +121,7 @@ export async function handleConfigPanelInteraction(
           interaction.values.length === 1) ||
         (action.action === "release-clear" && interaction.isButton()) ||
         (action.action === "set" && interaction.isButton()) ||
+        (action.action === "edit" && interaction.isChannelSelectMenu()) ||
         (action.action === "add" &&
           interaction.isChannelSelectMenu() &&
           interaction.values.length === 1) ||
@@ -189,6 +220,37 @@ export async function handleConfigPanelInteraction(
             await settingsService.setHistoryEnabled(guildId, enabled, actorId);
             break;
         }
+      } else if (action.action === "edit" && interaction.isChannelSelectMenu()) {
+        // The select was drawn from one version of the settings; against any other the
+        // presser's unchecks and checks cannot be told apart from someone else's edit.
+        if (action.version !== settings.settingsVersion) {
+          staleEdit = true;
+        } else {
+          // Looking up unchecked channels can go to the REST API and pass Discord's
+          // 3-second deadline, so the interaction is acknowledged first.
+          await interaction.deferUpdate();
+          const stored =
+            action.list === "auto" ? settings.autoReplyChannels : (settings.allowedChannels ?? []);
+          const removed: string[] = [];
+          for (const id of stored.filter((id) => !interaction.values.includes(id))) {
+            if (await removableBy(interaction, id)) removed.push(id);
+          }
+          try {
+            await settingsService.changeChannelList(
+              guildId,
+              action.list,
+              {
+                added: interaction.values.filter((id) => !stored.includes(id)),
+                removed,
+                expectedVersion: action.version,
+              },
+              actorId,
+            );
+          } catch (error) {
+            if (!(error instanceof SettingsConflictError)) throw error;
+            staleEdit = true;
+          }
+        }
       } else if (action.action === "add" && interaction.isChannelSelectMenu()) {
         if (action.list === "auto")
           await settingsService.addAutoReplyChannel(guildId, interaction.values[0], actorId);
@@ -206,6 +268,11 @@ export async function handleConfigPanelInteraction(
     );
     if (interaction.deferred) await interaction.editReply(payload);
     else await interaction.update(payload);
+    if (staleEdit) {
+      await notice(
+        "パネルを表示した後に設定が変わったため、保存しませんでした。最新の一覧でもう一度選んでください。",
+      );
+    }
     if (action.action === "set" && action.key === "web_search" && action.enabled) {
       await interaction.followUp(
         toNoticePayload(

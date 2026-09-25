@@ -27,6 +27,19 @@ export interface ISettingsService {
   removeAutoReplyChannel(guildId: string, channelId: string, actorId?: string): Promise<boolean>;
   addAllowedChannel(guildId: string, channelId: string, actorId?: string): Promise<void>;
   removeAllowedChannel(guildId: string, channelId: string, actorId?: string): Promise<boolean>;
+  /**
+   * Adds and removes channels in one write, leaving every other entry as stored,
+   * so an edit made from a stale view does not undo someone else's additions.
+   * Emptying the allowed list turns the restriction off (null). With
+   * `expectedVersion`, throws SettingsConflictError if the row has been written
+   * since that version, checked in the same transaction as the write.
+   */
+  changeChannelList(
+    guildId: string,
+    list: "auto" | "allowed",
+    change: { added: readonly string[]; removed: readonly string[]; expectedVersion?: number },
+    actorId?: string,
+  ): Promise<GuildSettings>;
   setAdminRoleId(guildId: string, roleId: string | null, actorId?: string): Promise<GuildSettings>;
   setWebSearchEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
   setReasoningDisplayEnabled(
@@ -150,6 +163,38 @@ export class SettingsService implements ISettingsService {
       (current) => {
         const channels = current.allowedChannels ?? [];
         return channels.includes(channelId) ? {} : { allowedChannels: [...channels, channelId] };
+      },
+      actorId,
+    );
+  }
+
+  async changeChannelList(
+    guildId: string,
+    list: "auto" | "allowed",
+    change: { added: readonly string[]; removed: readonly string[]; expectedVersion?: number },
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(
+      guildId,
+      (current) => {
+        if (
+          change.expectedVersion !== undefined &&
+          current.settingsVersion !== change.expectedVersion
+        ) {
+          throw new SettingsConflictError(
+            `channel list edit expected version ${change.expectedVersion} but the stored version is ${current.settingsVersion}`,
+          );
+        }
+        const stored =
+          list === "auto" ? current.autoReplyChannels : (current.allowedChannels ?? []);
+        const next = [
+          ...stored.filter((id) => !change.removed.includes(id)),
+          ...change.added.filter((id) => !stored.includes(id)),
+        ];
+        if (next.length === stored.length && next.every((id, i) => id === stored[i])) return {};
+        return list === "auto"
+          ? { autoReplyChannels: next }
+          : { allowedChannels: next.length ? next : null };
       },
       actorId,
     );
