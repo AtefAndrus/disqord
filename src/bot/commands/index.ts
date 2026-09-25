@@ -2,9 +2,16 @@ import { REST, Routes } from "discord.js";
 import { configCommand } from "./config";
 import { helpCommand } from "./help";
 import { modelCommand } from "./model";
+import { releaseNoteCommand } from "./releaseNote";
 import { statusCommand } from "./status";
 
-export const commandDefinitions = [helpCommand, statusCommand, modelCommand, configCommand];
+export const commandDefinitions = [
+  helpCommand,
+  statusCommand,
+  modelCommand,
+  configCommand,
+  releaseNoteCommand,
+];
 
 export async function registerCommands(applicationId: string, token: string): Promise<void> {
   const rest = new REST({ version: "10" }).setToken(token);

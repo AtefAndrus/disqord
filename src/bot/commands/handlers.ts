@@ -8,6 +8,12 @@ import type { ILLMClient } from "../../llm/openrouter";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import {
+  buildReleaseNotePages,
+  formatVersion,
+  parseVersion,
+  type ReleaseNotes,
+} from "../../services/releaseNotes";
+import {
   canManageGuildSettings,
   settingsActorFromInteraction,
   settingsPermissionDeniedMessage,
@@ -42,6 +48,8 @@ export function createCommandHandlers(
   settingsService: ISettingsService,
   modelService: IModelService,
   webSearchEngine: WebSearchEngine,
+  /** Undefined when CHANGELOG.md could not be read at startup. */
+  releaseNotes?: ReleaseNotes,
 ): CommandHandlers {
   /**
    * Replies with the denial itself, so a handler only returns when this yields
@@ -74,6 +82,7 @@ export function createCommandHandlers(
 - \`/model set <model>\` - モデルを変更
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
+- \`/release-note [version]\` - リリースノート（変更点）を表示
 - \`/config free-only <on|off>\` - 無料モデル限定の切り替え
 - \`/config llm-details <on|off>\` - LLM詳細情報表示の切り替え
 - \`/config web-search <on|off>\` - Web検索の切り替え
@@ -376,6 +385,62 @@ export function createCommandHandlers(
           errorNotice(`<#${channelId}> は自動応答チャンネルに設定されていません。`, "自動応答設定"),
         );
       }
+    },
+
+    async releaseNote(interaction: ChatInputCommandInteraction): Promise<void> {
+      const input = interaction.options.getString("version") ?? packageJson.version;
+      const version = parseVersion(input);
+      if (!version) {
+        await interaction.reply(
+          errorNotice("版は 1.2.3 の形で指定してください。", "リリースノート", true),
+        );
+        return;
+      }
+      if (!releaseNotes) {
+        await interaction.reply(
+          errorNotice("リリースノートを読み込めませんでした。", "リリースノート", true),
+        );
+        return;
+      }
+      const section = releaseNotes.section(version);
+      const label = `v${formatVersion(version)}`;
+      if (!section) {
+        await interaction.reply(
+          errorNotice(`${label} の変更点は CHANGELOG にありません。`, "リリースノート", true),
+        );
+        return;
+      }
+      if (section.status === "duplicate") {
+        await interaction.reply(
+          errorNotice(
+            `${label} の節が CHANGELOG に 2 つあるため表示できません。`,
+            "リリースノート",
+            true,
+          ),
+        );
+        return;
+      }
+      const [first, ...rest] = buildReleaseNotePages(version, section.body);
+      if (!first) return;
+      await interaction.reply(first);
+      for (const page of rest) {
+        await interaction.followUp(page);
+      }
+    },
+
+    async releaseNoteAutocomplete(interaction: AutocompleteInteraction): Promise<void> {
+      if (!releaseNotes) {
+        await interaction.respond([]);
+        return;
+      }
+      const focused = interaction.options.getFocused().trim().replace(/^v/i, "");
+      const choices = releaseNotes
+        .versions()
+        .map(formatVersion)
+        .filter((version) => version.includes(focused))
+        .slice(0, 25)
+        .map((version) => ({ name: `v${version}`, value: version }));
+      await interaction.respond(choices);
     },
 
     async configAutoReplyList(interaction: ChatInputCommandInteraction): Promise<void> {

@@ -19,6 +19,7 @@ import { ChatService } from "./services/chatService";
 import { ConversationWindowService } from "./services/conversationWindow";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
+import { loadReleaseNotes } from "./services/releaseNotes";
 import { createReplyRecordCleanupRunner, ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
@@ -72,6 +73,7 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     config.webSearchEngine,
+    await loadReleaseNotes(),
   );
 
   const client = await createBotClient();

@@ -5,6 +5,7 @@ tests
 tmp
 docs
 *.md
+!CHANGELOG.md
 .env*
 .vscode
 coverage

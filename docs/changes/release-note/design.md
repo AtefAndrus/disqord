@@ -74,11 +74,11 @@ interface ReleaseNotes {
 
 ## Tasks
 
-- [ ] CHANGELOG をイメージに入れる（`.dockerignore` と `Dockerfile`）
-- [ ] 節の切り出しと版の解析、比較を実装する
-- [ ] `/release-note` と autocomplete を足す
-- [ ] preview に表示を足す
-- [ ] テスト（実際の CHANGELOG.md での切り出し、先頭の節、末尾の注釈とリンク定義、`[Unreleased]`、重複、CRLF、コードブロックの中の見出し、閉じていないコードブロック、空の節、`v` 付きの入力、prerelease の拒否、autocomplete の絞り込みと 25 件の上限、日本語の複数ページ、メンションの抑止、CHANGELOG が読めない場合）
+- [x] CHANGELOG をイメージに入れる（`.dockerignore` と `Dockerfile`）
+- [x] 節の切り出しと版の解析、比較を実装する
+- [x] `/release-note` と autocomplete を足す
+- [x] preview に表示を足す
+- [x] テスト（実際の CHANGELOG.md での切り出し、先頭の節、末尾の注釈とリンク定義、`[Unreleased]`、重複、CRLF、コードブロックの中の見出し、閉じていないコードブロック、空の節、`v` 付きの入力、prerelease の拒否、autocomplete の絞り込みと 25 件の上限、日本語の複数ページ、メンションの抑止、CHANGELOG が読めない場合）
 - [ ] 手動確認: 開発用のサーバーで `/release-note` と `/release-note version:1.5.0` を実行し、表示と複数ページを確かめる
 - [ ] `docs/changes/release-note/` 削除（リリース完了時、git 履歴がアーカイブ）
 

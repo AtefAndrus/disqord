@@ -1,4 +1,5 @@
 import type {
+  AutocompleteInteraction,
   ButtonInteraction,
   ChatInputCommandInteraction,
   ContainerBuilder,
@@ -55,6 +56,8 @@ export interface CommandHandlers {
   configAutoReplyAdd: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyRemove: (interaction: ChatInputCommandInteraction) => Promise<void>;
   configAutoReplyList: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  releaseNote: (interaction: ChatInputCommandInteraction) => Promise<void>;
+  releaseNoteAutocomplete: (interaction: AutocompleteInteraction) => Promise<void>;
 }
 
 export function createInteractionCreateHandler(
@@ -67,6 +70,10 @@ export function createInteractionCreateHandler(
 ) {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
+      if (interaction.commandName === "release-note") {
+        await handlers.releaseNoteAutocomplete(interaction);
+        return;
+      }
       await handleAutocomplete(interaction, settingsService, modelService);
       return;
     }
@@ -98,6 +105,10 @@ export function createInteractionCreateHandler(
 
         case "status":
           await handlers.status(interaction);
+          break;
+
+        case "release-note":
+          await handlers.releaseNote(interaction);
           break;
 
         case "model": {
