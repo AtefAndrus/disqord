@@ -226,18 +226,30 @@ export async function handleConfigPanelInteraction(
         if (action.version !== settings.settingsVersion) {
           staleEdit = true;
         } else {
+          // Looking up unchecked channels can go to the REST API and pass Discord's
+          // 3-second deadline, so the interaction is acknowledged first.
+          await interaction.deferUpdate();
           const stored =
             action.list === "auto" ? settings.autoReplyChannels : (settings.allowedChannels ?? []);
           const removed: string[] = [];
           for (const id of stored.filter((id) => !interaction.values.includes(id))) {
             if (await removableBy(interaction, id)) removed.push(id);
           }
-          await settingsService.changeChannelList(
-            guildId,
-            action.list,
-            { added: interaction.values.filter((id) => !stored.includes(id)), removed },
-            actorId,
-          );
+          try {
+            await settingsService.changeChannelList(
+              guildId,
+              action.list,
+              {
+                added: interaction.values.filter((id) => !stored.includes(id)),
+                removed,
+                expectedVersion: action.version,
+              },
+              actorId,
+            );
+          } catch (error) {
+            if (!(error instanceof SettingsConflictError)) throw error;
+            staleEdit = true;
+          }
         }
       } else if (action.action === "add" && interaction.isChannelSelectMenu()) {
         if (action.list === "auto")

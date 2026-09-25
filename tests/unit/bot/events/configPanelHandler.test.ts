@@ -509,8 +509,26 @@ describe("config panel interactions", () => {
       expect(settings.autoReplyChannels).toEqual(["b", "c"]);
       expect(settings.settingsVersion).toBe(2);
       expect(settings.updatedBy).toBe("actor");
-      expect(press.update).toHaveBeenCalledTimes(1);
+      expect(press.deferUpdate).toHaveBeenCalledTimes(1);
+      expect(press.editReply).toHaveBeenCalledTimes(1);
       expect(press.followUp).not.toHaveBeenCalled();
+    });
+    test("a write that lands while unchecked channels are looked up is not overwritten", async () => {
+      await service.changeChannelList("guild", "auto", { added: ["a", "gone"], removed: [] });
+      const press = withGuild(await edit("auto", ["a"]), ["a"]);
+      const guild = press.guild as { channels: { fetch: unknown } };
+      guild.channels.fetch = mock(async () => {
+        await service.changeChannelList("guild", "auto", { added: ["late"], removed: [] });
+        throw Object.assign(new Error("Unknown Channel"), { code: 10003 });
+      });
+      await handler(press as unknown as Interaction);
+      expect((await service.getGuildSettings("guild")).autoReplyChannels).toEqual([
+        "a",
+        "gone",
+        "late",
+      ]);
+      expect(JSON.stringify(press.editReply.mock.calls[0]?.[0])).toContain('"id":"late"');
+      expect(flags(press.followUp.mock.calls[0][0]) & MessageFlags.Ephemeral).toBeTruthy();
     });
     test("a select drawn before another change saves nothing and redraws the panel", async () => {
       await service.changeChannelList("guild", "auto", { added: ["a"], removed: [] });
