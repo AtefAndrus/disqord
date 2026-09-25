@@ -5,7 +5,7 @@ import {
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
-import { SettingsConflictError, SettingsRuleError } from "../../errors";
+import { AppError, SettingsConflictError, SettingsRuleError } from "../../errors";
 import { describeSearchBilling, type WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IModelService } from "../../services/modelService";
 import { resolveReleaseChannel } from "../../services/releaseAnnouncer";
@@ -118,7 +118,10 @@ export async function handleConfigPanelInteraction(
             if (!interaction.guild) throw new Error("サーバー情報を取得できませんでした。");
             channelId = (await resolveReleaseChannel(interaction.guild, interaction.values[0])).id;
           } catch (error) {
-            await notice(error instanceof Error ? error.message : "通知先を確認できませんでした。");
+            logger.error("Release destination validation failed", { guildId, error });
+            await notice(
+              error instanceof AppError ? error.userMessage : "通知先を確認できませんでした。",
+            );
             return;
           }
           const latest = await settingsService.getGuildSettings(guildId);

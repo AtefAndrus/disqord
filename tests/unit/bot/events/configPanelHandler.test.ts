@@ -345,6 +345,43 @@ describe("config panel interactions", () => {
       }
     },
   );
+  test.each([
+    [50001, "Missing Access", "「チャンネルを見る」と「メッセージを送信」の権限が必要"],
+    [50013, "Missing Permissions", "「チャンネルを見る」と「メッセージを送信」の権限が必要"],
+    [10003, "Unknown Channel", "通知先のチャンネルが見つかりません"],
+    [0, "Unexpected API error", "通知先を確認できませんでした"],
+    [undefined, "Network failure", "通知先を確認できませんでした"],
+  ])(
+    "release destination fetch failure %s is localized without saving",
+    async (code, message, reason) => {
+      await service.setReleaseAnnounceChannelId("guild", "existing", "previous");
+      const before = await service.getGuildSettings("guild");
+      const errorLog = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const press = Object.assign(interaction("cfg:admin:release", "channel", ["channel"]), {
+          guild: {
+            id: "guild",
+            channels: {
+              fetch: async () => {
+                throw Object.assign(new Error(message), { code });
+              },
+            },
+          },
+        });
+        await handler(press as unknown as Interaction);
+        expect(await service.getGuildSettings("guild")).toEqual(before);
+        expect(press.editReply).not.toHaveBeenCalled();
+        expect(press.followUp).toHaveBeenCalledTimes(1);
+        const payload = press.followUp.mock.calls[0][0];
+        expect(flags(payload) & MessageFlags.Ephemeral).toBeTruthy();
+        expect(JSON.stringify(payload)).toContain(reason);
+        expect(JSON.stringify(payload)).not.toContain(message);
+        expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(message));
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+  );
   test("release destination rechecks authorization after fetching the channel", async () => {
     await service.setAdminRoleId("guild", "admin");
     const press = Object.assign(

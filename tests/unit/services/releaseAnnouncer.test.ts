@@ -186,15 +186,45 @@ describe("release announcements", () => {
   test("concurrent startup claims through separate connections send only once", async () => {
     const dir = mkdtempSync(join(tmpdir(), "disqord-release-"));
     const first = new Database(join(dir, "state.db"));
+    first.run("PRAGMA journal_mode = WAL");
     applyMigrations(first);
     first.query("INSERT INTO bot_state VALUES (?, ?)").run(KEY, "1.2.0");
     const second = new Database(join(dir, "state.db"));
+    second.run("PRAGMA busy_timeout = 0");
     try {
-      await Promise.all([
-        announcer(new BotStateRepository(first)).announce("1.4.0", notes),
-        announcer(new BotStateRepository(second)).announce("1.4.0", notes),
-      ]);
+      let competing: Promise<void> | undefined;
+      const competingSend = mock(async (): Promise<void> => {});
+      const other = new ReleaseAnnouncer(
+        new BotStateRepository(second),
+        settings,
+        () => ["a", "b"],
+        competingSend,
+      );
+      class OverlappingState extends BotStateRepository {
+        override claimRelease<T>(
+          version: string,
+          select: (stored: string | null) => T | undefined,
+        ): T | undefined {
+          return super.claimRelease(version, (stored) => {
+            // Enter the competing claim before this claim writes or commits, without scheduler timing.
+            competing = other.announce("1.4.0", notes);
+            return select(stored);
+          });
+        }
+      }
+      await announcer(new OverlappingState(first)).announce("1.4.0", notes);
+      expect(competing).toBeDefined();
+      await competing;
+      expect(competingSend).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
       expect(send).toHaveBeenCalledTimes(2);
+      expect(
+        first
+          .query<{ value: string }, [string]>("SELECT value FROM bot_state WHERE key = ?")
+          .get(KEY)?.value,
+      ).toBe("1.4.0");
+      await other.announce("1.4.0", notes);
+      expect(competingSend).not.toHaveBeenCalled();
     } finally {
       first.close();
       second.close();

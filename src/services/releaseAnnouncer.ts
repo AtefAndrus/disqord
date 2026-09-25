@@ -4,9 +4,11 @@ import {
   type Guild,
   type NewsChannel,
   PermissionFlagsBits,
+  RESTJSONErrorCodes,
   type TextChannel,
 } from "discord.js";
 import type { BotStateRepository } from "../db/repositories/botState";
+import { AppError } from "../errors";
 import { logger } from "../utils/logger";
 import {
   buildReleaseNotePages,
@@ -23,13 +25,27 @@ export async function resolveReleaseChannel(
   guild: Guild,
   channelId: string,
 ): Promise<TextChannel | NewsChannel> {
-  const channel = await guild.channels.fetch(channelId, { force: true });
+  const channel = await guild.channels.fetch(channelId, { force: true }).catch((error: unknown) => {
+    logger.error("Release destination fetch failed", { guildId: guild.id, channelId, error });
+    const code = error instanceof Error && "code" in error ? error.code : undefined;
+    let reason = "通知先を確認できませんでした。しばらくしてから再度お試しください。";
+    if (
+      code === RESTJSONErrorCodes.MissingAccess ||
+      code === RESTJSONErrorCodes.MissingPermissions
+    ) {
+      reason = "通知先で bot に「チャンネルを見る」と「メッセージを送信」の権限が必要です。";
+    } else if (code === RESTJSONErrorCodes.UnknownChannel) {
+      reason = "通知先のチャンネルが見つかりません。別のチャンネルを選択してください。";
+    }
+    throw new AppError("Release destination fetch failed", reason);
+  });
   if (
     !channel ||
     channel.guildId !== guild.id ||
     (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement)
   ) {
-    throw new Error(
+    throw new AppError(
+      "Invalid release destination",
       "通知先にはこのサーバーのテキストチャンネルかアナウンスチャンネルを選択してください。",
     );
   }
@@ -39,7 +55,10 @@ export async function resolveReleaseChannel(
       .permissionsFor(member)
       ?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])
   ) {
-    throw new Error("通知先で bot に「チャンネルを見る」と「メッセージを送信」の権限が必要です。");
+    throw new AppError(
+      "Missing release destination permissions",
+      "通知先で bot に「チャンネルを見る」と「メッセージを送信」の権限が必要です。",
+    );
   }
   return channel;
 }
