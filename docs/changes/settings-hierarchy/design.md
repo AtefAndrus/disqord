@@ -18,7 +18,7 @@ temperature などの LLM パラメータや、システムプロンプトを変
 - 先行: [Responses API への移行](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/responses-api-migration/design.md) — 解決済みパラメータを全ターンへ渡す経路（`IToolLoopParams.requestFields`）は同 change が用意した。あわせて送信できるパラメータ集合が Chat Completions より狭い（後述）
 - 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort と token 上限は本 change の LLM パラメータで解決し、推論本文を表示するかどうかは同 change が入れた Guild 設定 `reasoning_display_enabled` で扱う
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — guild スコープと channel スコープへの書き込みは同 change の共通認可関数 `canManageGuildSettings` で認可する
-- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — プロンプトと LLM パラメータの編集は、同 change の「プロンプトとパラメータ」ページと本人にだけ見える「自分の設定」のパネルに載せる。`/config` はサブコマンドを持たないので、本 change はサブコマンドや別のスラッシュコマンドを足さない
+- 先行: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — プロンプトと LLM パラメータの編集は、同 change の「プロンプトとパラメータ」ページと本人にだけ見える「自分の設定」のパネルに載せる。`/config` はサブコマンドを持たないので、本 change はサブコマンドや別のスラッシュコマンドを足さない
 - 連携: [OAuth BYOK](../oauth-byok/design.md) — ユーザーが自分のキーで払う場合に `free_models_only` を課すかは、両 change のどちらかで決める必要がある
 
 ## Goals / Non-Goals
@@ -50,7 +50,7 @@ temperature などの LLM パラメータや、システムプロンプトを変
 | パラメータ形式 | JSON 文字列（SQLite カラム） | 送信できるパラメータが増えてもスキーマを変えずに済む |
 | パラメータの許可リスト | 本 change が持つ対応表のキー | Models API の `supported_parameters` は Chat Completions の名前を返し、Responses API で送れる名前と一致しない |
 | カスタムプロンプトの置き場所 | Responses の `input` 先頭の system メッセージ | 設計メモ「プロンプトの置き場所と順序」に書く |
-| 編集の入口 | プロンプトとパラメータは [設定パネル](../config-panel/design.md) の「プロンプトとパラメータ」ページと「自分の設定」のパネルで編集する。モデルは `/model set <model> [scope]` で設定する | 自由入力は modal に向き、保存値と実効値と由来を並べて見せられる。モデルは数百件から autocomplete で選ぶ必要があり、選択メニュー（最大 25 件）に収まらないのでスラッシュコマンドに残す |
+| 編集の入口 | プロンプトとパラメータは [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「プロンプトとパラメータ」ページと「自分の設定」のパネルで編集する。モデルは `/model set <model> [scope]` で設定する | 自由入力は modal に向き、保存値と実効値と由来を並べて見せられる。モデルは数百件から autocomplete で選ぶ必要があり、選択メニュー（最大 25 件）に収まらないのでスラッシュコマンドに残す |
 
 ## Design
 
@@ -71,7 +71,7 @@ temperature などの LLM パラメータや、システムプロンプトを変
 | `twitter_expand_enabled` | Guild 専用 | 同上 |
 | `auto_reply_channels` | Guild 専用 | 値そのものがチャンネルの一覧なので、チャンネル単位の上書きと重なる |
 
-Guild 専用のトグルは、[設定パネル](../config-panel/design.md) の「応答」「機能」ページで切り替える。
+Guild 専用のトグルは、[設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「応答」「機能」ページで切り替える。
 
 ### 解決順序と Guild 制約
 
@@ -127,7 +127,7 @@ DB は `PRAGMA foreign_keys = ON` で開く（`src/db/index.ts:11`）が、`guil
 
 ### 設定パネルでの編集
 
-[設定パネル](../config-panel/design.md) の「スコープ付き設定のページ」の形に載せる。
+[設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「スコープ付き設定のページ」の形に載せる。
 
 - 「プロンプトとパラメータ」ページ（チャンネルに公開）は guild と channel のスコープを扱う。対象のスコープを String Select で選び、channel のときは Channel Select で対象のチャンネルを選ぶ。
 - 項目はモデル、LLM パラメータ、システムプロンプトの 3 つで、それぞれに選んだスコープの保存値、実際に効いている値、その値がどのスコープ由来か（モデル既定値を含む）を表示する。LLM パラメータの由来はキーごとに示す。
@@ -138,7 +138,7 @@ DB は `PRAGMA foreign_keys = ON` で開く（`src/db/index.ts:11`）が、`guil
 
 ### /status の表示
 
-`/status` は状態の表示に専念し、設定を変える部品を持たない（[設定パネル](../config-panel/design.md)）。
+`/status` は状態の表示に専念し、設定を変える部品を持たない（[設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md)）。
 `/status` は Ephemeral ではない返信なので、Guild の設定の要約を表示し、実行したチャンネルに channel スコープの上書きがあれば、そのモデルと、プロンプトとパラメータが設定されているかどうかを 1 項目として加える。
 user スコープの値は `/status` には出さず、本人が「自分の設定」のパネルで確かめる。
 
@@ -244,7 +244,7 @@ OpenRouter が `instructions` と `input` 内の system 項目を、OpenAI 以�
 - [ ] パラメータ対応表と検証、リクエストへの適用
 - [ ] 設定パネルの「プロンプトとパラメータ」ページ（スコープと対象チャンネルの選択、保存値と実効値と由来の表示、編集の modal、上書きの削除）
 - [ ] 「自分の設定」のパネル（user スコープ、本人にだけ見える）
-- [ ] 設定パネルの modal の仕組み（版の比較と保存を同じトランザクションで行うこと、下書き、「入力を修正する」）を、[設定パネル](../config-panel/design.md) の「modal の下書き」の仕様どおりに実装する
+- [ ] 設定パネルの modal の仕組み（版の比較と保存を同じトランザクションで行うこと、下書き、「入力を修正する」）を、[設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「modal の下書き」の仕様どおりに実装する
 - [ ] modal の handler の単体テスト（書き込み時の認可、版の衝突、入力エラー、下書きの期限切れと本人以外の押下）
 - [ ] 手動確認: PC とスマホで、プロンプトとパラメータを modal で編集し、入力エラーからの「入力を修正する」と版の衝突の表示を確かめる
 - [ ] プロンプトの適用

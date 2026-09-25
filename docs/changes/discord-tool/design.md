@@ -16,7 +16,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓に並ぶメッセージは `m7` のような参照で示され、`read_earlier_messages` / `view_attachment` がその参照を使う。本 change の tool も対象メッセージを同じ参照で受け取る
-- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 有効化の切り替えは同 change の「機能」ページの項目として足す
+- 先行: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — 有効化の切り替えは同 change の「機能」ページの項目として足す
 - 連携: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 有効化の切り替えの認可は、同 change の共通認可関数を呼ぶ。tool の実行時の認可（依頼者自身の Discord の権限を確かめる「共通の確認」）はそれとは別の軸で、本 change の `discordActionService` が持つ
 - 関連: [会話の分岐 (fork)](../fork/design.md) — 分岐先としてスレッドを作り、分岐元との関係を記録する。スレッドの作成は本 change の `create_thread` と同じ処理を使える
 
@@ -53,7 +53,7 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 | -------- | ---- | ---- |
 | tool の形 | 1 操作を 1 tool として登録する | 操作ごとの JSON Schema の方が、1 つの tool の `action` enum に畳むよりモデルの選択が正確で、`isEnabled` も操作ごとに書ける |
 | v1 の操作 | リアクション、投票、スレッド作成、ピン留め | どれも REST だけで完結し、特権 intent を足さずに動く。結果は Discord 上で誰にでも見える。リアクションとピンは取り消せ、投票は作成者（bot）かメッセージを管理できる人が消せる。スレッドを消すには `ManageThreads` が要り、作った本人だけでは消せない |
-| 有効化の単位 | [設定パネル](../config-panel/design.md) の「機能」ページの「Discord 操作」の on/off で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
+| 有効化の単位 | [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「機能」ページの「Discord 操作」の on/off で 4 つをまとめて切り替え、既定は off とする。guild 設定の列 `discord_tools_enabled` に保存する | どれも副作用が小さく、1 つずつ切り替える需要は今のところ無い。副作用のある操作を管理者の明示なしに始めない |
 | 対象メッセージの指定 | 会話の窓の参照（`m7`）で受け取り、省略時は bot を呼んだメッセージとする。会話履歴が off の guild では、bot を呼んだメッセージだけを対象にできる | モデルに生のメッセージ ID を書かせない。窓に無いメッセージは操作できない |
 | 権限の確認 | Discord を変える呼び出しはすべて `discordActionService` の 1 つの認可関数を通し、各操作の実行の直前に、bot と依頼したメンバーの両方が下の「共通の確認」と操作ごとの権限を満たすときだけ実行する | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。確認を操作ごとに書くと、閲覧権限、タイムアウト、非公開スレッドの参加といった前提の抜けが操作ごとに生じるので、1 か所に集める |
 | 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.27.0 の `Message#pinnable` の実装に合わせる |

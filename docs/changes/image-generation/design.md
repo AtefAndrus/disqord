@@ -23,7 +23,7 @@ planner は画像に限らない生成物を扱う形にし、[コード実行](
 - 前提（実装済み）: [推論の表示](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/reasoning-output/design.md) — `reasoning.md` の `File` 添付と、編集時の添付の消去を実装済みで、planner はこの添付と同じメッセージに生成物を並べる
 - 連携: [コード実行](../code-execution/design.md) — 生成ファイルの表示に本 change の planner を使う。どちらが先に実装されても、planner は本 change の仕様どおりに実装する
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 画像生成のトグルの変更は同 change の共通認可関数で判定する
-- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 画像生成のトグルは同 change の「機能」ページの項目として足す
+- 先行: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — 画像生成のトグルは同 change の「機能」ページの項目として足す
 - 連携: [使用統計](../usage-stats/design.md) — 画像生成の費用を保存対象に含める
 
 ## Goals / Non-Goals
@@ -57,7 +57,7 @@ planner は画像に限らない生成物を扱う形にし、[コード実行](
 | 1 回の生成で作る枚数 | handler 1 回につき `n = 1`、1 回の生成（1 回の `runToolLoop()`）で最大 `IMAGE_GENERATION_MAX_IMAGES`（既定 4）枚。上限に達した後の呼び出しは生成せずに上限到達を tool の結果として返す | client loop の `MAX_TOOL_CALLS_PER_TURN` と `MAX_TURNS` だけでは 1 回の生成で 30 枚を超えうる。1 枚ずつ呼ばせると、上限の判定と失敗の切り分けが 1 枚単位になる |
 | 有効化ゲート | `guild_settings.image_generation_enabled`（既定 0）と、環境変数 `IMAGE_GENERATION_ENABLED`（既定 `false`） | 1 枚ごとに課金されるので opt-in にする。環境変数は、料金や挙動が変わったときに guild の設定を触らずに止めるためのもの |
 | トグルの認可 | [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する | 1 枚ごとに課金されるので、ほかのギルド設定の書き込みと同じく一般メンバーには切り替えさせない |
-| トグルの置き場所 | [設定パネル](../config-panel/design.md) の「機能」ページに、Web 検索と同じ 1 回の押下で切り替わる on/off の項目として置く。確認の 2 段は挟まない。`/status` は状態を表示するだけにする | 課金を伴う点は Web 検索と同じで、外部へのデータの持ち出しは会話のモデルへの送信の範囲を超えないので、有効化の前に読ませる確認文が要らない |
+| トグルの置き場所 | [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「機能」ページに、Web 検索と同じ 1 回の押下で切り替わる on/off の項目として置く。確認の 2 段は挟まない。`/status` は状態を表示するだけにする | 課金を伴う点は Web 検索と同じで、外部へのデータの持ち出しは会話のモデルへの送信の範囲を超えないので、有効化の前に読ませる確認文が要らない |
 | tool の結果としてモデルへ返す内容 | 成否、生成したファイル名、改訂されたプロンプトがあればそれ。画像そのものと URL は返さない | モデルが本文に URL や base64 を書き写す経路を作らない。画像をモデルに見せる必要は無く、見せると入力トークンの費用が増える |
 | 生成物の境界 | producer は検証済みのバイト列だけを `ResponseArtifact` にする。planner と描画は URL、data URL、base64 文字列を受け取らない | 出所を失った共通層では、取得先の検証やサイズの強制を producer ごとに適用できない |
 | MIME | magic byte で PNG / JPEG / WebP / GIF を判定して `MediaGallery` に入れる。それ以外（SVG を含む）は `File` として扱う | 応答の `media_type` は省略されうる（OpenAPI 定義の `ImageGenerationResponse`）。SVG は Discord client のインライン表示が安定しない |
@@ -198,7 +198,7 @@ Images API の費用は Responses API の `usage` とは別の応答で届くの
 ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL DEFAULT 0;
 ```
 
-切り替えは [設定パネル](../config-panel/design.md) の「機能」ページの on/off で行う。`/status` は現在の値を表示する。
+切り替えは [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「機能」ページの on/off で行う。`/status` は現在の値を表示する。
 
 | 変数 | 既定 | 用途 |
 | ---- | ---- | ---- |

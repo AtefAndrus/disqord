@@ -29,7 +29,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 - 連携: [chat-response-v2](https://github.com/AtefAndrus/disqord/blob/2b2a78350778992e14d014a42b09825df05718c1/docs/changes/chat-response-v2/design.md) — 実行の進捗と結果は V2 updater の tool block hook に描画する
 - 連携: [画像生成](../image-generation/design.md) — 添付、component 数、合計バイト数の予算をまとめて配分する planner（`ResponseLayoutPlanner`）と、検証済みのバイト列を渡す生成物の型を同 change が定義する。本 change はそれを再利用し、本 change が先に実装される場合は、同 change の仕様どおりに planner を実装する
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — 2 つのトグルの変更は、同 change の共通認可関数で判定する
-- 先行: [設定パネル（/config の再構成）](../config-panel/design.md) — 2 つのトグルは同 change の「機能」ページの項目として足し、有効化は同 change の確認の 2 段で行う
+- 先行: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — 2 つのトグルは同 change の「機能」ページの項目として足し、有効化は同 change の確認の 2 段で行う
 - 連携: [回答の再生成と取り消し](../conversation-regeneration/design.md) — 実行結果のメッセージは回答と同じ生成に属する。生成が失効したときの公開の停止と、結果メッセージの扱いは同 change に従う（後述）
 - 連携: [使用統計](../usage-stats/design.md) — サンドボックス課金（`server_tool_cost`）を保存対象に含める
 - 関連: [OAuth BYOK](../oauth-byok/design.md) — コンテナは API キーの workspace に scope されるので、利用者の鍵で生成した場合のファイル取得は、生成に使ったのと同じ鍵で行う必要がある
@@ -74,7 +74,7 @@ shell server tool はこれらをすべて OpenRouter 側に持つ。
 | policy とコンテナの整合 | 1 回の生成の間は最初のターンで決めた policy を使い続ける | policy はコンテナ起動時に固定され、稼働中のコンテナへ別の policy を送ると 409 になる。guild 設定は `runToolLoop()` の開始時に一度だけ読み、`serverTools` を凍結して全ターンへ同じものを送る（foundation の既存の契約）。コンテナ ID も生成ごとに新しいので、別の生成の policy と衝突しない |
 | 有効化ゲート | `guild_settings.code_execution_enabled`（既定 0）と `code_execution_network_enabled`（既定 0）。前者が 1 のときだけ shell tool を載せ、両方が 1 のときだけ allowlist を付ける。どちらも新しい生成を始めるときの入口の制御であり、実行中の生成は止めない | 課金と第三者サンドボックスの利用を伴うので opt-in にする。`serverTools` は生成の開始時に凍結するので、トグルを off にしても進行中の生成の残りのターンには効かない。止めたい場合は停止ボタンを使う |
 | トグルの認可 | 2 つのトグルの変更は [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) の共通認可関数 `canManageGuildSettings` で判定する。確認の 2 段では、最初の押下と確認の押下の両方で判定する | 課金を伴う実行と外部通信を一般メンバーが有効化できないようにする。確認文を表示した後に権限を外された人が、確認の押下だけで有効化できないようにする |
-| トグルの置き場所と確認 | 2 つのトグルは [設定パネル](../config-panel/design.md) の「機能」ページに置く。on にする操作は、ボタン → 押した本人にだけ見える確認文と「有効にする」ボタン → 反映の 2 段にする。off にする操作は 1 回の押下で反映する。`/status` は状態を表示するだけで、切り替えの部品を持たない | 有効化の前に、実行内容が OpenRouter のサンドボックスに渡り 30 日保持されるという確認文（セキュリティとプライバシー）を読ませる必要がある。1 回の押下で切り替わるボタンでは確認文を挟めない。ネットワークの許可は外部通信を広げるので、同じく確認を挟む。off は課金と外部通信を減らす方向なので確認は要らない |
+| トグルの置き場所と確認 | 2 つのトグルは [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「機能」ページに置く。on にする操作は、ボタン → 押した本人にだけ見える確認文と「有効にする」ボタン → 反映の 2 段にする。off にする操作は 1 回の押下で反映する。`/status` は状態を表示するだけで、切り替えの部品を持たない | 有効化の前に、実行内容が OpenRouter のサンドボックスに渡り 30 日保持されるという確認文（セキュリティとプライバシー）を読ませる必要がある。1 回の押下で切り替わるボタンでは確認文を挟めない。ネットワークの許可は外部通信を広げるので、同じく確認を挟む。off は課金と外部通信を減らす方向なので確認は要らない |
 | グローバルな無効化 | 環境変数 `CODE_EXECUTION_ENABLED`（既定 `false`）。`false` なら guild 設定に関係なく tool を載せない。環境変数は起動時に読むので、切り替えには Bot の再起動が要る | beta の tool であり、挙動や課金が変わったときに、再ビルドや guild ごとの設定変更なしで止められるようにする |
 | 1 発言あたりの実行回数 | `runToolLoop()` に server tool の実行回数の予算（既定 8）を持たせる。各ターンのリクエストに残り予算を `max_tool_calls` として載せ、ターンの usage の `server_tool_use_details.tool_calls_requested` を予算から引く。usage にこの値が無いターンは、そのターンに送った `max_tool_calls` の全量を消費したものとして扱う。予算が尽きたターン以降は server tool を `tools` から外す。`max_tool_calls` と `stop_server_tools_when` は loop が所有するフィールドに加え、`requestFields` から取り除く | `max_tool_calls` は 1 HTTP リクエストの上限であり、`runToolLoop()` は 1 発言で、tool を実行できるリクエストを最大 4 回送る（5 回目は `tool_choice: "none"` の最終ターンで、`tools` は載るが実行はされない）。固定値をそのまま全ターンへ送ると 1 発言の上限はその 4 倍になる。`max_tool_calls` は shell だけでなく全 server tool の合計に効くので、予算は shell ではなく loop が持ち、[Web 検索](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) など他の server tool と共有する。Web 検索が無効で client tool を載せるリクエストには `openrouter:datetime` が常に載っており（`chatService.ts` の `runChatLoop`）、モデルがこれを呼んだ回数も `tool_calls_requested` に含まれて予算を減らす。回数が報告されないターンを 0 回と見なすと、実行したのに予算が減らないので、報告が無い場合は安全側に倒す。`stop_server_tools_when` は指定すると `max_tool_calls` が無視されるので、呼び出し側から指定できないようにする |
 | 自動リトライとの関係 | shell を載せたリクエストを、shell を載せたまま再送しない。`chatService.ts` の `generateChatResponse` は、何も表示しておらず client tool も実行していない失敗に限って、ツイートの画像を外した再試行と、Web 検索を外した再試行をそれぞれ 1 回まで行う。shell が載っている場合は、この 2 つの再試行のどちらでも shell も外す。失敗した試行は、そのターンに送った `max_tool_calls` の全量を予算から消費したものとして扱う | 失敗したリクエストが、検索の前に shell のコマンドを実行し終えていることがある。shell を残して再送すると、同じコンテナに対する変更が二重に行われ、課金も二重になる。失敗した試行の usage は得られないので、回数は安全側に倒して数える |
@@ -352,7 +352,7 @@ ALTER TABLE guild_settings ADD COLUMN code_execution_enabled INTEGER NOT NULL DE
 ALTER TABLE guild_settings ADD COLUMN code_execution_network_enabled INTEGER NOT NULL DEFAULT 0;
 ```
 
-切り替えは [設定パネル](../config-panel/design.md) の「機能」ページで行う（Decisions「トグルの置き場所と確認」）。
+切り替えは [設定パネル](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) の「機能」ページで行う（Decisions「トグルの置き場所と確認」）。
 どちらも Decisions「トグルの認可」の権限を要求し、権限の無い操作は設定を変えずに拒否する。
 
 2 つの列は独立に保存する。

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.9.0] - 2026-09-25
+
+
+### Added
+
+- /config を設定パネルにし、許可チャンネルと管理ロールを設定できるようにする (#169)
+- 新しい版で起動したら、設定したチャンネルへ変更点を通知する (#170)
+- 設定パネルのチャンネル一覧を 1 つの選択欄で編集できるようにする (#172)
+
+
+### Fixed
+
+- 設定パネルの on/off ボタンを「有効にする」「無効にする」だけにし、状態で色を分ける (#171)
+
+
+### Documentation
+
+- 設定パネルの手動確認を完了にする (#173)
+
+
+### Testing
+
+- E2e の失敗時に返信を保存し、separator を名前指定のシナリオにする (#168)
+
+
 ## [1.8.0] - 2026-09-25
 
 
@@ -462,6 +487,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.9.0]: https://github.com/AtefAndrus/disqord/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/AtefAndrus/disqord/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/AtefAndrus/disqord/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/AtefAndrus/disqord/compare/v1.5.0...v1.6.0
