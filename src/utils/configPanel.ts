@@ -63,7 +63,7 @@ export type ChannelList = "auto" | "allowed";
 export type ConfigAction =
   | { action: "open" | "page" }
   | { action: "set"; page: "response" | "features"; key: ConfigSwitch; enabled: boolean }
-  | { action: "edit"; page: "channels"; list: ChannelList }
+  | { action: "edit"; page: "channels"; list: ChannelList; version: number }
   | {
       action: "add" | "remove";
       page: "channels";
@@ -89,7 +89,7 @@ export function configCustomId(action: ConfigAction): string {
   if (action.action === "open" || action.action === "page") return `cfg:${action.action}`;
   if (action.action === "set")
     return `cfg:${action.page}:set:${action.key}:${action.enabled ? "on" : "off"}`;
-  if (action.action === "edit") return `cfg:channels:edit:${action.list}`;
+  if (action.action === "edit") return `cfg:channels:edit:${action.list}:${action.version}`;
   if (action.action === "list" || action.action === "add" || action.action === "remove") {
     const positions =
       action.autoPage === undefined && action.allowedPage === undefined
@@ -119,7 +119,12 @@ export function parseConfigCustomId(value: string): ConfigAction | undefined {
     return { page, action, key: typedKey, enabled: state === "on" };
   }
   if (page === "channels" && (key === "auto" || key === "allowed")) {
-    if (action === "edit") return parts.length === 4 ? { page, action, list: key } : undefined;
+    if (action === "edit")
+      return parts.length === 5 &&
+        /^(0|[1-9]\d*)$/.test(state) &&
+        Number.isSafeInteger(Number(state))
+        ? { page, action, list: key, version: Number(state) }
+        : undefined;
     const positionOffset = action === "list" ? 5 : 4;
     if (
       (action === "list" || action === "add" || action === "remove") &&
@@ -245,13 +250,16 @@ export function buildConfigPanel(
           `### ${label}（${channels.length} 件）\n${lines.join("\n") || (list === "auto" ? "自動応答なし" : "全チャンネルで応答")}\n${list === "allowed" ? "最後の 1 件を削除すると全チャンネルで応答します。" : "メンションがなくても応答します。"}`,
         ),
       );
-      if (channels.length <= CHANNEL_SELECT_LIMIT) {
+      if (channels.length < CHANNEL_SELECT_LIMIT) {
         // One select holds the whole list: checking adds a channel, unchecking removes it.
-        // A select cannot preselect more than 25, so longer lists keep the add/remove pair below.
+        // A full select (25 preselected) leaves no room to check one more, so from 25 on
+        // the list keeps the add/remove pair below.
         container.addActionRowComponents(
           new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(
             new ChannelSelectMenuBuilder()
-              .setCustomId(configCustomId({ page, action: "edit", list }))
+              .setCustomId(
+                configCustomId({ page, action: "edit", list, version: settings.settingsVersion }),
+              )
               .setPlaceholder(`${label}を選択`)
               .setChannelTypes(ChannelType.GuildText, ChannelType.PublicThread)
               .setDefaultChannels(channels)

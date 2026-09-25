@@ -2,6 +2,7 @@ import {
   type ButtonInteraction,
   type ChannelSelectMenuInteraction,
   PermissionFlagsBits,
+  RESTJSONErrorCodes,
   type RoleSelectMenuInteraction,
   type StringSelectMenuInteraction,
 } from "discord.js";
@@ -30,32 +31,31 @@ import {
 import { logger } from "../../utils/logger";
 
 /**
- * The channels the select showed as checked when it was pressed, read from the
- * message itself: the difference between these and the submitted values is what
- * this person changed, whatever else has changed in the database since.
+ * Whether unchecking this channel can be taken as the presser's choice. The
+ * client cannot show a channel the presser is not allowed to see, so it drops
+ * out of the submitted values without anyone removing it; such a channel stays.
+ * A deleted channel has nothing to keep and goes.
  */
-function shownChannels(interaction: ChannelSelectMenuInteraction): string[] | undefined {
-  const find = (node: unknown): string[] | undefined => {
-    if (typeof node !== "object" || node === null) return undefined;
-    const part = node as {
-      custom_id?: string;
-      default_values?: { id: string }[];
-      components?: unknown[];
-      accessory?: unknown;
-    };
-    if (part.custom_id === interaction.customId)
-      return (part.default_values ?? []).map((v) => v.id);
-    for (const child of [...(part.components ?? []), part.accessory]) {
-      const found = find(child);
-      if (found) return found;
-    }
-    return undefined;
-  };
-  for (const component of interaction.message.components) {
-    const found = find(component.toJSON());
-    if (found) return found;
-  }
-  return undefined;
+async function removableBy(
+  interaction: ChannelSelectMenuInteraction,
+  channelId: string,
+): Promise<boolean> {
+  const guild = interaction.guild;
+  if (!guild) return false;
+  const channel =
+    guild.channels.cache.get(channelId) ??
+    (await guild.channels
+      .fetch(channelId)
+      .catch((error: unknown) =>
+        error instanceof Error &&
+        "code" in error &&
+        error.code === RESTJSONErrorCodes.UnknownChannel
+          ? null
+          : undefined,
+      ));
+  if (channel === null) return true;
+  if (!channel) return false;
+  return channel.permissionsFor(interaction.user.id)?.has(PermissionFlagsBits.ViewChannel) === true;
 }
 
 type ConfigInteraction =
@@ -96,6 +96,7 @@ export async function handleConfigPanelInteraction(
       },
     };
     const settings = await settingsService.getGuildSettings(guildId);
+    let staleEdit = false;
     if (action.action === "list" || action.action === "add" || action.action === "remove") {
       options.autoPage = action.autoPage;
       options.allowedPage = action.allowedPage;
@@ -220,20 +221,24 @@ export async function handleConfigPanelInteraction(
             break;
         }
       } else if (action.action === "edit" && interaction.isChannelSelectMenu()) {
-        const shown = shownChannels(interaction);
-        if (!shown) {
-          await notice("この操作は無効です。`/config` から開き直してください。");
-          return;
+        // The select was drawn from one version of the settings; against any other the
+        // presser's unchecks and checks cannot be told apart from someone else's edit.
+        if (action.version !== settings.settingsVersion) {
+          staleEdit = true;
+        } else {
+          const stored =
+            action.list === "auto" ? settings.autoReplyChannels : (settings.allowedChannels ?? []);
+          const removed: string[] = [];
+          for (const id of stored.filter((id) => !interaction.values.includes(id))) {
+            if (await removableBy(interaction, id)) removed.push(id);
+          }
+          await settingsService.changeChannelList(
+            guildId,
+            action.list,
+            { added: interaction.values.filter((id) => !stored.includes(id)), removed },
+            actorId,
+          );
         }
-        await settingsService.changeChannelList(
-          guildId,
-          action.list,
-          {
-            added: interaction.values.filter((id) => !shown.includes(id)),
-            removed: shown.filter((id) => !interaction.values.includes(id)),
-          },
-          actorId,
-        );
       } else if (action.action === "add" && interaction.isChannelSelectMenu()) {
         if (action.list === "auto")
           await settingsService.addAutoReplyChannel(guildId, interaction.values[0], actorId);
@@ -251,6 +256,11 @@ export async function handleConfigPanelInteraction(
     );
     if (interaction.deferred) await interaction.editReply(payload);
     else await interaction.update(payload);
+    if (staleEdit) {
+      await notice(
+        "パネルを表示した後に設定が変わったため、保存しませんでした。最新の一覧でもう一度選んでください。",
+      );
+    }
     if (action.action === "set" && action.key === "web_search" && action.enabled) {
       await interaction.followUp(
         toNoticePayload(
