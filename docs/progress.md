@@ -19,6 +19,7 @@
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
+| [会話履歴の時間制限の撤廃と tool 結果の予算化](changes/unbounded-conversation-history/design.md) | 中 | planned | 会話履歴を 24 時間より前まで読めるようにし、tool の結果の大きさを固定バイト数ではなくモデルの context 長から決める予算で抑える |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | investigating | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用量とコストを記録し /stats で表示する |
