@@ -10,10 +10,8 @@ import type {
   ConversationWindowContext,
 } from "../../../src/services/conversationWindow";
 import {
-  CONVERSATION_MAX_AGE_MS,
   CONVERSATION_REST_LIMIT,
   ConversationWindowService,
-  READ_EARLIER_MAX_RESULT_BYTES,
   WINDOW_RAW_MESSAGE_LIMIT,
   WINDOW_SHRUNK_MESSAGE_LIMIT,
   WINDOW_SHRUNK_TOKEN_LIMIT,
@@ -214,7 +212,15 @@ class ScenarioRecords implements IReplyRecordRepository {
     return 0;
   }
 
-  deleteExpired(): number {
+  deleteByGuild(): number {
+    return 0;
+  }
+
+  deleteByChannel(): number {
+    return 0;
+  }
+
+  deleteGuildsNotIn(): number {
     return 0;
   }
 
@@ -1843,35 +1849,32 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
     ensure(tracker.healthySeen, `token limit ${targetTokens} lost healthy content`);
   }
 
-  for (const offset of [1, 0, -1]) {
-    const older = message(
-      "100",
-      HEALTHY_EXCHANGE,
-      new Date(NOW - CONVERSATION_MAX_AGE_MS + offset).toISOString(),
-    );
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (const ageMs of [DAY_MS - 1, DAY_MS, DAY_MS + 1, 30 * DAY_MS]) {
+    const older = message("100", HEALTHY_EXCHANGE, new Date(NOW - ageMs).toISOString());
     const harness = createHarness({
-      name: `age-limit-${offset}`,
-      seed: `age-limit-${offset}`,
+      name: `age-${ageMs}`,
+      seed: `age-${ageMs}`,
       pageCount: 0,
       recordVariant: "none",
     });
     const tracker = new OutputTracker(HEALTHY_OUTPUT_EXCHANGE, TARGET_OUTPUT_EXCHANGE);
     const context = requireContext(
-      await buildAndTrack(harness, tracker, `age-limit-build-${offset}`),
-      `age limit ${offset} returned no context`,
+      await buildAndTrack(harness, tracker, `age-build-${ageMs}`),
+      `age ${ageMs} returned no context`,
     );
-    addToolList(harness, [older], `age-limit-page-${offset}`);
+    addToolList(harness, [older], `age-page-${ageMs}`);
     const result = await readAndTrack(
       harness,
       tracker,
       context,
       1,
       new AbortController().signal,
-      `age-limit-${offset}`,
+      `age-${ageMs}`,
     );
     const returned = typeof result === "string" && result.includes("exchange=healthy|body=100");
-    ensure(returned === offset >= 0, `24-hour boundary ${offset} returned the wrong content`);
-    ensure(tracker.healthySeen, `24-hour boundary ${offset} lost healthy content`);
+    ensure(returned, `a message ${ageMs} ms old was not returned`);
+    ensure(tracker.healthySeen, `age ${ageMs} lost healthy content`);
   }
 
   const replyLimitHarness = createHarness({
@@ -1920,11 +1923,9 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
   );
   ensure(replyLimitTracker.healthySeen, "reply-target deletion lost healthy content");
 
-  for (const bytes of [
-    READ_EARLIER_MAX_RESULT_BYTES - 64,
-    READ_EARLIER_MAX_RESULT_BYTES,
-    READ_EARLIER_MAX_RESULT_BYTES + 64,
-  ]) {
+  // Without a token budget the whole message comes back as valid JSON, past
+  // the 16 KiB the dispatcher used to clip every result to.
+  for (const bytes of [16 * 1024 - 64, 16 * 1024, 16 * 1024 + 64]) {
     const older = message("100", HEALTHY_EXCHANGE, new Date(NOW - 10 * 60 * 1000).toISOString(), {
       content: `exchange=${HEALTHY_EXCHANGE}|${"x".repeat(Math.max(1, bytes))}`,
     });
@@ -1949,13 +1950,13 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
       new AbortController().signal,
       `tool-bytes-${bytes}`,
     );
-    const resultBytes =
-      typeof result === "string"
-        ? new TextEncoder().encode(result).byteLength
-        : new TextEncoder().encode(JSON.stringify(result)).byteLength;
+    ensure(typeof result === "string", `tool byte boundary ${bytes} returned parts`);
+    const parsed = JSON.parse(result as string) as {
+      messages: Array<{ text: string; truncated: boolean }>;
+    };
     ensure(
-      resultBytes <= READ_EARLIER_MAX_RESULT_BYTES,
-      `tool byte boundary ${bytes} exceeded the result limit`,
+      parsed.messages[0]?.text === older.content && parsed.messages[0]?.truncated === false,
+      `tool byte boundary ${bytes} did not return the whole message`,
     );
     ensure(tracker.healthySeen, `tool byte boundary ${bytes} lost healthy content`);
   }

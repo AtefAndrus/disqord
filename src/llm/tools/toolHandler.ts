@@ -1,4 +1,9 @@
 import type { ResponsesInputContentPart, ToolChatMessage } from "../../types";
+import {
+  estimateToolResultTokens,
+  FIXED_RESULT_TOKENS,
+  MAX_TOOL_ERROR_RESULT_BYTES,
+} from "../contextBudget";
 import type {
   IClientTool,
   IToolContext,
@@ -38,6 +43,13 @@ export interface IToolDispatchOutcome {
   toolMessage: ToolChatMessage;
   /** Only present when `status === "ok"`. */
   render?: ToolRenderPayload;
+  /**
+   * The result exceeded `ctx.resultBudgetTokens` and was replaced with
+   * `result_too_large`. The tool may already have committed state for the
+   * result that never reached the model, and the conversation tools share
+   * that state, so the loop runs no client tool for the rest of the response.
+   */
+  resultTooLarge?: true;
 }
 
 export interface IToolDispatchOptions {
@@ -52,7 +64,6 @@ export interface IToolDispatchOptions {
 export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 export const MIN_TOOL_TIMEOUT_MS = 1_000;
 export const MAX_TOOL_TIMEOUT_MS = 120_000;
-export const MAX_TOOL_RESULT_BYTES = 16_384;
 /** Backstop for binary tool parts; attachment tools enforce their smaller per-format limits. */
 export const MAX_TOOL_RESULT_PART_BYTES = 32 * 1024 * 1024;
 
@@ -95,13 +106,15 @@ function sliceFromTailByBytes(bytes: Uint8Array, maxBytes: number): string {
 
 /**
  * UTF-8-safe head+tail clip to at most `maxBytes` bytes, never splitting a
- * multi-byte character. Both normal `llmResult`s and generated error
- * messages go through this same path (design "tool 結果の serialize").
+ * multi-byte character. The dispatcher uses it only for the error texts it
+ * generates. A normal result is never clipped here: a marker in the middle
+ * keeps neither JSON structure nor whole messages, so a result over budget
+ * is refused instead. A future tool whose output reads fine with its middle
+ * cut out (a log, a fetched page) can call this itself with a byte count
+ * derived from `ctx.resultBudgetTokens`, then check the clipped text with
+ * `estimateToolResultTokens()`.
  */
-export function clipToolResultBytes(
-  text: string,
-  maxBytes: number = MAX_TOOL_RESULT_BYTES,
-): string {
+export function clipToolResultBytes(text: string, maxBytes: number): string {
   const bytes = utf8Encoder.encode(text);
   if (bytes.length <= maxBytes) return text;
 
@@ -373,7 +386,7 @@ export class ToolDispatcher {
       // `IToolHandlerResult.llmResult` only binds at compile time —
       // a handler is arbitrary tool-author code, so a runtime value that
       // doesn't actually match (e.g. `{ llmResult: undefined }`) must be
-      // caught here. Otherwise it reaches `clipToolResultBytes()` (which
+      // caught here. Otherwise it reaches the budget estimate (which
       // assumes a string) and produces a `status:"ok"` tool message whose
       // `content` isn't a string, silently dropping the required `content`
       // field from the next model request instead of failing loudly.
@@ -389,6 +402,12 @@ export class ToolDispatcher {
         );
       }
 
+      const budget = options.ctx.resultBudgetTokens;
+      const estimated = estimateToolResultTokens(llmResult);
+      const fixedLength =
+        settlement.value.terminal === true &&
+        typeof llmResult === "string" &&
+        estimated <= FIXED_RESULT_TOKENS;
       if (typeof llmResult !== "string") {
         const bounded = clipToolResultParts(llmResult);
         if (bounded === null) {
@@ -397,6 +416,9 @@ export class ToolDispatcher {
             "error",
             `Tool "${call.name}" returned a result that exceeds the multimodal output limit.`,
           );
+        }
+        if (budget !== undefined && estimated > budget) {
+          return this.resultTooLargeOutcome(call, estimated, budget);
         }
         return {
           status: "ok",
@@ -409,18 +431,55 @@ export class ToolDispatcher {
         };
       }
 
+      if (!fixedLength && budget !== undefined && estimated > budget) {
+        return this.resultTooLargeOutcome(call, estimated, budget);
+      }
       return {
         status: "ok",
         toolMessage: {
           role: "tool",
           tool_call_id: call.id,
-          content: clipToolResultBytes(llmResult),
+          content: llmResult,
         },
         ...(settlement.value.render !== undefined && { render: settlement.value.render }),
       };
     } finally {
       cleanup();
     }
+  }
+
+  /**
+   * For a call the loop does not run because an earlier result in the same
+   * response was `result_too_large`.
+   */
+  buildStoppedOutcome(call: INormalizedToolCall): IToolDispatchOutcome {
+    return this.errorOutcome(
+      call,
+      "error",
+      '{"error":"client_tools_stopped","reason":"result_too_large"}',
+    );
+  }
+
+  private resultTooLargeOutcome(
+    call: INormalizedToolCall,
+    estimatedTokens: number,
+    budget: number,
+  ): IToolDispatchOutcome {
+    console.warn(
+      `[tool] result over budget name=${call.name} estimated=${estimatedTokens} budget=${budget}`,
+    );
+    return {
+      ...this.errorOutcome(
+        call,
+        "error",
+        JSON.stringify({
+          error: "result_too_large",
+          estimated_tokens: estimatedTokens,
+          budget: Math.max(0, Math.floor(budget)),
+        }),
+      ),
+      resultTooLarge: true,
+    };
   }
 
   private errorOutcome(
@@ -433,7 +492,7 @@ export class ToolDispatcher {
       toolMessage: {
         role: "tool",
         tool_call_id: call.id,
-        content: clipToolResultBytes(message),
+        content: clipToolResultBytes(message, MAX_TOOL_ERROR_RESULT_BYTES),
       },
     };
   }

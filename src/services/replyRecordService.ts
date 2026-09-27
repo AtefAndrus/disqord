@@ -24,7 +24,9 @@ export interface IReplyRecordService {
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
   markPendingFailed(): Promise<number>;
-  cleanupExpired(now?: number): Promise<number>;
+  deleteByGuild(guildId: string): Promise<number>;
+  deleteByChannel(channelId: string): Promise<number>;
+  deleteGuildsNotIn(guildIds: readonly string[]): Promise<number>;
 }
 
 function operationError(error: unknown): string {
@@ -122,39 +124,30 @@ export class ReplyRecordService implements IReplyRecordService {
     }
   }
 
-  async cleanupExpired(now?: number): Promise<number> {
+  async deleteByGuild(guildId: string): Promise<number> {
     try {
-      return this.repository.deleteExpired(now);
+      return this.repository.deleteByGuild(guildId);
     } catch (error) {
-      console.error("[replyRecord] cleanupExpired failed", operationError(error));
+      console.error("[replyRecord] deleteByGuild failed", operationError(error));
       return 0;
     }
   }
-}
 
-export const REPLY_RECORD_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+  async deleteByChannel(channelId: string): Promise<number> {
+    try {
+      return this.repository.deleteByChannel(channelId);
+    } catch (error) {
+      console.error("[replyRecord] deleteByChannel failed", operationError(error));
+      return 0;
+    }
+  }
 
-export interface ReplyRecordCleanupRunner {
-  run(): void;
-  cancel(): void;
-}
-
-export function createReplyRecordCleanupRunner(
-  service: IReplyRecordService,
-  setIntervalFn: typeof setInterval = setInterval,
-  clearIntervalFn: typeof clearInterval = clearInterval,
-  onCleanup?: () => void,
-): ReplyRecordCleanupRunner {
-  const timer = setIntervalFn(() => {
-    void service.cleanupExpired();
-    onCleanup?.();
-  }, REPLY_RECORD_CLEANUP_INTERVAL_MS);
-  timer.unref();
-  return {
-    run: () => {
-      void service.cleanupExpired();
-      onCleanup?.();
-    },
-    cancel: () => clearIntervalFn(timer),
-  };
+  async deleteGuildsNotIn(guildIds: readonly string[]): Promise<number> {
+    try {
+      return this.repository.deleteGuildsNotIn(guildIds);
+    } catch (error) {
+      console.error("[replyRecord] deleteGuildsNotIn failed", operationError(error));
+      return 0;
+    }
+  }
 }

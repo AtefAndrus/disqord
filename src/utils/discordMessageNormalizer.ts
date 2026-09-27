@@ -1,5 +1,6 @@
 import type { ReplyPage } from "../db/repositories/replyRecord";
 import { REASONING_COMPONENT_ID } from "./chatContainerBuilder";
+import { estimateTextTokens } from "./tokenEstimate";
 
 export interface RawDiscordAttachment {
   id: string;
@@ -257,14 +258,7 @@ export function estimateNormalizedMessageTokens(
   message: NormalizedMessage,
   ref = message.ref ?? "m1",
 ): number {
-  const text = formatMessageForModel(message, ref);
-  let ascii = 0;
-  let nonAscii = 0;
-  for (const character of Array.from(text)) {
-    if ((character.codePointAt(0) ?? 0) <= 0x7f) ascii++;
-    else nonAscii++;
-  }
-  return Math.ceil(ascii / 4) + nonAscii;
+  return estimateTextTokens(formatMessageForModel(message, ref));
 }
 
 export function buildConversationUntrustedDataSystemMessage(): {

@@ -25,6 +25,8 @@ export interface ModelDetails {
   outputModalities: string[];
   supportedParameters: string[];
   supportsTools: boolean;
+  /** `top_provider.max_completion_tokens`; null when OpenRouter does not state one. */
+  maxCompletionTokens?: number | null;
 }
 
 export type Modality = "image" | "file";
@@ -138,6 +140,7 @@ export class ModelService implements IModelService {
       outputModalities: model.outputModalities,
       supportedParameters: model.supportedParameters ?? [],
       supportsTools: (model.supportedParameters ?? []).includes("tools"),
+      ...(model.maxCompletionTokens != null && { maxCompletionTokens: model.maxCompletionTokens }),
     };
   }
 

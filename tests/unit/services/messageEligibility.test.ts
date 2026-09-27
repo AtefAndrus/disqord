@@ -69,7 +69,9 @@ function setup(
     ),
     listPages: mock(() => pages),
     markPendingFailed: mock(() => 0),
-    deleteExpired: mock(() => 0),
+    deleteByGuild: mock(() => 0),
+    deleteByChannel: mock(() => 0),
+    deleteGuildsNotIn: mock(() => 0),
   };
   const reader: IDiscordMessageReader = {
     list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),
@@ -145,7 +147,9 @@ describe("MessageEligibilityService", () => {
         return pageListCalls === 1 ? [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }] : [];
       }),
       markPendingFailed: mock(() => 0),
-      deleteExpired: mock(() => 0),
+      deleteByGuild: mock(() => 0),
+      deleteByChannel: mock(() => 0),
+      deleteGuildsNotIn: mock(() => 0),
     };
     const reader: IDiscordMessageReader = {
       list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),
@@ -227,7 +231,9 @@ describe("MessageEligibilityService", () => {
       findByPage: mock(() => null),
       listPages: mock(() => []),
       markPendingFailed: mock(() => 0),
-      deleteExpired: mock(() => 0),
+      deleteByGuild: mock(() => 0),
+      deleteByChannel: mock(() => 0),
+      deleteGuildsNotIn: mock(() => 0),
     };
     const reader: IDiscordMessageReader = {
       list: mock(async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [] })),

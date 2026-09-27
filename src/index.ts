@@ -6,6 +6,7 @@ import { createCommandHandlers } from "./bot/commands/handlers";
 import { createInteractionCreateHandler } from "./bot/events/interactionCreate";
 import { createMessageCreateHandler } from "./bot/events/messageCreate";
 import { onReady } from "./bot/events/ready";
+import { createReplyRecordCleanupHandlers } from "./bot/events/replyRecordCleanup";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
 import { BotStateRepository } from "./db/repositories/botState";
@@ -17,12 +18,12 @@ import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
 import { ChatService } from "./services/chatService";
-import { ConversationWindowService } from "./services/conversationWindow";
+import { ConversationWindowService, WINDOW_REBUILD_AFTER_MS } from "./services/conversationWindow";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
 import { createReleaseSender, ReleaseAnnouncer } from "./services/releaseAnnouncer";
 import { loadReleaseNotes } from "./services/releaseNotes";
-import { createReplyRecordCleanupRunner, ReplyRecordService } from "./services/replyRecordService";
+import { ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
 import { createLogFileWriter } from "./utils/logFile";
@@ -52,7 +53,6 @@ async function bootstrap(): Promise<void> {
   const replyRecordRepository = new ReplyRecordRepository(db);
   const replyRecordService = new ReplyRecordService(replyRecordRepository);
   await replyRecordService.markPendingFailed();
-  await replyRecordService.cleanupExpired();
 
   const llmClient = OpenRouterClient.fromConfig(config);
   const settingsService = new SettingsService(guildSettingsRepo);
@@ -126,10 +126,15 @@ async function bootstrap(): Promise<void> {
     () => client.guilds.cache.keys(),
     createReleaseSender(client),
   );
+  const replyRecordCleanup = createReplyRecordCleanupHandlers(replyRecordService);
   client.once(Events.ClientReady, () => {
     onReady(client);
+    void replyRecordCleanup.reconcileGuilds(client.guilds.cache.keys());
     void releaseAnnouncer.announce(packageJson.version, releaseNotes);
   });
+  client.on(Events.GuildDelete, (guild) => void replyRecordCleanup.guildDelete(guild));
+  client.on(Events.ChannelDelete, (channel) => void replyRecordCleanup.channelDelete(channel));
+  client.on(Events.ThreadDelete, (thread) => void replyRecordCleanup.threadDelete(thread));
   client.on("messageCreate", messageCreateHandler);
   client.on("interactionCreate", interactionCreateHandler);
 
@@ -147,16 +152,15 @@ async function bootstrap(): Promise<void> {
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
   });
-  const ttlSweepRunner = createReplyRecordCleanupRunner(
-    replyRecordService,
-    setInterval,
-    clearInterval,
+  const windowSweepTimer = setInterval(
     () => conversationWindow.sweepStaleChannels(),
+    WINDOW_REBUILD_AFTER_MS,
   );
+  windowSweepTimer.unref();
 
   const shutdown = (signal: string): void => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
-    ttlSweepRunner.cancel();
+    clearInterval(windowSweepTimer);
     httpServer.stop();
     client.destroy();
     db.close();

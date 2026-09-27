@@ -22,7 +22,9 @@ function createReplyRecordService(events: string[]): IReplyRecordService {
     findByPage: mock(() => null),
     listPages: mock(() => []),
     markPendingFailed: mock(async () => 0),
-    cleanupExpired: mock(async () => 0),
+    deleteByGuild: mock(async () => 0),
+    deleteByChannel: mock(async () => 0),
+    deleteGuildsNotIn: mock(async () => 0),
   };
 }
 

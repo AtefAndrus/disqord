@@ -4,10 +4,10 @@ import type {
   ReplyPage,
   ReplyRecord,
 } from "../../../src/db/repositories/replyRecord";
+import { estimateToolResultTokens } from "../../../src/llm/contextBudget";
 import {
   type BuildConversationWindowInput,
   ConversationWindowService,
-  READ_EARLIER_MAX_RESULT_BYTES,
   truncateTextByBytes,
   WINDOW_RAW_MESSAGE_LIMIT,
   WINDOW_REBUILD_AFTER_MS,
@@ -82,7 +82,9 @@ const records = (): IReplyRecordRepository => ({
   findByPage: mock(() => null),
   listPages: mock(() => []),
   markPendingFailed: mock(() => 0),
-  deleteExpired: mock(() => 0),
+  deleteByGuild: mock(() => 0),
+  deleteByChannel: mock(() => 0),
+  deleteGuildsNotIn: mock(() => 0),
 });
 
 test("FakeReader reports exhausted REST budgets", async () => {
@@ -689,7 +691,7 @@ test("truncateTextByBytes backs off at a multibyte UTF-8 boundary", () => {
   expect(new TextEncoder().encode(`${result}😀`).byteLength).toBeGreaterThan(maxBytes);
 });
 
-test("fitToolResult keeps a large Japanese message close to its byte budget", async () => {
+test("read_earlier_messages truncates a message larger than the whole budget to fit it", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });
   const service = new ConversationWindowService(reader, records(), () => NOW);
@@ -699,18 +701,20 @@ test("fitToolResult keeps a large Japanese message close to its byte budget", as
     messages: [message("900", undefined, { content: "日".repeat(5_000) })],
   });
 
+  const budget = 2_000;
   const raw = (await context?.toolContext.readEarlierMessages(
     1,
     new AbortController().signal,
+    budget,
   )) as string;
   const result = JSON.parse(raw) as {
     messages: Array<{ text: string; truncated: boolean }>;
   };
-  const byteLength = new TextEncoder().encode(raw).byteLength;
 
-  expect(byteLength).toBeGreaterThan(11 * 1024);
-  expect(byteLength).toBeLessThanOrEqual(READ_EARLIER_MAX_RESULT_BYTES);
+  expect(estimateToolResultTokens(raw)).toBeLessThanOrEqual(budget);
+  expect(estimateToolResultTokens(raw)).toBeGreaterThan(budget - 100);
   expect(result.messages[0]?.truncated).toBe(true);
+  expect(result.messages[0]?.text.length).toBeGreaterThan(1_500);
 });
 
 test("read_earlier_messages advances past an entirely ineligible page", async () => {
@@ -749,15 +753,19 @@ test("read_earlier_messages restores deferred large messages and reports has_mor
     ],
   });
 
-  const first = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(3, new AbortController().signal)) as string,
-  ) as { messages: Array<{ ref: string; text: string }>; has_more: boolean };
-  const second = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { messages: Array<{ text: string }> };
-  const third = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { messages: Array<{ text: string }> };
+  // 8,000 ASCII characters are about 2,000 tokens, so one message fits in 3,000.
+  const read = async (count: number): Promise<string> =>
+    (await context?.toolContext.readEarlierMessages(
+      count,
+      new AbortController().signal,
+      3_000,
+    )) as string;
+  const first = JSON.parse(await read(3)) as {
+    messages: Array<{ ref: string; text: string }>;
+    has_more: boolean;
+  };
+  const second = JSON.parse(await read(1)) as { messages: Array<{ text: string }> };
+  const third = JSON.parse(await read(1)) as { messages: Array<{ text: string }> };
 
   expect(first.messages).toHaveLength(1);
   expect(first.messages[0]?.text).toBe("c".repeat(8_000));
@@ -766,7 +774,7 @@ test("read_earlier_messages restores deferred large messages and reports has_mor
   expect(third.messages[0]?.text).toBe("a".repeat(8_000));
 });
 
-test("recomputes stop_reason and has_more after byte-fitting instead of the pre-fit message-count guess", async () => {
+test("reports has_more and no stop_reason when the budget returns only part of the count", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });
   const service = new ConversationWindowService(reader, records(), () => NOW);
@@ -800,7 +808,11 @@ test("recomputes stop_reason and has_more after byte-fitting instead of the pre-
     ),
   });
   const third = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
+    (await context?.toolContext.readEarlierMessages(
+      20,
+      new AbortController().signal,
+      10_000,
+    )) as string,
   ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
 
   expect(third.messages.length).toBeGreaterThan(0);
@@ -891,44 +903,7 @@ test("read_earlier_messages orders same-millisecond messages by id across pages"
   expect(parsed.messages.map((entry) => entry.text)).toEqual(["message-99", "message-100"]);
 });
 
-test("read_earlier_messages enforces the combined sixty-message and three-call caps", async () => {
-  const reader = new FakeReader();
-  reader.listResponses.push({
-    status: "ok",
-    messages: Array.from({ length: 20 }, (_, index) => message(String(900 + index))),
-  });
-  reader.listResponses.push({
-    status: "ok",
-    messages: Array.from({ length: 40 }, (_, index) => message(String(800 + index))),
-  });
-  const service = new ConversationWindowService(reader, records(), () => NOW);
-  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
-
-  const first = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
-  ) as {
-    messages: unknown[];
-  };
-  const second = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
-  ) as {
-    messages: unknown[];
-  };
-  const third = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(20, new AbortController().signal)) as string,
-  ) as {
-    messages: unknown[];
-    stop_reason: string;
-  };
-
-  expect(first.messages).toHaveLength(20);
-  expect(second.messages).toHaveLength(20);
-  expect(third.messages).toEqual([]);
-  expect(third.stop_reason).toBe("message_limit");
-  expect(reader.listQueries).toHaveLength(2);
-});
-
-test("read_earlier_messages stops after three calls even when the message cap is not reached", async () => {
+test("read_earlier_messages has no call or total-message cap", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({
     status: "ok",
@@ -938,32 +913,9 @@ test("read_earlier_messages stops after three calls even when the message cap is
     status: "ok",
     messages: Array.from({ length: 100 }, (_, index) => message(String(700 + index))),
   });
-  const service = new ConversationWindowService(reader, records(), () => NOW);
-  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
-
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  const fourth = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as {
-    messages: unknown[];
-    stop_reason: string;
-  };
-
-  expect(fourth.messages).toEqual([]);
-  expect(fourth.stop_reason).toBe("call_limit");
-});
-
-test("read_earlier_messages checks the call limit before authorizing", async () => {
-  const reader = new FakeReader();
   reader.listResponses.push({
     status: "ok",
-    messages: Array.from({ length: 20 }, (_, index) => message(String(900 + index))),
-  });
-  reader.listResponses.push({
-    status: "ok",
-    messages: Array.from({ length: 100 }, (_, index) => message(String(700 + index))),
+    messages: Array.from({ length: 30 }, (_, index) => message(String(600 + index))),
   });
   const authorize = mock(async () => true);
   const service = new ConversationWindowService(reader, records(), () => NOW);
@@ -973,23 +925,24 @@ test("read_earlier_messages checks the call limit before authorizing", async () 
   });
 
   authorize.mockClear();
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  await context?.toolContext.readEarlierMessages(1, new AbortController().signal);
-  authorize.mockClear();
-  const fourth = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as {
-    messages: unknown[];
-    stop_reason: string;
-  };
+  const results: Array<{ messages: unknown[]; stop_reason: string | null }> = [];
+  for (const count of [100, 20, 5, 5]) {
+    results.push(
+      JSON.parse(
+        (await context?.toolContext.readEarlierMessages(
+          count,
+          new AbortController().signal,
+        )) as string,
+      ) as { messages: unknown[]; stop_reason: string | null },
+    );
+  }
 
-  expect(fourth.messages).toEqual([]);
-  expect(fourth.stop_reason).toBe("call_limit");
-  expect(authorize).not.toHaveBeenCalled();
+  expect(results.map((result) => result.messages.length)).toEqual([100, 20, 5, 5]);
+  expect(results.every((result) => result.stop_reason === null)).toBe(true);
+  expect(authorize).toHaveBeenCalledTimes(4);
 });
 
-test("read_earlier_messages counts unauthorized attempts toward the call cap", async () => {
+test("read_earlier_messages reports no_permission on every unauthorized call", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });
   let allowBuild = true;
@@ -1002,27 +955,20 @@ test("read_earlier_messages counts unauthorized attempts toward the call cap", a
 
   allowBuild = false;
   authorize.mockClear();
-  const first = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { stop_reason: string };
-  const second = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { stop_reason: string };
-  const third = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { stop_reason: string };
-  const fourth = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { stop_reason: string };
+  const reasons: string[] = [];
+  for (let call = 0; call < 4; call++) {
+    const result = JSON.parse(
+      (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+    ) as { stop_reason: string; has_more: boolean };
+    reasons.push(result.stop_reason);
+  }
 
-  expect(first.stop_reason).toBe("no_permission");
-  expect(second.stop_reason).toBe("no_permission");
-  expect(third.stop_reason).toBe("no_permission");
-  expect(fourth.stop_reason).toBe("call_limit");
-  expect(authorize).toHaveBeenCalledTimes(3);
+  expect(reasons).toEqual(["no_permission", "no_permission", "no_permission", "no_permission"]);
+  expect(authorize).toHaveBeenCalledTimes(4);
+  expect(reader.listQueries).toHaveLength(1);
 });
 
-test("read_earlier_messages keeps the 24-hour cutoff reason while draining its buffer", async () => {
+test("read_earlier_messages returns messages older than 24 hours", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });
   const service = new ConversationWindowService(reader, records(), () => NOW);
@@ -1030,25 +976,23 @@ test("read_earlier_messages keeps the 24-hour cutoff reason while draining its b
   reader.listResponses.push({
     status: "ok",
     messages: [
-      message("800", new Date(NOW - 25 * 60 * 60 * 1000).toISOString()),
-      message("900", new Date(NOW - 2 * 60 * 60 * 1000).toISOString()),
+      message("800", new Date(NOW - 30 * 24 * 60 * 60 * 1000).toISOString()),
+      message("900", new Date(NOW - 25 * 60 * 60 * 1000).toISOString()),
       message("901", new Date(NOW - 1 * 60 * 60 * 1000).toISOString()),
     ],
   });
 
-  const first = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
-  const second = JSON.parse(
-    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
-  ) as { messages: unknown[]; has_more: boolean; stop_reason: string | null };
+  const parsed = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(5, new AbortController().signal)) as string,
+  ) as { messages: Array<{ text: string }>; has_more: boolean; stop_reason: string | null };
 
-  expect(first.messages).toHaveLength(1);
-  expect(first.has_more).toBe(true);
-  expect(first.stop_reason).toBeNull();
-  expect(second.messages).toHaveLength(1);
-  expect(second.has_more).toBe(false);
-  expect(second.stop_reason).toBe("24h_cutoff");
+  expect(parsed.messages.map((entry) => entry.text)).toEqual([
+    "message-800",
+    "message-900",
+    "message-901",
+  ]);
+  expect(parsed.has_more).toBe(false);
+  expect(parsed.stop_reason).toBeNull();
 });
 
 test("memoizes a deleted exchange across raw pages and reply-target lookup", async () => {
@@ -1231,7 +1175,7 @@ test("keeps an exchange when its pinned attachment is gone but the message remai
   expect(readResult.messages).toHaveLength(1);
 });
 
-test("excludes a split reply when a reconstructed page crosses the 24-hour cutoff", async () => {
+test("returns a split reply whose first page is older than 24 hours", async () => {
   const buildRead = async (oldPageTimestamp: string): Promise<{ messages: unknown[] }> => {
     const reader = new FakeReader();
     const replyRecord: ReplyRecord = {
@@ -1268,10 +1212,10 @@ test("excludes a split reply when a reconstructed page crosses the 24-hour cutof
     ) as { messages: unknown[] };
   };
 
-  const tooOld = await buildRead(new Date(NOW - 25 * 60 * 60 * 1000).toISOString());
-  const withinRange = await buildRead(new Date(NOW - 2 * 60 * 60 * 1000).toISOString());
-  expect(tooOld.messages).toEqual([]);
-  expect(withinRange.messages).toHaveLength(1);
+  const dayOld = await buildRead(new Date(NOW - 25 * 60 * 60 * 1000).toISOString());
+  const recent = await buildRead(new Date(NOW - 2 * 60 * 60 * 1000).toISOString());
+  expect(dayOld.messages).toHaveLength(1);
+  expect(recent.messages).toHaveLength(1);
 });
 
 test("aborting read_earlier_messages leaves its cursor, buffer, and shown set unchanged", async () => {

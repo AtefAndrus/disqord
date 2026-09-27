@@ -73,8 +73,25 @@ export class TimeoutError extends AppError {
 }
 
 export class BadRequestError extends AppError {
+  constructor(
+    message: string,
+    userMessage = "リクエストに問題があります。入力内容を確認してください。",
+  ) {
+    super(message, userMessage, 400);
+  }
+}
+
+/**
+ * OpenRouter reported `error_type: "context_length_exceeded"`. A subclass of
+ * `BadRequestError` so that every existing handling of a rejected request
+ * still applies; the tool loop additionally recovers from it once.
+ */
+export class ContextLengthExceededError extends BadRequestError {
   constructor(message: string) {
-    super(message, "リクエストに問題があります。入力内容を確認してください。", 400);
+    super(
+      message,
+      "会話がモデルの扱える長さを超えました。会話履歴を減らすか、コンテキスト長の大きいモデルでお試しください。",
+    );
   }
 }
 

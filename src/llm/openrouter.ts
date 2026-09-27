@@ -4,6 +4,7 @@ import {
   AuthenticationError,
   BadRequestError,
   ConfigurationError,
+  ContextLengthExceededError,
   InsufficientCreditsError,
   InvalidModelError,
   ModelUnavailableError,
@@ -247,6 +248,7 @@ interface OpenRouterModelResponse {
       instruct_type?: string | null;
     };
     supported_parameters?: string[];
+    top_provider?: { max_completion_tokens?: number | null } | null;
   }[];
 }
 
@@ -271,6 +273,8 @@ interface OpenRouterErrorResponse {
     metadata?: Record<string, unknown>;
   };
 }
+
+const CONTEXT_LENGTH_EXCEEDED = "context_length_exceeded";
 
 /**
  * Runtime validation for an optional string field such as `response.model`.
@@ -612,6 +616,13 @@ function readIncompleteFinishReason(details: unknown): string {
   if (reason === "content_filter") return "content_filter";
   logger.warn("OpenRouter response.incomplete with an unrecognized reason", { reason });
   return "incomplete";
+}
+
+function readMaxCompletionTokens(
+  topProvider: OpenRouterModelResponse["data"][number]["top_provider"],
+): number | null {
+  const value = topProvider?.max_completion_tokens;
+  return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : null;
 }
 
 export class OpenRouterClient implements ILLMClient {
@@ -1250,6 +1261,9 @@ export class OpenRouterClient implements ILLMClient {
       inputModalities: model.architecture?.input_modalities ?? [],
       outputModalities: model.architecture?.output_modalities ?? [],
       ...(model.supported_parameters && { supportedParameters: model.supported_parameters }),
+      ...(readMaxCompletionTokens(model.top_provider) !== null && {
+        maxCompletionTokens: readMaxCompletionTokens(model.top_provider),
+      }),
     }));
   }
 
@@ -1273,6 +1287,10 @@ export class OpenRouterClient implements ILLMClient {
     const errorBody = (await response.json().catch(() => ({}))) as OpenRouterErrorResponse;
     const message = errorBody.error?.message ?? `HTTP ${response.status}`;
     const metadata = errorBody.error?.metadata;
+    if (metadata?.error_type === CONTEXT_LENGTH_EXCEEDED) {
+      logger.error("OpenRouter API error", { status: response.status, message, metadata });
+      throw new ContextLengthExceededError(message);
+    }
 
     // Log error with metadata if available
     logger.error("OpenRouter API error", {
@@ -1325,9 +1343,20 @@ export class OpenRouterClient implements ILLMClient {
     throw this.buildApiError(code, message);
   }
 
-  /** A Responses result with `status:"failed"`: its `error` has the same `{code,message}` shape as a stream error event. */
+  /**
+   * A Responses result with `status:"failed"`: its `error` has the same
+   * `{code,message}` shape as a stream error event. The canonical
+   * `error_type` beside it is the only thing that tells a context overflow
+   * apart: `error.code` is `invalid_prompt` for that and for other causes.
+   */
   private throwForFailedResponse(response: Record<string, unknown>): never {
     const error = response.error;
+    if (response.error_type === CONTEXT_LENGTH_EXCEEDED) {
+      const message =
+        isPlainObject(error) && typeof error.message === "string" ? error.message : "";
+      logger.error("OpenRouter response failed", { error_type: response.error_type, message });
+      throw new ContextLengthExceededError(message || CONTEXT_LENGTH_EXCEEDED);
+    }
     if (
       !isPlainObject(error) ||
       typeof error.message !== "string" ||
