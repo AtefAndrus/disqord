@@ -71,7 +71,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 | ---- | ---- |
 | `list_pins` | なし |
 | `get_channel_info` | なし |
-| `list_events` | `from`、`until`（どちらも任意、時差付き ISO 8601）。開始がこの範囲に入るイベントだけを返す。`from` を省くと現在、`until` を省くと上限なし |
+| `list_events` | `from`、`until`（どちらも任意、時差付き ISO 8601）。開催中のイベントと、開始がこの範囲に入る予定のイベントを返す。`from` を省くと現在、`until` を省くと上限なし |
 | `create_event` | `kind`（`external` か `voice`）、`name`（1〜100 字）、`start`（時差付き ISO 8601）、`end`（時差付き ISO 8601。`external` では必須、`voice` では任意）、`location`（1〜100 字。`external` では必須、`voice` では指定しない）、`channel_name`（`voice` では必須、`external` では指定しない）、`description`（任意、1〜1000 字。空文字列は指定しなかったものとして扱う） |
 
 `validate` は上の必須と長さ、`kind` ごとの組み合わせ、日時の書式を確かめる。
@@ -94,7 +94,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 - 読み取りの tool の結果は、`read_earlier_messages` と同じく `resultBudgetTokens` に収まるよう切り詰める。ピン留めは新しい順に並べる。`has_more` は、結果の予算で省いた分があるとき、REST の上限で確かめ終えなかった分があるとき、Discord の応答の `has_more` が true（取得した 50 件より古いピン留めがある）のときに true にする。
 - `list_pins` は `GET /channels/{id}/messages/pins` を最大 50 件取り、窓に入る判定を通ったものだけを返す。判定で外れたもの（他の bot の発言など）は件数だけを返す。
 - `get_channel_info` はチャンネルを REST で取り直して読む。キャッシュのチャンネルは discord-tool の共通の確認と同じ理由で使わない。
-- `list_events` は `GET /guilds/{id}/scheduled-events?with_user_count=true` を使い、終わったものと取り消されたもの、権限で見られないもの、期間の外のものを除いてから、開始の早い順に最大 20 件を返す。残りがあれば `has_more` を true にし、モデルは `from` を最後のイベントの開始に進めて続きを取れる。各イベントは名前、説明、開始と終了、状態、場所またはチャンネル名、興味ありの人数を持つ。
+- `list_events` は `GET /guilds/{id}/scheduled-events?with_user_count=true` を使い、終わったものと取り消されたもの、権限で見られないものを除く。開催中（`ACTIVE`）のものは期間に関係なく残し、予定（`SCHEDULED`）のものは開始が期間に入るものだけを残す。開始の早い順に最大 20 件を返し、残りがあれば `has_more` を true にする。モデルは `from` と `until` を狭めて残りを取る。Discord の一覧にはページングが無く、予定と開催中のイベントは guild あたり最大 100 件なので、開始が全く同じイベントが 20 件を超える場合だけは、期間を狭めても全部を読めない。各イベントは名前、説明、開始と終了、状態、場所またはチャンネル名、興味ありの人数を持つ。
 - tool の description に、ユーザが頼んだときだけイベントを作ると書く。
 
 ### e2e
