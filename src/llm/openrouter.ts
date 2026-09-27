@@ -277,6 +277,23 @@ interface OpenRouterErrorResponse {
 const CONTEXT_LENGTH_EXCEEDED = "context_length_exceeded";
 
 /**
+ * OpenRouter documents the canonical `error_type` at the top level of a
+ * failed Responses result and inside `error.metadata` of the Chat-style
+ * error envelope, and states it is carried on every error path. Where the
+ * other error shapes put it is not documented, so each place it could be is
+ * read: the object itself, its `error`, and that error's `metadata`.
+ */
+function carriesContextLengthExceeded(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  const error = isPlainObject(value.error) ? value.error : undefined;
+  const metadata = isPlainObject(error?.metadata) ? error.metadata : undefined;
+  const nested = isPlainObject(value.metadata) ? value.metadata : undefined;
+  return [value.error_type, error?.error_type, metadata?.error_type, nested?.error_type].includes(
+    CONTEXT_LENGTH_EXCEEDED,
+  );
+}
+
+/**
  * Runtime validation for an optional string field such as `response.model`.
  * Untyped wire JSON like every other field here: a provider sending e.g.
  * `model: {}` must be rejected before it ever reaches `state.lastModel`,
@@ -1048,6 +1065,10 @@ export class OpenRouterClient implements ILLMClient {
           `Stream error event has a non-integer, non-string code: ${JSON.stringify(errorPayload.code)}`,
         );
       }
+      if (carriesContextLengthExceeded(event) || carriesContextLengthExceeded(errorPayload)) {
+        logger.error("OpenRouter stream error event", { error_type: CONTEXT_LENGTH_EXCEEDED });
+        throw new ContextLengthExceededError(errorPayload.message);
+      }
       this.throwForStreamErrorPayload(
         errorPayload as NonNullable<OpenRouterErrorResponse["error"]>,
       ); // always throws
@@ -1284,10 +1305,11 @@ export class OpenRouterClient implements ILLMClient {
   }
 
   private async handleErrorResponse(response: Response): Promise<never> {
-    const errorBody = (await response.json().catch(() => ({}))) as OpenRouterErrorResponse;
+    const rawBody: unknown = await response.json().catch(() => ({}));
+    const errorBody = (isPlainObject(rawBody) ? rawBody : {}) as OpenRouterErrorResponse;
     const message = errorBody.error?.message ?? `HTTP ${response.status}`;
     const metadata = errorBody.error?.metadata;
-    if (metadata?.error_type === CONTEXT_LENGTH_EXCEEDED) {
+    if (carriesContextLengthExceeded(rawBody)) {
       logger.error("OpenRouter API error", { status: response.status, message, metadata });
       throw new ContextLengthExceededError(message);
     }
@@ -1351,7 +1373,7 @@ export class OpenRouterClient implements ILLMClient {
    */
   private throwForFailedResponse(response: Record<string, unknown>): never {
     const error = response.error;
-    if (response.error_type === CONTEXT_LENGTH_EXCEEDED) {
+    if (carriesContextLengthExceeded(response)) {
       const message =
         isPlainObject(error) && typeof error.message === "string" ? error.message : "";
       logger.error("OpenRouter response failed", { error_type: response.error_type, message });

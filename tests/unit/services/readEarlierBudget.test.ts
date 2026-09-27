@@ -286,6 +286,47 @@ describe("read_earlier_messages paging under a deadline", () => {
   });
 });
 
+describe("fetched messages shared across the response", () => {
+  test("a reply page fetched while building the window is not fetched again by a tool call", async () => {
+    const replyRecord: ReplyRecord = {
+      triggerMsgId: "940",
+      channelId: "channel",
+      guildId: "guild",
+      status: "completed",
+      pageCount: 2,
+      finalizedAt: NOW - 5_000,
+      createdAt: NOW - 6_000,
+    };
+    const fetchQueries: string[] = [];
+    const reader: IDiscordMessageReader = {
+      list: async (_channelId, _query, budget) =>
+        budget.consume()
+          ? { status: "ok", messages: [message("940")] }
+          : { status: "failed", messages: [] },
+      fetch: async (_channelId, id, budget) => {
+        if (!budget.consume()) return { status: "failed", error: new Error("budget") };
+        fetchQueries.push(id);
+        return id === "950"
+          ? { status: "found", message: botPage("950", "first page") }
+          : { status: "failed", error: new Error("5xx") };
+      },
+    };
+    const repository = records({
+      findByTrigger: (id) => (id === "940" ? replyRecord : null),
+      listPages: () => [
+        { pageMsgId: "950", triggerMsgId: "940", seq: 0 },
+        { pageMsgId: "951", triggerMsgId: "940", seq: 1 },
+      ],
+    });
+    const service = new ConversationWindowService(reader, repository, () => NOW);
+    const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+    await read(context, 5);
+
+    // The window checks the reply first (950 found, 951 failed), then the tool checks it again.
+    expect(fetchQueries).toEqual(["950", "951", "951"]);
+  });
+});
+
 describe("read_earlier_messages budgets", () => {
   test("returns what it has when the tool REST budget runs out, then repeats the reason without REST", async () => {
     const reader = new ScriptedReader(async (query) => {

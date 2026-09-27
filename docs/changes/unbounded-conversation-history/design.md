@@ -14,8 +14,8 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ## 依存 / 関連 change
 
-- 連携: [fork](../fork/design.md) — 系譜の寿命と遡りの範囲を 24 時間の制限と記録の TTL を前提に決めている。この change の後に書き直す
-- 連携: [conversation-regeneration](../conversation-regeneration/design.md) — 記録が 24 時間で消える前提の判定を持つ。この change の後に書き直す
+- 連携: [fork](../fork/design.md) — 系譜の寿命と遡りの範囲を、記録を無期限に持つことと、この change の予算を前提に決めている
+- 連携: [conversation-regeneration](../conversation-regeneration/design.md) — 記録が期限で消えないことを前提に、記録の無い返答の扱いと index の要否を決める
 
 ## Goals / Non-Goals
 
@@ -179,8 +179,8 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 - [x] 単体テスト: `context_length_exceeded` で 1 回だけ tool 無しで回復し、`error_type` の無い HTTP 400 と最初のリクエストでの拒否では回復しない。`length` の終了は、本文があれば回答として確定し、tool 呼び出しの断片があれば失敗になる（今と同じ）
 - [x] 単体テスト: 既存の規則が変わらない（`finalized-after-current`、pending / failed の記録を持つ人の発言と Bot の返答の扱いの違い、分割した返答を先頭ページの位置まで保留する順序、既に見せた reply 先を ref で返す契約）
 - [ ] 1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を、変更の前後で計測する
-- [ ] 既定の e2e と `history-set history-recall history-window read-earlier view-attachment view-image` を実行する
-- [ ] `search` と `reasoning` の e2e を実行する。`tool_choice: "none"` への切り替えは server tool（Web 検索）を載せたリクエストにもかかり、reasoning は context 予算の差し引きの対象になり、`max_output_tokens` が reasoning の量にも効く可能性があるため（OpenRouter の OpenAPI 定義には記述が無く未確認）
+- [x] 既定の e2e と `history-set history-recall history-window read-earlier view-attachment view-image` を実行する
+- [x] `search` と `reasoning` の e2e を実行する。`tool_choice: "none"` への切り替えは server tool（Web 検索）を載せたリクエストにもかかり、reasoning は context 予算の差し引きの対象になり、`max_output_tokens` が reasoning の量にも効く可能性があるため（OpenRouter の OpenAPI 定義には記述が無く未確認）
 - [x] README の履歴の説明を書き直し、[fork](../fork/design.md) と [conversation-regeneration](../conversation-regeneration/design.md) の 24 時間を前提にした記述を書き直す
 - [ ] `docs/changes/unbounded-conversation-history/` 削除（リリース完了時、git 履歴がアーカイブ）
 

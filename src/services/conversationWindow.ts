@@ -417,6 +417,7 @@ export class ConversationWindowService {
                 verificationCache,
                 externalDeletions,
                 controller.signal,
+                fetchedMessages,
                 generation,
                 false,
               )
@@ -429,6 +430,7 @@ export class ConversationWindowService {
                   verificationCache,
                   externalDeletions,
                   controller.signal,
+                  fetchedMessages,
                   generation,
                 )
               : this.extend(
@@ -440,6 +442,7 @@ export class ConversationWindowService {
                   verificationCache,
                   externalDeletions,
                   controller.signal,
+                  fetchedMessages,
                   generation,
                 );
         })(),
@@ -552,6 +555,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
     generation: number,
     commitState = true,
   ): Promise<WindowBuildResult | null> {
@@ -588,6 +592,7 @@ export class ConversationWindowService {
         verificationCache,
         externalDeletions,
         signal,
+        fetchedMessages,
       );
       if (signal.aborted) return null;
       if (reachesShrunkBoundary(eligible, now) || budget.used >= budget.limit) break;
@@ -603,6 +608,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     const replyTarget = await this.findReplyTarget(
@@ -613,6 +619,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     const filteredMessages = messages.filter(
@@ -640,6 +647,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
     generation: number,
   ): Promise<WindowBuildResult | null> {
     if (signal.aborted) return null;
@@ -688,6 +696,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     let selected = selectEntries(messages, state.startMessageId);
@@ -701,6 +710,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     selected = selected.filter((message) => !externalDeletions.has(message.exchangeId));
@@ -783,6 +793,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
   ): Promise<NormalizedMessage | undefined> {
     const targetId = input.current.message_reference?.message_id;
     const targetChannelId = input.current.message_reference?.channel_id;
@@ -823,6 +834,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (!result.eligible) return undefined;
     const resolved = result.isHuman
