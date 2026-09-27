@@ -412,6 +412,21 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    // Discord shows a Markdown table as rows of pipes, so the system prompt
+    // tells the model to use headings and lists instead. Named-only: whether
+    // it passes depends on the model following that instruction against a
+    // request that asks for a table outright.
+    name: "no-table",
+    manual: true,
+    prompt: "[e2e] Python、Rust、Go の特徴を、速度・学習コスト・用途の 3 項目で表にして比較して。",
+    check: (reply) => [
+      ...(/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/mu.test(reply.body)
+        ? ["the reply contains a Markdown table"]
+        : []),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
     // A thematic break must reach Discord as a Separator with a divider (the
     // footer's Separator has none), not as literal `---` text. Named-only:
     // whether it passes depends on the model writing `---` exactly as asked,

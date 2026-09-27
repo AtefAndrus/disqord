@@ -257,6 +257,7 @@ export class ChatService implements IChatService {
 
       const tweetParts = expansion?.parts ?? [];
       const leadingSystemMessages: ChatMessage[] = [
+        DISCORD_FORMAT_SYSTEM_MESSAGE,
         ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
         ...(input.conversation ? [buildConversationSafetyMessage()] : []),
       ];
@@ -266,6 +267,7 @@ export class ChatService implements IChatService {
       ];
       const buildWithoutHistory = (): ChatCompletionRequest =>
         buildChatRequest(settings.defaultModel, input, tweetParts, [
+          DISCORD_FORMAT_SYSTEM_MESSAGE,
           ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
           ...volatileSystemMessages,
           ...buildChatMessages(input, tweetParts),
@@ -557,6 +559,18 @@ function buildDateTimeSystemMessage(now: Date, webSearchEnabled: boolean): ChatM
 const DATETIME_SERVER_TOOL: ServerTool = {
   type: "openrouter:datetime",
   parameters: { timezone: "Asia/Tokyo" },
+};
+
+/**
+ * Discord renders no Markdown tables: a table arrives as rows of pipes.
+ * Converting tables into lists after generation is not done, because the
+ * model can choose a list shape that fits the content, and a converted table
+ * would still flash as raw pipes while the reply streams.
+ */
+const DISCORD_FORMAT_SYSTEM_MESSAGE: ChatMessage = {
+  role: "system",
+  content:
+    "回答は Discord のメッセージとして表示される。Discord は Markdown の表を表示しないので、表を使わないこと。表にしたくなる内容は、見出しと箇条書きで書くこと。",
 };
 
 function buildConversationSafetyMessage(): ChatMessage {
