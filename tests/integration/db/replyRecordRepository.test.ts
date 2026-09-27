@@ -110,11 +110,15 @@ describe("ReplyRecordRepository", () => {
     expect(repository.findByTrigger("a1")).toBeNull();
     expect(pageRows()).toBe(2);
 
-    expect(repository.deleteGuildsNotIn([])).toBe(0);
     expect(repository.deleteGuildsNotIn(["guild-b"])).toBe(1);
     expect(repository.findByTrigger("b1")).not.toBeNull();
     expect(repository.findByTrigger("c1")).toBeNull();
     expect(pageRows()).toBe(1);
+
+    // No guild left at all: every record goes.
+    expect(repository.deleteGuildsNotIn([])).toBe(1);
+    expect(repository.findByTrigger("b1")).toBeNull();
+    expect(pageRows()).toBe(0);
   });
 
   test("resolves a registered bot page through real SQLite eligibility", async () => {

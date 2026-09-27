@@ -197,9 +197,9 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
     return this.deleteWhere("channel_id = ?", [channelId]);
   }
 
+  // 呼び出し側は ClientReady 時点の参加中の guild をすべて渡すので、空の一覧は「どの guild にも居ない」を意味する。
   deleteGuildsNotIn(guildIds: readonly string[]): number {
-    // 空の一覧は「どの guild にも居ない」ではなく一覧の取得に失敗したときに起きうるので、何も消さない。
-    if (guildIds.length === 0) return 0;
+    if (guildIds.length === 0) return this.deleteWhere("1 = 1", []);
     const placeholders = guildIds.map(() => "?").join(", ");
     return this.deleteWhere(`guild_id NOT IN (${placeholders})`, guildIds);
   }

@@ -27,15 +27,25 @@ export const MESSAGE_OVERHEAD_TOKENS = 8;
 export const IMAGE_TOKEN_ESTIMATE = 1_600;
 /** One PDF in the input. A PDF's real cost grows with its pages; this is a fixed stand-in. */
 export const PDF_TOKEN_ESTIMATE = 10_000;
+/**
+ * Room for the `tool_call_id` every tool result is sent with. Provider ids
+ * and the loop's synthetic ids (`synthetic-` plus a UUID) stay well under 64
+ * ASCII characters; an id longer than that eats into the finishing reserve.
+ */
+export const CALL_ID_TOKEN_ALLOWANCE = 16;
 /** Cap on the error texts the tool dispatcher generates itself. */
 export const MAX_TOOL_ERROR_RESULT_BYTES = 256;
 /**
  * Upper bound of a fixed-length tool result: a dispatcher error clipped to
  * `MAX_TOOL_ERROR_RESULT_BYTES` (at most one token per two bytes), or a
- * tool's terminal result, which the dispatcher accepts only up to this size.
+ * tool's terminal result, which the dispatcher accepts only up to this size,
+ * together with its call id.
  */
 export const FIXED_RESULT_TOKENS =
-  Math.ceil(MAX_TOOL_ERROR_RESULT_BYTES / 2) + 1 + MESSAGE_OVERHEAD_TOKENS;
+  Math.ceil(MAX_TOOL_ERROR_RESULT_BYTES / 2) +
+  1 +
+  MESSAGE_OVERHEAD_TOKENS +
+  CALL_ID_TOKEN_ALLOWANCE;
 
 export function computeMaxOutputTokens(
   contextLength: number | null | undefined,
@@ -79,7 +89,9 @@ export function estimateToolResultTokens(
 }
 
 export function estimateChatMessageTokens(message: ChatMessage): number {
-  if (message.role === "tool") return estimateToolResultTokens(message.content);
+  if (message.role === "tool") {
+    return estimateToolResultTokens(message.content) + estimateTextTokens(message.tool_call_id);
+  }
   let tokens = estimateContentTokens(message.content) + MESSAGE_OVERHEAD_TOKENS;
   if (message.role === "assistant") {
     if (message.reasoningItems && message.reasoningItems.length > 0) {

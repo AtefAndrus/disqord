@@ -18,6 +18,7 @@ import type {
   ToolChoice,
   WebSearchTrace,
 } from "../types";
+import { estimateTextTokens } from "../utils/tokenEstimate";
 import {
   CONTEXT_BUDGET_SAFETY_FACTOR,
   DEFAULT_CONTEXT_BUDGET_TOKENS,
@@ -1006,8 +1007,10 @@ async function dispatchCalls(
     }
 
     await invokeUpdater(() => updater.beginToolBlock(call.name), requestSignal, updaterCallMs);
+    // The result is sent with its call id, which the tool cannot shrink.
+    const resultBudgetTokens = Math.max(0, budget.forToolResult - estimateTextTokens(call.id));
     const outcome = await dispatcher.dispatch(call, {
-      ctx: { ...ctx, resultBudgetTokens: budget.forToolResult },
+      ctx: { ...ctx, resultBudgetTokens },
       requestSignal,
       frozenToolNames,
       requestId,

@@ -1,5 +1,6 @@
 import type { ResponsesInputContentPart, ToolChatMessage } from "../../types";
 import {
+  CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
   FIXED_RESULT_TOKENS,
   MAX_TOOL_ERROR_RESULT_BYTES,
@@ -407,7 +408,7 @@ export class ToolDispatcher {
       const fixedLength =
         settlement.value.terminal === true &&
         typeof llmResult === "string" &&
-        estimated <= FIXED_RESULT_TOKENS;
+        estimated <= FIXED_RESULT_TOKENS - CALL_ID_TOKEN_ALLOWANCE;
       if (typeof llmResult !== "string") {
         const bounded = clipToolResultParts(llmResult);
         if (bounded === null) {

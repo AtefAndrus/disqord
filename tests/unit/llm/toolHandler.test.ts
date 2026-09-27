@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
   FIXED_RESULT_TOKENS,
   MAX_TOOL_ERROR_RESULT_BYTES,
@@ -520,7 +521,9 @@ describe("clipToolResultBytes", () => {
     expect(outcome.status).toBe("error");
     const content = outcome.toolMessage.content as string;
     expect(utf8Encoder.encode(content).length).toBeLessThanOrEqual(MAX_TOOL_ERROR_RESULT_BYTES);
-    expect(estimateToolResultTokens(content)).toBeLessThanOrEqual(FIXED_RESULT_TOKENS);
+    expect(estimateToolResultTokens(content)).toBeLessThanOrEqual(
+      FIXED_RESULT_TOKENS - CALL_ID_TOKEN_ALLOWANCE,
+    );
   });
 });
 
