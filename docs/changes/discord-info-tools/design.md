@@ -1,6 +1,6 @@
 ---
 title: "Discord の情報を読む tool とイベントの作成"
-status: investigating  # investigating | planned | in-progress | implemented
+status: planned      # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "ピン留め一覧、チャンネル情報、サーバーのイベント一覧をモデルが読める tool と、イベントを作る tool"
 ---

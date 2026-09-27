@@ -1,6 +1,6 @@
 ---
 title: "自動応答で返答するかを判断する"
-status: investigating  # investigating | planned | in-progress | implemented
+status: planned      # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "自動応答チャンネルの発言ごとに、判定専用のモデルで返答すべきかを先に判定し、口を挟む場面でなければ何も送らない"
 ---

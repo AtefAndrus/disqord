@@ -1,6 +1,6 @@
 ---
 title: "投票の内容と結果をモデルに渡す"
-status: investigating  # investigating | planned | in-progress | implemented
+status: planned      # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "会話の窓に入った投票を、質問、選択肢、票数、確定したかどうかのテキストにしてモデルへ渡し、締め切りの通知も窓に入れる"
 ---
