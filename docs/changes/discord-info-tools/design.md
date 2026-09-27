@@ -16,7 +16,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 ## 依存 / 関連 change
 
 - 前提（実装済み）: [discord-tool](../discord-tool/design.md) — 副作用のある Discord 操作の認可（`discordActionService` の共通の確認）、1 応答あたりの上限、「Discord 操作」の設定。イベントの作成はこの仕組みに載せる
-- 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓、`read_earlier_messages` と `view_attachment`、窓の参照（`m7`）
+- 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓、`read_earlier_messages` と `view_attachment`、窓の参照（`m7`）、応答ごとの REST の上限
 - 関連: [poll-results](../poll-results/design.md) — 投票の結果は tool にせず窓で扱う
 
 ## Goals / Non-Goals
@@ -32,6 +32,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 
 **Non-Goals:**
 
+- テキストチャンネルとその中のスレッド以外での利用。ボイスやステージのチャンネルのテキストチャットは、メッセージを読むのに Connect も要るなど権限の前提が異なり、[discord-tool](../discord-tool/design.md) と同じく対象にしない
 - 他のチャンネルのピン留めや情報を読むこと（依頼者が見られるかの確認を広げる必要があり、使い道がはっきりしてから扱う）
 - イベントの編集、削除、参加者の一覧
 - ステージのイベントの作成（Manage Channels、Mute Members、Move Members を要し、bot にそこまで渡したくない）
@@ -47,30 +48,46 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 | -------- | ---- | ---- |
 | context に常に入れるか tool にするか | tool にする | どれも毎回の応答で要る情報ではなく、常に入れると token を使う。モデルが要るときに取りに行く |
 | 読み取りの tool を有効にする設定 | 「会話履歴」が on の guild で提示する。新しい設定は作らない | どれも、そのチャンネルやサーバーの参加者が見られるものを読むだけで、会話履歴を読むことと性質が近い。`read_earlier_messages` と同じく `ctx.conversation` があるときに提示する |
+| 読み取りの tool を提示するチャンネル | テキストチャンネル（`GuildText`）と、その中の公開・非公開スレッド | Non-Goals のとおり。discord-tool と同じ範囲にそろえる |
+| 読み取りの権限の確認 | 読み取りの tool の呼び出しのたびに、discord-tool の共通の確認の 1〜4（依頼者の REST での取り直し、`canReadConversation()`、タイムアウト、ロックされたスレッド）を通す。取り直しに失敗したら読まずに失敗を返す | 1 回の応答は tool のターンを重ねて数分続きうるので、応答の開始時の状態で判断すると、途中でロールを外された依頼者にも読ませてしまう。discord-tool の副作用の tool と同じ根拠である |
 | `create_event` を有効にする設定 | 「Discord 操作」の on/off に含める | 副作用があり、他の Discord 操作と同じく管理者の明示なしに始めない |
-| ピン留めの対象 | 今のチャンネルだけ。窓と同じ窓に入る判定（`messageEligibility`）と読み取りの確認（`canReadConversation`）を通し、返したメッセージに窓の参照（`m7`）を振る | 窓の外のメッセージを読む点は `read_earlier_messages` と同じなので、同じ判定と確認を使う。参照を振ると、ピン留めの添付を `view_attachment` で開ける |
+| ピン留めの対象 | 今のチャンネルだけ。窓に入る判定（`messageEligibility`）を通したものだけを返し、返したメッセージに窓の参照（`m7`）を振る | 窓の外のメッセージを読む点は `read_earlier_messages` と同じなので、同じ判定を使う。参照を振ると、ピン留めの添付を `view_attachment` で開ける |
+| ピン留めの REST の上限 | ピン留めの取得と、窓に入る判定が行う返答記録の確認は、`read_earlier_messages` と同じ応答ごとの上限（`TOOL_REST_LIMIT`）から使う。上限に達したら、それまでに判定を終えたピン留めだけを返し、`stop_reason` に `rest_budget_exhausted` を入れる | 判定はピン留めごとに REST を使いうるので、上限が無いと 1 回の呼び出しで rate limit を使い切る。応答全体で 1 つの上限にするのは既存の履歴の tool と同じ理由である |
 | チャンネル情報の範囲 | 今のチャンネルの名前、種類、トピック、カテゴリー名、NSFW、低速モード、作成日時。スレッドなら親チャンネルの名前とトピックも | どれもチャンネルを見られる人に表示される情報である。権限の上書きやメンバー一覧は含めない |
-| イベント一覧の絞り込み | ボイスとステージのイベントは、依頼者と bot の双方がそのチャンネルの View Channel を持つときだけ返す。外部のイベントは返す | Discord はボイスとステージのイベントの取得に、そのチャンネルの View Channel を求める。bot の権限で取った一覧をそのまま返すと、依頼者が見られないチャンネルのイベントが漏れる |
+| イベント一覧の絞り込み | ボイスとステージのイベントは、依頼者と bot の双方がそのチャンネルの View Channel を持つときだけ返す。判定に使うチャンネルは REST で取り直す。外部のイベントは返す | Discord はボイスとステージのイベントの取得に、そのチャンネルの View Channel を求める。bot の権限で取った一覧をそのまま返すと、依頼者が見られないチャンネルのイベントが漏れる |
 | 作れるイベントの種類 | 外部（場所を文字で持つ）とボイスチャンネル | ステージは Non-Goals の理由で外す |
-| イベント作成の権限 | 外部は bot と依頼者の双方にサーバー単位の Create Events を求める。ボイスは双方にそのチャンネルの Create Events、View Channel、Connect を求める。加えて discord-tool の共通の確認（依頼者の取り直し、閲覧、タイムアウト）を通す | Discord が求める権限を bot と依頼者の双方に当てはめ、bot を経由した権限の昇格を防ぐ |
-| ボイスチャンネルの指定 | モデルはチャンネル名で指定し、実行の直前に REST で取ったサーバーのボイスチャンネルから名前で引く。同名が複数あれば実行せず候補の名前を返す | モデルに ID を書かせない。同名の取り違えで別のチャンネルにイベントを作らない |
+| イベント作成の権限 | 外部は bot と依頼者の双方にサーバー単位の Create Events を求める。ボイスは双方にそのチャンネルの Create Events、View Channel、Connect を求める。加えて、今のチャンネルに対する discord-tool の共通の確認を通す | Discord が求める権限を bot と依頼者の双方に当てはめ、bot を経由した権限の昇格を防ぐ |
+| ボイスチャンネルの指定 | モデルはチャンネル名で指定する。実行の直前に REST でサーバーのチャンネルを取り、ボイスチャンネルのうち依頼者と bot の双方が View Channel を持つものだけから名前で引く。見つからなければ `channel_not_found`、2 つ以上なら `channel_ambiguous` を返し、候補の名前は返さない | モデルに ID を書かせない。依頼者が見られないチャンネルは候補にしないので、その存在を知らせない。同名の候補はどれも同じ名前でモデルが選べないので、名前を返しても役に立たない |
 | 日時 | モデルに時差付きの ISO 8601 で書かせ、開始が現在より後、終了が開始より後であることを確かめる。外部のイベントは終了を必須にする | 外部のイベントには終了時刻が必須である。現在日時は既存の system メッセージ（JST）でモデルに渡っている |
-| イベントの公開範囲 | サーバーのメンバーだけ（`GUILD_ONLY`） | Discord が今受け付ける公開範囲はこれだけである |
+| イベントの公開範囲 | サーバーのメンバーだけ（`GUILD_ONLY`） | Discord が定める公開範囲はこれだけである |
 | 作成の上限と中断 | 1 応答 1 回。中断した呼び出しにも数える | 投票と同じく、中断後に再試行すると二重に作られうる |
+| 作成の結果 | 成功は `{"ok":true,"url":"https://discord.com/events/<guild>/<event>"}` だけを返し、`terminal` にする | 名前や説明を返すと長さが入力で変わり、固定長の結果（`FIXED_RESULT_TOKENS`、256 バイトまで）の枠を超えうる。枠を超えると、作った後に結果が `result_too_large` に置き換わり、モデルが失敗と伝える。名前と日時はモデル自身が引数に書いたものである |
 
 ## Design
+
+### tool の引数
+
+| tool | 引数 |
+| ---- | ---- |
+| `list_pins` | なし |
+| `get_channel_info` | なし |
+| `list_events` | なし |
+| `create_event` | `kind`（`external` か `voice`）、`name`（1〜100 字）、`start`（時差付き ISO 8601）、`end`（時差付き ISO 8601。`external` では必須、`voice` では任意）、`location`（1〜100 字。`external` では必須、`voice` では指定しない）、`channel_name`（`voice` では必須、`external` では指定しない）、`description`（任意、1000 字まで） |
+
+`validate` は上の必須と長さ、`kind` ごとの組み合わせ、日時の書式を確かめる。
+現在より後か、終了が開始より後かは、実行の直前の時刻で handler が確かめる。
 
 ### 変更対象ファイル
 
 - 新規: `src/llm/tools/discord/listPins.ts` / `getChannelInfo.ts` / `listEvents.ts` / `createEvent.ts`
-- 新規: `src/services/discordInfoService.ts` — 読み取りの tool の実装。応答ごとに作り、依頼者と bot の権限を確かめてから読む
+- 新規: `src/services/discordInfoService.ts` — 読み取りの tool の実装。呼び出しのたびに共通の確認を通してから読む
+- 修正: `src/services/discordActionService.ts` — 共通の確認の 1〜4 を読み取りからも呼べる関数に分ける。`createEvent` を足す。イベントは今のチャンネルでなく作成先の権限を確かめ、成功時にリンクを返すので、既存の `execute`（対象メッセージの解決と `{"ok":true}` の結果）とは別の実行関数にし、上限の数え方とエラーの分類だけを共有する
 - 修正: `src/llm/tools/registry.ts` — `IToolContext` に読み取りの窓口（`DiscordInfoContext`）を足し、`DiscordToolContext` に `createEvent` を足す
-- 修正: `src/services/conversationWindow.ts` — ピン留めを窓の判定と参照の付与に通す関数を足す
-- 修正: `src/services/discordActionService.ts` — `createEvent` と、イベント用の権限の確認
-- 修正: `src/services/chatService.ts` / `src/bot/events/messageCreate.ts` — 会話履歴が有効なときに `DiscordInfoContext` を作って載せる。`clientToolInvoked` を立てる
+- 修正: `src/services/conversationWindow.ts` — ピン留めを窓に入る判定と参照の付与に通す関数を足す。応答ごとの REST の上限を共有する
+- 修正: `src/services/chatService.ts` / `src/bot/events/messageCreate.ts` — 会話履歴が有効なときに `DiscordInfoContext` を作って載せる。読み取りの呼び出しでも `clientToolInvoked` を立てる
 - 修正: `src/index.ts` — 4 つの tool を登録する
 - 修正: `README.md` — 招待に必要な権限に Create Events と Connect を足す
-- 修正: `scripts/e2e/scenarios.ts` — 名前を指定して走るシナリオ
+- 修正: `scripts/e2e/scenarios.ts` / `scripts/e2e/index.ts` — 名前を指定して走るシナリオ
 
 ### 実装内容
 
@@ -78,32 +95,33 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 - `list_pins` は `GET /channels/{id}/messages/pins` を最大 50 件取り、窓に入る判定を通ったものだけを返す。判定で外れたもの（他の bot の発言など）は件数だけを返す。
 - `get_channel_info` はチャンネルを REST で取り直して読む。キャッシュのチャンネルは discord-tool の共通の確認と同じ理由で使わない。
 - `list_events` は `GET /guilds/{id}/scheduled-events?with_user_count=true` を使い、終わったものと取り消されたものを除いて開始の早い順に最大 20 件を返す。各イベントは名前、説明、開始と終了、状態、場所またはチャンネル名、興味ありの人数を持つ。
-- `create_event` は discord-tool の `execute`（認可、上限、エラーの分類）に載せる。成功したらイベントの名前と開始日時とリンクを返す。
 - tool の description に、ユーザが頼んだときだけイベントを作ると書く。
 
 ### e2e
 
 `bun run e2e discord-info` を名前を指定したときだけ走らせ、会話履歴を有効にすることを要件にする。
 テスト bot が、チャンネルのトピックとピン留めの 1 件を尋ね、REST で読んだ値と返答が合うことを確かめる。
-`create_event` は `discord-tools` シナリオに足し、作ったイベントを最後に消す。
+`create_event` は `discord-tools` シナリオに足す。
+作ったイベントは、作成者である bot 自身のトークン（`.env` の `DISCORD_TOKEN`）で消す。作成者は Create Events だけで自分のイベントを消せるので、テスト bot に Manage Events を足さずに済む。
 
 ## Tasks
 
-- [ ] `DiscordInfoContext` と `discordInfoService` を実装する
+- [ ] 共通の確認を読み取りから呼べるように分け、`DiscordInfoContext` と `discordInfoService` を実装する
 - [ ] `list_pins`、`get_channel_info`、`list_events` を実装して登録する
 - [ ] `create_event` を `discordActionService` に足して登録する
-- [ ] テスト: 依頼者が見られないボイスチャンネルのイベントが一覧に出ないこと、ピン留めが窓の判定を通ること、会話履歴が off の guild で読み取りの tool が提示されないこと、イベント作成の権限（外部とボイス、bot だけが持つ、依頼者だけが持つ）、日時の検証、同名のボイスチャンネル
+- [ ] テスト: 依頼者が見られないボイスチャンネルのイベントが一覧に出ないこと、応答の途中で依頼者の閲覧権限が外れたら読み取りが断られること、ピン留めが窓に入る判定を通ること、ピン留めの判定が REST の上限で止まること、会話履歴が off の guild とテキスト以外のチャンネルで読み取りの tool が提示されないこと、イベント作成の権限（外部とボイス、bot だけが持つ、依頼者だけが持つ）、引数の検証（`kind` ごとの必須、長さ、日時）、依頼者が見られない同名のボイスチャンネルが候補に入らないこと、同名が 2 つ以上のときに名前を返さないこと
 - [ ] README の招待に必要な権限に Create Events と Connect を足す
-- [ ] e2e シナリオ `discord-info` を足し、`discord-tools` にイベント作成を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [ ] e2e シナリオ `discord-info` を足し、`discord-tools` にイベント作成と bot のトークンでの片付けを足し、AGENTS.md の End-to-end 節に実行条件を書く
 - [ ] 手動確認: 本番の bot を、Create Events と Connect を足した招待 URL で認可し直す
 - [ ] `docs/changes/discord-info-tools/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **一覧のイベントの View Channel の判定（未検証）**: bot の権限で取った一覧に、依頼者が見られないボイスチャンネルのイベントが含まれるかを確かめていない。含まれない前提にはせず、本 change の絞り込みで除く。
 - **ピン留めの件数**: 50 件を超えるピン留めは読まない。古いピン留めが要る場面が出たら `before` で続きを取る。
+- **チャンネルの秘匿化**: Discord は 2026-11-16 から、bot が見られないチャンネルを `GET /guilds/{id}/channels` の結果から除く。本 change は bot と依頼者の双方が見られるチャンネルだけを使うので、挙動は変わらない。
 
 ## 参照
 
-- Discord Guild Scheduled Event Resource（`developers/resources/guild-scheduled-event.mdx`）— 種類ごとの必須項目、種類ごとの権限、List Scheduled Events の `with_user_count`
-- Discord Message Resource（`developers/resources/message.mdx`）— Get Channel Pins（最大 50 件、`before`、`has_more`）
+- Discord Guild Scheduled Event Resource（`developers/resources/guild-scheduled-event.mdx`）— 種類ごとの必須項目、種類ごとの権限、List Scheduled Events の `with_user_count`、名前と場所の長さ
+- Discord Message Resource（`developers/resources/message.mdx`）— Get Channel Pins（最大 50 件、`before`、`has_more`）、ボイスチャンネルでのメッセージ取得に要る Connect
+- Discord API change log（2026-08-12「Channel Obfuscation for Users and Bots」）
