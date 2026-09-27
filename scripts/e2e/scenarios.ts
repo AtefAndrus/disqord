@@ -420,7 +420,7 @@ export const SCENARIOS: Scenario[] = [
     manual: true,
     prompt: "[e2e] Python、Rust、Go の特徴を、速度・学習コスト・用途の 3 項目で表にして比較して。",
     check: (reply) => [
-      ...(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/mu.test(reply.body)
+      ...(/^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/mu.test(reply.body)
         ? ["the reply contains a Markdown table"]
         : []),
       ...hasUsageFooter(reply),
