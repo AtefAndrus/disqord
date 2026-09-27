@@ -131,11 +131,12 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 
 ## Tasks
 
-- [ ] `discord_tools_enabled` の列と、設定パネルの「機能」ページの項目、`/status` の表示を足す
-- [ ] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
-- [ ] 4 つの tool を実装して登録する
-- [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
-- [ ] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [x] `discord_tools_enabled` の列と、設定パネルの「機能」ページの項目、`/status` の表示を足す
+- [x] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
+- [x] 4 つの tool を実装して登録する
+- [x] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
+- [x] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [ ] `bun run e2e` と `bun run e2e discord-tools` を実行し、結果を PR に書く
 - [ ] 手動確認: bot のロールから `SendPolls` を外した状態で投票を頼み、Discord が投票の作成を断るかを確かめる（結果に応じて bot 側の事前確認を残すか外す）
 - [ ] `docs/changes/discord-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
