@@ -1,6 +1,6 @@
 ---
 title: "Discord 操作ツール"
-status: planned
+status: in-progress
 priority: medium
 summary: "リアクション、投票、スレッド作成、ピン留めを、会話の流れでモデルが行える client tool 群"
 ---
@@ -118,6 +118,8 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - `DiscordToolContext` は応答ごとに作り、依頼者の ID、bot を呼んだメッセージ、上限のカウンタを持つ。メンバーは持たず、共通の確認が操作のたびに取り直す。
 - handler は `AbortSignal` を受け取るが、Discord への要求が送られた後の中断では結果が分からない。リアクションとピンは繰り返しても害が無く、スレッドは Discord が重複を断るので、中断後の再試行で二重に作られることは無い。投票だけは中断後に再試行すると二重になりうるので、1 応答 1 回の上限を、中断した呼び出しにも数える。
 - モデルに返す結果は `{"ok":true}` か `{"ok":false,"reason":"missing_permission","who":"bot","permissions":["PinMessages"]}` のような短い JSON にする。
+- 結果はどれも `IToolHandlerResult.terminal` を true にして返す。tool loop は client tool の結果を `resultBudgetTokens` に収まらなければ `result_too_large` に差し替えるが、`terminal` の固定長の結果（`FIXED_RESULT_TOKENS` 以内）は予算を使い切っていても通す（`src/llm/tools/toolHandler.ts` の `fixedLength`）。本 change の tool は結果を返す前に Discord を変え終えているので、実行したのに結果が `result_too_large` に置き換わり、モデルが失敗と誤って伝えることを防ぐ。
+- `chatService.generateChatResponse` は、Web 検索やツイート画像の失敗でループをやり直すのを、何も表示しておらず client tool も実行していないときに限る（`clientToolInvoked`）。やり直すと tool の副作用も繰り返すためである。Discord 操作の呼び出しも、会話の窓の tool と同じく `DiscordToolContext` を包んで `clientToolInvoked` を立てる。
 
 ### e2e
 
@@ -132,11 +134,12 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - [ ] 4 つの tool を実装して登録する
 - [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
 - [ ] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [ ] 手動確認: bot のロールから `SendPolls` を外した状態で投票を頼み、Discord が投票の作成を断るかを確かめる（結果に応じて bot 側の事前確認を残すか外す）
 - [ ] `docs/changes/discord-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **`SEND_POLLS` の bot への適用（未検証）**: `SendPolls` が bot の投票作成にも要求されるかは Discord の文書から確かめられていない。bot 側の事前確認には含め、実装時に権限を外した bot で挙動を確かめる。
+- **`SEND_POLLS` の bot への適用（未検証）**: Discord の権限の文書（`developers/topics/permissions.mdx`、2026-09-27 の main）は `SEND_POLLS` を「Allows sending polls」とだけ書き、bot が投票を作るときに要求されるかは書いていない。bot 側の事前確認には含め、`手動確認` で権限を外した bot の挙動を確かめる。要求されないと分かれば、bot 側の確認から外す。
 - **ボイスチャンネルでの履歴の読み取り**: 会話の窓と `read_earlier_messages` が使う `canReadConversation()` は、ボイスチャンネルのテキストチャットで要る `Connect` を確かめていない。本 change の tool はボイスチャンネルで提示しないので影響しないが、履歴の読み取り側の抜けとして別に直す。
 - **モデルの呼びすぎ**: tool があると、頼まれていないのにリアクションや投票をするモデルがありうる。tool の description に「ユーザが頼んだときだけ使う」と書き、e2e とログで様子を見る。
 
