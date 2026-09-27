@@ -313,6 +313,7 @@ describe("createMessageCreateHandler", () => {
       reasoningDisplayEnabled: false,
       twitterExpandEnabled: true,
       historyEnabled: true,
+      discordToolsEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -333,6 +334,7 @@ describe("createMessageCreateHandler", () => {
       setReasoningDisplayEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setDiscordToolsEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -493,6 +495,7 @@ describe("createMessageCreateHandler", () => {
             reasoningDisplayEnabled: false,
             twitterExpandEnabled: true,
             historyEnabled: false,
+            discordToolsEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),

@@ -497,6 +497,8 @@ export class ConversationWindowService {
         sessionId: result.sessionId,
         windowStartMessageId: result.startMessageId,
         toolContext: {
+          resolveMessageRef: (ref) =>
+            [...responseState.shown.values()].find((message) => message.ref === ref)?.id,
           readEarlierMessages: (count, signal, budgetTokens) =>
             this.readEarlier(
               responseState,

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test
 import { getEventListeners } from "node:events";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
+import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
+import type { DiscordToolContext } from "../../../src/llm/tools/registry";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
 import { ChatService } from "../../../src/services/chatService";
@@ -41,6 +43,7 @@ interface ChatFixture {
   llmClient: MockedLlmClient;
   settingsService: MockedSettingsService;
   tweetService: MockedTweetService;
+  toolRegistry: ToolRegistry;
 }
 
 function createUpdater(): IToolLoopUpdater {
@@ -61,15 +64,16 @@ function createFixture(overrides: Partial<GuildSettings> = {}): ChatFixture {
     createMockGuildSettings({ guildId, ...overrides }),
   );
   const tweetService = createMockTweetService() as MockedTweetService;
+  const toolRegistry = new ToolRegistry();
   const chatService = new ChatService(
     llmClient,
     settingsService,
-    new ToolRegistry(),
+    toolRegistry,
     "perplexity",
     tweetService,
     new ModelService(llmClient),
   );
-  return { chatService, llmClient, settingsService, tweetService };
+  return { chatService, llmClient, settingsService, tweetService, toolRegistry };
 }
 
 function conversationContext(): ConversationWindowContext {
@@ -115,6 +119,7 @@ function conversationContext(): ConversationWindowContext {
     sessionId: "opaque-session-id",
     windowStartMessageId: "1",
     toolContext: {
+      resolveMessageRef: () => undefined,
       readEarlierMessages: async () => '{"messages":[]}',
       viewAttachment: async () => '{"error":"unused"}',
     },
@@ -124,6 +129,40 @@ function conversationContext(): ConversationWindowContext {
 describe("ChatService", () => {
   afterEach(() => {
     setSystemTime();
+  });
+
+  test("offers Discord tools when history is off and the model supports tools", async () => {
+    const fixture = createFixture({ historyEnabled: false, discordToolsEnabled: true });
+    fixture.toolRegistry.register(createAddReactionTool());
+    fixture.llmClient.listModelsWithPricing = mock(async () => [
+      {
+        id: "test-model:fixture",
+        name: "Fixture",
+        created: 0,
+        contextLength: 128_000,
+        pricing: { prompt: "0", completion: "0" },
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+        supportedParameters: ["tools"],
+      },
+    ]);
+    const discord: DiscordToolContext = {
+      channelType: 0,
+      addReaction: async () => '{"ok":true}',
+      createPoll: async () => '{"ok":true}',
+      createThread: async () => '{"ok":true}',
+      pinMessage: async () => '{"ok":true}',
+    };
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      { text: "react", discord },
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+    expect(JSON.stringify(request.tools)).toContain('"name":"add_reaction"');
+    expect(request.messages.at(-1)?.content).toBe("react");
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {

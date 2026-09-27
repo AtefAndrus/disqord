@@ -224,6 +224,9 @@ export async function handleConfigPanelInteraction(
           case "history":
             await settingsService.setHistoryEnabled(guildId, enabled, actorId);
             break;
+          case "discord_tools":
+            await settingsService.setDiscordToolsEnabled(guildId, enabled, actorId);
+            break;
         }
       } else if (action.action === "edit" && interaction.isChannelSelectMenu()) {
         // The select was drawn from one version of the settings; against any other the

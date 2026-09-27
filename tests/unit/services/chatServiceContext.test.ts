@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
+import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
 import { createReadEarlierMessagesTool } from "../../../src/llm/tools/readEarlierMessages";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
@@ -70,7 +71,10 @@ function createUpdater(): IToolLoopUpdater {
   };
 }
 
-function createRetryFixture(webSearchEnabled = false): {
+function createRetryFixture(
+  webSearchEnabled = false,
+  discordToolsEnabled = false,
+): {
   chatService: ChatService;
   llmClient: ReturnType<typeof createMockLLMClient>;
   requests: ChatCompletionRequest[];
@@ -91,7 +95,12 @@ function createRetryFixture(webSearchEnabled = false): {
   ]);
   const settingsService = createMockSettingsService();
   settingsService.getGuildSettings = mock(async (guildId: string) =>
-    createMockGuildSettings({ guildId, historyEnabled: true, webSearchEnabled }),
+    createMockGuildSettings({
+      guildId,
+      historyEnabled: true,
+      webSearchEnabled,
+      discordToolsEnabled,
+    }),
   );
   const tweetService = createMockTweetService();
   const imagePart = {
@@ -108,6 +117,7 @@ function createRetryFixture(webSearchEnabled = false): {
   const readEarlier = mock(async () => '{"messages":[]}');
   const registry = new ToolRegistry();
   registry.register(createReadEarlierMessagesTool());
+  if (discordToolsEnabled) registry.register(createAddReactionTool());
   const requests: ChatCompletionRequest[] = [];
   const chatService = new ChatService(
     llmClient,
@@ -127,6 +137,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
     sessionId: string;
     windowStartMessageId: string;
     toolContext: {
+      resolveMessageRef: (ref: string) => string | undefined;
       readEarlierMessages: typeof readEarlier;
       viewAttachment: () => Promise<string>;
     };
@@ -139,6 +150,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
       sessionId: "session",
       windowStartMessageId: "start",
       toolContext: {
+        resolveMessageRef: () => undefined,
         readEarlierMessages: readEarlier,
         viewAttachment: async () => '{"error":"unused"}',
       },
@@ -189,6 +201,7 @@ describe("conversation-context request construction", () => {
           sessionId: "must-not-be-sent",
           windowStartMessageId: "start",
           toolContext: {
+            resolveMessageRef: () => undefined,
             readEarlierMessages: async () => "history",
             viewAttachment: async () => "attachment",
           },
@@ -369,6 +382,49 @@ describe("conversation-context request construction", () => {
     if (result.status === "error") expect(result.error).toBeInstanceOf(BadRequestError);
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
     expect(fixture.readEarlier).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not retry web search after a Discord side effect", async () => {
+    const fixture = createRetryFixture(true, true);
+    const addReaction = mock(async () => '{"ok":true}');
+    let calls = 0;
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      calls += 1;
+      if (calls === 1)
+        return (async function* () {
+          yield {
+            toolCall: {
+              index: 0,
+              id: "call-1",
+              name: "add_reaction",
+              argumentsDelta: '{"emoji":"👍"}',
+            },
+            done: false as const,
+          };
+          yield { done: true as const, fullText: "", finishReason: "tool_calls" as const };
+        })();
+      return webSearchFailedTurn();
+    });
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      {
+        ...retryInput(fixture.readEarlier),
+        discord: {
+          channelType: 0,
+          addReaction,
+          createPoll: async () => '{"ok":true}',
+          createThread: async () => '{"ok":true}',
+          pinMessage: async () => '{"ok":true}',
+        },
+      },
+      "discord-side-effect",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    expect(result.status).toBe("error");
+    expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
+    expect(addReaction).toHaveBeenCalledTimes(1);
   });
 
   test("still retries tweet images when the first attempt invokes no client tool", async () => {

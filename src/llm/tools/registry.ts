@@ -4,6 +4,7 @@ export type ToolLlmResult = string | ResponsesInputContentPart[];
 
 /** `budgetTokens` is `IToolContext.resultBudgetTokens` of the call; absent means unlimited. */
 export interface ConversationToolContext {
+  resolveMessageRef(ref: string): string | undefined;
   readEarlierMessages(
     count: number,
     signal: AbortSignal,
@@ -16,6 +17,20 @@ export interface ConversationToolContext {
     signal: AbortSignal,
     budgetTokens?: number,
   ): Promise<ToolLlmResult>;
+}
+
+export interface DiscordToolContext {
+  channelType: number;
+  addReaction(emoji: string, messageRef: string | undefined, signal: AbortSignal): Promise<string>;
+  createPoll(
+    question: string,
+    answers: string[],
+    durationHours: number,
+    allowMultiselect: boolean,
+    signal: AbortSignal,
+  ): Promise<string>;
+  createThread(name: string, messageRef: string | undefined, signal: AbortSignal): Promise<string>;
+  pinMessage(messageRef: string | undefined, signal: AbortSignal): Promise<string>;
 }
 
 /**
@@ -32,6 +47,7 @@ export interface IToolContext {
   model?: string;
   toolsAllowed?: boolean;
   conversation?: ConversationToolContext;
+  discord?: DiscordToolContext;
   /**
    * Tokens this call's result may add to the request, as estimated by
    * `estimateToolResultTokens()`. Set by the tool loop per call. A tool

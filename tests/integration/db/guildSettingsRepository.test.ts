@@ -92,6 +92,14 @@ describe("GuildSettingsRepository", () => {
   });
 
   describe("update", () => {
+    test("Discord 操作は既定で無効で、更新を保存する", async () => {
+      const initial = await repo.update("discord-guild", () => ({}));
+      expect(initial.discordToolsEnabled).toBe(false);
+      const enabled = await repo.update("discord-guild", () => ({ discordToolsEnabled: true }));
+      expect(enabled.discordToolsEnabled).toBe(true);
+      expect((await repo.findByGuildId("discord-guild"))?.discordToolsEnabled).toBe(true);
+    });
+
     test("行が無ければ既定値で作ってから、返した列を書く", async () => {
       const result = await repo.update("new-guild", () => ({ defaultModel: "new-model" }));
 
@@ -105,6 +113,7 @@ describe("GuildSettingsRepository", () => {
         reasoningDisplayEnabled: false,
         twitterExpandEnabled: true,
         historyEnabled: false,
+        discordToolsEnabled: false,
       });
       expect(await repo.findByGuildId("new-guild")).toEqual(result);
     });

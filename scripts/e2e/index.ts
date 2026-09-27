@@ -267,6 +267,13 @@ async function main(): Promise<number> {
           ? spawn && bot?.toolCalls.has(scenario.toolName) === true
           : true;
         const problems = scenario.check(reply);
+        if (scenario.verify && channelId) {
+          problems.push(
+            ...(await scenario.verify(messageId, channelId, (path, init) =>
+              discord(path, deadline, init),
+            )),
+          );
+        }
         if (scenario.toolName && !spawn) {
           problems.push(
             `cannot verify ${scenario.toolName} invocation without --spawn: bot log is unavailable under --no-spawn`,

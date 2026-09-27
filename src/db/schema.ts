@@ -96,6 +96,17 @@ export function applyMigrations(db: Database): void {
     `);
   }
 
+  if (
+    !db
+      .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+      .all()
+      .some((c) => c.name === "discord_tools_enabled")
+  ) {
+    db.run(
+      "ALTER TABLE guild_settings ADD COLUMN discord_tools_enabled INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+
   // Migration: Add the optional guild settings administrator role
   const columnsAfterHistory = db
     .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")

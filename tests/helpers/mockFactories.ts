@@ -94,6 +94,9 @@ export function createMockSettingsService(): ISettingsService {
     setHistoryEnabled: mock((guildId: string, historyEnabled: boolean) =>
       Promise.resolve(settings(guildId, { historyEnabled })),
     ),
+    setDiscordToolsEnabled: mock((guildId: string, discordToolsEnabled: boolean) =>
+      Promise.resolve(settings(guildId, { discordToolsEnabled })),
+    ),
   };
 }
 
@@ -122,6 +125,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     reasoningDisplayEnabled: false,
     twitterExpandEnabled: true,
     historyEnabled: false,
+    discordToolsEnabled: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

@@ -53,6 +53,11 @@ export interface ISettingsService {
     actorId?: string,
   ): Promise<GuildSettings>;
   setHistoryEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
+  setDiscordToolsEnabled(
+    guildId: string,
+    enabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {
@@ -71,6 +76,14 @@ function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | und
 
 export class SettingsService implements ISettingsService {
   constructor(private readonly repo: IGuildSettingsRepository) {}
+
+  async setDiscordToolsEnabled(
+    guildId: string,
+    enabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ discordToolsEnabled: enabled }), actorId);
+  }
 
   async setReleaseAnnounceChannelId(
     guildId: string,

@@ -18,6 +18,7 @@ export interface GuildSettings {
   reasoningDisplayEnabled: boolean;
   twitterExpandEnabled: boolean;
   historyEnabled: boolean;
+  discordToolsEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
