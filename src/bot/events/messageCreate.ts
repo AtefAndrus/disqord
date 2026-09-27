@@ -452,6 +452,15 @@ export function createMessageCreateHandler(
         throw result.error;
       }
 
+      // A router model (openrouter/auto, a preset router) answers through
+      // another model. The badge was drawn from the configured id before the
+      // answer arrived; the final pages name the model that answered, as the
+      // footer does.
+      const answeredModelName =
+        result.model && result.model !== settings.defaultModel
+          ? ((await modelService.getModelName(result.model)) ?? result.model)
+          : modelName;
+
       // 最終更新（Components V2、footer 付き、Section なし）
       const latency = Date.now() - startTime;
       const metadata: FinalMetadata = {
@@ -497,7 +506,7 @@ export function createMessageCreateHandler(
         settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
       const chunks = splitTextIntoMessages(
         finalText,
-        measureTextBudget(badgeText(modelName)),
+        measureTextBudget(badgeText(answeredModelName)),
         footerBudget,
         reasoningText ? reasoningReserve(reasoningText) : undefined,
       );
@@ -518,11 +527,14 @@ export function createMessageCreateHandler(
         // page's page-number footer.
         const reasoning =
           isFirst && reasoningText
-            ? fitReasoning(reasoningText, remainingPageBudget(chunks[i], modelName, footerBudget))
+            ? fitReasoning(
+                reasoningText,
+                remainingPageBudget(chunks[i], answeredModelName, footerBudget),
+              )
             : undefined;
         const container = buildFinalContainer({
           text: chunks[i],
-          modelName,
+          modelName: answeredModelName,
           color,
           isFirst,
           isLast,
