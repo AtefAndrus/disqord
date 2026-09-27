@@ -56,10 +56,10 @@ summary: "会話の窓に入った投票を、質問、選択肢、票数、確�
 
 - 修正: `src/utils/discordMessageNormalizer.ts` — `RawDiscordMessage` に `poll` と `embeds` を足し、投票と締め切りの通知をテキストにする
 - 修正: `src/services/messageEligibility.ts` — bot の投票メッセージと type 46 の通知を窓に入れる判定。判定の結果に、返答記録を持たない bot の発言（投票）と通知を表す種類を足す
-- 修正: `src/services/conversationWindow.ts` — 窓は今、人の発言でない採用メッセージを返答記録付きの bot の返答として扱い、返答記録が無ければ捨てる。bot の投票は 1 件の assistant の発言として、通知は 1 件の発言として、返答とは別に正規化して時刻順に並べる。`exchangeId`（窓が削除の判定に使う、やり取りの起点の ID）は、bot の投票には返信先の発言の ID を、通知には元の投票の `exchangeId`（人の投票なら投票メッセージの ID、bot の投票なら返信先の発言の ID）を入れる。こうすると、既存の `exchangeId` による削除の判定がそのまま投票と通知にも効く
+- 修正: `src/services/conversationWindow.ts` — 窓は今、人の発言でない採用メッセージを返答記録付きの bot の返答として扱い、返答記録が無ければ捨てる。bot の投票は 1 件の assistant の発言として、通知は 1 件の発言として、返答とは別に正規化して時刻順に並べる。返信先を窓とは別に組み立てる `findReplyTarget()` も、返信先が bot の投票や通知なら同じ正規化で返信先にする（今は人の発言か返答記録のある bot の返答だけを返信先にする）。`exchangeId`（窓が削除の判定に使う、やり取りの起点の ID）は、bot の投票には返信先の発言の ID を、通知には元の投票の `exchangeId`（人の投票なら投票メッセージの ID、bot の投票なら返信先の発言の ID）を入れる。こうすると、既存の `exchangeId` による削除の判定がそのまま投票と通知にも効く
 - 修正: `src/services/chatService.ts` — `formatConversationMessage()` で投票のテキストを本文の後に置く（正規化の結果を使う）
-- 修正: `src/bot/events/messageCreate.ts` — bot を呼んだ発言が投票を持つとき、正規化と同じ関数で作った投票のテキストを入力の本文の後に足す。投票だけで本文の無い発言も、本文があるものとして扱い「メッセージを入力してください」で断らない
-- テスト: 正規化（票のある選択肢だけの `answer_counts`、`results` の欠落、確定と集計中、勝者の無い通知）、窓に入る判定と並び（bot の投票、返信先が消えた bot の投票、返信先が窓より古く、その返答のページが外部で削除された bot の投票、他の bot の投票、人と bot 自身と他の bot の通知、元の投票が削除された通知、元の投票が窓より古い通知、REST の上限で確かめられない通知）
+- 修正: `src/bot/events/messageCreate.ts` — bot を呼んだ発言が投票を持つとき、投票のテキストを入力の本文の後に足す。gateway の `Message.poll` は discord.js の `Poll`（選択肢は `answers` の Collection、票数は各 `PollAnswer` の `voteCount`）で、REST の `poll.results.answer_counts` と形が違う。`toRawDiscordMessage()` で REST と同じ `poll` の形に写してから、正規化と同じ関数でテキストにする。投票だけで本文の無い発言も、本文があるものとして扱い「メッセージを入力してください」で断らない
+- テスト: bot を呼んだ発言の投票（discord.js の `Poll` からの写し、票の無い選択肢、本文の無い投票だけの発言）、返信先が窓より古い bot の投票や通知のとき、正規化（票のある選択肢だけの `answer_counts`、`results` の欠落、確定と集計中、勝者の無い通知）、窓に入る判定と並び（bot の投票、返信先が消えた bot の投票、返信先が窓より古く、その返答のページが外部で削除された bot の投票、他の bot の投票、人と bot 自身と他の bot の通知、元の投票が削除された通知、元の投票が窓より古い通知、REST の上限で確かめられない通知）
 - 修正: `scripts/e2e/scenarios.ts` — 名前を指定して走るシナリオ
 
 ### 実装内容
