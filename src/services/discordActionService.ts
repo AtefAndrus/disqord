@@ -32,7 +32,8 @@ function classifyError(error: unknown, action: ActionName, channel: ActionChanne
     return error as Failure;
   const value = error as { code?: number | string; status?: number };
   const code = Number(value?.code);
-  if (code === 50013 || code === 50001 || value?.status === 403) {
+  if (code === 50001) return failure("missing_access", "bot");
+  if (code === 50013 || value?.status === 403) {
     return failure(
       "missing_permission",
       "bot",
@@ -84,10 +85,8 @@ export class DiscordActionService implements DiscordToolContext {
       return failure("requester_unavailable");
     }
     try {
-      const fetched = await guild.channels.fetch(this.trigger.channelId, {
-        force: true,
-        cache: false,
-      });
+      // Keep caching enabled so the REST response patches existing channel objects.
+      const fetched = await guild.channels.fetch(this.trigger.channelId, { force: true });
       if (
         !fetched ||
         ![ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread].includes(
@@ -97,10 +96,14 @@ export class DiscordActionService implements DiscordToolContext {
         return failure("unsupported_channel");
       }
       channel = fetched as ActionChannel;
+      if (channel.isThread()) {
+        if (!channel.parentId) return failure("unsupported_channel");
+        const parent = await guild.channels.fetch(channel.parentId, { force: true });
+        if (!parent) return failure("unsupported_channel");
+      }
       bot = await guild.members.fetch({
         user: this.trigger.client.user.id,
         force: true,
-        cache: false,
       });
     } catch {
       return failure("discord_failed");
@@ -165,7 +168,11 @@ export class DiscordActionService implements DiscordToolContext {
     action: ActionName,
     ref: string | undefined,
     signal: AbortSignal,
-    perform: (auth: Exclude<Authorization, Failure>, targetId: string) => Promise<void>,
+    perform: (
+      auth: Exclude<Authorization, Failure>,
+      targetId: string,
+      consume: () => void,
+    ) => Promise<void>,
   ): Promise<string> {
     const limits: Record<ActionName, number> = { reaction: 3, poll: 1, thread: 1, pin: 1 };
     if (this.counts[action] >= limits[action]) return result(failure("limit_reached"));
@@ -176,8 +183,11 @@ export class DiscordActionService implements DiscordToolContext {
       const auth = await this.authorize(action);
       if (isFailure(auth)) return result(auth);
       if (signal.aborted) return result(failure("cancelled"));
-      this.counts[action] += 1;
-      await perform(auth, targetId);
+      await perform(auth, targetId, () => {
+        if (signal.aborted) throw failure("cancelled");
+        if (this.counts[action] >= limits[action]) throw failure("limit_reached");
+        this.counts[action] += 1;
+      });
       return result({ ok: true });
     } catch (error) {
       return result(classifyError(error, action, this.trigger.channel as ActionChannel));
@@ -190,7 +200,7 @@ export class DiscordActionService implements DiscordToolContext {
       "reaction",
       messageRef,
       signal,
-      async ({ channel, user, bot }, targetId) => {
+      async ({ channel, user, bot }, targetId, consume) => {
         let reaction: string = emoji;
         if (/^[a-zA-Z0-9_]{2,32}$/u.test(emoji)) {
           const emojis = await this.trigger.guild.emojis.fetch();
@@ -212,6 +222,7 @@ export class DiscordActionService implements DiscordToolContext {
           cache: false,
           force: true,
         });
+        consume();
         await message.react(reaction);
       },
     );
@@ -224,7 +235,8 @@ export class DiscordActionService implements DiscordToolContext {
     allowMultiselect: boolean,
     signal: AbortSignal,
   ): Promise<string> {
-    return this.execute("poll", undefined, signal, async ({ channel }) => {
+    return this.execute("poll", undefined, signal, async ({ channel }, _targetId, consume) => {
+      consume();
       await channel.send({
         poll: {
           question: { text: question },
@@ -238,25 +250,27 @@ export class DiscordActionService implements DiscordToolContext {
   }
 
   createThread(name: string, messageRef: string | undefined, signal: AbortSignal): Promise<string> {
-    return this.execute("thread", messageRef, signal, async ({ channel }, targetId) => {
+    return this.execute("thread", messageRef, signal, async ({ channel }, targetId, consume) => {
       if (channel.type !== ChannelType.GuildText) throw { code: 10003 };
       const message = await channel.messages.fetch({
         message: targetId,
         cache: false,
         force: true,
       });
+      consume();
       await message.startThread({ name });
     });
   }
 
   pinMessage(messageRef: string | undefined, signal: AbortSignal): Promise<string> {
-    return this.execute("pin", messageRef, signal, async ({ channel }, targetId) => {
+    return this.execute("pin", messageRef, signal, async ({ channel }, targetId, consume) => {
       const message = await channel.messages.fetch({
         message: targetId,
         cache: false,
         force: true,
       });
-      if (!message.pinnable) throw failure("not_pinnable");
+      if (!message.pinnable) throw failure(message.system ? "system_message" : "not_pinnable");
+      consume();
       await message.pin();
     });
   }

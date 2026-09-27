@@ -162,7 +162,7 @@ async function repliesAfter(messageId: string, deadline: number): Promise<Reply>
   );
   if (!response.ok) throw new Error(`read failed: HTTP ${response.status}`);
   const messages = ((await response.json()) as DiscordMessage[])
-    .filter((message) => message.author.id === botId)
+    .filter((message) => message.author.id === botId && ((message.flags ?? 0) & (1 << 15)) !== 0)
     .reverse();
   return toReply(messages);
 }
@@ -269,8 +269,11 @@ async function main(): Promise<number> {
         const problems = scenario.check(reply);
         if (scenario.verify && channelId) {
           problems.push(
-            ...(await scenario.verify(messageId, channelId, (path, init) =>
-              discord(path, deadline, init),
+            ...(await scenario.verify(
+              messageId,
+              channelId,
+              (path, init) => discord(path, deadline, init),
+              botId,
             )),
           );
         }

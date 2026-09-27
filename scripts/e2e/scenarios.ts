@@ -10,6 +10,7 @@ import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
 export interface DiscordMessage {
   id: string;
   content: string;
+  flags?: number;
   edited_timestamp?: string | null;
   author: { id: string; username: string };
   components?: unknown[];
@@ -53,6 +54,7 @@ export interface Scenario {
     triggerId: string,
     channelId: string,
     request: (path: string, init?: RequestInit) => Promise<Response>,
+    botId: string,
   ) => Promise<string[]>;
 }
 
@@ -300,7 +302,7 @@ export const SCENARIOS: Scenario[] = [
     prompt:
       "[e2e] このメッセージに 👍 を付け、『賛成ですか？』を選択肢『はい』『いいえ』で投票にし、このメッセージから『e2e thread』という公開スレッドを作り、このメッセージをピン留めして。4 つの Discord 操作ツールを必ず使って。",
     check: (reply) => hasUsageFooter(reply),
-    verify: async (triggerId, channelId, request) => {
+    verify: async (triggerId, channelId, request, botId) => {
       const problems: string[] = [];
       const messageResponse = await request(`/channels/${channelId}/messages/${triggerId}`);
       if (!messageResponse.ok) return [`cannot read trigger: HTTP ${messageResponse.status}`];
@@ -326,11 +328,15 @@ export const SCENARIOS: Scenario[] = [
       const recentResponse = await request(`/channels/${channelId}/messages?limit=50`);
       if (recentResponse.ok) {
         const recent = (await recentResponse.json()) as {
+          author?: { id?: string };
+          message_reference?: { message_id?: string };
           poll?: { question?: { text?: string }; answers?: { poll_media?: { text?: string } }[] };
         }[];
         if (
           !recent.some(
             (item) =>
+              item.author?.id === botId &&
+              item.message_reference?.message_id === triggerId &&
               item.poll?.question?.text === "賛成ですか？" &&
               item.poll.answers?.map((answer) => answer.poll_media?.text).join(",") ===
                 "はい,いいえ",

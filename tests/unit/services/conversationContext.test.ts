@@ -113,6 +113,32 @@ function input(current: RawDiscordMessage): BuildConversationWindowInput {
   };
 }
 
+test("resolves only shown message references, including pages shown by read_earlier_messages", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({
+    status: "ok",
+    messages: [
+      message("900"),
+      message("950", undefined, {
+        author: { id: "other-bot", username: "other-bot", bot: true },
+      }),
+    ],
+  });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+  const first = context?.messages.find((entry) => entry.id === "900");
+  expect(first?.ref).toBeString();
+  expect(context?.toolContext.resolveMessageRef(first?.ref ?? "")).toBe("900");
+  expect(context?.toolContext.resolveMessageRef("m2")).toBeUndefined();
+
+  reader.listResponses.push({ status: "ok", messages: [message("800")] });
+  const earlier = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(1, new AbortController().signal)) as string,
+  ) as { messages: Array<{ ref: string }> };
+  expect(earlier.messages).toHaveLength(1);
+  expect(context?.toolContext.resolveMessageRef(earlier.messages[0]?.ref ?? "")).toBe("800");
+});
+
 test("anchored windows shrink to the compact limits and rebuild after sixty minutes", async () => {
   let now = NOW;
   const reader = new FakeReader();

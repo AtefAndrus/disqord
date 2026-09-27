@@ -26,6 +26,7 @@ function fixture(
     memberFetchFails?: boolean;
     privateMemberFails?: boolean;
     pinAllowed?: boolean;
+    systemMessage?: boolean;
     emojiRoles?: string[];
   } = {},
 ) {
@@ -46,12 +47,17 @@ function fixture(
   };
   const message = {
     pinnable: options.pinAllowed ?? true,
+    system: options.systemMessage ?? false,
     react: actions.react,
     pin: actions.pin,
     startThread: actions.startThread,
   };
   const channel = {
     type: options.type ?? ChannelType.GuildText,
+    parentId:
+      options.type === ChannelType.PublicThread || options.type === ChannelType.PrivateThread
+        ? "parent"
+        : null,
     locked: options.locked ?? false,
     isThread: () =>
       options.type === ChannelType.PublicThread || options.type === ChannelType.PrivateThread,
@@ -114,7 +120,8 @@ describe("DiscordActionService", () => {
     const { service, actions, channel, guild } = fixture();
     expect(await parsed(service.addReaction("👍", "m7", signal))).toEqual({ ok: true });
     expect(guild.members.fetch).toHaveBeenCalledWith({ user: "user", force: true, cache: false });
-    expect(guild.channels.fetch).toHaveBeenCalledWith("channel", { force: true, cache: false });
+    expect(guild.channels.fetch).toHaveBeenCalledWith("channel", { force: true });
+    expect(guild.members.fetch).toHaveBeenCalledWith({ user: "bot", force: true });
     expect(channel.messages.fetch).toHaveBeenCalledWith({
       message: "older",
       cache: false,
@@ -213,6 +220,28 @@ describe("DiscordActionService", () => {
     });
   });
 
+  test("refetches the parent of a thread for permission checks", async () => {
+    const { service, guild } = fixture({ type: ChannelType.PublicThread });
+    expect(await parsed(service.addReaction("👍", undefined, signal))).toEqual({ ok: true });
+    expect(guild.channels.fetch).toHaveBeenNthCalledWith(1, "channel", { force: true });
+    expect(guild.channels.fetch).toHaveBeenNthCalledWith(2, "parent", { force: true });
+  });
+
+  test("does not send after authorization if the call was cancelled", async () => {
+    const { service, guild, channel, actions } = fixture();
+    const controller = new AbortController();
+    guild.channels.fetch.mockImplementationOnce(async () => {
+      controller.abort();
+      return channel;
+    });
+    expect(await parsed(service.addReaction("👍", undefined, controller.signal))).toEqual({
+      ok: false,
+      reason: "cancelled",
+    });
+    expect(channel.messages.fetch).not.toHaveBeenCalled();
+    expect(actions.react).not.toHaveBeenCalled();
+  });
+
   test("checks each operation's permissions for bot and user", async () => {
     for (const [bit, invoke, name] of [
       [
@@ -302,6 +331,32 @@ describe("DiscordActionService", () => {
     );
   });
 
+  test("counts an interrupted poll after Discord received the send request", async () => {
+    const { service, actions } = fixture();
+    const controller = new AbortController();
+    actions.send.mockImplementationOnce(async () => {
+      controller.abort();
+      throw new Error("request interrupted");
+    });
+    expect(
+      (await parsed(service.createPoll("Q", ["A", "B"], 24, false, controller.signal))).reason,
+    ).toBe("discord_failed");
+    expect((await parsed(service.createPoll("Q", ["A", "B"], 24, false, signal))).reason).toBe(
+      "limit_reached",
+    );
+    expect(actions.send).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not count failures before a Discord mutation", async () => {
+    const { service, actions } = fixture();
+    expect((await parsed(service.addReaction("unknown", undefined, signal))).reason).toBe(
+      "emoji_unavailable",
+    );
+    expect((await parsed(service.pinMessage("m999", signal))).reason).toBe("not_found");
+    expect(await parsed(service.pinMessage(undefined, signal))).toEqual({ ok: true });
+    expect(actions.pin).toHaveBeenCalledTimes(1);
+  });
+
   test("classifies Discord errors and non-pinnable messages", async () => {
     const missing = fixture();
     missing.actions.react.mockImplementationOnce(async () => {
@@ -317,9 +372,11 @@ describe("DiscordActionService", () => {
     missingAccess.actions.react.mockImplementationOnce(async () => {
       throw { code: 50001 };
     });
-    expect((await parsed(missingAccess.service.addReaction("👍", undefined, signal))).reason).toBe(
-      "missing_permission",
-    );
+    expect(await parsed(missingAccess.service.addReaction("👍", undefined, signal))).toEqual({
+      ok: false,
+      reason: "missing_access",
+      who: "bot",
+    });
     const generic = fixture();
     generic.actions.react.mockImplementationOnce(async () => {
       throw new Error("network");
@@ -330,6 +387,10 @@ describe("DiscordActionService", () => {
     const notPinnable = fixture({ pinAllowed: false });
     expect((await parsed(notPinnable.service.pinMessage(undefined, signal))).reason).toBe(
       "not_pinnable",
+    );
+    const systemMessage = fixture({ pinAllowed: false, systemMessage: true });
+    expect((await parsed(systemMessage.service.pinMessage(undefined, signal))).reason).toBe(
+      "system_message",
     );
     const invalidRef = fixture();
     expect((await parsed(invalidRef.service.pinMessage("m999", signal))).reason).toBe("not_found");
