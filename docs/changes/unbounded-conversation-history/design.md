@@ -98,7 +98,7 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 - 残りの予算が予約を下回ったら、次のターンを `tool_choice: "none"` にして最終回答させる。`tool_choice: "none"` で送ったターンは、何ターン目であっても今の最終ターンと同じに扱う。モデルが従わずに tool を呼んだら、その呼び出しは実行せず、本文があれば回答として確定し、本文が無ければ失敗の経路へ渡す（今は `turn === MAX_TURNS` のときだけこの扱いになる：`toolLoop.ts:1235-1277`）。context 超過からの回復のターンも同じである。
 - tool は呼び出しのたびに、残りの予算（締めくくりの予約を除いた分）を `IToolContext` で受け取り、結果が予算に収まることを確かめてから内部の状態（カーソル、バッファ、`shown`、添付の読み込み済みの印）を確定する。
 - トークンの見積もりは、今の `estimateNormalizedMessageTokens` と同じ規則（ASCII は 4 文字で 1、それ以外は 1 文字で 1）を共通の関数にして使う。日本語の実測（約 0.49 トークン / 文字）に対して約 2 倍の安全側に倒れる。
-- context の予算と費用は別に扱う。同じ応答の以後のターンは、それまでの履歴を毎回送るので、入力トークンの課金は積まれた量 × 残りのターン数に近づく。同じ応答の中では履歴が追記だけなので、`session_id` を送る現状で、対応する provider では prompt cache が効くと見込む（未計測）。
+- context の予算と費用は別に扱う。同じ応答の以後のターンは、それまでの履歴を毎回送るので、入力トークンの課金は積まれた量 × 残りのターン数に近づく。同じ応答の中では履歴が追記だけなので、`session_id` を送れば、対応する provider では prompt cache が効く余地がある。`google/gemini-3.5-flash-lite` の 3 ターンの応答（1 ターンの入力 3,200 トークン程度まで）では、どのターンも cached tokens は 0 だった（「設計メモ」の計測）。
 
 ### `read_earlier_messages`
 
@@ -154,10 +154,22 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 2026-09-27 に計測した値は次のとおりである。
 
 - Discord `GET /channels/{id}/messages` に `limit=101` を送ると HTTP 400（`code 50035`、`NUMBER_TYPE_MAX`）が返る。
-- 開発用チャンネルの直近 100 件を `formatMessageForTool` 相当の JSON にすると 59,696 bytes で、1 件の中央値は 154 bytes、p90 は 2,413 bytes、最大は 4,099 bytes だった。今の 12 KiB と 16 KiB のどちらにも収まらない。
+- 開発用チャンネルの直近 100 件を `formatMessageForTool` 相当の JSON にすると 59,696 bytes で、1 件の中央値は 154 bytes、p90 は 2,413 bytes、最大は 4,099 bytes だった。以前の固定の上限だった 12 KiB（`read_earlier_messages`）と 16 KiB（dispatcher）のどちらにも収まらない。
 - 合成した日本語 2,000 文字 × 100 件の tool 結果 JSON（613,891 bytes）は、`google/gemini-3.5-flash-lite` で 104,408 トークン（$0.031）、`google/gemma-4-26b-a4b-it` で 104,421 トークンだった。200 文字 × 100 件では 15,808 と 15,821 だった。複数ページを連結した Bot の返答は 1 件で 2,000 文字を超えうるので、これは 100 件の最悪値ではない。
 - context 長 32,768 の `qwen/qwen-2.5-7b-instruct` に 2,000 文字 × 100 件を送ると、OpenRouter は context 長の超過で拒否し、応答は生成されなかった。
 - OpenRouter で `tools` に対応する 390 モデルのうち、context 長が 128k 以下のものは 72、最小は 4,095 だった。
+- 開発用チャンネルで e2e の `read-earlier`（40 件の発言の後に、`read_earlier_messages` を呼んで古い発言の確認用トークンを答えさせる）を `google/gemini-3.5-flash-lite` で、この change の前（24 時間の制限あり）と後で交互に 3 回ずつ実行し、ターンごとの usage、所要時間、Discord REST の回数を記録した。後の 1 回は 4 ターン目で OpenRouter が `server_error` を返して失敗したので、成功した前 3 回と後 2 回を比べる。
+
+  | 項目 | 前 | 後 |
+  | ---- | -- | -- |
+  | ターン数（`read_earlier_messages` の呼び出し） | 3（2 回） | 3（2 回） |
+  | 入力トークン（1、2、3 ターン目） | 749、1,892、3,108〜3,578 | 813、1,956、3,170〜3,171 |
+  | cached tokens | すべて 0 | すべて 0 |
+  | 1 応答の費用 | $0.00184〜0.00198 | $0.00190 |
+  | 1 ターンの所要時間 | 0.7〜1.3 秒 | 0.8〜1.0 秒 |
+  | Discord REST（窓と tool の合計） | list 2 回（1 回だけ fetch 1 回が加わる） | list 2 回 |
+
+  後の入力トークンが各ターン 64 多いのは、`read_earlier_messages` の説明文を長くした分と見られる（推定）。このシナリオでは tool の結果が 1 回 4 KiB 以下で、予算にも 24 時間の境界にも届かないので、古い履歴を大量に読む応答での増え方はこの計測では分からない。
 
 ## Tasks
 
@@ -178,7 +190,7 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 - [x] 単体テスト: 残りの予算が締めくくりの予約を下回ると次のターンが `tool_choice: "none"` になる。`view_attachment` は予算を超える画像や PDF を読み込まない。16 KiB を超える `read_earlier_messages` の結果が有効な JSON のまま届く。残りの予算が外枠と 1 件の発言の間にあるときの境界。同じターンの先の呼び出しが残りを使い切った後の呼び出しが、`result_too_large` ではなく終了結果を返し、以後も同じ理由を返す
 - [x] 単体テスト: `context_length_exceeded` で 1 回だけ tool 無しで回復し、`error_type` の無い HTTP 400 と最初のリクエストでの拒否では回復しない。`length` の終了は、本文があれば回答として確定し、tool 呼び出しの断片があれば失敗になる（今と同じ）
 - [x] 単体テスト: 既存の規則が変わらない（`finalized-after-current`、pending / failed の記録を持つ人の発言と Bot の返答の扱いの違い、分割した返答を先頭ページの位置まで保留する順序、既に見せた reply 先を ref で返す契約）
-- [ ] 1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を、変更の前後で計測する
+- [x] 1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を、変更の前後で計測する
 - [x] 既定の e2e と `history-set history-recall history-window read-earlier view-attachment view-image` を実行する
 - [x] `search` と `reasoning` の e2e を実行する。`tool_choice: "none"` への切り替えは server tool（Web 検索）を載せたリクエストにもかかり、reasoning は context 予算の差し引きの対象になり、`max_output_tokens` が reasoning の量にも効く可能性があるため（OpenRouter の OpenAPI 定義には記述が無く未確認）
 - [x] README の履歴の説明を書き直し、[fork](../fork/design.md) と [conversation-regeneration](../conversation-regeneration/design.md) の 24 時間を前提にした記述を書き直す
@@ -186,8 +198,8 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ## Open Questions / Risks
 
-- 「決めた値」はどれも計測していない。1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を変更の前後で計測し、値を見直す。
-- モデルに送る範囲は、Discord に残っている過去の人の発言と Bot の返答へ広がる。1 応答の費用と待ち時間の増え方は未計測である。
+- 「決めた値」はどれも計測から詰めたものではない。本番で予算に当たる応答（`result_budget_exhausted`、`result_too_large`、`tool_choice: "none"` への切り替え、context 超過からの回復）が出る頻度を見て見直す。
+- モデルに送る範囲は、Discord に残っている過去の人の発言と、記録が残っている Bot の返答へ広がる。短い読み取りでは変更の前後で費用も待ち時間も変わらなかった（「設計メモ」の計測）が、古い履歴を大量に読む応答での増え方は計測していない。
 - context 超過の識別は、失敗した Responses の結果の `error_type` と、HTTP エラーの本文の `error.metadata.error_type` による。OpenRouter が context 超過をどちらの形で返すかは確かめていない（未検証）。どちらにも `error_type` が無ければ回復しない。
 - 記録は無期限に持つので、`reply_records` と `reply_pages` の行は返答の数だけ増え続ける。DB の大きさは監視で追う。
 
