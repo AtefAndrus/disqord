@@ -455,10 +455,11 @@ export function createMessageCreateHandler(
       // A router model (openrouter/auto, a preset router) answers through
       // another model. The badge was drawn from the configured id before the
       // answer arrived; the final pages name the model that answered, as the
-      // footer does.
+      // footer does. A failed name lookup must not turn the finished answer
+      // into an error, so it falls back to the id.
       const answeredModelName =
         result.model && result.model !== settings.defaultModel
-          ? ((await modelService.getModelName(result.model)) ?? result.model)
+          ? ((await modelService.getModelName(result.model).catch(() => null)) ?? result.model)
           : modelName;
 
       // 最終更新（Components V2、footer 付き、Section なし）
