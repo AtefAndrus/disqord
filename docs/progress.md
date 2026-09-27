@@ -14,10 +14,12 @@
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
 | [スケジュール実行（cron）](changes/cron/design.md) | 中 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
 | [カスタム絵文字・スタンプ・GIF への対応](changes/discord-expressions/design.md) | 中 | planned | カスタム絵文字、スタンプ、GIF の埋め込みをモデルが読めるようにし、返信でサーバーのカスタム絵文字を使えるようにする |
+| [Discord の情報を読む tool とイベントの作成](changes/discord-info-tools/design.md) | 中 | investigating | ピン留め一覧、チャンネル情報、サーバーのイベント一覧をモデルが読める tool と、イベントを作る tool |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | in-progress | リアクション、投票、スレッド作成、ピン留めを、会話の流れでモデルが行える client tool 群 |
 | [終了時の進行中返信の後始末](changes/graceful-shutdown/design.md) | 中 | investigating | bot の終了時に、生成途中の返信を停止表示へ書き換えてから落とす |
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
+| [投票の内容と結果をモデルに渡す](changes/poll-results/design.md) | 中 | investigating | 会話の窓に入った投票を、質問、選択肢、票数、確定したかどうかのテキストにしてモデルへ渡し、締め切りの通知も窓に入れる |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [会話履歴の時間制限の撤廃と tool 結果の予算化](changes/unbounded-conversation-history/design.md) | 中 | in-progress | 会話履歴を 24 時間より前まで読めるようにし、tool の結果の大きさを固定バイト数ではなくモデルの context 長から決める予算で抑える |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |

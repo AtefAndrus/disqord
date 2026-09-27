@@ -42,8 +42,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 **将来別 change 候補:**
 
 - メッセージ検索（`GET /guilds/{id}/messages/search`）: 2026-03-19 から bot でも使える。窓の外の話題を時期を問わず引けるが、bot と依頼者の双方が読めるチャンネルに絞る制御、NSFW の除外、index 作成中の 202 への再試行が要るので別に設計する。discord.js 14.27.0 にはメソッドが無く、`client.rest` で `Routes.guildMessagesSearch` を呼ぶ
-- イベントの作成（`guild.scheduledEvents.create`、`CREATE_EVENTS`）: 「土曜に集まろう」を Discord のイベントにする
-- ピン一覧とチャンネル情報の読み取り: 副作用が無く、文脈の補強になる
+- イベントの作成と一覧、ピン一覧とチャンネル情報の読み取り → 別 change [discord-info-tools](../discord-info-tools/design.md)
+- 投票の内容と結果の読み取り → 別 change [poll-results](../poll-results/design.md)
 - メンバー検索（`guild.members.search`）: メンバー情報を外に出す同意の設計が要る
 - 非公開スレッド、フォーラムへの投稿
 
