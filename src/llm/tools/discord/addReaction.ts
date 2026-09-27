@@ -42,7 +42,7 @@ export class AddReactionTool implements IClientTool<Arguments> {
     const args = value as Record<string, unknown>;
     if (typeof args.emoji !== "string" || args.emoji.length === 0 || args.emoji.length > 100)
       return { ok: false, error: "emoji is required" };
-    if (/[<>:]/u.test(args.emoji))
+    if (/[<>:%]/u.test(args.emoji))
       return { ok: false, error: "emoji must be Unicode or a guild emoji name" };
     if (
       args.message_ref !== undefined &&

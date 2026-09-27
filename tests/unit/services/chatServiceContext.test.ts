@@ -117,7 +117,7 @@ function createRetryFixture(
   const readEarlier = mock(async () => '{"messages":[]}');
   const registry = new ToolRegistry();
   registry.register(createReadEarlierMessagesTool());
-  if (discordToolsEnabled) registry.register(createAddReactionTool());
+  registry.register(createAddReactionTool());
   const requests: ChatCompletionRequest[] = [];
   const chatService = new ChatService(
     llmClient,
@@ -159,6 +159,35 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
 }
 
 describe("conversation-context request construction", () => {
+  test("does not offer Discord tools when guild settings disable them even if input supplies a context", async () => {
+    const fixture = createRetryFixture(false, false);
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      return finalTurn("answer");
+    });
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      {
+        ...retryInput(fixture.readEarlier),
+        discord: {
+          channelType: 0,
+          addReaction: async () => '{"ok":true}',
+          createPoll: async () => '{"ok":true}',
+          createThread: async () => '{"ok":true}',
+          pinMessage: async () => '{"ok":true}',
+        },
+      },
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    expect(
+      fixture.requests[0]?.tools?.some(
+        (tool) =>
+          tool.type === "function" && (tool as FunctionTool).function.name === "add_reaction",
+      ) ?? false,
+    ).toBe(false);
+  });
   test("attaches file-parser from the first request when view_attachment is offered without a file part", () => {
     const request = buildChatRequest("model", { text: "question" }, [], undefined, true);
 

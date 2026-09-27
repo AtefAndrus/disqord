@@ -42,6 +42,7 @@ describe("Discord client tools", () => {
       expect(
         tool.isEnabled(context({ discord: { ...discord, channelType: ChannelType.GuildVoice } })),
       ).toBe(false);
+      expect(tool.isEnabled(context({ discord: { ...discord, channelType: -1 } }))).toBe(false);
       expect(
         tool.isEnabled(
           context({ discord: { ...discord, channelType: ChannelType.GuildAnnouncement } }),
@@ -62,6 +63,7 @@ describe("Discord client tools", () => {
     expect(createAddReactionTool().validate({ emoji: "👍", message_ref: "m7" }).ok).toBe(true);
     expect(createAddReactionTool().validate({ emoji: "👍", message_ref: "123" }).ok).toBe(false);
     expect(createAddReactionTool().validate({ emoji: "<:party:123>" }).ok).toBe(false);
+    expect(createAddReactionTool().validate({ emoji: "blob%3A123456789012345678" }).ok).toBe(false);
     expect(
       createCreatePollTool().validate({ question: "x".repeat(301), answers: ["a", "b"] }).ok,
     ).toBe(false);

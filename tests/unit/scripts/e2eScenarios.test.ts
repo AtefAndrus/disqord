@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import {
   costOf,
   type DiscordMessage,
@@ -67,6 +67,21 @@ function check(name: string, messages: DiscordMessage[]): string[] {
   if (!scenario) throw new Error(`no scenario ${name}`);
   return scenario.check(toReply(messages));
 }
+
+test("discord-tools cleanup removes the thread and pin after a failed verification", async () => {
+  const scenario = SCENARIOS.find((item) => item.name === "discord-tools");
+  if (!scenario?.cleanup) throw new Error("discord-tools cleanup missing");
+  const request = mock(async (path: string, init?: RequestInit) => {
+    if (!init) return Response.json({ thread: { id: "thread" }, pinned: true });
+    if (path === "/channels/thread") return new Response(null, { status: 403 });
+    return new Response(null, { status: 204 });
+  });
+  expect(await scenario.cleanup("trigger", "channel", request)).toEqual([
+    "cannot delete thread: HTTP 403",
+  ]);
+  expect(request).toHaveBeenCalledWith("/channels/thread", { method: "DELETE" });
+  expect(request).toHaveBeenCalledWith("/channels/channel/pins/trigger", { method: "DELETE" });
+});
 
 describe("e2e scenarios: レンダラの実出力との整合", () => {
   // フィクスチャの形が実装とずれると以下の判定テスト全体が無意味になるので、実際の builder の出力で確かめる。

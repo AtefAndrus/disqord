@@ -20,6 +20,7 @@ function fixture(
     userPermissions?: bigint[];
     botPermissions?: bigint[];
     type?: ChannelType;
+    parentType?: ChannelType;
     locked?: boolean;
     timedOut?: boolean;
     owner?: boolean;
@@ -54,6 +55,7 @@ function fixture(
   };
   const channel = {
     type: options.type ?? ChannelType.GuildText,
+    parent: { type: options.parentType ?? ChannelType.GuildText },
     parentId:
       options.type === ChannelType.PublicThread || options.type === ChannelType.PrivateThread
         ? "parent"
@@ -85,7 +87,11 @@ function fixture(
         return id === "user" ? user : bot;
       }),
     },
-    channels: { fetch: mock(async () => channel) },
+    channels: {
+      fetch: mock(async (id: string) =>
+        id === "parent" ? { type: options.parentType ?? ChannelType.GuildText } : channel,
+      ),
+    },
     emojis: {
       fetch: mock(async () => ({
         find: (predicate: (emoji: unknown) => boolean) => {
@@ -227,6 +233,19 @@ describe("DiscordActionService", () => {
     expect(guild.channels.fetch).toHaveBeenNthCalledWith(2, "parent", { force: true });
   });
 
+  test.each([ChannelType.GuildForum, ChannelType.GuildMedia])(
+    "rejects threads whose refetched parent has type %p",
+    async (parentType) => {
+      const { service, actions } = fixture({ type: ChannelType.PublicThread, parentType });
+      expect(service.channelType).toBe(-1);
+      expect(await parsed(service.addReaction("👍", undefined, signal))).toEqual({
+        ok: false,
+        reason: "unsupported_channel",
+      });
+      expect(actions.react).not.toHaveBeenCalled();
+    },
+  );
+
   test("does not send after authorization if the call was cancelled", async () => {
     const { service, guild, channel, actions } = fixture();
     const controller = new AbortController();
@@ -240,6 +259,26 @@ describe("DiscordActionService", () => {
     });
     expect(channel.messages.fetch).not.toHaveBeenCalled();
     expect(actions.react).not.toHaveBeenCalled();
+  });
+
+  test("does not pin when cancelled during target message fetch", async () => {
+    const { service, channel, actions } = fixture();
+    const controller = new AbortController();
+    channel.messages.fetch.mockImplementationOnce(async () => {
+      controller.abort();
+      return {
+        pinnable: true,
+        system: false,
+        react: actions.react,
+        pin: actions.pin,
+        startThread: actions.startThread,
+      };
+    });
+    expect(await parsed(service.pinMessage(undefined, controller.signal))).toEqual({
+      ok: false,
+      reason: "cancelled",
+    });
+    expect(actions.pin).not.toHaveBeenCalled();
   });
 
   test("checks each operation's permissions for bot and user", async () => {
@@ -312,6 +351,18 @@ describe("DiscordActionService", () => {
     expect(allowed.actions.react).toHaveBeenCalledWith("party:123");
   });
 
+  test("rejects percent-encoded custom emoji before sending a reaction", async () => {
+    const { service, actions, guild } = fixture({ emojiRoles: ["bot-role"] });
+    expect(
+      await parsed(service.addReaction("blob%3A123456789012345678", undefined, signal)),
+    ).toEqual({
+      ok: false,
+      reason: "invalid_emoji",
+    });
+    expect(actions.react).not.toHaveBeenCalled();
+    expect(guild.emojis.fetch).not.toHaveBeenCalled();
+  });
+
   test("enforces per-response limits, including a failed poll send", async () => {
     const { service, actions } = fixture();
     for (let i = 0; i < 3; i++)
@@ -349,10 +400,20 @@ describe("DiscordActionService", () => {
 
   test("does not count failures before a Discord mutation", async () => {
     const { service, actions } = fixture();
-    expect((await parsed(service.addReaction("unknown", undefined, signal))).reason).toBe(
-      "emoji_unavailable",
-    );
-    expect((await parsed(service.pinMessage("m999", signal))).reason).toBe("not_found");
+    for (let i = 0; i < 4; i++) {
+      expect((await parsed(service.addReaction("unknown", undefined, signal))).reason).toBe(
+        "emoji_unavailable",
+      );
+    }
+    expect(await parsed(service.addReaction("👍", undefined, signal))).toEqual({ ok: true });
+    expect(actions.react).toHaveBeenCalledTimes(1);
+    const { service: pinService, channel, actions: pinActions } = fixture();
+    channel.messages.fetch.mockImplementationOnce(async () => {
+      throw { status: 404 };
+    });
+    expect((await parsed(pinService.pinMessage(undefined, signal))).reason).toBe("not_found");
+    expect(await parsed(pinService.pinMessage(undefined, signal))).toEqual({ ok: true });
+    expect(pinActions.pin).toHaveBeenCalledTimes(1);
     expect(await parsed(service.pinMessage(undefined, signal))).toEqual({ ok: true });
     expect(actions.pin).toHaveBeenCalledTimes(1);
   });
@@ -367,6 +428,22 @@ describe("DiscordActionService", () => {
       reason: "missing_permission",
       who: "bot",
       permissions: ["AddReactions"],
+    });
+    const blocked = fixture();
+    blocked.actions.react.mockImplementationOnce(async () => {
+      throw { code: 90001, status: 403 };
+    });
+    expect(await parsed(blocked.service.addReaction("👍", undefined, signal))).toEqual({
+      ok: false,
+      reason: "reaction_blocked",
+    });
+    const forbidden = fixture();
+    forbidden.actions.react.mockImplementationOnce(async () => {
+      throw { status: 403 };
+    });
+    expect(await parsed(forbidden.service.addReaction("👍", undefined, signal))).toEqual({
+      ok: false,
+      reason: "discord_forbidden",
     });
     const missingAccess = fixture();
     missingAccess.actions.react.mockImplementationOnce(async () => {

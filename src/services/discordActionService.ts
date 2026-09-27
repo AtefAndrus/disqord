@@ -1,5 +1,5 @@
 import type { GuildMember, Message, TextChannel, ThreadChannel } from "discord.js";
-import { ChannelType, PermissionFlagsBits } from "discord.js";
+import { ChannelType, PermissionFlagsBits, parseEmoji } from "discord.js";
 import type { DiscordToolContext } from "../llm/tools/registry";
 import { DiscordRestBudget } from "./discordMessageReader";
 import { type AuthorizationChannelLike, canReadConversation } from "./messageAuthorization";
@@ -33,13 +33,15 @@ function classifyError(error: unknown, action: ActionName, channel: ActionChanne
   const value = error as { code?: number | string; status?: number };
   const code = Number(value?.code);
   if (code === 50001) return failure("missing_access", "bot");
-  if (code === 50013 || value?.status === 403) {
+  if (code === 50013) {
     return failure(
       "missing_permission",
       "bot",
       requiredPermissions(action, channel).map(([name]) => name),
     );
   }
+  if (code === 90001) return failure("reaction_blocked");
+  if (value?.status === 403) return failure("discord_forbidden");
   if (code === 160004) return failure("thread_exists");
   if ([10003, 10008, 10014].includes(code) || value?.status === 404) {
     return failure("not_found");
@@ -71,7 +73,10 @@ export class DiscordActionService implements DiscordToolContext {
     private readonly trigger: Message<true>,
     private readonly resolveMessageRef: (ref: string) => string | undefined,
   ) {
-    this.channelType = trigger.channel.type;
+    this.channelType =
+      trigger.channel.isThread() && trigger.channel.parent?.type !== ChannelType.GuildText
+        ? -1
+        : trigger.channel.type;
   }
 
   private async authorize(action: ActionName): Promise<Authorization> {
@@ -99,7 +104,7 @@ export class DiscordActionService implements DiscordToolContext {
       if (channel.isThread()) {
         if (!channel.parentId) return failure("unsupported_channel");
         const parent = await guild.channels.fetch(channel.parentId, { force: true });
-        if (!parent) return failure("unsupported_channel");
+        if (parent?.type !== ChannelType.GuildText) return failure("unsupported_channel");
       }
       bot = await guild.members.fetch({
         user: this.trigger.client.user.id,
@@ -195,7 +200,7 @@ export class DiscordActionService implements DiscordToolContext {
   }
 
   addReaction(emoji: string, messageRef: string | undefined, signal: AbortSignal): Promise<string> {
-    if (/[<>:]/u.test(emoji)) return Promise.resolve(result(failure("invalid_emoji")));
+    if (/[<>:%]/u.test(emoji)) return Promise.resolve(result(failure("invalid_emoji")));
     return this.execute(
       "reaction",
       messageRef,
@@ -216,6 +221,8 @@ export class DiscordActionService implements DiscordToolContext {
             throw failure("missing_emoji_role", "user");
           }
           reaction = match.identifier;
+        } else if (parseEmoji(emoji)?.id) {
+          throw failure("invalid_emoji");
         }
         const message = await channel.messages.fetch({
           message: targetId,

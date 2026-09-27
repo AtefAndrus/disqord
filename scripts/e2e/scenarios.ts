@@ -56,6 +56,11 @@ export interface Scenario {
     request: (path: string, init?: RequestInit) => Promise<Response>,
     botId: string,
   ) => Promise<string[]>;
+  cleanup?: (
+    triggerId: string,
+    channelId: string,
+    request: (path: string, init?: RequestInit) => Promise<Response>,
+  ) => Promise<string[]>;
 }
 
 // Discord component types.
@@ -347,14 +352,31 @@ export const SCENARIOS: Scenario[] = [
       if (threadId) {
         const thread = await request(`/channels/${threadId}`);
         if (!thread.ok) problems.push(`cannot read thread: HTTP ${thread.status}`);
-        const cleanup = await request(`/channels/${threadId}`, { method: "DELETE" });
-        if (!cleanup.ok) problems.push(`cannot delete thread: HTTP ${cleanup.status}`);
+      }
+      return problems;
+    },
+    cleanup: async (triggerId, channelId, request) => {
+      const problems: string[] = [];
+      const response = await request(`/channels/${channelId}/messages/${triggerId}`);
+      if (!response.ok) return [`cannot read trigger for cleanup: HTTP ${response.status}`];
+      const message = (await response.json()) as { thread?: { id: string }; pinned?: boolean };
+      if (message.thread?.id) {
+        try {
+          const deleted = await request(`/channels/${message.thread.id}`, { method: "DELETE" });
+          if (!deleted.ok) problems.push(`cannot delete thread: HTTP ${deleted.status}`);
+        } catch (error) {
+          problems.push(`cannot delete thread: ${error instanceof Error ? error.message : error}`);
+        }
       }
       if (message.pinned) {
-        const cleanup = await request(`/channels/${channelId}/pins/${triggerId}`, {
-          method: "DELETE",
-        });
-        if (!cleanup.ok) problems.push(`cannot unpin trigger: HTTP ${cleanup.status}`);
+        try {
+          const unpinned = await request(`/channels/${channelId}/pins/${triggerId}`, {
+            method: "DELETE",
+          });
+          if (!unpinned.ok) problems.push(`cannot unpin trigger: HTTP ${unpinned.status}`);
+        } catch (error) {
+          problems.push(`cannot unpin trigger: ${error instanceof Error ? error.message : error}`);
+        }
       }
       return problems;
     },
