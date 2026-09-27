@@ -1,4 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import {
+  CALL_ID_TOKEN_ALLOWANCE,
+  estimateToolResultTokens,
+  FIXED_RESULT_TOKENS,
+  MAX_TOOL_ERROR_RESULT_BYTES,
+} from "../../../src/llm/contextBudget";
 import type {
   IClientTool,
   IToolContext,
@@ -8,7 +14,6 @@ import { ToolRegistry } from "../../../src/llm/tools/registry";
 import type { INormalizedToolCall } from "../../../src/llm/tools/toolHandler";
 import {
   clipToolResultBytes,
-  MAX_TOOL_RESULT_BYTES,
   MIN_TOOL_TIMEOUT_MS,
   ToolDispatcher,
 } from "../../../src/llm/tools/toolHandler";
@@ -492,12 +497,6 @@ describe("clipToolResultBytes", () => {
     expect(() => utf8Decoder.decode(bytes)).not.toThrow();
   });
 
-  test("uses the default MAX_TOOL_RESULT_BYTES cap when none is given", () => {
-    const text = "x".repeat(MAX_TOOL_RESULT_BYTES + 500);
-    const clipped = clipToolResultBytes(text);
-    expect(utf8Encoder.encode(clipped).length).toBeLessThanOrEqual(MAX_TOOL_RESULT_BYTES);
-  });
-
   test("degrades gracefully when the cap is smaller than the marker itself", () => {
     const text = "x".repeat(1000);
     const clipped = clipToolResultBytes(text, 5);
@@ -506,19 +505,92 @@ describe("clipToolResultBytes", () => {
     expect(() => utf8Decoder.decode(bytes)).not.toThrow();
   });
 
-  test("a full tool run whose llmResult exceeds the cap is clipped through the same path", async () => {
-    const huge = "z".repeat(MAX_TOOL_RESULT_BYTES + 1000);
-    const { dispatcher } = setup([makeTool({ handler: async () => ({ llmResult: huge }) })]);
+  test("clips an error text the dispatcher generates to the fixed error cap", async () => {
+    const { dispatcher } = setup([
+      makeTool({
+        handler: async () => {
+          throw new Error("失敗".repeat(1_000));
+        },
+      }),
+    ]);
     const outcome = await dispatcher.dispatch(makeCall(), {
       ctx,
       frozenToolNames: new Set(["echo"]),
       requestId: "req-1",
     });
+    expect(outcome.status).toBe("error");
+    const content = outcome.toolMessage.content as string;
+    expect(utf8Encoder.encode(content).length).toBeLessThanOrEqual(MAX_TOOL_ERROR_RESULT_BYTES);
+    expect(estimateToolResultTokens(content)).toBeLessThanOrEqual(
+      FIXED_RESULT_TOKENS - CALL_ID_TOKEN_ALLOWANCE,
+    );
+  });
+});
+
+describe("ToolDispatcher result budget", () => {
+  const dispatchWith = (
+    handler: IClientTool["handler"],
+    resultBudgetTokens?: number,
+  ): ReturnType<ToolDispatcher["dispatch"]> => {
+    const { dispatcher } = setup([makeTool({ handler })]);
+    return dispatcher.dispatch(makeCall(), {
+      ctx: { ...ctx, ...(resultBudgetTokens !== undefined && { resultBudgetTokens }) },
+      frozenToolNames: new Set(["echo"]),
+      requestId: "req-1",
+    });
+  };
+
+  test("passes a string result through whole, however long, when it fits the budget", async () => {
+    const json = JSON.stringify({ messages: [{ text: "x".repeat(20_000) }] });
+    const outcome = await dispatchWith(async () => ({ llmResult: json }), 100_000);
     expect(outcome.status).toBe("ok");
-    expect(
-      utf8Encoder.encode(
-        typeof outcome.toolMessage.content === "string" ? outcome.toolMessage.content : "",
-      ).length,
-    ).toBeLessThanOrEqual(MAX_TOOL_RESULT_BYTES);
+    expect(outcome.toolMessage.content).toBe(json);
+    expect(() => JSON.parse(outcome.toolMessage.content as string)).not.toThrow();
+  });
+
+  test("replaces a result over the budget with result_too_large and flags it", async () => {
+    const text = "y".repeat(4_000);
+    const outcome = await dispatchWith(async () => ({ llmResult: text }), 100);
+    expect(outcome.status).toBe("error");
+    expect(outcome.resultTooLarge).toBe(true);
+    expect(JSON.parse(outcome.toolMessage.content as string)).toEqual({
+      error: "result_too_large",
+      estimated_tokens: estimateToolResultTokens(text),
+      budget: 100,
+    });
+  });
+
+  test("accepts a small terminal result even with no budget left", async () => {
+    const terminal = '{"messages":[],"has_more":true,"stop_reason":"result_budget_exhausted"}';
+    const outcome = await dispatchWith(async () => ({ llmResult: terminal, terminal: true }), 0);
+    expect(outcome.status).toBe("ok");
+    expect(outcome.toolMessage.content).toBe(terminal);
+  });
+
+  test("does not let a terminal result larger than the fixed size bypass the budget", async () => {
+    const large = "z".repeat(FIXED_RESULT_TOKENS * 8);
+    const outcome = await dispatchWith(async () => ({ llmResult: large, terminal: true }), 0);
+    expect(outcome.resultTooLarge).toBe(true);
+  });
+
+  test("refuses multimodal parts whose estimate exceeds the budget", async () => {
+    const outcome = await dispatchWith(
+      async () => ({
+        llmResult: [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,AA" }],
+      }),
+      10,
+    );
+    expect(outcome.resultTooLarge).toBe(true);
+  });
+
+  test("builds a fixed error for calls skipped after result_too_large", () => {
+    const { dispatcher } = setup([]);
+    const outcome = dispatcher.buildStoppedOutcome(makeCall({ id: "later" }));
+    expect(outcome.status).toBe("error");
+    expect(outcome.toolMessage).toEqual({
+      role: "tool",
+      tool_call_id: "later",
+      content: '{"error":"client_tools_stopped","reason":"result_too_large"}',
+    });
   });
 });

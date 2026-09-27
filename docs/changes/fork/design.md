@@ -43,8 +43,8 @@ bot の会話の窓は応答した発言のチャンネルだけを読む（`src
 | 分岐点の指定 | メッセージのコンテキストメニュー「ここから分岐」。対象は `interaction.targetMessage` で受ける | slash command の interaction は reply 先を持たないので、特定の発言を起点に取るにはコンテキストメニューか、message URL を受けるオプションが要る。コンテキストメニューは URL の貼り付けが要らない |
 | 分岐先の置き場 | 起点の発言から `message.startThread()` で公開スレッドを作る。テキストチャンネル（`ChannelType.GuildText`）に限る | 同じチャンネルで分岐すると親の会話と分岐後の会話が一つの窓に混ざる。スレッドは別のチャンネル ID を持つので、窓の状態（チャンネルごと）も自然に分かれる。1 つの発言には 1 つのスレッドしか作れないので、同じ起点からの二度目の分岐は既存スレッドへの案内で返す |
 | 系譜の保持 | DB に `thread_lineages`（スレッド ID、親チャンネル ID、起点の発言 ID、guild ID、作成時刻）を置く | メモリに置くと再起動で失われ、再起動後の分岐先は親を読めなくなる。発言の本文は持たず ID だけなので、会話ストアを持たない前提と両立する。親チャンネルの発言が消えれば読むときに Discord から消えているので、削除の同期も要らない |
-| 系譜の寿命 | 起点の発言から 24 時間を過ぎた行は、`reply_records` と同じ定期掃除で消す | 窓も遡りも今回の発言から 24 時間より古い発言を読まず、起点以前の親の発言はすべて起点より古い。起点から 24 時間を過ぎると、親の発言は一つも読めなくなる |
-| 遡りの範囲 | スレッドの発言を読み尽くしたら、親チャンネルの起点の発言（それ自身を含む）から前を、スレッドと同じ窓の上限と 24 時間の制限のもとで続けて読む | 窓の縮小規則と `read_earlier_messages` の上限をそのまま使えば、分岐先だけ別の予算規則を持たずに済む |
+| 系譜の寿命 | 期限では消さず、`reply_records` と同じく guild からの退出とスレッドの削除で消す。親チャンネルの削除で消すかは Open Questions に残す | 読み取りに期間の制限が無いので、起点が古くなっても親の発言は読める。返答の記録も同じ契機でしか消えないので、親の Bot の返答も読めるまま残る |
+| 遡りの範囲 | スレッドの発言を読み尽くしたら、親チャンネルの起点の発言（それ自身を含む）から前を、スレッドと同じ窓の上限と、`read_earlier_messages` の context 予算、tool 側の REST 予算、内部の期限のもとで続けて読む | 窓の縮小規則と `read_earlier_messages` の予算をそのまま使えば、分岐先だけ別の予算規則を持たずに済む |
 | 親を読む権限 | 親チャンネルの発言を読む前に、bot と発言者が親チャンネルの `ViewChannel` と `ReadMessageHistory` を持つことを確かめる | 窓の認可（`messageAuthorization.ts` の `canReadConversation`）は今回のチャンネルだけを見る。スレッドの権限から親の閲覧権限が導けるかは確かめておらず（未検証）、直接確かめる方が安全である |
 | 実行者の権限 | 実行者自身が `CreatePublicThreads` を持たなければ断る | bot の権限でスレッドを作ると、スレッドを作れない人が bot 経由で作れてしまう |
 | セッション ID とコンテナ | 引き継がない | OpenRouter へ渡す `session_id` は窓ごとにメモリで採番し、窓を組み直すと新しくなる（`conversationWindow.ts` の `rebuild`）。分岐先スレッドは別のチャンネルなので別の窓と別の ID になる。code-execution のコンテナも生成ごとに採番されるので、分岐で共有する状態が無い |
@@ -56,7 +56,7 @@ bot の会話の窓は応答した発言のチャンネルだけを読む（`src
 ### 変更対象ファイル（想定）
 
 - 新規: `src/bot/commands/fork.ts` — コンテキストメニュー「ここから分岐」。起点の検証、権限の確認、スレッド作成、系譜の登録
-- 新規: `src/db/repositories/threadLineage.ts` — 系譜の登録、スレッド ID での参照、期限切れの削除
+- 新規: `src/db/repositories/threadLineage.ts` — 系譜の登録、スレッド ID での参照、guild とチャンネル単位の削除
 - 修正: `src/db/schema.ts` — `thread_lineages` 表
 - 修正: `src/services/conversationWindow.ts` — スレッドの読み尽くし後に親チャンネルの起点以前へ続ける読み取り（窓の組み立てと `read_earlier_messages` の両方）
 - 修正: `src/services/messageEligibility.ts` — 返答の検証で発言を取得するチャンネルを、今回のチャンネルではなく記録の `channel_id` にする。親チャンネルの返答は親チャンネルの記録を持つためである
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS thread_lineages (
 ## Tasks
 
 - [ ] 遡りの境界（スレッドの末端から親へ移る条件、窓の縮小規則との関係）を `conversationWindow.ts` の実装に沿って確定し、`status` を `planned` にする
-- [ ] `thread_lineages` の表と repository を追加し、期限切れの削除を定期掃除に加える
+- [ ] `thread_lineages` の表と repository を追加し、`guildDelete`、`channelDelete`、`threadDelete` と起動時の guild の突き合わせで消す
 - [ ] 返答の検証が記録の `channel_id` で発言を取得するよう `messageEligibility.ts` を直し、テストする
 - [ ] 窓と `read_earlier_messages` の親への遡りを実装し、テストする
 - [ ] コンテキストメニューの command を実装し、テストする
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS thread_lineages (
 
 ## Open Questions / Risks
 
-- **24 時間の制限**: 起点が 24 時間より古い発言だと、分岐しても親の会話は読めない。起点から 24 時間を過ぎると、分岐先は親の文脈を失う。加えて返答の記録は確定から 24 時間で消え、記録の無い bot の発言は窓から外れるので、親の bot の返答はそれより早く読めなくなることがある。分岐先だけ制限を延ばすには、記録の保持期間も延ばす必要がある。
+- **親チャンネルの削除**: 親チャンネルを消すと discord.js は配下のスレッドに `threadDelete` を emit しないので、`channelDelete` で親チャンネルの ID を持つ系譜も消すかを決める。
 - **人が作ったスレッドへの適用**: 発言から作られたスレッドは Discord 上で親チャンネルと起点の発言が分かるので、系譜表なしで全スレッドに親を読ませる案もある。既存のスレッドの挙動が変わり、応答ごとの REST 消費も増えるため、第一候補は分岐で作ったスレッドに限る。起点の発言 ID がスレッド ID と一致するという Discord の仕様は未検証である。
 - **スレッドの中からの分岐**: 需要があれば、親チャンネルに兄弟スレッドを作り、系譜を多段にたどる。深さの上限と循環の防止が要る。
 - **返答ページを起点にしたとき**: 窓はページが揃わない返答を外す（`conversationWindow.ts` の `eligibleEntries`）。複数ページの返答の途中のページを起点にすると、その返答は分岐先に入らない。起点を返答の最後のページへ寄せるかを決める。
@@ -100,6 +100,6 @@ CREATE TABLE IF NOT EXISTS thread_lineages (
 
 ## 参照
 
-- [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 窓の組み方、`read_earlier_messages`、24 時間の制限
+- [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 窓の組み方、`read_earlier_messages`
 - [discord.js ThreadManager](https://discord.js.org/docs/packages/discord.js/14.26.2/ThreadManager:Class) — `threads.create()` と `message.startThread()`
 - [discord.js Context Menus](https://discordjs.guide/interactions/context-menus.html) — メッセージのコンテキストメニュー（`interaction.targetMessage`）

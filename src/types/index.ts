@@ -36,6 +36,8 @@ export interface OpenRouterModel {
   inputModalities: string[];
   outputModalities: string[];
   supportedParameters?: string[];
+  /** `top_provider.max_completion_tokens`; null or absent when OpenRouter does not state one. */
+  maxCompletionTokens?: number | null;
 }
 
 export interface TextContentPart {
@@ -137,6 +139,7 @@ export interface ChatCompletionRequest {
   tool_choice?: ToolChoice;
   parallel_tool_calls?: boolean;
   session_id?: string;
+  max_output_tokens?: number;
 }
 
 export interface ChatCompletionResponse {

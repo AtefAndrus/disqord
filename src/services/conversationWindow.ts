@@ -1,4 +1,6 @@
 import type { IReplyRecordRepository } from "../db/repositories/replyRecord";
+import { estimateToolResultTokens } from "../llm/contextBudget";
+import { READ_EARLIER_MAX_COUNT } from "../llm/tools/readEarlierMessages";
 import type { ConversationToolContext, ToolLlmResult } from "../llm/tools/registry";
 import type { NormalizedMessage, RawDiscordMessage } from "../utils/discordMessageNormalizer";
 import {
@@ -8,6 +10,7 @@ import {
   normalizeBotReply,
   normalizeHumanMessage,
 } from "../utils/discordMessageNormalizer";
+import { estimateTextTokens } from "../utils/tokenEstimate";
 import type {
   DiscordMessageFetchResult,
   DiscordRestBudget,
@@ -17,12 +20,15 @@ import { DiscordRestBudget as RestBudget } from "./discordMessageReader";
 import {
   type AuthorizationChannelLike,
   type AuthorizationMessageLike,
+  type ConversationAccess,
   canReadConversation,
+  checkConversationAccess,
 } from "./messageAuthorization";
 import {
   classifyNotFoundMessage,
   type MessageEligibilityCache,
   type MessageEligibilityExternalDeletionSet,
+  type MessageEligibilityFetchedMessages,
   MessageEligibilityService,
 } from "./messageEligibility";
 
@@ -33,20 +39,41 @@ export const WINDOW_SHRUNK_TOKEN_LIMIT = 4_000;
 export const WINDOW_SHRUNK_MESSAGE_LIMIT = 20;
 export const WINDOW_SHRUNK_AGE_MS = 30 * 60 * 1000;
 export const WINDOW_REBUILD_AFTER_MS = 60 * 60 * 1000;
-export const CONVERSATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Discord REST calls the window may make while it is built. */
 export const CONVERSATION_REST_LIMIT = 12;
 export const WINDOW_FETCH_TIMEOUT_MS = 5_000;
-export const READ_EARLIER_MAX_CALLS = 3;
-export const READ_EARLIER_MAX_MESSAGES = 60;
-export const READ_EARLIER_MAX_RESULT_BYTES = 12 * 1024;
+/**
+ * Discord REST calls every tool call of one response shares: paging and reply
+ * checks of `read_earlier_messages`, the refetch in `view_attachment`, and
+ * authorization. One budget for the response rather than one per call,
+ * because a response can run up to 32 tool calls one after another, and with
+ * no age limit on history each could otherwise page far back and crowd the
+ * rate limit other responses share.
+ */
+export const TOOL_REST_LIMIT = 40;
+/**
+ * `read_earlier_messages` stops paging here and returns what it has, well
+ * before the dispatcher's 30-second timeout would discard all of it. Rate
+ * limits and retries make the time a REST call takes unpredictable, so the
+ * call count alone cannot bound it.
+ */
+export const READ_EARLIER_DEADLINE_MS = 20_000;
+/** Below this many tokens beyond the empty result, not even one truncated message fits. */
+const READ_EARLIER_MIN_MESSAGE_TOKENS = 64;
 
 export type ConversationStopReason =
-  | "call_limit"
-  | "message_limit"
-  | "24h_cutoff"
+  | "fetch_deadline"
+  | "rest_budget_exhausted"
+  | "result_budget_exhausted"
   | "no_permission"
   | "fetch_failed"
   | null;
+
+/** Once returned, every later call of the response returns it again without REST. */
+type StickyStopReason = "rest_budget_exhausted" | "result_budget_exhausted";
+
+/** The longest `stop_reason`, used to size a result before its reason is known. */
+const LONGEST_STOP_REASON: ConversationStopReason = "result_budget_exhausted";
 
 type ReadEarlierToolMessage = ReturnType<typeof formatMessageForTool> | { ref: string };
 
@@ -69,25 +96,24 @@ interface ResponseState {
   nodeEnv?: string;
   userId: string;
   channel: AuthorizationChannelLike;
-  authorize: () => Promise<boolean>;
-  budget: DiscordRestBudget;
+  checkAccess: () => Promise<ConversationAccess>;
+  toolBudget: DiscordRestBudget;
+  /** Oldest message ID whose page has been fully checked. Moves only a whole page at a time. */
   cursor: string;
-  cutoffAt: number;
   replyTarget?: NormalizedMessage;
   buffer: NormalizedMessage[];
   shown: Map<string, NormalizedMessage>;
-  shownCount: number;
-  calls: number;
   seenReplies: Set<string>;
   knownMessages: Map<string, RawDiscordMessage>;
   refCounter: number;
   exhausted: boolean;
-  cutoffReached: boolean;
   reachedReplyTarget: boolean;
+  stickyStop?: StickyStopReason;
   openedAttachments: Set<string>;
   attachmentResults: Map<string, ToolLlmResult>;
   verificationCache: MessageEligibilityCache;
   externalDeletions: MessageEligibilityExternalDeletionSet;
+  fetchedMessages: MessageEligibilityFetchedMessages;
 }
 
 export interface ConversationWindowContext {
@@ -240,6 +266,12 @@ function shrinkToLimits(
   return { messages: [], startMessageId: fallbackStartMessageId };
 }
 
+function estimateFormattedMessageTokens(message: NormalizedMessage, ref: string): number {
+  // The trailing comma separates entries in the array; counting it for every
+  // entry keeps the sum an upper bound of the serialized whole.
+  return estimateTextTokens(`${JSON.stringify(formatMessageForTool({ ...message, ref }))},`);
+}
+
 export function truncateTextByBytes(text: string, maxBytes: number): string {
   const bytes = new TextEncoder().encode(text);
   if (bytes.byteLength <= maxBytes) return text;
@@ -284,6 +316,28 @@ function asToolResult(
   return JSON.stringify(value);
 }
 
+/** Resolves with `undefined` once `signal` aborts, leaving `promise` to settle on its own. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) {
+    promise.catch(() => {});
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => resolve(undefined);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export class ConversationWindowService {
   private readonly states = new Map<string, WindowState>();
   private generationCounter = 0;
@@ -297,6 +351,7 @@ export class ConversationWindowService {
     private readonly now: () => number = () => Date.now(),
     private readonly imageCapability: (model: string) => Promise<boolean | null> = async () => true,
     private readonly windowFetchTimeoutMs = WINDOW_FETCH_TIMEOUT_MS,
+    private readonly readEarlierDeadlineMs = READ_EARLIER_DEADLINE_MS,
   ) {
     this.records = records;
     this.eligibility = new MessageEligibilityService(reader, records);
@@ -308,8 +363,10 @@ export class ConversationWindowService {
     if (!input.historyEnabled) return null;
     const currentTime = messageTime(input.current) || now;
     const budget = new RestBudget(CONVERSATION_REST_LIMIT);
+    const toolBudget = new RestBudget(TOOL_REST_LIMIT);
     const verificationCache: MessageEligibilityCache = new Map();
     const externalDeletions: MessageEligibilityExternalDeletionSet = new Set();
+    const fetchedMessages: MessageEligibilityFetchedMessages = new Map();
     const controller = new AbortController();
     const authorize = input.authorize
       ? input.authorize
@@ -321,6 +378,20 @@ export class ConversationWindowService {
               budget,
             )
         : async () => false;
+    // Tool calls check access again on every call, from the tool budget, so
+    // that a window that used up its own budget does not turn them into
+    // no_permission.
+    const checkToolAccess = input.authorize
+      ? async (): Promise<ConversationAccess> =>
+          (await (input.authorize as () => Promise<boolean>)()) ? "allowed" : "denied"
+      : input.authorizationMessage
+        ? () =>
+            checkConversationAccess(
+              input.authorizationMessage as AuthorizationMessageLike,
+              input.botUser,
+              toolBudget,
+            )
+        : async (): Promise<ConversationAccess> => "denied";
     const generation = this.nextGeneration();
     let staleCursor: string | undefined;
 
@@ -346,6 +417,7 @@ export class ConversationWindowService {
                 verificationCache,
                 externalDeletions,
                 controller.signal,
+                fetchedMessages,
                 generation,
                 false,
               )
@@ -358,6 +430,7 @@ export class ConversationWindowService {
                   verificationCache,
                   externalDeletions,
                   controller.signal,
+                  fetchedMessages,
                   generation,
                 )
               : this.extend(
@@ -369,6 +442,7 @@ export class ConversationWindowService {
                   verificationCache,
                   externalDeletions,
                   controller.signal,
+                  fetchedMessages,
                   generation,
                 );
         })(),
@@ -383,25 +457,22 @@ export class ConversationWindowService {
         nodeEnv: input.nodeEnv,
         userId: input.userId,
         channel: input.channel,
-        authorize,
-        budget,
+        checkAccess: checkToolAccess,
+        toolBudget,
         cursor: minMessageId(staleCursor ?? result.startMessageId, input.current.id),
-        cutoffAt: currentTime - CONVERSATION_MAX_AGE_MS,
         replyTarget: result.replyTarget,
         buffer: [],
         shown: new Map(),
-        shownCount: 0,
-        calls: 0,
         seenReplies: new Set(),
         knownMessages: new Map(result.rawMessages.map((message) => [message.id, message])),
         refCounter: 0,
         exhausted: false,
-        cutoffReached: false,
         reachedReplyTarget: false,
         openedAttachments: new Set(),
         attachmentResults: new Map(),
         verificationCache,
         externalDeletions,
+        fetchedMessages,
       };
       // ここの除外は二重の守りである。同じ判定を rebuild() と extend() が reply 先の確認の後に行い、
       // reply 先自体は findReplyTarget() が落とす。テストが落ちるのはそちらなので、両方を残す。
@@ -426,9 +497,22 @@ export class ConversationWindowService {
         sessionId: result.sessionId,
         windowStartMessageId: result.startMessageId,
         toolContext: {
-          readEarlierMessages: (count, signal) => this.readEarlier(responseState, count, signal),
-          viewAttachment: (messageRef, attachmentIndex, model, signal) =>
-            this.viewAttachment(responseState, messageRef, attachmentIndex, model, signal),
+          readEarlierMessages: (count, signal, budgetTokens) =>
+            this.readEarlier(
+              responseState,
+              count,
+              budgetTokens ?? Number.POSITIVE_INFINITY,
+              signal,
+            ),
+          viewAttachment: (messageRef, attachmentIndex, model, signal, budgetTokens) =>
+            this.viewAttachment(
+              responseState,
+              messageRef,
+              attachmentIndex,
+              model,
+              budgetTokens ?? Number.POSITIVE_INFINITY,
+              signal,
+            ),
         },
       };
     } catch (error) {
@@ -471,6 +555,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
     generation: number,
     commitState = true,
   ): Promise<WindowBuildResult | null> {
@@ -507,6 +592,7 @@ export class ConversationWindowService {
         verificationCache,
         externalDeletions,
         signal,
+        fetchedMessages,
       );
       if (signal.aborted) return null;
       if (reachesShrunkBoundary(eligible, now) || budget.used >= budget.limit) break;
@@ -522,6 +608,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     const replyTarget = await this.findReplyTarget(
@@ -532,6 +619,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     const filteredMessages = messages.filter(
@@ -559,6 +647,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
     generation: number,
   ): Promise<WindowBuildResult | null> {
     if (signal.aborted) return null;
@@ -607,6 +696,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     let selected = selectEntries(messages, state.startMessageId);
@@ -620,6 +710,7 @@ export class ConversationWindowService {
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (signal.aborted) return null;
     selected = selected.filter((message) => !externalDeletions.has(message.exchangeId));
@@ -646,6 +737,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal?: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages = new Map(),
   ): Promise<NormalizedMessage[]> {
     const sorted = sortedMessages(rawMessages);
     const known = new Map(sorted.map((message) => [message.id, message]));
@@ -660,13 +752,13 @@ export class ConversationWindowService {
           e2eTesterBotId: input.e2eTesterBotId,
           nodeEnv: input.nodeEnv,
           channelId: input.current.channel_id,
-          maxAgeMs: CONVERSATION_MAX_AGE_MS,
         },
         budget,
         known,
         verificationCache,
         externalDeletions,
         signal,
+        fetchedMessages,
       );
       if (signal?.aborted) return [];
       if (!result.eligible) continue;
@@ -701,6 +793,7 @@ export class ConversationWindowService {
     verificationCache: MessageEligibilityCache,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages: MessageEligibilityFetchedMessages,
   ): Promise<NormalizedMessage | undefined> {
     const targetId = input.current.message_reference?.message_id;
     const targetChannelId = input.current.message_reference?.channel_id;
@@ -719,17 +812,13 @@ export class ConversationWindowService {
           budget,
           externalDeletions,
           signal,
+          fetchedMessages,
         );
     if (signal.aborted) return undefined;
     if (target.status === "not-found") {
       return undefined;
     }
-    if (
-      target.status !== "found" ||
-      messageTime(target.message) < currentTime - CONVERSATION_MAX_AGE_MS
-    ) {
-      return undefined;
-    }
+    if (target.status !== "found") return undefined;
     const knownMessages = new Map(rawMessages.map((message) => [message.id, message]));
     knownMessages.set(target.message.id, target.message);
     const result = await this.eligibility.evaluate(
@@ -740,13 +829,13 @@ export class ConversationWindowService {
         e2eTesterBotId: input.e2eTesterBotId,
         nodeEnv: input.nodeEnv,
         channelId: input.current.channel_id,
-        maxAgeMs: CONVERSATION_MAX_AGE_MS,
       },
       budget,
       knownMessages,
       verificationCache,
       externalDeletions,
       signal,
+      fetchedMessages,
     );
     if (!result.eligible) return undefined;
     const resolved = result.isHuman
@@ -763,8 +852,10 @@ export class ConversationWindowService {
     budget: DiscordRestBudget,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages?: MessageEligibilityFetchedMessages,
   ): Promise<DiscordMessageFetchResult> {
     const result = await this.reader.fetch(channelId, messageId, budget, signal);
+    if (result.status === "found") fetchedMessages?.set(messageId, result.message);
     if (result.status === "not-found" && !signal.aborted) {
       classifyNotFoundMessage(messageId, this.records, externalDeletions);
     }
@@ -776,7 +867,6 @@ export class ConversationWindowService {
     if (existing) return existing;
     const withRef = { ...message, ref: `m${++state.refCounter}` };
     state.shown.set(withRef.id, withRef);
-    state.shownCount += 1;
     if (withRef.kind === "assistant" && withRef.triggerMsgId) {
       state.seenReplies.add(withRef.triggerMsgId);
     }
@@ -786,68 +876,110 @@ export class ConversationWindowService {
   private async readEarlier(
     state: ResponseState,
     requestedCount: number,
+    budgetTokens: number,
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
     const aborted = (): ToolLlmResult => asToolResult([], true, "fetch_failed");
     if (signal.aborted) return aborted();
-    if (state.calls >= READ_EARLIER_MAX_CALLS) {
-      return asToolResult([], true, "call_limit");
+    if (state.stickyStop) return asToolResult([], true, state.stickyStop);
+    if (
+      budgetTokens <
+      estimateToolResultTokens(asToolResult([], true, LONGEST_STOP_REASON)) +
+        READ_EARLIER_MIN_MESSAGE_TOKENS
+    ) {
+      state.stickyStop = "result_budget_exhausted";
+      return asToolResult([], true, state.stickyStop);
     }
-    state.calls += 1;
-    if (!(await state.authorize())) {
-      return asToolResult([], false, "no_permission");
-    }
-    if (signal.aborted) return aborted();
 
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.readEarlierDeadlineMs);
+    const fetchSignal = AbortSignal.any([signal, deadline.signal]);
+    try {
+      // The authorization REST call takes no signal, so the deadline can only
+      // stop waiting for it. History is never returned before it passes.
+      const access = await untilAborted(state.checkAccess(), fetchSignal);
+      if (signal.aborted) return aborted();
+      if (access === undefined) return asToolResult([], true, "fetch_deadline");
+      if (access === "denied") return asToolResult([], false, "no_permission");
+      if (access === "failed") return asToolResult([], true, "fetch_failed");
+      if (access === "rest_budget_exhausted") {
+        state.stickyStop = "rest_budget_exhausted";
+        return asToolResult([], true, state.stickyStop);
+      }
+      return await this.readEarlierPages(
+        state,
+        Math.max(1, Math.min(READ_EARLIER_MAX_COUNT, Math.trunc(requestedCount))),
+        budgetTokens,
+        signal,
+        deadline.signal,
+        fetchSignal,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async readEarlierPages(
+    state: ResponseState,
+    count: number,
+    budgetTokens: number,
+    signal: AbortSignal,
+    deadlineSignal: AbortSignal,
+    fetchSignal: AbortSignal,
+  ): Promise<ToolLlmResult> {
+    const aborted = (): ToolLlmResult => asToolResult([], true, "fetch_failed");
     const draft: ResponseState = {
       ...state,
-      calls: state.calls,
       buffer: [...state.buffer],
       shown: new Map(state.shown),
       seenReplies: new Set(state.seenReplies),
     };
-    const count = Math.max(1, Math.min(20, Math.trunc(requestedCount)));
-    const available = READ_EARLIER_MAX_MESSAGES - draft.shownCount;
-    if (available <= 0) return asToolResult([], true, "message_limit");
-    const targetCount = Math.min(count, available);
     let stoppedReason: ConversationStopReason = null;
     const references: ToolReference[] = [];
-    while (
-      this.eligibleBufferCount(draft) < targetCount &&
-      !draft.cutoffReached &&
-      !draft.exhausted
-    ) {
+    // A page is committed (cursor, buffer, reply-target reference) only after
+    // every message on it has been checked. A page cut short by the deadline
+    // or the REST budget is dropped whole and fetched again by the next call;
+    // the checks it finished stay in the response's caches.
+    while (this.eligibleBufferCount(draft) < count && !draft.exhausted) {
       if (signal.aborted) return aborted();
+      if (deadlineSignal.aborted) {
+        stoppedReason = "fetch_deadline";
+        break;
+      }
+      if (draft.toolBudget.used >= draft.toolBudget.limit) {
+        stoppedReason = "rest_budget_exhausted";
+        break;
+      }
       const page = await this.reader.list(
         draft.current.channel_id,
         { before: draft.cursor, limit: 100 },
-        draft.budget,
-        signal,
+        draft.toolBudget,
+        fetchSignal,
       );
       if (signal.aborted) return aborted();
-      if (page.status !== "ok") {
-        stoppedReason = page.status === "forbidden" ? "no_permission" : "fetch_failed";
+      if (deadlineSignal.aborted) {
+        stoppedReason = "fetch_deadline";
         break;
       }
-      if (page.messages.length === 0) {
-        draft.exhausted = true;
+      if (page.status !== "ok") {
+        stoppedReason =
+          page.status === "forbidden"
+            ? "no_permission"
+            : draft.toolBudget.refused
+              ? "rest_budget_exhausted"
+              : "fetch_failed";
         break;
       }
       const beforeCurrent = page.messages.filter(
         (message) => compareMessageIds(message.id, draft.current.id) < 0,
       );
-      if (beforeCurrent.length === 0) {
+      const oldest = beforeCurrent[0];
+      if (!oldest) {
         draft.exhausted = true;
         break;
       }
-      const oldest = beforeCurrent[0];
-      if (oldest) {
-        draft.cursor = oldest.id;
-        if (messageTime(oldest) < draft.cutoffAt) draft.cutoffReached = true;
-      }
-      const inRange = beforeCurrent.filter((message) => messageTime(message) >= draft.cutoffAt);
       const entries = await this.eligibleEntries(
-        inRange,
+        beforeCurrent,
         {
           current: draft.current,
           guildId: draft.current.guild_id ?? "",
@@ -860,13 +992,26 @@ export class ConversationWindowService {
           nodeEnv: draft.nodeEnv,
         },
         messageTime(draft.current),
-        draft.budget,
+        draft.toolBudget,
         false,
         draft.verificationCache,
         draft.externalDeletions,
-        signal,
+        fetchSignal,
+        draft.fetchedMessages,
       );
       if (signal.aborted) return aborted();
+      // A check cut short here reads as a failed fetch, which would make a
+      // human trigger look eligible and drop a bot reply. Neither is a
+      // verdict, so the page is left unprocessed instead.
+      if (deadlineSignal.aborted) {
+        stoppedReason = "fetch_deadline";
+        break;
+      }
+      if (draft.toolBudget.refused) {
+        stoppedReason = "rest_budget_exhausted";
+        break;
+      }
+      draft.cursor = oldest.id;
       draft.buffer = draft.buffer.filter(
         (message) =>
           compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
@@ -895,7 +1040,7 @@ export class ConversationWindowService {
         draft.buffer.push(entry);
       }
       draft.buffer.sort(byChronology);
-      if (page.messages.length < 100 || draft.cutoffReached) {
+      if (page.messages.length < 100) {
         draft.exhausted = true;
         break;
       }
@@ -906,7 +1051,6 @@ export class ConversationWindowService {
         compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
         !draft.externalDeletions.has(message.exchangeId),
     );
-
     // 走査がまだ追いついていない範囲より古い発言は、いま返すと「新しい方から count 件」に反する。
     // 分割した返答は後半のページから先に見つかるので、走査が終わるまでバッファに残す。
     const selectable = draft.exhausted
@@ -914,67 +1058,34 @@ export class ConversationWindowService {
       : draft.buffer.filter(
           (message) => compareMessageIds(entryPositionId(message), draft.cursor) >= 0,
         );
-    const selected = selectable.slice(Math.max(0, selectable.length - targetCount));
-    const selectedIds = new Set(selected.map((message) => message.id));
-    draft.buffer = draft.buffer.filter((message) => !selectedIds.has(message.id));
-    const shown: NormalizedMessage[] = [];
-    for (const message of selected) {
-      if (draft.shown.has(message.id)) continue;
-      shown.push(this.addShown(draft, message));
-    }
-    const provisionalReason = stoppedReason
-      ? stoppedReason
-      : draft.cutoffReached && draft.buffer.length === 0
-        ? "24h_cutoff"
-        : available <= shown.length
-          ? "message_limit"
-          : null;
-    const provisionalHasMore = draft.buffer.length > 0 || !draft.exhausted;
-    const output = await this.fitToolResult(
-      draft,
-      shown,
-      provisionalHasMore,
-      provisionalReason,
-      references,
-    );
-    if (signal.aborted) return aborted();
-    const filteredOutput = output.filter(
-      (message) =>
-        compareMessageIds(entryPositionId(message), draft.current.id) < 0 &&
-        !draft.externalDeletions.has(message.exchangeId),
-    );
+    const candidates = selectable
+      .slice(Math.max(0, selectable.length - count))
+      .filter((message) => !draft.shown.has(message.id));
     const safeReferences =
       draft.replyTarget && draft.externalDeletions.has(draft.replyTarget.exchangeId)
         ? []
         : references;
-    const hasMore = draft.buffer.length > 0 || !draft.exhausted;
-    const reason = stoppedReason
-      ? stoppedReason
-      : draft.cutoffReached && draft.buffer.length === 0
-        ? "24h_cutoff"
-        : available <= filteredOutput.length
-          ? "message_limit"
-          : null;
-    const outputIds = new Set(filteredOutput.map((message) => message.id));
-    for (const message of shown) {
-      if (!outputIds.has(message.id)) {
-        draft.shown.delete(message.id);
-        draft.shownCount -= 1;
-      }
+    const fitted = this.fitToBudget(draft, candidates, safeReferences, budgetTokens);
+    if (candidates.length > 0 && fitted.length === 0) {
+      stoppedReason = "result_budget_exhausted";
     }
+    const fittedIds = new Set(fitted.map((message) => message.id));
+    draft.buffer = draft.buffer.filter((message) => !fittedIds.has(message.id));
+    const shown = fitted.map((message) => this.addShown(draft, message));
     if (signal.aborted) return aborted();
 
-    state.calls = draft.calls;
     state.cursor = draft.cursor;
     state.buffer = draft.buffer;
     state.shown = draft.shown;
-    state.shownCount = draft.shownCount;
     state.seenReplies = draft.seenReplies;
     state.refCounter = draft.refCounter;
     state.exhausted = draft.exhausted;
-    state.cutoffReached = draft.cutoffReached;
     state.reachedReplyTarget = draft.reachedReplyTarget;
-    return asToolResult(filteredOutput, hasMore, reason, safeReferences);
+    if (stoppedReason === "rest_budget_exhausted" || stoppedReason === "result_budget_exhausted") {
+      state.stickyStop = stoppedReason;
+    }
+    const hasMore = draft.buffer.length > 0 || !draft.exhausted;
+    return asToolResult(shown, hasMore, stoppedReason, safeReferences);
   }
 
   private eligibleBufferCount(state: ResponseState): number {
@@ -987,57 +1098,69 @@ export class ConversationWindowService {
     ).length;
   }
 
-  private async fitToolResult(
+  /**
+   * Takes messages from the newest end of `candidates` while the whole
+   * result, sized as the JSON the model receives, stays within
+   * `budgetTokens`. Every message is sized with the longest ref it could get
+   * and the result with the longest stop reason, so the estimate is an upper
+   * bound. When not even the newest message fits, its text is cut to fit and
+   * marked truncated; when not even an empty text fits, nothing is returned.
+   * Returned in chronological order.
+   */
+  private fitToBudget(
     state: ResponseState,
-    messages: readonly NormalizedMessage[],
-    hasMore: boolean,
-    reason: ConversationStopReason,
-    references: readonly ToolReference[] = [],
-  ): Promise<NormalizedMessage[]> {
-    const fits = (items: readonly NormalizedMessage[]): boolean =>
-      new TextEncoder().encode(asToolResult(items, hasMore, reason, references)).length <=
-      READ_EARLIER_MAX_RESULT_BYTES;
-    const items = [...messages];
-    const deferred: NormalizedMessage[] = [];
-    while (items.length > 0 && !fits(items)) {
-      if (items.length === 1) {
-        const message = items[0];
-        if (!message) break;
-        let low = 0;
-        let high = message.text.length;
-        let best = "";
-        while (low <= high) {
-          const mid = Math.floor((low + high) / 2);
-          const end =
-            mid > 0 &&
-            mid < message.text.length &&
-            message.text.charCodeAt(mid - 1) >= 0xd800 &&
-            message.text.charCodeAt(mid - 1) <= 0xdbff &&
-            message.text.charCodeAt(mid) >= 0xdc00 &&
-            message.text.charCodeAt(mid) <= 0xdfff
-              ? mid - 1
-              : mid;
-          const candidate = {
-            ...message,
-            text: message.text.slice(0, end),
-            toolTruncated: true,
-          };
-          if (fits([candidate])) {
-            best = candidate.text;
-            low = mid + 1;
-          } else {
-            high = mid - 1;
-          }
-        }
-        items[0] = { ...message, text: best, toolTruncated: true };
-        break;
+    candidates: readonly NormalizedMessage[],
+    references: readonly ToolReference[],
+    budgetTokens: number,
+  ): NormalizedMessage[] {
+    if (candidates.length === 0) return [];
+    const longestRef = `m${state.refCounter + candidates.length}`;
+    let remaining =
+      budgetTokens -
+      estimateToolResultTokens(asToolResult([], true, LONGEST_STOP_REASON, references));
+    const fitted: NormalizedMessage[] = [];
+    for (let index = candidates.length - 1; index >= 0; index--) {
+      const message = candidates[index];
+      if (!message) continue;
+      const tokens = estimateFormattedMessageTokens(message, longestRef);
+      if (tokens <= remaining) {
+        fitted.unshift(message);
+        remaining -= tokens;
+        continue;
       }
-      const returned = items.shift();
-      if (returned) deferred.push(returned);
+      if (fitted.length === 0) {
+        const truncated = this.truncateToFit(message, longestRef, remaining);
+        if (truncated) fitted.push(truncated);
+      }
+      break;
     }
-    state.buffer.push(...deferred);
-    state.buffer.sort(byChronology);
-    return items;
+    return fitted;
+  }
+
+  private truncateToFit(
+    message: NormalizedMessage,
+    ref: string,
+    budgetTokens: number,
+  ): NormalizedMessage | undefined {
+    const withText = (length: number): NormalizedMessage => {
+      const end =
+        length > 0 &&
+        length < message.text.length &&
+        message.text.charCodeAt(length - 1) >= 0xd800 &&
+        message.text.charCodeAt(length - 1) <= 0xdbff
+          ? length - 1
+          : length;
+      return { ...message, text: message.text.slice(0, end), toolTruncated: true };
+    };
+    if (estimateFormattedMessageTokens(withText(0), ref) > budgetTokens) return undefined;
+    let low = 0;
+    let high = message.text.length;
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (estimateFormattedMessageTokens(withText(mid), ref) <= budgetTokens) low = mid;
+      else high = mid - 1;
+    }
+    return withText(low);
   }
 
   private async viewAttachment(
@@ -1045,13 +1168,21 @@ export class ConversationWindowService {
     messageRef: string,
     attachmentIndex: number,
     model: string,
+    budgetTokens: number,
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
     const shown = [...state.shown.values()].find((candidate) => candidate.ref === messageRef);
     if (shown && state.externalDeletions.has(shown.exchangeId)) {
       return '{"error":"attachment_unavailable"}';
     }
-    const result = await this.loadAttachment(state, messageRef, attachmentIndex, model, signal);
+    const result = await this.loadAttachment(
+      state,
+      messageRef,
+      attachmentIndex,
+      model,
+      budgetTokens,
+      signal,
+    );
     return shown && state.externalDeletions.has(shown.exchangeId)
       ? '{"error":"attachment_unavailable"}'
       : result;
@@ -1062,9 +1193,13 @@ export class ConversationWindowService {
     messageRef: string,
     attachmentIndex: number,
     model: string,
+    budgetTokens: number,
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
-    if (!(await state.authorize())) return '{"error":"no_permission"}';
+    const access = await state.checkAccess();
+    if (access === "denied") return '{"error":"no_permission"}';
+    if (access === "rest_budget_exhausted") return '{"error":"rest_budget_exhausted"}';
+    if (access === "failed") return '{"error":"attachment_unavailable"}';
     const message = [...state.shown.values()].find((candidate) => candidate.ref === messageRef);
     if (!message) return '{"error":"message_ref_not_shown"}';
     const attachment = message.attachments.find((candidate) => candidate.index === attachmentIndex);
@@ -1074,6 +1209,18 @@ export class ConversationWindowService {
     const cacheKey = `${state.current.id}:${attachment.id}`;
     const cached = state.attachmentResults.get(cacheKey);
     if (cached) return Array.isArray(cached) ? '{"status":"already_loaded"}' : cached;
+    // Checked before anything is marked, so a later call with more room could
+    // still open it; the budget never grows within a response, though.
+    if (
+      (attachment.kind === "image" || attachment.kind === "pdf") &&
+      estimateToolResultTokens([
+        attachment.kind === "image"
+          ? { type: "input_image", detail: "auto", image_url: "" }
+          : { type: "input_file", filename: attachment.filename, file_data: "" },
+      ]) > budgetTokens
+    ) {
+      return '{"error":"result_budget_exhausted"}';
+    }
     if (!state.openedAttachments.has(cacheKey) && state.openedAttachments.size >= 2) {
       const result = '{"error":"attachment_limit"}';
       state.attachmentResults.set(cacheKey, result);
@@ -1096,7 +1243,7 @@ export class ConversationWindowService {
     const fetched = await this.fetchMessage(
       state.current.channel_id,
       message.id,
-      state.budget,
+      state.toolBudget,
       state.externalDeletions,
       signal,
     );

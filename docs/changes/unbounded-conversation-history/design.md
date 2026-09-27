@@ -1,6 +1,6 @@
 ---
 title: "会話履歴の時間制限の撤廃と tool 結果の予算化"
-status: planned  # investigating | planned | in-progress | implemented
+status: in-progress  # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "会話履歴を 24 時間より前まで読めるようにし、tool の結果の大きさを固定バイト数ではなくモデルの context 長から決める予算で抑える"
 ---
@@ -14,8 +14,8 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ## 依存 / 関連 change
 
-- 連携: [fork](../fork/design.md) — 系譜の寿命と遡りの範囲を 24 時間の制限と記録の TTL を前提に決めている。この change の後に書き直す
-- 連携: [conversation-regeneration](../conversation-regeneration/design.md) — 記録が 24 時間で消える前提の判定を持つ。この change の後に書き直す
+- 連携: [fork](../fork/design.md) — 系譜の寿命と遡りの範囲を、記録を無期限に持つことと、この change の予算を前提に決めている
+- 連携: [conversation-regeneration](../conversation-regeneration/design.md) — 記録が期限で消えないことを前提に、記録の無い返答の扱いと index の要否を決める
 
 ## Goals / Non-Goals
 
@@ -48,11 +48,15 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 | `count` の範囲 | 1〜100、既定 5 | 100 は Discord の 1 回の取得量（`limit` は 1〜100）に揃えた、1 回の応答の粒度としての判断である。`count` は適格な発言の数なので、100 件を返すのに REST が複数回要ることもある |
 | 呼び出し回数と総件数 | `READ_EARLIER_MAX_CALLS`（3 回）と `READ_EARLIER_MAX_MESSAGES`（60 件）を削除する | 呼び出しの暴走は tool loop の 5 ターンと 1 ターン 8 回の上限が止める。件数は発言の大きさと対応しないので、context の量を抑える単位にならない |
 | tool の結果の大きさ | tool loop が応答の開始時に context 予算を決め、残りを tool に渡し、tool が収めてから状態を確定する | 固定バイト数では、context 長の大きいモデルで読める量が少なく、小さいモデルではリクエストが失敗する。どう縮めるべきかを知っているのは結果を作る tool である |
-| 出力用の予約 | アプリの既定の上限と `top_provider.max_completion_tokens` の小さい方を `max_output_tokens` として送り、同じ値を予約する | provider の最大出力をそのまま予約すると、`qwen/qwen-2.5-7b-instruct`（context 32,768、最大出力 29,491）では予約だけで context の 9 割を使う |
+| 出力用の予約 | アプリの既定の上限（16,384）、`top_provider.max_completion_tokens`、context 長の 4 分の 1 の最小を `max_output_tokens` として送り、同じ値を予約する | provider の最大出力をそのまま予約すると、`qwen/qwen-2.5-7b-instruct`（context 32,768、最大出力 29,491）では予約だけで context の 9 割を使う。context 長の 4 分の 1 で抑えると、この model では 8,192 になる |
+| `max_output_tokens` を送る応答 | モデルの情報（`/models`）を引いた応答だけ。今どおり、会話履歴か推論表示が有効な guild で引く | すべての応答で引くと、どの返答も models API の応答を待つようになる。情報を引かない応答には client tool が無く、予約を守る必要が無い |
+| tool を許すターンの開始条件 | 残りの予算が締めくくりの予約以上のときだけ。予約には、固定長の結果 32 件分に加えて、そのターンの assistant の出力（本文、reasoning、引数）の許容量 2,048 トークンを含める | assistant の出力はターンの後でしか数えられない。許容量を超えて書いたターンは最終回答のリクエストを context 超過にしうるが、その場合は context 超過からの回復で 1 回だけ持ち直し、それでも超えれば失敗させる。履歴を縮める仕組みは持たない |
+| 確認の途中の進捗 | 応答ごとに、REST で取得できた発言を message ID で持ち、同じ応答の中の確認で再利用する（`MessageEligibilityFetchedMessages`） | 確認キャッシュは返答単位で、1 件の取得に失敗すると返答全体のエントリを消す。取得できた発言を別に残せば、期限で打ち切られた複数ページの返答を取り直すときに、取得済みのページで REST を使わない |
+| 期限と認可 | 認可を `allowed`、`denied`、`rest_budget_exhausted`、`failed` の 4 つに分けて返し（`checkConversationAccess`）、内部の期限は認可の待ちも含める。期限までに認可が済まなければ、履歴を返さず `fetch_deadline` を返す | 認可を期限の対象外にすると、認可が遅いときに dispatcher のタイムアウトで走査済みの分ごと失う。private thread の認可の REST は中断を受け付けないので、期限の後も裏で残るが、結果は使わない |
 | dispatcher の切り詰め | 文字列の結果の 16 KiB の head+tail clip をやめ、予算を超えた結果を `result_too_large` で断る | 中間に `[truncated N bytes]` を入れても、JSON の構造と発言という意味の単位は保てない |
 | tool 側の REST 予算 | 窓（12 回と 5 秒のまま）とは別に、応答全体で 1 つの予算を持ち、今の 12 回より大きくする | tool の呼び出しは 1 応答で最大 32 回、逐次に実行される。呼び出しごとに予算を与え直すと、24 時間の打ち切りが無い状態で REST と待ち時間が膨らみ、他の応答のレート制限も圧迫する |
 | ページングの単位 | 1 ページ（100 件）の適格性をすべて確かめてからカーソルを進める。途中で予算か期限が尽きたらページごと取り直す | ページの途中で返すと、確認済みの古い側と未処理の新しい側が混ざり、「新しい方から count 件」と、分割した返答を先頭ページの位置まで保留する規則を守る境界を別に持つ必要が出る |
-| context 超過の識別 | Responses API の失敗応答の `error_type: "context_length_exceeded"` だけで識別する | `error.code: "invalid_prompt"` は他の原因にも使われる。`error_type` を持たない HTTP 400 は区別できない |
+| context 超過の識別 | `error_type: "context_length_exceeded"` だけで識別する。失敗した Responses の結果の最上位、HTTP エラーの本文、stream のエラーイベントのどれにあっても読み、その値自身、`error`、`error.metadata` の位置を見る | `error.code: "invalid_prompt"` は他の原因にも使われる。OpenRouter は `error_type` をどのエラーの経路にも載せるとしているが、位置を文書にしているのは失敗した Responses の結果と Chat Completions 形式の `error.metadata` だけである。`error_type` を持たない HTTP 400 は区別できない |
 | context 超過からの回復 | 直前に積んだ tool の結果をエラーに置き換え、`tool_choice: "none"` で最終回答を 1 回だけ求める | tool を続行すると、捨てた結果に対応する tool の状態（返した発言の記録、添付の読み込み済みの印）との矛盾を巻き戻す必要が出る |
 
 ## Design
@@ -87,9 +91,9 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 - tool loop は応答の開始時に、以後のターンで履歴に足してよい量をトークンで決める。
   - 予算 = (モデルの `contextLength` − 出力用の予約 − 最初のリクエストの見積もり) × 安全係数。
   - 最初のリクエストの見積もりは、system、tool の定義、窓、reply 先（複数ページを連結した全文）、今回の発言と添付を含む。
-  - `max_completion_tokens` が省略か null のときは、アプリの既定の上限を出力用の予約にする。`contextLength` が取れないときは固定の既定予算を使う。予算が 0 以下なら、その応答では tool を提示しない。
-- ターンごとに履歴へ積むもの（assistant の本文、reasoning、tool 呼び出しの引数、tool の結果、dispatcher が生成するエラーの結果）はすべて、積んだ時点で見積もって予算から引く。各結果は 1 回だけ数える。
-- 予算の中に締めくくりの予約を置く。予約は、1 ターンに受け付ける呼び出しの上限（`MAX_DISTINCT_TOOL_CALLS_HARD_CAP`、32 件）ぶんの固定長の結果と、最終回答のターンの入力増分を賄う量とする。実行の上限は 8 件だが、9 件目以降の呼び出しにもエラーの結果が作られるので、8 件ぶんでは足りない。
+  - `max_completion_tokens` が省略か null のときは、アプリの既定の上限と context 長の 4 分の 1 の小さい方を出力用の予約にする。`contextLength` が取れないときは固定の既定予算を使う。予算が締めくくりの予約に満たなければ、その応答では client tool を提示しない（server tool は提示する）。
+- 以後のターンで送る履歴に積むもの（assistant の本文、reasoning、tool 呼び出しの引数と ID、tool の結果とその `tool_call_id`、dispatcher が生成するエラーの結果）はすべて、積んだ時点で見積もって予算から引く。各結果は 1 回だけ数える。tool に渡す予算からは、その呼び出しの ID の分を先に引く。
+- 予算の中に締めくくりの予約を置く。予約は、1 ターンに受け付ける呼び出しの上限（`MAX_DISTINCT_TOOL_CALLS_HARD_CAP`、32 件）ぶんの固定長の結果と、tool を呼ぶターンの assistant の出力の許容量（Decisions の「tool を許すターンの開始条件」）とする。実行の上限は 8 件だが、9 件目以降の呼び出しにもエラーの結果が作られるので、8 件ぶんでは足りない。
 - **固定長の結果**は、dispatcher が生成するエラーと、tool が予算不足や停止を伝える終了結果（`read_earlier_messages` の発言 0 件の JSON、`view_attachment` の `{"error":"result_budget_exhausted"}` など）である。どれも上限の決まった定数か、発言 0 件の決まった形である。tool は残りの予算がこの終了結果にも満たないときも終了結果を返してよく、dispatcher は固定長の結果を予約から引いて受け入れ、`result_too_large` にしない。`result_too_large` にするのは、固定長の結果でない結果が渡された予算を超えたときだけである。同じターンの先に実行した呼び出しが残りを使い切った場合も、後の呼び出しはこの規則で終了結果を返せる。
 - 残りの予算が予約を下回ったら、次のターンを `tool_choice: "none"` にして最終回答させる。`tool_choice: "none"` で送ったターンは、何ターン目であっても今の最終ターンと同じに扱う。モデルが従わずに tool を呼んだら、その呼び出しは実行せず、本文があれば回答として確定し、本文が無ければ失敗の経路へ渡す（今は `turn === MAX_TURNS` のときだけこの扱いになる：`toolLoop.ts:1235-1277`）。context 超過からの回復のターンも同じである。
 - tool は呼び出しのたびに、残りの予算（締めくくりの予約を除いた分）を `IToolContext` で受け取り、結果が予算に収まることを確かめてから内部の状態（カーソル、バッファ、`shown`、添付の読み込み済みの印）を確定する。
@@ -124,11 +128,26 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ### context 超過からの回復
 
-- 失敗応答の `error_type` を保持する。現在のクライアントはこれを捨てている。
+- クライアントは `error_type` が `context_length_exceeded` の失敗を `ContextLengthExceededError`（`BadRequestError` の派生）として投げる。識別する位置は Decisions の「context 超過の識別」のとおりである。
 - 回復するのは、`error_type: "context_length_exceeded"` と識別でき、かつ tool の結果を積んだ後のターンで、そのターンの出力がまだ利用者に確定していないときだけとする。直前のターンで積んだ tool の結果を `{"error":"result_dropped","reason":"context_overflow"}` に置き換え、`tool_choice: "none"` で最終回答を 1 回だけ求め、以後 tool を使わない。置き換えた結果に対応する tool の状態は戻さないが、以後 tool を呼ばないので矛盾は表に出ない。
 - 最初のリクエストでの拒否、回復でも拒否されたとき、`error_type` を持たない HTTP 400 は、今の失敗の経路（`toolLoop.ts` の `abortToErrorOrCancelled`）へ渡す。既に確定した表示と usage の扱いもその経路に従う。
 - 出力上限による `length` の終了は context 超過として扱わず、今の処理のままにする。tool 呼び出しの断片が無く本文があれば回答として確定し、断片があれば失敗の経路へ渡す（`toolLoop.ts:1369-1396`）。`max_output_tokens` を送るようになると、上限に達した通常の回答もこの経路で確定する。
 - この「回復しない」は context 超過の回復についてだけである。`chatService` が、未表示で client tool を実行していない `BadRequestError` のときに tweet の画像を外して再試行する既存の処理は変えない。
+
+### 決めた値
+
+値は `src/llm/contextBudget.ts`、`src/llm/toolLoop.ts`、`src/services/conversationWindow.ts` にある。どれも計測で詰めたものではなく、安全側に置いた初期値である。
+
+| 値 | 大きさ | 置いた理由 |
+| -- | ------ | ---------- |
+| 安全係数 | 0.75 | 見積もりは日本語では実測の約 2 倍だが、ASCII の多い JSON は 3 文字程度で 1 トークンになり、4 文字で 1 とする見積もりを超えうる |
+| アプリの既定の出力上限 | 16,384 | `max_output_tokens` は reasoning の量も含めて抑えるので、推論するモデルの答えを途中で切らない大きさにする |
+| `contextLength` が取れないときの既定予算 | 16,000 | 情報が取れないモデルでは `supportsTools` も偽になり client tool を提示しないので、実際に使うのはテストだけである |
+| 画像 1 件、PDF 1 件の見積もり | 1,600、10,000 | 画像は provider によって 1 件 250〜1,600 程度で課金される。PDF はページ数で増えるが、固定値で置く |
+| 固定長の結果 1 件 | 153 | dispatcher のエラー文を 256 bytes で切り、2 bytes あたり最大 1 トークンとした上限に、履歴 1 件あたりの 8 トークンと、結果に付けて送る `tool_call_id` の許容量 16 トークン（ASCII 64 文字）を足した値 |
+| 締めくくりの予約 | 6,944 | 固定長の結果 32 件（4,896）と assistant の出力の許容量 2,048 |
+| tool 側の REST 予算 | 1 応答 40 回 | 窓の 12 回より大きく、1 ページ 100 件の走査を 30 ページ以上続けられる |
+| `read_earlier_messages` の内部の期限 | 20 秒 | dispatcher のタイムアウト（30 秒）までに、走査済みの分を返す時間を残す |
 
 ### 設計メモ
 
@@ -142,41 +161,35 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ## Tasks
 
-- [ ] 24 時間の打ち切りと `too-old` を削除し、`stop_reason` から `24h_cutoff` を外す
-- [ ] `deleteExpired` と起動時の期限切れ削除をやめ、1 時間ごとの runner を `sweepStaleChannels` だけにする
-- [ ] `guildDelete`、`channelDelete`、`threadDelete` と起動時の guild の突き合わせで記録を消す
-- [ ] 失敗応答の `error_type` を保持し、`max_output_tokens` を送り、`top_provider.max_completion_tokens` を取得する
-- [ ] tool loop に context 予算、締めくくりの予約、`tool_choice: "none"` への切り替えを入れ、`IToolContext` で残りの予算を渡す
-- [ ] dispatcher の文字列の clip をやめ、`result_too_large` と応答内の実行停止を入れる
-- [ ] `read_earlier_messages` を予算による収め方、ページ単位の確定、tool 側の REST 予算、内部の期限、新しい `stop_reason` に変え、`count` を 1〜100 にする
-- [ ] `view_attachment` に予算による受け入れ判定を入れる
-- [ ] context 超過からの回復を入れる
-- [ ] Open Questions の 3 点を決め、この文書に反映する
-- [ ] 単体テスト: 24 時間より古い人の発言、Bot の返答、reply 先が tool と reply 先で読める（時刻を固定する。e2e は投稿直後の発言しか扱えない）
-- [ ] 単体テスト: デプロイ前から残っている記録が起動後に消えない。返答のページを消した後の次の応答で、そのトリガーと返答が外れたままである
-- [ ] 単体テスト: `guildDelete`、`channelDelete`、`threadDelete` で、その範囲の記録だけが消える
-- [ ] 単体テスト: `fetch_deadline` の後の次の呼び出しが重複も欠落もなく続き、ページの途中で止まったときはカーソルが進まない。`rest_budget_exhausted` と `result_budget_exhausted` の後は REST を呼ばずに同じ理由を返す。返した発言だけが `shown` に入る
-- [ ] 単体テスト: 最終ターンより前に `tool_choice: "none"` で送ったターンでモデルが tool を呼んだとき、tool を実行せず、本文があれば回答として確定する。`result_too_large` の後は、同じターンの未実行の呼び出しを含めてすべての client tool が実行されない
-- [ ] 単体テスト: 残りの予算が締めくくりの予約を下回ると次のターンが `tool_choice: "none"` になる。`view_attachment` は予算を超える画像や PDF を読み込まない。16 KiB を超える `read_earlier_messages` の結果が有効な JSON のまま届く。残りの予算が外枠と 1 件の発言の間にあるときの境界。同じターンの先の呼び出しが残りを使い切った後の呼び出しが、`result_too_large` ではなく終了結果を返し、以後も同じ理由を返す
-- [ ] 単体テスト: `context_length_exceeded` で 1 回だけ tool 無しで回復し、`error_type` の無い HTTP 400 と最初のリクエストでの拒否では回復しない。`length` の終了は、本文があれば回答として確定し、tool 呼び出しの断片があれば失敗になる（今と同じ）
-- [ ] 単体テスト: 既存の規則が変わらない（`finalized-after-current`、pending / failed の記録を持つ人の発言と Bot の返答の扱いの違い、分割した返答を先頭ページの位置まで保留する順序、既に見せた reply 先を ref で返す契約）
+- [x] 24 時間の打ち切りと `too-old` を削除し、`stop_reason` から `24h_cutoff` を外す
+- [x] `deleteExpired` と起動時の期限切れ削除をやめ、1 時間ごとの runner を `sweepStaleChannels` だけにする
+- [x] `guildDelete`、`channelDelete`、`threadDelete` と起動時の guild の突き合わせで記録を消す
+- [x] 失敗応答の `error_type` を保持し、`max_output_tokens` を送り、`top_provider.max_completion_tokens` を取得する
+- [x] tool loop に context 予算、締めくくりの予約、`tool_choice: "none"` への切り替えを入れ、`IToolContext` で残りの予算を渡す
+- [x] dispatcher の文字列の clip をやめ、`result_too_large` と応答内の実行停止を入れる
+- [x] `read_earlier_messages` を予算による収め方、ページ単位の確定、tool 側の REST 予算、内部の期限、新しい `stop_reason` に変え、`count` を 1〜100 にする
+- [x] `view_attachment` に予算による受け入れ判定を入れる
+- [x] context 超過からの回復を入れる
+- [x] 単体テスト: 24 時間より古い人の発言、Bot の返答、reply 先が tool と reply 先で読める（時刻を固定する。e2e は投稿直後の発言しか扱えない）
+- [x] 単体テスト: デプロイ前から残っている記録が起動後に消えない。返答のページを消した後の次の応答で、そのトリガーと返答が外れたままである
+- [x] 単体テスト: `guildDelete`、`channelDelete`、`threadDelete` で、その範囲の記録だけが消える
+- [x] 単体テスト: `fetch_deadline` の後の次の呼び出しが重複も欠落もなく続き、ページの途中で止まったときはカーソルが進まない。`rest_budget_exhausted` と `result_budget_exhausted` の後は REST を呼ばずに同じ理由を返す。返した発言だけが `shown` に入る
+- [x] 単体テスト: 最終ターンより前に `tool_choice: "none"` で送ったターンでモデルが tool を呼んだとき、tool を実行せず、本文があれば回答として確定する。`result_too_large` の後は、同じターンの未実行の呼び出しを含めてすべての client tool が実行されない
+- [x] 単体テスト: 残りの予算が締めくくりの予約を下回ると次のターンが `tool_choice: "none"` になる。`view_attachment` は予算を超える画像や PDF を読み込まない。16 KiB を超える `read_earlier_messages` の結果が有効な JSON のまま届く。残りの予算が外枠と 1 件の発言の間にあるときの境界。同じターンの先の呼び出しが残りを使い切った後の呼び出しが、`result_too_large` ではなく終了結果を返し、以後も同じ理由を返す
+- [x] 単体テスト: `context_length_exceeded` で 1 回だけ tool 無しで回復し、`error_type` の無い HTTP 400 と最初のリクエストでの拒否では回復しない。`length` の終了は、本文があれば回答として確定し、tool 呼び出しの断片があれば失敗になる（今と同じ）
+- [x] 単体テスト: 既存の規則が変わらない（`finalized-after-current`、pending / failed の記録を持つ人の発言と Bot の返答の扱いの違い、分割した返答を先頭ページの位置まで保留する順序、既に見せた reply 先を ref で返す契約）
 - [ ] 1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を、変更の前後で計測する
-- [ ] 既定の e2e と `history-set history-recall history-window read-earlier view-attachment view-image` を実行する
-- [ ] `search` と `reasoning` の e2e を実行する。`tool_choice: "none"` への切り替えは server tool（Web 検索）を載せたリクエストにもかかり、reasoning は context 予算の差し引きの対象になり、`max_output_tokens` が reasoning の量にも効く可能性があるため（OpenRouter の OpenAPI 定義には記述が無く未確認）
-- [ ] README の履歴の説明を書き直し、[fork](../fork/design.md) と [conversation-regeneration](../conversation-regeneration/design.md) の 24 時間を前提にした記述を書き直す
+- [x] 既定の e2e と `history-set history-recall history-window read-earlier view-attachment view-image` を実行する
+- [x] `search` と `reasoning` の e2e を実行する。`tool_choice: "none"` への切り替えは server tool（Web 検索）を載せたリクエストにもかかり、reasoning は context 予算の差し引きの対象になり、`max_output_tokens` が reasoning の量にも効く可能性があるため（OpenRouter の OpenAPI 定義には記述が無く未確認）
+- [x] README の履歴の説明を書き直し、[fork](../fork/design.md) と [conversation-regeneration](../conversation-regeneration/design.md) の 24 時間を前提にした記述を書き直す
 - [ ] `docs/changes/unbounded-conversation-history/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-次の 3 点は、状態の持ち方（確認キャッシュの粒度、認可関数のシグネチャ）に依存するので、実装時にテストとともに決める。
-
-- **最終回答を送れる条件**: assistant の出力（本文、引数、reasoning）が締めくくりの予約に食い込んだ後で、最終回答のリクエストが context に収まる保証。tool を許すターンの開始条件に「次の assistant の入力増分と、そのターンで生じうるエラーの結果を吸収できること」を加えるか、足りないときに履歴を縮めるか失敗させるかを決める。
-- **確認の途中の進捗**: `verificationCache` は返答単位で、トリガーかページのどれか 1 つの取得に失敗すると返答全体のエントリを消す（`messageEligibility.ts:308`）。複数ページの返答の確認が毎回期限を超えると、同じページを取り直し続けて REST 予算だけを使う。個別の message の取得結果を残すか、返答の中の確認の進捗を残すかを決め、1 つの返答の確認の途中で中断するテストを加える。
-- **期限と認可**: private thread の認可は REST を待つが、認可関数は中断を受け付けず、予算不足も通信失敗も `false` にまとめる（`messageAuthorization.ts:33`）。内部の期限に認可の待ちを含め、認可が済んでいなければ履歴を返さないこと、権限の拒否、期限切れ、予算不足を区別することを契約にする。認可を期限の対象外にしても、呼び出し全体は dispatcher のタイムアウト（30 秒）で打ち切られるが、内部の期限までに `fetch_deadline` を返せずに dispatcher の timeout エラーになり、走査済みの分を返せない。打ち切られた後も認可の REST が裏で残る。
-
-実装時の計測で決める値は、context 予算の安全係数、アプリの既定の出力上限、`contextLength` が取れないときの既定予算、画像や PDF 1 件の見積もり、締めくくりの予約の大きさ、tool 側の REST 予算の回数、`read_earlier_messages` の内部の期限である。
-
-モデルに送る範囲は、Discord に残っている過去の人の発言と Bot の返答へ広がる。1 応答の費用と待ち時間の増え方は未計測である。
+- 「決めた値」はどれも計測していない。1 応答あたりのターンごとの入力トークン、cached tokens、費用、待ち時間、REST 回数を変更の前後で計測し、値を見直す。
+- モデルに送る範囲は、Discord に残っている過去の人の発言と Bot の返答へ広がる。1 応答の費用と待ち時間の増え方は未計測である。
+- context 超過の識別は、失敗した Responses の結果の `error_type` と、HTTP エラーの本文の `error.metadata.error_type` による。OpenRouter が context 超過をどちらの形で返すかは確かめていない（未検証）。どちらにも `error_type` が無ければ回復しない。
+- 記録は無期限に持つので、`reply_records` と `reply_pages` の行は返答の数だけ増え続ける。DB の大きさは監視で追う。
 
 ## 参照
 

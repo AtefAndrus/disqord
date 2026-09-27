@@ -1,4 +1,9 @@
-import type { IClientTool, IToolContext, IToolInvocationMeta, ToolLlmResult } from "./registry";
+import type {
+  IClientTool,
+  IToolContext,
+  IToolHandlerResult,
+  IToolInvocationMeta,
+} from "./registry";
 
 interface ViewAttachmentArguments {
   message_ref: string;
@@ -50,18 +55,19 @@ export class ViewAttachmentTool implements IClientTool<ViewAttachmentArguments> 
     ctx: IToolContext,
     signal: AbortSignal,
     _meta: IToolInvocationMeta,
-  ): Promise<{ llmResult: ToolLlmResult }> {
+  ): Promise<IToolHandlerResult> {
     if (!ctx.conversation || !ctx.model) {
-      return { llmResult: '{"error":"attachment_unavailable"}' };
+      return { llmResult: '{"error":"attachment_unavailable"}', terminal: true };
     }
-    return {
-      llmResult: await ctx.conversation.viewAttachment(
-        args.message_ref,
-        args.attachment_index,
-        ctx.model,
-        signal,
-      ),
-    };
+    const llmResult = await ctx.conversation.viewAttachment(
+      args.message_ref,
+      args.attachment_index,
+      ctx.model,
+      signal,
+      ctx.resultBudgetTokens,
+    );
+    // Every string this tool returns is one of its fixed status or error objects.
+    return { llmResult, terminal: typeof llmResult === "string" };
   }
 }
 

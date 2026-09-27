@@ -54,7 +54,7 @@ describe("ReplyRecordRepository", () => {
     expect(repository.listPages("trigger")).toHaveLength(1);
   });
 
-  test("marks pending records failed and removes records older than 24 hours", () => {
+  test("marks pending records failed and keeps records of any age", () => {
     repository.createPending({
       triggerMsgId: "pending",
       channelId: "channel",
@@ -80,10 +80,45 @@ describe("ReplyRecordRepository", () => {
     expect(repository.findByTrigger("pending")?.status).toBe("failed");
     expect(repository.findByTrigger("pending")?.finalizedAt).toBeNull();
 
-    expect(repository.deleteExpired(172_800_000)).toBe(2);
-    expect(repository.findByTrigger("pending")).toBeNull();
-    expect(repository.findByTrigger("completed-old")).toBeNull();
-    expect(repository.findByTrigger("fresh")).not.toBeNull();
+    expect(repository.findByTrigger("completed-old")).not.toBeNull();
+    expect(repository.listPages("completed-old")).toHaveLength(1);
+  });
+
+  test("deletes records and pages only within the guild, channel, or guilds left", () => {
+    // foreign_keys を切った接続でも、ページの行が記録と一緒に消えること。
+    database.run("PRAGMA foreign_keys = OFF");
+    const add = (trigger: string, channelId: string, guildId: string): void => {
+      repository.createPending({ triggerMsgId: trigger, channelId, guildId, createdAt: 1 });
+      repository.appendPage(trigger, `${trigger}-page`);
+      repository.finalize(trigger, "completed", 1, 2);
+    };
+    add("a1", "channel-a", "guild-a");
+    add("a2", "thread-a", "guild-a");
+    add("b1", "channel-b", "guild-b");
+    add("c1", "channel-c", "guild-c");
+    const pageRows = (): number =>
+      database.query<{ count: number }, []>("SELECT COUNT(*) as count FROM reply_pages").get()
+        ?.count ?? 0;
+
+    expect(repository.deleteByChannel("thread-a")).toBe(1);
+    expect(repository.findByTrigger("a2")).toBeNull();
+    expect(repository.findByPage("a2-page")).toBeNull();
+    expect(repository.findByTrigger("a1")).not.toBeNull();
+    expect(pageRows()).toBe(3);
+
+    expect(repository.deleteByGuild("guild-a")).toBe(1);
+    expect(repository.findByTrigger("a1")).toBeNull();
+    expect(pageRows()).toBe(2);
+
+    expect(repository.deleteGuildsNotIn(["guild-b"])).toBe(1);
+    expect(repository.findByTrigger("b1")).not.toBeNull();
+    expect(repository.findByTrigger("c1")).toBeNull();
+    expect(pageRows()).toBe(1);
+
+    // No guild left at all: every record goes.
+    expect(repository.deleteGuildsNotIn([])).toBe(1);
+    expect(repository.findByTrigger("b1")).toBeNull();
+    expect(pageRows()).toBe(0);
   });
 
   test("resolves a registered bot page through real SQLite eligibility", async () => {

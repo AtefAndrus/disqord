@@ -1,4 +1,5 @@
 import { BadRequestError, WebSearchFailedError } from "../errors";
+import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
@@ -272,6 +273,12 @@ export class ChatService implements IChatService {
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       let supportsTools = false;
       let requestReasoning: ChatCompletionRequest["reasoning"];
+      let contextLength: number | null = null;
+      // Sent, and reserved by the tool loop, only when the model's details
+      // are known. Looking them up on every request would make every reply
+      // wait on the models API, and without them there are no client tools
+      // whose results need the reservation.
+      let maxOutputTokens: number | undefined;
       if (conversation || settings.reasoningDisplayEnabled) {
         try {
           const detailsResult = await raceWithAbort(
@@ -286,6 +293,13 @@ export class ChatService implements IChatService {
             details?.supportedParameters.includes("reasoning")
           ) {
             requestReasoning = { summary: "auto" };
+          }
+          if (details) {
+            contextLength = details.contextLength;
+            maxOutputTokens = computeMaxOutputTokens(
+              details.contextLength,
+              details.maxCompletionTokens,
+            );
           }
         } catch {
           supportsTools = false;
@@ -338,17 +352,18 @@ export class ChatService implements IChatService {
         let clientToolInvoked = false;
         const toolContext: ConversationWindowContext["toolContext"] | undefined = conversation
           ? {
-              readEarlierMessages: (count, signal) => {
+              readEarlierMessages: (count, signal, budgetTokens) => {
                 clientToolInvoked = true;
-                return conversation.toolContext.readEarlierMessages(count, signal);
+                return conversation.toolContext.readEarlierMessages(count, signal, budgetTokens);
               },
-              viewAttachment: (messageRef, attachmentIndex, model, signal) => {
+              viewAttachment: (messageRef, attachmentIndex, model, signal, budgetTokens) => {
                 clientToolInvoked = true;
                 return conversation.toolContext.viewAttachment(
                   messageRef,
                   attachmentIndex,
                   model,
                   signal,
+                  budgetTokens,
                 );
               },
             }
@@ -366,6 +381,8 @@ export class ChatService implements IChatService {
           toolContext,
           settings.defaultModel,
           supportsTools,
+          contextLength,
+          maxOutputTokens,
         );
         usage = addUsage(usage, result.usage);
         const untouched = !tracked.stagedNonEmpty && !clientToolInvoked;
@@ -411,18 +428,22 @@ export class ChatService implements IChatService {
     conversation: ConversationWindowContext["toolContext"] | undefined,
     model: string,
     toolsAllowed: boolean,
+    contextLength: number | null,
+    maxOutputTokens: number | undefined,
   ): Promise<ToolLoopResult> {
     return runToolLoop({
       llmClient: this.llmClient,
       model: request.model,
       messages: request.messages,
       ...(request.plugins && { plugins: request.plugins }),
-      ...((sessionId || request.reasoning) && {
+      ...((sessionId || request.reasoning || maxOutputTokens !== undefined) && {
         requestFields: {
           ...(sessionId && { session_id: sessionId }),
           ...(request.reasoning && { reasoning: request.reasoning }),
+          ...(maxOutputTokens !== undefined && { max_output_tokens: maxOutputTokens }),
         },
       }),
+      contextLength,
       registry: this.toolRegistry,
       ...(webSearchEnabled
         ? { serverTools: [buildWebSearchServerTool(this.webSearchEngine)] }

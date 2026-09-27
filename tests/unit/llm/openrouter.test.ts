@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:
 import {
   AuthenticationError,
   BadRequestError,
+  ContextLengthExceededError,
   InsufficientCreditsError,
   InvalidModelError,
   ModelUnavailableError,
@@ -717,6 +718,46 @@ describe("OpenRouterClient", () => {
       await expect(client.chat(request)).rejects.toBeInstanceOf(BadRequestError);
     });
 
+    test("400 の error.metadata.error_type が context_length_exceeded なら ContextLengthExceededError になる", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        json: () =>
+          Promise.resolve({
+            error: {
+              code: 400,
+              message: "maximum context length exceeded",
+              metadata: { error_type: "context_length_exceeded" },
+            },
+          }),
+      });
+
+      const error = await client
+        .chat({ model: "test-model", messages: [{ role: "user", content: "Hi" }] })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ContextLengthExceededError);
+      expect(error).toBeInstanceOf(BadRequestError);
+    });
+
+    test("400 の本文の最上位の error_type も context 超過として読む", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        json: () =>
+          Promise.resolve({
+            error: { code: 400, message: "too long" },
+            error_type: "context_length_exceeded",
+          }),
+      });
+
+      await expect(
+        client.chat({ model: "test-model", messages: [{ role: "user", content: "Hi" }] }),
+      ).rejects.toBeInstanceOf(ContextLengthExceededError);
+    });
+
     test("400エラーで無効なモデルIDの場合はInvalidModelErrorをスローする", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: false,
@@ -1394,6 +1435,74 @@ describe("OpenRouterClient", () => {
         await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
           InsufficientCreditsError,
         );
+      });
+
+      test("response.failed の error_type が context_length_exceeded なら ContextLengthExceededError になる", async () => {
+        respondWithEvents([
+          {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              error_type: "context_length_exceeded",
+              error: { code: "invalid_prompt", message: "prompt is too long" },
+            },
+          },
+        ]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+          ContextLengthExceededError,
+        );
+      });
+
+      test.each([
+        [
+          "response.error の最上位",
+          {
+            type: "response.error",
+            error_type: "context_length_exceeded",
+            error: { code: "invalid_prompt", message: "too long" },
+          },
+        ],
+        [
+          "error イベントの最上位",
+          {
+            type: "error",
+            code: "invalid_prompt",
+            message: "too long",
+            error_type: "context_length_exceeded",
+          },
+        ],
+        [
+          "error.metadata",
+          {
+            error: {
+              code: 400,
+              message: "too long",
+              metadata: { error_type: "context_length_exceeded" },
+            },
+          },
+        ],
+      ])("stream の %s にある error_type も context 超過として読む", async (_label, event) => {
+        respondWithEvents([event]);
+
+        await expect(drain(client.chatStream(REQUEST))).rejects.toBeInstanceOf(
+          ContextLengthExceededError,
+        );
+      });
+
+      test("error_type の無い invalid_prompt は context 超過として扱わない", async () => {
+        respondWithEvents([
+          {
+            type: "response.failed",
+            response: {
+              status: "failed",
+              error: { code: "invalid_prompt", message: "bad prompt" },
+            },
+          },
+        ]);
+
+        const error = await drain(client.chatStream(REQUEST)).catch((caught: unknown) => caught);
+        expect(error).not.toBeInstanceOf(ContextLengthExceededError);
       });
 
       test("response.failed の error.code がシンボリック文字列なら UnknownApiError になる", async () => {
@@ -2499,6 +2608,7 @@ describe("OpenRouterClient", () => {
                   tokenizer: "Other",
                 },
                 supported_parameters: ["temperature", "stop"],
+                top_provider: { max_completion_tokens: 2048, is_moderated: false },
               },
               {
                 id: "model-2",
@@ -2523,6 +2633,7 @@ describe("OpenRouterClient", () => {
           inputModalities: ["text", "image"],
           outputModalities: ["text"],
           supportedParameters: ["temperature", "stop"],
+          maxCompletionTokens: 2048,
         },
         {
           id: "model-2",

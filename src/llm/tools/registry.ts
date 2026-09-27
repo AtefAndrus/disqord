@@ -2,13 +2,19 @@ import type { FunctionTool, ResponsesInputContentPart } from "../../types";
 
 export type ToolLlmResult = string | ResponsesInputContentPart[];
 
+/** `budgetTokens` is `IToolContext.resultBudgetTokens` of the call; absent means unlimited. */
 export interface ConversationToolContext {
-  readEarlierMessages(count: number, signal: AbortSignal): Promise<ToolLlmResult>;
+  readEarlierMessages(
+    count: number,
+    signal: AbortSignal,
+    budgetTokens?: number,
+  ): Promise<ToolLlmResult>;
   viewAttachment(
     messageRef: string,
     attachmentIndex: number,
     model: string,
     signal: AbortSignal,
+    budgetTokens?: number,
   ): Promise<ToolLlmResult>;
 }
 
@@ -26,6 +32,14 @@ export interface IToolContext {
   model?: string;
   toolsAllowed?: boolean;
   conversation?: ConversationToolContext;
+  /**
+   * Tokens this call's result may add to the request, as estimated by
+   * `estimateToolResultTokens()`. Set by the tool loop per call. A tool
+   * confirms its result fits before committing any state; a larger result
+   * is replaced with `result_too_large` and stops every client tool for the
+   * rest of the response.
+   */
+  resultBudgetTokens?: number;
 }
 
 /** Identifiers for a single tool invocation, used for idempotency/reconciliation. */
@@ -39,6 +53,14 @@ export interface IToolInvocationMeta {
 export interface IToolHandlerResult {
   llmResult: ToolLlmResult;
   render?: ToolRenderPayload;
+  /**
+   * A fixed-length string result that reports the tool stopped or could not
+   * fit anything (such as `read_earlier_messages` with no messages). The
+   * dispatcher takes it out of the loop's finishing reserve even when
+   * `resultBudgetTokens` is exhausted, as long as it is no larger than
+   * `FIXED_RESULT_TOKENS`.
+   */
+  terminal?: boolean;
 }
 
 export interface IClientTool<Args = unknown> {

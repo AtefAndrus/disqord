@@ -82,7 +82,7 @@ function createRetryFixture(webSearchEnabled = false): {
       id: "test-model:fixture",
       name: "Fixture",
       created: 0,
-      contextLength: 4_096,
+      contextLength: 128_000,
       pricing: { prompt: "0", completion: "0" },
       inputModalities: ["text", "image"],
       outputModalities: ["text"],

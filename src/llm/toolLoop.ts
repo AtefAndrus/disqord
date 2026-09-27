@@ -1,4 +1,4 @@
-import { ToolProtocolError } from "../errors";
+import { ContextLengthExceededError, ToolProtocolError } from "../errors";
 import type {
   AssistantChatMessage,
   ChatCompletionRequest,
@@ -18,6 +18,15 @@ import type {
   ToolChoice,
   WebSearchTrace,
 } from "../types";
+import { estimateTextTokens } from "../utils/tokenEstimate";
+import {
+  CONTEXT_BUDGET_SAFETY_FACTOR,
+  DEFAULT_CONTEXT_BUDGET_TOKENS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  estimateChatMessageTokens,
+  estimateToolsTokens,
+  FIXED_RESULT_TOKENS,
+} from "./contextBudget";
 import type { ILLMClient } from "./openrouter";
 import { MAX_TOOL_CALL_INDEX } from "./openrouter";
 import type { IToolContext, ToolRegistry, ToolRenderPayload } from "./tools/registry";
@@ -109,6 +118,12 @@ export interface IToolLoopParams {
   signal?: AbortSignal;
   requestId: string;
   /**
+   * The model's context length, from which the loop derives how much the
+   * response's later turns may add to the history (see `ContextBudget`).
+   * Absent or null when unknown, in which case a fixed budget is used.
+   */
+  contextLength?: number | null;
+  /**
    * Test-only override of the idle/wall-clock/updater-call timeouts, so
    * tests don't have to wait out the real (minutes-long) production
    * defaults. Defaults to `STREAM_IDLE_TIMEOUT_MS` / `STREAM_WALL_TIMEOUT_MS`
@@ -149,6 +164,49 @@ export const UPDATER_CALL_TIMEOUT_MS = 10_000;
  * ensures a single turn's cleanup can never hang the loop indefinitely.
  */
 export const ITERATOR_CLEANUP_TIMEOUT_MS = 5_000;
+/**
+ * The assistant message of a turn that may call tools (its text, reasoning,
+ * and call arguments) is counted only after the turn ends, so a turn is
+ * allowed to call tools only while this much is still left on top of the
+ * room for fixed-length results. A turn that writes more than this can push
+ * the final request past the context; the loop then recovers from the
+ * provider's `context_length_exceeded` once, or fails.
+ */
+export const ASSISTANT_TURN_ALLOWANCE_TOKENS = 2_048;
+/**
+ * Kept back from the tools so that the response can always finish: one
+ * fixed-length result for every call a turn can accept (calls past
+ * `MAX_TOOL_CALLS_PER_TURN` are not run but still get an error result), plus
+ * the assistant turn allowance.
+ */
+export const FINISHING_RESERVE_TOKENS =
+  MAX_DISTINCT_TOOL_CALLS_HARD_CAP * FIXED_RESULT_TOKENS + ASSISTANT_TURN_ALLOWANCE_TOKENS;
+/** Replaces the previous turn's tool results when the provider rejects the request as too long. */
+const CONTEXT_OVERFLOW_RESULT = '{"error":"result_dropped","reason":"context_overflow"}';
+
+/**
+ * Tokens the response may still add to the history. Decided once when the
+ * loop starts: (context length - output reservation - first request) times
+ * a safety factor. Every item appended to the history afterwards is charged
+ * once, when it is appended.
+ */
+class ContextBudget {
+  constructor(private remaining: number) {}
+
+  charge(message: ChatMessage): void {
+    this.remaining -= estimateChatMessageTokens(message);
+  }
+
+  /** What one tool result may use, leaving the finishing reserve untouched. */
+  get forToolResult(): number {
+    return Math.max(0, this.remaining - FINISHING_RESERVE_TOKENS);
+  }
+
+  /** True once the next turn must be the final answer. */
+  get finishing(): boolean {
+    return this.remaining < FINISHING_RESERVE_TOKENS;
+  }
+}
 
 const utf8Encoder = new TextEncoder();
 function byteLen(text: string): number {
@@ -890,6 +948,7 @@ function normalizeToolCalls(
 }
 
 interface DispatchCallsParams {
+  budget: ContextBudget;
   normalizedCalls: INormalizedToolCall[];
   dispatcher: ToolDispatcher;
   ctx: IToolContext;
@@ -903,13 +962,18 @@ interface DispatchCallsParams {
 
 /**
  * Sequentially dispatches normalized calls, pushing each `role:"tool"`
- * result to `history` as it completes. If the request is cancelled before or
- * during a call, every remaining (not-yet-started) call — and the
- * in-flight one, if the dispatcher itself reports `cancelled` — is filled
- * with a bounded cancellation result, and no further calls are attempted.
+ * result to `history` as it completes and charging it to `budget`. If the
+ * request is cancelled before or during a call, every remaining
+ * (not-yet-started) call — and the in-flight one, if the dispatcher itself
+ * reports `cancelled` — is filled with a bounded cancellation result, and no
+ * further calls are attempted. Once a result comes back `result_too_large`,
+ * the remaining calls get a fixed error without running (`stopped`).
  */
-async function dispatchCalls(params: DispatchCallsParams): Promise<{ cancelled: boolean }> {
+async function dispatchCalls(
+  params: DispatchCallsParams,
+): Promise<{ cancelled: boolean; stopped: boolean }> {
   const {
+    budget,
     normalizedCalls,
     dispatcher,
     ctx,
@@ -920,6 +984,7 @@ async function dispatchCalls(params: DispatchCallsParams): Promise<{ cancelled: 
     history,
     updaterCallMs,
   } = params;
+  let stopped = false;
 
   for (let i = 0; i < normalizedCalls.length; i++) {
     const call = normalizedCalls[i];
@@ -931,17 +996,28 @@ async function dispatchCalls(params: DispatchCallsParams): Promise<{ cancelled: 
         if (!remaining) continue;
         history.push(dispatcher.buildCancelledOutcome(remaining).toolMessage);
       }
-      return { cancelled: true };
+      return { cancelled: true, stopped };
+    }
+
+    if (stopped) {
+      const stoppedMessage = dispatcher.buildStoppedOutcome(call).toolMessage;
+      history.push(stoppedMessage);
+      budget.charge(stoppedMessage);
+      continue;
     }
 
     await invokeUpdater(() => updater.beginToolBlock(call.name), requestSignal, updaterCallMs);
+    // The result is sent with its call id, which the tool cannot shrink.
+    const resultBudgetTokens = Math.max(0, budget.forToolResult - estimateTextTokens(call.id));
     const outcome = await dispatcher.dispatch(call, {
-      ctx,
+      ctx: { ...ctx, resultBudgetTokens },
       requestSignal,
       frozenToolNames,
       requestId,
     });
     history.push(outcome.toolMessage);
+    budget.charge(outcome.toolMessage);
+    if (outcome.resultTooLarge) stopped = true;
     await invokeUpdater(
       () => updater.endToolBlock(call.name, outcome.render),
       requestSignal,
@@ -954,18 +1030,20 @@ async function dispatchCalls(params: DispatchCallsParams): Promise<{ cancelled: 
         if (!remaining) continue;
         history.push(dispatcher.buildCancelledOutcome(remaining).toolMessage);
       }
-      return { cancelled: true };
+      return { cancelled: true, stopped };
     }
   }
 
-  return { cancelled: false };
+  return { cancelled: false, stopped };
 }
 
 /**
  * Runs the client tool-calling protocol loop against `llmClient`: builds the
  * (frozen) combined `tools` array once, streams each assistant turn,
  * normalizes and sequentially dispatches any `tool_calls`, and repeats up to
- * `MAX_TURNS` (the last turn forces `tool_choice:"none"`). See
+ * `MAX_TURNS`. A turn is sent with `tool_choice:"none"` when it is the last
+ * one, when the context budget is down to the finishing reserve, after a
+ * `result_too_large`, and when recovering from a context overflow. See
  * `docs/changes/tool-calling-foundation/design.md` for the full protocol
  * this implements.
  */
@@ -1010,6 +1088,28 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   } catch (error) {
     return { status: "error", error, history };
   }
+
+  const outputReservation =
+    typeof requestFields?.max_output_tokens === "number"
+      ? requestFields.max_output_tokens
+      : DEFAULT_MAX_OUTPUT_TOKENS;
+  const firstRequestTokens =
+    history.reduce((total, message) => total + estimateChatMessageTokens(message), 0) +
+    estimateToolsTokens([...clientTools, ...serverTools]);
+  const budget = new ContextBudget(
+    params.contextLength != null && params.contextLength > 0
+      ? Math.floor(
+          (params.contextLength - outputReservation - firstRequestTokens) *
+            CONTEXT_BUDGET_SAFETY_FACTOR,
+        )
+      : DEFAULT_CONTEXT_BUDGET_TOKENS,
+  );
+  // Offering the client tools with no room for a single result would only
+  // let the model spend a turn on calls that come back empty.
+  if (clientTools.length > 0 && budget.finishing) {
+    console.info("[toolLoop] context budget too small for client tools; not offering them");
+    clientTools = [];
+  }
   const frozenToolNames = new Set(clientTools.map((t) => t.function.name));
   // Deep-cloned so the frozen snapshot is structurally independent of
   // `registry`/`serverTools` state from this point on: `clientTools` carries
@@ -1051,8 +1151,15 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
   // a cancelled or failed reply shows no search results.
   let webSearch: WebSearchTrace | undefined;
   const reasoningTurns: ResponsesReasoningItem[][] = [];
+  let clientToolsStopped = false;
+  // Where the tool results of the previous turn start in `history`, while
+  // they are the last thing appended; the context-overflow recovery
+  // replaces them.
+  let lastToolResultsStart: number | undefined;
+  let recovering = false;
 
-  for (let turn = 1; turn <= MAX_TURNS; turn++) {
+  // The recovery turn after a context overflow does not count toward MAX_TURNS.
+  for (let turn = 1; turn <= MAX_TURNS + (recovering ? 1 : 0); turn++) {
     // Covers both "before the first request" and "before the next model
     // request after a turn's tool dispatch" — in both cases `beginTurn()`
     // for the *new* turn has not been called yet, so no updater call is made.
@@ -1060,7 +1167,12 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
       return { status: "cancelled", history, usage: aggregatedUsage };
     }
 
-    const toolChoice: ToolChoice = turn < MAX_TURNS ? "auto" : "none";
+    const finalTurn =
+      turn >= MAX_TURNS ||
+      recovering ||
+      clientToolsStopped ||
+      (frozenToolNames.size > 0 && budget.finishing);
+    const toolChoice: ToolChoice = finalTurn ? "none" : "auto";
     const request: ChatCompletionRequest = {
       ...passthroughFields,
       model,
@@ -1162,6 +1274,30 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
 
     if (turnResult.kind === "transport-error") {
       aggregatedUsage = addUsage(aggregatedUsage, turnResult.usage);
+      // Only a rejection after tool results were appended is recovered: the
+      // first request has nothing the loop added, and a second overflow means
+      // dropping the results was not enough. The tools' own state for the
+      // dropped results (messages marked shown, attachments marked loaded)
+      // is left as is; no tool runs again, so it never shows.
+      if (
+        turnResult.error instanceof ContextLengthExceededError &&
+        !recovering &&
+        lastToolResultsStart !== undefined
+      ) {
+        for (let index = lastToolResultsStart; index < history.length; index++) {
+          const message = history[index];
+          if (message?.role === "tool") {
+            history[index] = { ...message, content: CONTEXT_OVERFLOW_RESULT };
+          }
+        }
+        console.warn("[toolLoop] context length exceeded; answering once without tools");
+        await decideAbort(updater, "context length exceeded", requestSignal, updaterCallMs);
+        if (requestSignal?.aborted) {
+          return { status: "cancelled", history, usage: aggregatedUsage };
+        }
+        recovering = true;
+        continue;
+      }
       return await abortToErrorOrCancelled(
         updater,
         "stream error",
@@ -1233,8 +1369,8 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
     }
 
     if (finishReason === "tool_calls") {
-      if (turn === MAX_TURNS) {
-        // 最終ターンは tool_choice:"none" で送るが、従わずに tool を呼ぶモデルがある。
+      if (toolChoice === "none") {
+        // tool_choice:"none" で送ったターンは何ターン目でも最終ターンだが、従わずに tool を呼ぶモデルがある。
         // その要求は通せない一方、本文を書いていればそれが利用者への答えになる。
         // 捨てるとエラー表示だけが残り、ここまでの tool の往復も無駄になる。
         // ここは正規化 (normalizeToolCalls) より前なので、断片が 0 件や関数名の欠けた
@@ -1269,7 +1405,7 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
           history,
           aggregatedUsage,
           new ToolProtocolError(
-            'Model returned "tool_calls" on the final allowed turn despite tool_choice:"none".',
+            'Model returned "tool_calls" on a final turn despite tool_choice:"none".',
           ),
         );
       }
@@ -1299,9 +1435,12 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
         ...(reasoningItems.length > 0 && { reasoningItems }),
       };
       history.push(assistantMessage);
+      budget.charge(assistantMessage);
       await decideCommit(updater, "tool_calls", requestSignal, updaterCallMs);
 
+      const resultsStart = history.length;
       const dispatchOutcome = await dispatchCalls({
+        budget,
         normalizedCalls,
         dispatcher,
         ctx,
@@ -1316,6 +1455,8 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
       if (dispatchOutcome.cancelled) {
         return { status: "cancelled", history, usage: aggregatedUsage };
       }
+      if (dispatchOutcome.stopped) clientToolsStopped = true;
+      lastToolResultsStart = resultsStart;
 
       continue;
     }
@@ -1438,8 +1579,10 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
     );
   }
 
-  // Unreachable: every branch above either `return`s or `continue`s (and
-  // `continue` only happens for turn < MAX_TURNS, since the MAX_TURNS
-  // iteration's tool_calls branch always returns). Kept for type-safety.
+  // Unreachable: every branch above either `return`s or `continue`s, and
+  // `continue` only happens on a turn sent with tool_choice:"auto" (whose
+  // successor is at most MAX_TURNS) or to enter the one recovery turn, which
+  // is sent with tool_choice:"none" and so always returns. Kept for
+  // type-safety.
   throw new ToolProtocolError("Tool loop exited without producing a result.");
 }

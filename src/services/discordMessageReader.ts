@@ -37,6 +37,7 @@ export interface IDiscordMessageReader {
 /** Counts application REST calls; discord.js's internal retry attempts are outside this counter. */
 export class DiscordRestBudget {
   private count = 0;
+  private refusedCall = false;
 
   constructor(readonly limit = 12) {}
 
@@ -44,8 +45,16 @@ export class DiscordRestBudget {
     return this.count;
   }
 
+  /** True once a call was turned away because the budget was spent. */
+  get refused(): boolean {
+    return this.refusedCall;
+  }
+
   consume(): boolean {
-    if (this.count >= this.limit) return false;
+    if (this.count >= this.limit) {
+      this.refusedCall = true;
+      return false;
+    }
     this.count += 1;
     return true;
   }

@@ -39,7 +39,9 @@ export interface IReplyRecordRepository {
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
   markPendingFailed(): number;
-  deleteExpired(now?: number): number;
+  deleteByGuild(guildId: string): number;
+  deleteByChannel(channelId: string): number;
+  deleteGuildsNotIn(guildIds: readonly string[]): number;
 }
 
 interface RawReplyRecord {
@@ -184,23 +186,36 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
       .run().changes;
   }
 
-  deleteExpired(now = Date.now()): number {
-    const cutoff = now - 24 * 60 * 60 * 1000;
+  // 記録は期限では消さない。返答のページやトリガーが消えたと分かったときにも消さない。
+  // 消すと、そのトリガーが記録の無い人の発言として次の応答で再び読めるようになるからである。
+  // 消すのは、その範囲がもう読まれないと分かったとき（guild からの退出、チャンネルの削除）だけである。
+  deleteByGuild(guildId: string): number {
+    return this.deleteWhere("guild_id = ?", [guildId]);
+  }
+
+  deleteByChannel(channelId: string): number {
+    return this.deleteWhere("channel_id = ?", [channelId]);
+  }
+
+  // 呼び出し側は ClientReady 時点の参加中の guild をすべて渡すので、空の一覧は「どの guild にも居ない」を意味する。
+  deleteGuildsNotIn(guildIds: readonly string[]): number {
+    if (guildIds.length === 0) return this.deleteWhere("1 = 1", []);
+    const placeholders = guildIds.map(() => "?").join(", ");
+    return this.deleteWhere(`guild_id NOT IN (${placeholders})`, guildIds);
+  }
+
+  private deleteWhere(condition: string, params: readonly string[]): number {
     return this.db
-      .transaction((expiry: number): number => {
-        const count =
-          this.db
-            .query<{ count: number }, [number]>(
-              "SELECT COUNT(*) as count FROM reply_records WHERE COALESCE(finalized_at, created_at) < ?",
-            )
-            .get(expiry)?.count ?? 0;
-        if (count > 0) {
-          this.db
-            .query("DELETE FROM reply_records WHERE COALESCE(finalized_at, created_at) < ?")
-            .run(expiry);
-        }
-        return count;
+      .transaction((): number => {
+        // foreign_keys が無効な接続でもページの行を残さないよう、ON DELETE CASCADE に頼らず先に消す。
+        this.db
+          .query(
+            `DELETE FROM reply_pages WHERE trigger_msg_id IN
+               (SELECT trigger_msg_id FROM reply_records WHERE ${condition})`,
+          )
+          .run(...params);
+        return this.db.query(`DELETE FROM reply_records WHERE ${condition}`).run(...params).changes;
       })
-      .immediate(cutoff);
+      .immediate();
   }
 }

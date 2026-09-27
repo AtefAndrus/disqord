@@ -49,7 +49,9 @@ function records(): IReplyRecordRepository {
     findByPage: () => null,
     listPages: () => [],
     markPendingFailed: () => 0,
-    deleteExpired: () => 0,
+    deleteByGuild: () => 0,
+    deleteByChannel: () => 0,
+    deleteGuildsNotIn: () => 0,
   };
 }
 
