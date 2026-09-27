@@ -37,6 +37,7 @@ function switchRows(settings: GuildSettings, webSearchEngine: string): SwitchRow
     },
     { key: "twitter_expand", label: "ツイート展開", enabled: settings.twitterExpandEnabled },
     { key: "history", label: "会話履歴", enabled: settings.historyEnabled },
+    { key: "discord_tools", label: "Discord 操作", enabled: settings.discordToolsEnabled },
     { key: "reasoning_display", label: "推論表示", enabled: settings.reasoningDisplayEnabled },
   ];
 }

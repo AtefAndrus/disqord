@@ -10,6 +10,7 @@ import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
 export interface DiscordMessage {
   id: string;
   content: string;
+  flags?: number;
   edited_timestamp?: string | null;
   author: { id: string; username: string };
   components?: unknown[];
@@ -49,6 +50,17 @@ export interface Scenario {
   timeoutMs?: number;
   /** Returns the reasons the reply is wrong; empty means it passed. */
   check: (reply: Reply) => string[];
+  verify?: (
+    triggerId: string,
+    channelId: string,
+    request: (path: string, init?: RequestInit) => Promise<Response>,
+    botId: string,
+  ) => Promise<string[]>;
+  cleanup?: (
+    triggerId: string,
+    channelId: string,
+    request: (path: string, init?: RequestInit) => Promise<Response>,
+  ) => Promise<string[]>;
 }
 
 // Discord component types.
@@ -289,6 +301,86 @@ export const LONG_NUMBER_COUNT = 1200;
 export const LONG_NUMBERS_PER_LINE = 20;
 
 export const SCENARIOS: Scenario[] = [
+  {
+    name: "discord-tools",
+    manual: true,
+    prompt:
+      "[e2e] このメッセージに 👍 を付け、『賛成ですか？』を選択肢『はい』『いいえ』で投票にし、このメッセージから『e2e thread』という公開スレッドを作り、このメッセージをピン留めして。4 つの Discord 操作ツールを必ず使って。",
+    check: (reply) => hasUsageFooter(reply),
+    verify: async (triggerId, channelId, request, botId) => {
+      const problems: string[] = [];
+      const messageResponse = await request(`/channels/${channelId}/messages/${triggerId}`);
+      if (!messageResponse.ok) return [`cannot read trigger: HTTP ${messageResponse.status}`];
+      const message = (await messageResponse.json()) as {
+        reactions?: { emoji?: { name?: string } }[];
+        thread?: { id: string };
+        pinned?: boolean;
+      };
+      if (!message.reactions?.some((reaction) => reaction.emoji?.name === "👍"))
+        problems.push("the trigger has no 👍 reaction");
+      const pinsResponse = await request(`/channels/${channelId}/pins`);
+      if (pinsResponse.ok) {
+        const pins = (await pinsResponse.json()) as
+          | { id?: string; items?: { message?: { id?: string } }[] }[]
+          | { items?: { message?: { id?: string } }[] };
+        const pinned = Array.isArray(pins)
+          ? pins.some((item) => item.id === triggerId)
+          : pins.items?.some((item) => item.message?.id === triggerId);
+        if (!pinned) problems.push("the trigger is absent from the pin list");
+      } else problems.push(`cannot read pins: HTTP ${pinsResponse.status}`);
+      const threadId = message.thread?.id;
+      if (!threadId) problems.push("the trigger has no thread");
+      const recentResponse = await request(`/channels/${channelId}/messages?limit=50`);
+      if (recentResponse.ok) {
+        const recent = (await recentResponse.json()) as {
+          author?: { id?: string };
+          message_reference?: { message_id?: string };
+          poll?: { question?: { text?: string }; answers?: { poll_media?: { text?: string } }[] };
+        }[];
+        if (
+          !recent.some(
+            (item) =>
+              item.author?.id === botId &&
+              item.message_reference?.message_id === triggerId &&
+              item.poll?.question?.text === "賛成ですか？" &&
+              item.poll.answers?.map((answer) => answer.poll_media?.text).join(",") ===
+                "はい,いいえ",
+          )
+        )
+          problems.push("the poll message was not found");
+      } else problems.push(`cannot read poll messages: HTTP ${recentResponse.status}`);
+      if (threadId) {
+        const thread = await request(`/channels/${threadId}`);
+        if (!thread.ok) problems.push(`cannot read thread: HTTP ${thread.status}`);
+      }
+      return problems;
+    },
+    cleanup: async (triggerId, channelId, request) => {
+      const problems: string[] = [];
+      const response = await request(`/channels/${channelId}/messages/${triggerId}`);
+      if (!response.ok) return [`cannot read trigger for cleanup: HTTP ${response.status}`];
+      const message = (await response.json()) as { thread?: { id: string }; pinned?: boolean };
+      if (message.thread?.id) {
+        try {
+          const deleted = await request(`/channels/${message.thread.id}`, { method: "DELETE" });
+          if (!deleted.ok) problems.push(`cannot delete thread: HTTP ${deleted.status}`);
+        } catch (error) {
+          problems.push(`cannot delete thread: ${error instanceof Error ? error.message : error}`);
+        }
+      }
+      if (message.pinned) {
+        try {
+          const unpinned = await request(`/channels/${channelId}/pins/${triggerId}`, {
+            method: "DELETE",
+          });
+          if (!unpinned.ok) problems.push(`cannot unpin trigger: HTTP ${unpinned.status}`);
+        } catch (error) {
+          problems.push(`cannot unpin trigger: ${error instanceof Error ? error.message : error}`);
+        }
+      }
+      return problems;
+    },
+  },
   {
     name: "chat",
     prompt: "[e2e] 「接続確認OK」という語を含めて、1文で返事をして。",

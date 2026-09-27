@@ -14,6 +14,10 @@ import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
+import { createAddReactionTool } from "./llm/tools/discord/addReaction";
+import { createCreatePollTool } from "./llm/tools/discord/createPoll";
+import { createCreateThreadTool } from "./llm/tools/discord/createThread";
+import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
 import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
@@ -61,6 +65,10 @@ async function bootstrap(): Promise<void> {
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(createReadEarlierMessagesTool());
   toolRegistry.register(createViewAttachmentTool());
+  toolRegistry.register(createAddReactionTool());
+  toolRegistry.register(createCreatePollTool());
+  toolRegistry.register(createCreateThreadTool());
+  toolRegistry.register(createPinMessageTool());
   const chatService = new ChatService(
     llmClient,
     settingsService,

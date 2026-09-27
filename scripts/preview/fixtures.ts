@@ -61,6 +61,7 @@ const settings: GuildSettings = {
   reasoningDisplayEnabled: true,
   twitterExpandEnabled: true,
   historyEnabled: false,
+  discordToolsEnabled: false,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

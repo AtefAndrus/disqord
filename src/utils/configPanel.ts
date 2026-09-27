@@ -55,6 +55,12 @@ export const CONFIG_SWITCHES = {
     label: "会話履歴",
     description: "チャンネルの会話履歴をモデルに渡します。",
   },
+  discord_tools: {
+    page: "features",
+    field: "discordToolsEnabled",
+    label: "Discord 操作",
+    description: "リアクション、投票、スレッド作成、ピン留めをモデルに許可します。",
+  },
 } as const;
 export type ConfigSwitch = keyof typeof CONFIG_SWITCHES;
 /** The most options a select can hold or preselect. */

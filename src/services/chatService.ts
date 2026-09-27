@@ -3,7 +3,7 @@ import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
-import type { ToolRegistry } from "../llm/tools/registry";
+import type { DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
   buildWebSearchStaticSystemMessage,
@@ -33,6 +33,7 @@ export interface ChatUserInput {
   parts?: ChatMessageContent[];
   authorLabel?: string;
   conversation?: ConversationWindowContext;
+  discord?: DiscordToolContext;
 }
 
 export interface ChatRequestContext {
@@ -271,6 +272,7 @@ export class ChatService implements IChatService {
         ]);
 
       const conversation = settings.historyEnabled ? input.conversation : undefined;
+      const discord = settings.discordToolsEnabled ? input.discord : undefined;
       let supportsTools = false;
       let requestReasoning: ChatCompletionRequest["reasoning"];
       let contextLength: number | null = null;
@@ -279,7 +281,7 @@ export class ChatService implements IChatService {
       // wait on the models API, and without them there are no client tools
       // whose results need the reservation.
       let maxOutputTokens: number | undefined;
-      if (conversation || settings.reasoningDisplayEnabled) {
+      if (conversation || settings.discordToolsEnabled || settings.reasoningDisplayEnabled) {
         try {
           const detailsResult = await raceWithAbort(
             this.modelService.getModelDetails(settings.defaultModel),
@@ -287,7 +289,8 @@ export class ChatService implements IChatService {
           );
           if (!detailsResult.ok) return { status: "cancelled", history: initialMessages };
           const details = detailsResult.value;
-          if (conversation) supportsTools = details?.supportsTools ?? false;
+          if (conversation || settings.discordToolsEnabled)
+            supportsTools = details?.supportsTools ?? false;
           if (
             settings.reasoningDisplayEnabled &&
             details?.supportedParameters.includes("reasoning")
@@ -352,6 +355,7 @@ export class ChatService implements IChatService {
         let clientToolInvoked = false;
         const toolContext: ConversationWindowContext["toolContext"] | undefined = conversation
           ? {
+              resolveMessageRef: (ref) => conversation.toolContext.resolveMessageRef(ref),
               readEarlierMessages: (count, signal, budgetTokens) => {
                 clientToolInvoked = true;
                 return conversation.toolContext.readEarlierMessages(count, signal, budgetTokens);
@@ -368,6 +372,27 @@ export class ChatService implements IChatService {
               },
             }
           : undefined;
+        const discordContext: DiscordToolContext | undefined = discord
+          ? {
+              channelType: discord.channelType,
+              addReaction: (...args) => {
+                clientToolInvoked = true;
+                return discord.addReaction(...args);
+              },
+              createPoll: (...args) => {
+                clientToolInvoked = true;
+                return discord.createPoll(...args);
+              },
+              createThread: (...args) => {
+                clientToolInvoked = true;
+                return discord.createThread(...args);
+              },
+              pinMessage: (...args) => {
+                clientToolInvoked = true;
+                return discord.pinMessage(...args);
+              },
+            }
+          : undefined;
         const tracked = createTrackingUpdater(updater);
         const result = await this.runChatLoop(
           requestWithout(dropTweetImages, dropWebSearch),
@@ -379,6 +404,7 @@ export class ChatService implements IChatService {
           requestId,
           conversation?.sessionId,
           toolContext,
+          discordContext,
           settings.defaultModel,
           supportsTools,
           contextLength,
@@ -426,6 +452,7 @@ export class ChatService implements IChatService {
     requestId: MessageId,
     sessionId: string | undefined,
     conversation: ConversationWindowContext["toolContext"] | undefined,
+    discord: DiscordToolContext | undefined,
     model: string,
     toolsAllowed: boolean,
     contextLength: number | null,
@@ -455,6 +482,7 @@ export class ChatService implements IChatService {
         model,
         toolsAllowed,
         ...(conversation && { conversation }),
+        ...(discord && { discord }),
       },
       updater,
       signal,

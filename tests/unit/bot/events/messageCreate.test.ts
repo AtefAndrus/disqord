@@ -8,7 +8,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import { type Attachment, Collection, MessageFlags, MessageType } from "discord.js";
+import { type Attachment, ChannelType, Collection, MessageFlags, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
@@ -107,6 +107,7 @@ interface MockMessage {
   attachments: Collection<string, Attachment>;
   channel: {
     id: string;
+    type: ChannelType;
     send: ReturnType<typeof mock>;
     isThread: () => boolean;
   };
@@ -313,6 +314,7 @@ describe("createMessageCreateHandler", () => {
       reasoningDisplayEnabled: false,
       twitterExpandEnabled: true,
       historyEnabled: true,
+      discordToolsEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -333,6 +335,7 @@ describe("createMessageCreateHandler", () => {
       setReasoningDisplayEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setDiscordToolsEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -378,6 +381,7 @@ describe("createMessageCreateHandler", () => {
       attachments: makeAttachments([]),
       channel: {
         id: "channel-123",
+        type: ChannelType.GuildText,
         send: mockSend,
         isThread: () => false,
       },
@@ -424,6 +428,37 @@ describe("createMessageCreateHandler", () => {
       expect.anything(),
       expect.anything(),
     );
+  });
+
+  test("Discord operations are omitted when disabled and history-off references cannot resolve", async () => {
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+    const disabledInput = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[0]?.[1] as ChatUserInput;
+    expect(disabledInput.discord).toBeUndefined();
+
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue({
+      ...settings,
+      historyEnabled: false,
+      discordToolsEnabled: true,
+    });
+    await handler(mockMessage as never);
+    const enabledInput = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[1]?.[1] as ChatUserInput;
+    expect(enabledInput.conversation).toBeUndefined();
+    expect(enabledInput.discord).toBeDefined();
+    if (!enabledInput.discord) throw new Error("Discord context missing");
+    expect(
+      JSON.parse(await enabledInput.discord.pinMessage("m7", new AbortController().signal)),
+    ).toEqual({
+      ok: false,
+      reason: "not_found",
+    });
   });
 
   test("Botからのメッセージは無視する", async () => {
@@ -493,6 +528,7 @@ describe("createMessageCreateHandler", () => {
             reasoningDisplayEnabled: false,
             twitterExpandEnabled: true,
             historyEnabled: false,
+            discordToolsEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),

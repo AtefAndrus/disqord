@@ -1,6 +1,6 @@
 ---
 title: "Discord 操作ツール"
-status: planned
+status: in-progress
 priority: medium
 summary: "リアクション、投票、スレッド作成、ピン留めを、会話の流れでモデルが行える client tool 群"
 ---
@@ -57,7 +57,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 | 対象メッセージの指定 | 会話の窓の参照（`m7`）で受け取り、省略時は bot を呼んだメッセージとする。会話履歴が off の guild では、bot を呼んだメッセージだけを対象にできる | モデルに生のメッセージ ID を書かせない。窓に無いメッセージは操作できない |
 | 権限の確認 | Discord を変える呼び出しはすべて `discordActionService` の 1 つの認可関数を通し、各操作の実行の直前に、bot と依頼したメンバーの両方が下の「共通の確認」と操作ごとの権限を満たすときだけ実行する | tool は bot の権限で動くので、確かめないとユーザが自分に無い権限（ピン留めなど）を bot 経由で使える。確認を操作ごとに書くと、閲覧権限、タイムアウト、非公開スレッドの参加といった前提の抜けが操作ごとに生じるので、1 か所に集める |
 | 必要な権限 | 下の「操作ごとの仕様」の表のとおり。`PIN_MESSAGES` は `MANAGE_MESSAGES` から分かれた権限で、2026-02-23 以降は `MANAGE_MESSAGES` だけではピン留めできない | Discord の API change log（2025-08-20、2025-11-24）と discord.js 14.27.0 の `Message#pinnable` の実装に合わせる |
-| 失敗の返し方 | 権限不足（`50013`、`50001`）は足りない権限名を、対象が無い（`10008` など）は対象が無いことを、それ以外は一般的な失敗を、短い JSON でモデルに返す | 権限と not-found を混ぜると、モデルがユーザに誤った対処を伝える |
+| 失敗の返し方 | 権限不足（`50013`）は足りない権限名を、bot がチャンネルに入れない（`50001`）はそのことを権限名なしで、相手が bot をブロックしていてリアクションできない（`90001`）はそのことを、コードの分からない 403 は権限名を添えない拒否として、対象が無い（`10008` など）は対象が無いことを、それ以外は一般的な失敗を、短い JSON でモデルに返す | 権限と not-found を混ぜると、モデルがユーザに誤った対処を伝える。`50001` に操作の権限名を添えると、閲覧できないことが原因なのに別の権限を足すよう伝えてしまう |
+| 上限の数え方 | Discord へ変更を送る直前に数える。絵文字が見つからない、対象が無いといった送る前の失敗は数えない | モデルが名前を誤っただけで、同じ応答の正しい呼び出しまで断らないようにする |
 | 1 応答あたりの上限 | リアクションは 3 個、投票・スレッド・ピンは各 1 回 | モデルが繰り返し呼んでチャンネルを荒らさないようにする。上限を超えた呼び出しは実行せず、上限に達したことを返す |
 | 投票の送り方 | Components V2 を使わない別のメッセージとして、bot を呼んだメッセージへの返信で送る | `IS_COMPONENTS_V2` のメッセージには `poll` を付けられない |
 | スレッドの重複 | 対象メッセージから `message.startThread()` で作る | 1 つのメッセージには 1 つのスレッドしか作れず、2 回目は Discord が `160004` で断るので、bot 側で重複を防ぐ仕組みが要らない |
@@ -68,7 +69,8 @@ bot はチャンネルの会話を読んで答えられるが、Discord に対�
 ### 共通の確認
 
 認可関数は、操作のたびに次を順に確かめ、1 つでも満たさなければ実行せず、どの条件で断ったかを返す。
-判断に使う Discord の状態（依頼者のメンバー、チャンネルとスレッド、カスタム絵文字）は、キャッシュから読まず、実行の直前に REST で取り直す。
+判断に使う Discord の状態（依頼者と bot のメンバー、チャンネルとスレッドとその親チャンネル、カスタム絵文字）は、キャッシュから読まず、実行の直前に REST で取り直す。
+チャンネルと bot のメンバーは、取り直した値でキャッシュを更新させる（`fetch` に `cache: false` を渡さない）。discord.js 14.27.0 の `ChannelManager._add` は、キャッシュに同じ ID のチャンネルがあると `cache: false` では REST の値を反映せずにキャッシュのオブジェクトを返し、スレッドの `permissionsFor()` は親チャンネルのキャッシュを、`Message#pinnable` は `guild.members.me` を読むためである。
 bot は `GuildMembers` と `GuildExpressions` の intent を持たないので、ロールの付け外しや絵文字の利用ロールの変更はキャッシュに届かない。
 
 1. 依頼者を `guild.members.fetch({ user, force: true, cache: false })` で取り直す。取れなければ断る。1 回の応答は tool のターンを重ねて数分続きうるので、応答の開始時に取ったメンバーや gateway 由来の `message.member` では、途中でロールを外されたことを反映できない。
@@ -118,6 +120,8 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - `DiscordToolContext` は応答ごとに作り、依頼者の ID、bot を呼んだメッセージ、上限のカウンタを持つ。メンバーは持たず、共通の確認が操作のたびに取り直す。
 - handler は `AbortSignal` を受け取るが、Discord への要求が送られた後の中断では結果が分からない。リアクションとピンは繰り返しても害が無く、スレッドは Discord が重複を断るので、中断後の再試行で二重に作られることは無い。投票だけは中断後に再試行すると二重になりうるので、1 応答 1 回の上限を、中断した呼び出しにも数える。
 - モデルに返す結果は `{"ok":true}` か `{"ok":false,"reason":"missing_permission","who":"bot","permissions":["PinMessages"]}` のような短い JSON にする。
+- 結果はどれも `IToolHandlerResult.terminal` を true にして返す。tool loop は client tool の結果を `resultBudgetTokens` に収まらなければ `result_too_large` に差し替えるが、`terminal` の固定長の結果（`FIXED_RESULT_TOKENS` 以内）は予算を使い切っていても通す（`src/llm/tools/toolHandler.ts` の `fixedLength`）。本 change の tool は結果を返す前に Discord を変え終えているので、実行したのに結果が `result_too_large` に置き換わり、モデルが失敗と誤って伝えることを防ぐ。
+- `chatService.generateChatResponse` は、Web 検索やツイート画像の失敗でループをやり直すのを、何も表示しておらず client tool も実行していないときに限る（`clientToolInvoked`）。やり直すと tool の副作用も繰り返すためである。Discord 操作の呼び出しも、会話の窓の tool と同じく `DiscordToolContext` を包んで `clientToolInvoked` を立てる。
 
 ### e2e
 
@@ -127,16 +131,18 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 
 ## Tasks
 
-- [ ] `discord_tools_enabled` の列と、設定パネルの「機能」ページの項目、`/status` の表示を足す
-- [ ] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
-- [ ] 4 つの tool を実装して登録する
-- [ ] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
-- [ ] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [x] `discord_tools_enabled` の列と、設定パネルの「機能」ページの項目、`/status` の表示を足す
+- [x] `DiscordToolContext` と `discordActionService`（対象の解決、権限の確認、エラーの分類、上限）を実装する
+- [x] 4 つの tool を実装して登録する
+- [x] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
+- [x] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [x] `bun run e2e` と `bun run e2e discord-tools` を実行し、結果を PR に書く
+- [ ] 手動確認: bot のロールから `SendPolls` を外した状態で投票を頼み、Discord が投票の作成を断るかを確かめる（結果に応じて bot 側の事前確認を残すか外す）
 - [ ] `docs/changes/discord-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **`SEND_POLLS` の bot への適用（未検証）**: `SendPolls` が bot の投票作成にも要求されるかは Discord の文書から確かめられていない。bot 側の事前確認には含め、実装時に権限を外した bot で挙動を確かめる。
+- **`SEND_POLLS` の bot への適用（未検証）**: Discord の権限の文書（`developers/topics/permissions.mdx`、2026-09-27 の main）は `SEND_POLLS` を「Allows sending polls」とだけ書き、bot が投票を作るときに要求されるかは書いていない。bot 側の事前確認には含め、`手動確認` で権限を外した bot の挙動を確かめる。要求されないと分かれば、bot 側の確認から外す。
 - **ボイスチャンネルでの履歴の読み取り**: 会話の窓と `read_earlier_messages` が使う `canReadConversation()` は、ボイスチャンネルのテキストチャットで要る `Connect` を確かめていない。本 change の tool はボイスチャンネルで提示しないので影響しないが、履歴の読み取り側の抜けとして別に直す。
 - **モデルの呼びすぎ**: tool があると、頼まれていないのにリアクションや投票をするモデルがありうる。tool の description に「ユーザが頼んだときだけ使う」と書き、e2e とログで様子を見る。
 

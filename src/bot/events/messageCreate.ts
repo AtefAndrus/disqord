@@ -7,6 +7,7 @@ import type {
   ConversationWindowContext,
   ConversationWindowService,
 } from "../../services/conversationWindow";
+import { DiscordActionService } from "../../services/discordActionService";
 import type {
   AuthorizationChannelLike,
   AuthorizationMessageLike,
@@ -410,6 +411,11 @@ export function createMessageCreateHandler(
             message.author.id,
           ),
           ...(conversation && { conversation }),
+          ...(settings.discordToolsEnabled && {
+            discord: new DiscordActionService(message as Message<true>, (ref) =>
+              conversation?.toolContext.resolveMessageRef(ref),
+            ),
+          }),
         },
         message.id,
         updater,

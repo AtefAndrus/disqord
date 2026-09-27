@@ -63,6 +63,7 @@ const REPLY_TIMEOUT_MS = 180_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
 const BOT_EXIT_TIMEOUT_MS = 5_000;
 const USAGE_POLL_INTERVAL_MS = 3_000;
+const CLEANUP_TIMEOUT_MS = 30_000;
 
 const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
@@ -162,7 +163,7 @@ async function repliesAfter(messageId: string, deadline: number): Promise<Reply>
   );
   if (!response.ok) throw new Error(`read failed: HTTP ${response.status}`);
   const messages = ((await response.json()) as DiscordMessage[])
-    .filter((message) => message.author.id === botId)
+    .filter((message) => message.author.id === botId && ((message.flags ?? 0) & (1 << 15)) !== 0)
     .reverse();
   return toReply(messages);
 }
@@ -258,15 +259,48 @@ async function main(): Promise<number> {
       try {
         const messageId = await send(scenario, deadline);
         if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
-        const reply = await waitForReply({
-          read: () => repliesAfter(messageId, deadline),
-          pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
-          log: console.log,
-        });
-        const toolWasInvoked = scenario.toolName
-          ? spawn && bot?.toolCalls.has(scenario.toolName) === true
-          : true;
-        const problems = scenario.check(reply);
+        const cleanupProblems: string[] = [];
+        const { reply, problems, toolWasInvoked } = await (async () => {
+          try {
+            const reply = await waitForReply({
+              read: () => repliesAfter(messageId, deadline),
+              pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
+              log: console.log,
+            });
+            const toolWasInvoked = scenario.toolName
+              ? spawn && bot?.toolCalls.has(scenario.toolName) === true
+              : true;
+            const problems = scenario.check(reply);
+            if (scenario.verify && channelId) {
+              problems.push(
+                ...(await scenario.verify(
+                  messageId,
+                  channelId,
+                  (path, init) => discord(path, deadline, init),
+                  botId,
+                )),
+              );
+            }
+            return { reply, problems, toolWasInvoked };
+          } finally {
+            if (scenario.cleanup && channelId) {
+              try {
+                const cleanupDeadline = Date.now() + CLEANUP_TIMEOUT_MS;
+                cleanupProblems.push(
+                  ...(await scenario.cleanup(messageId, channelId, (path, init) =>
+                    discord(path, cleanupDeadline, init),
+                  )),
+                );
+              } catch (error) {
+                cleanupProblems.push(
+                  `cleanup failed: ${error instanceof Error ? error.message : error}`,
+                );
+              }
+              for (const problem of cleanupProblems) console.log(`     cleanup: ${problem}`);
+            }
+          }
+        })();
+        problems.push(...cleanupProblems);
         if (scenario.toolName && !spawn) {
           problems.push(
             `cannot verify ${scenario.toolName} invocation without --spawn: bot log is unavailable under --no-spawn`,
