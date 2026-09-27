@@ -243,6 +243,9 @@ ALTER TABLE guild_settings ADD COLUMN image_generation_enabled INTEGER NOT NULL 
 - **server tool を採らない判断の前提**: (a) の output item に `imageB64` が常に入るなら、URL の取得は不要になり、(a) の短所は回数の制御とモデルへの URL の受け渡しだけになる。実測で分かった場合も、回数の制御のために (b) を維持する見込みだが、そのときに比較し直す
 - **function calling に対応しないモデル**: そのモデルを選んだ guild では画像生成が効かない。設定パネルと `/status` で、有効でも使えない状態であることを示すかを実装時に決める
 - **費用の予測**: 1 枚の費用はモデルと `quality` / `size` で大きく変わる。上限の枚数と固定値を決めるまで、1 回の返信の最大費用は見積もれない
+- **編集で残す添付の取得元（未解決）**: component が参照するファイルはメッセージの `attachments` に入らない（Discord の Message Resource。2026-09-28 に、`reasoning.md` を File component で付けた bot の返答を REST で取得すると、`attachments` は空で、`file.url` のパスは `/attachments/<channel>/<attachment_id>/reasoning.md` だった）。編集で残す attachment の列挙と、編集の失敗の後に「メッセージを取得し直してファイル名で反映済みの生成物を確かめる」手順は、`attachments` ではなく component の `attachment_id` と、`media.url` や `file.url` のパスの最後の区切りのファイル名から組み立てる必要がある。`reasoning.md` も同じ扱いになる
+- **1 件ずつの再試行と同じページの参照（未解決）**: 同じページに未反映の生成物が複数あるとき、1 件だけを送りながら完成形の `MediaGallery` を送ると、ほかの `attachment://` の参照に対応するファイルが無い。各再試行の payload に載せる生成物と、それに合わせた component の組み立てを決める必要がある
+- **discord.js の編集の `attachments`**: discord.js の `message.edit()` は、`files` の新しいファイルの項目を `attachments` に自ら足し、その項目を渡された配列そのものに `push` する（`MessagePayload.resolveBody()`）。呼び出し側は残す既存の添付だけを渡し、編集を試みるたびに配列を新しく作る。新しいファイルも列挙するか、同じ配列を再試行に使うと、項目が重複する
 - **生成物の寿命**: 永続保存しないので、Discord のメッセージが消えれば画像も消え、再生成しない限り再表示できない
 
 ## 参照
