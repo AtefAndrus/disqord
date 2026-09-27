@@ -342,22 +342,24 @@ describe("ChatService", () => {
     expect(request.messages.map((message) => message.role)).toEqual([
       "system",
       "system",
+      "system",
       "user",
       "assistant",
       "system",
       "user",
     ]);
-    expect(request.messages[0]?.content).toContain("非信頼データ");
+    expect(request.messages[0]?.content).toContain("Markdown の表");
     expect(request.messages[1]?.content).toContain("非信頼データ");
-    expect(request.messages[2]?.content).toContain("[m1] Prior: before");
-    expect(request.messages[2]?.content).toContain("添付 m1/1: PDF");
-    expect(request.messages[4]?.content).toContain("現在日時");
-    expect(request.messages[4]?.content).toContain(
+    expect(request.messages[2]?.content).toContain("非信頼データ");
+    expect(request.messages[3]?.content).toContain("[m1] Prior: before");
+    expect(request.messages[3]?.content).toContain("添付 m1/1: PDF");
+    expect(request.messages[5]?.content).toContain("現在日時");
+    expect(request.messages[5]?.content).toContain(
       "未来の日付・架空の日付・設定上の日付として扱わない",
     );
-    expect(request.messages[4]?.content).toContain("検索結果の日付が現在日時と整合するなら");
-    expect(request.messages[4]?.content).not.toContain("あなたは知らない");
-    expect(request.messages[5]?.content).toBe("[current] Current: now");
+    expect(request.messages[5]?.content).toContain("検索結果の日付が現在日時と整合するなら");
+    expect(request.messages[5]?.content).not.toContain("あなたは知らない");
+    expect(request.messages[6]?.content).toBe("[current] Current: now");
   });
 
   test.each([
@@ -444,6 +446,7 @@ describe("ChatService", () => {
       {
         model: "test-model:fixture",
         messages: [
+          { role: "system", content: expect.stringContaining("Markdown の表") },
           {
             role: "system",
             content: expect.stringContaining(
@@ -508,8 +511,8 @@ describe("ChatService", () => {
         parameters: { engine: "exa", max_results: 5, max_total_results: 20, max_uses: 4 },
       },
     ]);
-    expect(request.messages[0]?.content).toContain("非信頼データ");
-    expect(request.messages[1]?.content).toContain("2026/09/22(火) 14:00 (JST)");
+    expect(request.messages[1]?.content).toContain("非信頼データ");
+    expect(request.messages[2]?.content).toContain("2026/09/22(火) 14:00 (JST)");
   });
 
   test("Web検索が失敗して何も表示していなければ、検索を外して1回だけ答え直す", async () => {
@@ -597,10 +600,11 @@ describe("ChatService", () => {
       "system",
       "system",
       "system",
+      "system",
       "user",
     ]);
-    expect(request.messages[1]?.content).toContain("tweet");
-    expect(request.messages[3]?.content).toEqual([
+    expect(request.messages[2]?.content).toContain("tweet");
+    expect(request.messages[4]?.content).toEqual([
       { type: "text", text: "read this" },
       { type: "text", text: "tweet" },
     ]);
@@ -623,6 +627,7 @@ describe("ChatService", () => {
     expect(fixture.llmClient.chatStream.mock.calls[0]?.[0]).toEqual({
       model: "test-model:fixture",
       messages: [
+        { role: "system", content: expect.stringContaining("Markdown の表") },
         {
           role: "system",
           content: expect.stringContaining(
@@ -757,8 +762,10 @@ describe("ChatService", () => {
 
       expect(result.status).toBe("final");
       const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
-      const system = request.messages.find((message) => message.role === "system");
-      expect(JSON.stringify(system?.content)).toContain("untrusted-tweet");
+      const systems = request.messages.filter((message) => message.role === "system");
+      expect(JSON.stringify(systems.map((message) => message.content))).toContain(
+        "untrusted-tweet",
+      );
       const user = request.messages.find((message) => message.role === "user");
       if (!user || !Array.isArray(user.content)) throw new Error("user content must be parts");
       const texts = user.content.flatMap((part) => (part.type === "text" ? [part.text] : []));
@@ -789,6 +796,7 @@ describe("ChatService", () => {
     expect(fixture.llmClient.chatStream.mock.calls[0]?.[0]).toEqual({
       model: "test-model:fixture",
       messages: [
+        { role: "system", content: expect.stringContaining("Markdown の表") },
         {
           role: "system",
           content: expect.stringContaining(

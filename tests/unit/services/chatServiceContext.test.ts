@@ -256,6 +256,7 @@ describe("conversation-context request construction", () => {
     expect(request).toEqual({
       ...expected,
       messages: [
+        { role: "system", content: expect.stringContaining("Markdown の表") },
         { role: "system", content: expect.stringContaining("現在日時") },
         ...expected.messages,
       ],
