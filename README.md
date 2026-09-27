@@ -12,6 +12,24 @@ Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び
 - Discord Bot Token
 - OpenRouter API Key
 
+### Discord への招待
+
+Developer Portal の Bot ページで Message Content Intent を有効にする。
+招待 URL は OAuth2 → URL Generator で、Scopes に `bot` を選び、Bot Permissions に次を選んで作る（`permissions=2815059004869696`）。
+
+- View Channels
+- Send Messages
+- Send Messages in Threads
+- Read Message History
+- Embed Links
+- Attach Files
+- Add Reactions、Create Polls、Create Public Threads、Pin Messages（`/config` の 機能 → Discord 操作 が使う）
+
+既にサーバーにいる bot も、権限を足した URL で認可し直すと、bot のロールの権限が更新される。
+Discord 操作は bot と依頼したメンバーの双方がその権限を持つときだけ実行するので、足りなければ実行せずにその旨をモデルが伝える。
+
+`bun run e2e` のテスト bot には、上の権限に加えて Manage Threads を付ける（`discord-tools` シナリオが作ったスレッドを片付けるため）。
+
 ### ローカル開発
 
 ```bash
