@@ -812,6 +812,7 @@ export class ConversationWindowService {
           budget,
           externalDeletions,
           signal,
+          fetchedMessages,
         );
     if (signal.aborted) return undefined;
     if (target.status === "not-found") {
@@ -851,8 +852,10 @@ export class ConversationWindowService {
     budget: DiscordRestBudget,
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal: AbortSignal,
+    fetchedMessages?: MessageEligibilityFetchedMessages,
   ): Promise<DiscordMessageFetchResult> {
     const result = await this.reader.fetch(channelId, messageId, budget, signal);
+    if (result.status === "found") fetchedMessages?.set(messageId, result.message);
     if (result.status === "not-found" && !signal.aborted) {
       classifyNotFoundMessage(messageId, this.records, externalDeletions);
     }

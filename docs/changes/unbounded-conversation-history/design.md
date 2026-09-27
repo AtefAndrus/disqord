@@ -56,7 +56,7 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 | dispatcher の切り詰め | 文字列の結果の 16 KiB の head+tail clip をやめ、予算を超えた結果を `result_too_large` で断る | 中間に `[truncated N bytes]` を入れても、JSON の構造と発言という意味の単位は保てない |
 | tool 側の REST 予算 | 窓（12 回と 5 秒のまま）とは別に、応答全体で 1 つの予算を持ち、今の 12 回より大きくする | tool の呼び出しは 1 応答で最大 32 回、逐次に実行される。呼び出しごとに予算を与え直すと、24 時間の打ち切りが無い状態で REST と待ち時間が膨らみ、他の応答のレート制限も圧迫する |
 | ページングの単位 | 1 ページ（100 件）の適格性をすべて確かめてからカーソルを進める。途中で予算か期限が尽きたらページごと取り直す | ページの途中で返すと、確認済みの古い側と未処理の新しい側が混ざり、「新しい方から count 件」と、分割した返答を先頭ページの位置まで保留する規則を守る境界を別に持つ必要が出る |
-| context 超過の識別 | Responses API の失敗応答の `error_type: "context_length_exceeded"` だけで識別する | `error.code: "invalid_prompt"` は他の原因にも使われる。`error_type` を持たない HTTP 400 は区別できない |
+| context 超過の識別 | `error_type: "context_length_exceeded"` だけで識別する。失敗した Responses の結果の最上位、HTTP エラーの本文、stream のエラーイベントのどれにあっても読み、その値自身、`error`、`error.metadata` の位置を見る | `error.code: "invalid_prompt"` は他の原因にも使われる。OpenRouter は `error_type` をどのエラーの経路にも載せるとしているが、位置を文書にしているのは失敗した Responses の結果と Chat Completions 形式の `error.metadata` だけである。`error_type` を持たない HTTP 400 は区別できない |
 | context 超過からの回復 | 直前に積んだ tool の結果をエラーに置き換え、`tool_choice: "none"` で最終回答を 1 回だけ求める | tool を続行すると、捨てた結果に対応する tool の状態（返した発言の記録、添付の読み込み済みの印）との矛盾を巻き戻す必要が出る |
 
 ## Design
@@ -128,7 +128,7 @@ summary: "会話履歴を 24 時間より前まで読めるようにし、tool �
 
 ### context 超過からの回復
 
-- 失敗応答の `error_type` を保持する。現在のクライアントはこれを捨てている。
+- クライアントは `error_type` が `context_length_exceeded` の失敗を `ContextLengthExceededError`（`BadRequestError` の派生）として投げる。識別する位置は Decisions の「context 超過の識別」のとおりである。
 - 回復するのは、`error_type: "context_length_exceeded"` と識別でき、かつ tool の結果を積んだ後のターンで、そのターンの出力がまだ利用者に確定していないときだけとする。直前のターンで積んだ tool の結果を `{"error":"result_dropped","reason":"context_overflow"}` に置き換え、`tool_choice: "none"` で最終回答を 1 回だけ求め、以後 tool を使わない。置き換えた結果に対応する tool の状態は戻さないが、以後 tool を呼ばないので矛盾は表に出ない。
 - 最初のリクエストでの拒否、回復でも拒否されたとき、`error_type` を持たない HTTP 400 は、今の失敗の経路（`toolLoop.ts` の `abortToErrorOrCancelled`）へ渡す。既に確定した表示と usage の扱いもその経路に従う。
 - 出力上限による `length` の終了は context 超過として扱わず、今の処理のままにする。tool 呼び出しの断片が無く本文があれば回答として確定し、断片があれば失敗の経路へ渡す（`toolLoop.ts:1369-1396`）。`max_output_tokens` を送るようになると、上限に達した通常の回答もこの経路で確定する。
