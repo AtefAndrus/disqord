@@ -2,6 +2,9 @@ import { describe, expect, mock, test } from "bun:test";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
+import { createCreatePollTool } from "../../../src/llm/tools/discord/createPoll";
+import { createCreateThreadTool } from "../../../src/llm/tools/discord/createThread";
+import { createPinMessageTool } from "../../../src/llm/tools/discord/pinMessage";
 import { createReadEarlierMessagesTool } from "../../../src/llm/tools/readEarlierMessages";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
@@ -118,6 +121,9 @@ function createRetryFixture(
   const registry = new ToolRegistry();
   registry.register(createReadEarlierMessagesTool());
   registry.register(createAddReactionTool());
+  registry.register(createCreatePollTool());
+  registry.register(createCreateThreadTool());
+  registry.register(createPinMessageTool());
   const requests: ChatCompletionRequest[] = [];
   const chatService = new ChatService(
     llmClient,
@@ -413,9 +419,19 @@ describe("conversation-context request construction", () => {
     expect(fixture.readEarlier).toHaveBeenCalledTimes(1);
   });
 
-  test("does not retry web search after a Discord side effect", async () => {
+  test.each([
+    ["add_reaction", "addReaction", '{"emoji":"👍"}'],
+    ["create_poll", "createPoll", '{"question":"q","answers":["a","b"]}'],
+    ["create_thread", "createThread", '{"name":"t"}'],
+    ["pin_message", "pinMessage", "{}"],
+  ] as const)("does not retry web search after %s", async (toolName, method, argumentsDelta) => {
     const fixture = createRetryFixture(true, true);
-    const addReaction = mock(async () => '{"ok":true}');
+    const actions = {
+      addReaction: mock(async () => '{"ok":true}'),
+      createPoll: mock(async () => '{"ok":true}'),
+      createThread: mock(async () => '{"ok":true}'),
+      pinMessage: mock(async () => '{"ok":true}'),
+    };
     let calls = 0;
     fixture.llmClient.chatStream = mock((request) => {
       fixture.requests.push(request);
@@ -426,8 +442,8 @@ describe("conversation-context request construction", () => {
             toolCall: {
               index: 0,
               id: "call-1",
-              name: "add_reaction",
-              argumentsDelta: '{"emoji":"👍"}',
+              name: toolName,
+              argumentsDelta,
             },
             done: false as const,
           };
@@ -439,13 +455,7 @@ describe("conversation-context request construction", () => {
       "guild",
       {
         ...retryInput(fixture.readEarlier),
-        discord: {
-          channelType: 0,
-          addReaction,
-          createPoll: async () => '{"ok":true}',
-          createThread: async () => '{"ok":true}',
-          pinMessage: async () => '{"ok":true}',
-        },
+        discord: { channelType: 0, ...actions },
       },
       "discord-side-effect",
       createUpdater(),
@@ -453,7 +463,7 @@ describe("conversation-context request construction", () => {
     );
     expect(result.status).toBe("error");
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
-    expect(addReaction).toHaveBeenCalledTimes(1);
+    expect(actions[method]).toHaveBeenCalledTimes(1);
   });
 
   test("still retries tweet images when the first attempt invokes no client tool", async () => {

@@ -222,6 +222,9 @@ export class DiscordActionService implements DiscordToolContext {
           }
           reaction = match.identifier;
         } else if (parseEmoji(emoji)?.id) {
+          // Unreachable while addReaction rejects `%` and `:`, which is how
+          // parseEmoji builds an id. Kept so that loosening that check cannot
+          // send a custom emoji past the name lookup and role check above.
           throw failure("invalid_emoji");
         }
         const message = await channel.messages.fetch({
