@@ -1297,6 +1297,61 @@ describe("createMessageCreateHandler", () => {
     expect(payload.files).toBeUndefined();
   });
 
+  test("ルーターのモデルでは、最終描画の見出しを実際に答えたモデルの名前にする", async () => {
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        model: "provider/answered-model",
+      }),
+    );
+    (mockModelService.getModelName as ReturnType<typeof mock>).mockImplementation(
+      async (id: string) => (id === "provider/answered-model" ? "Answered Model" : "Router"),
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const texts = extractTextContents(
+      toContainerJSON(lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>)),
+    );
+    expect(texts[0]).toContain("Answered Model");
+    expect(texts[0]).not.toContain("Router");
+  });
+
+  test("答えたモデルの名前が取れなくても、ID を見出しに出して返答を完了する", async () => {
+    const answer = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await answer(...args)),
+        model: "provider/answered-model",
+      }),
+    );
+    (mockModelService.getModelName as ReturnType<typeof mock>).mockImplementation(
+      async (id: string) => {
+        if (id === "provider/answered-model") throw new Error("network");
+        return "Router";
+      },
+    );
+
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+
+    const texts = extractTextContents(
+      toContainerJSON(lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>)),
+    );
+    expect(texts[0]).toContain("provider/answered-model");
+    expect(texts.join("\n")).toContain("answer");
+  });
+
   test("長い推論は 1 ページ目で切り、全文を reasoning.md として添える", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;
