@@ -240,7 +240,13 @@ export async function handleCronPanelInteraction(
         await interaction.deferUpdate();
         const result = await cronService.runNow(job.id, guildId, actor, job.version);
         if (!result.ok) {
-          await notice(`実行できませんでした: ${result.reason}`);
+          // The job can change between the check above and the run.
+          const current = await cronService.getJob(job.id, guildId, userId, actor);
+          if (!current) await notice(CRON_INVALID_MESSAGE);
+          else if (current.version !== job.version) {
+            await show(buildCronDetail(current));
+            await notice(CRON_STALE_MESSAGE);
+          } else await notice(`実行できませんでした: ${result.reason}`);
           return;
         }
         const current = await cronService.getJob(job.id, guildId, userId, actor);
@@ -297,6 +303,26 @@ async function submitModal(
   actor: SettingsActor,
   cronService: ICronService,
 ): Promise<void> {
+  const userId = interaction.user.id;
+  /** The job being edited when it no longer has the version the modal was opened with. */
+  const changedJob = async (): Promise<CronJob | null | undefined> => {
+    if (action.action !== "modal-edit") return undefined;
+    const job = await cronService.getJob(action.jobId, guildId, userId, actor);
+    return job?.version === action.version ? undefined : job;
+  };
+  const changed = await changedJob();
+  if (changed !== undefined) {
+    const payload = toNoticePayload(
+      buildErrorContainer(changed ? CRON_STALE_MESSAGE : CRON_INVALID_MESSAGE, "定期実行"),
+      true,
+    );
+    // A modal opened from the detail panel can redraw that panel in place.
+    if (changed && interaction.isFromMessage()) {
+      await interaction.update(buildCronDetail(changed));
+      await interaction.followUp(payload);
+    } else await interaction.reply(payload);
+    return;
+  }
   // Converting a natural-language schedule calls the LLM, which can pass Discord's 3 seconds.
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   const fail = async (message: string): Promise<void> => {
@@ -328,7 +354,14 @@ async function submitModal(
     actor,
   );
   if (!created.ok) {
-    await fail(created.reason);
+    // The job can also change while the schedule is being converted.
+    const job = await changedJob();
+    if (job) {
+      await interaction.editReply(buildCronDetail(job));
+      await interaction.followUp(
+        toNoticePayload(buildErrorContainer(CRON_STALE_MESSAGE, "定期実行"), true),
+      );
+    } else await fail(created.reason);
     return;
   }
   await interaction.editReply(

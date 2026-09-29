@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { ChannelType, type Message, PermissionFlagsBits, PermissionsBitField } from "discord.js";
 import { CronRepository } from "../../../../src/db/repositories/cronRepository";
 import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSettings";
@@ -161,16 +161,45 @@ describe("cron tool session", () => {
     expect(proposals()).toBe(0);
   });
 
+  test("a timeout while the schedule is being converted saves nothing and does not count", async () => {
+    const session = new CronToolSession(trigger, cron, settings);
+    const controller = new AbortController();
+    let converting: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      converting = resolve;
+    });
+    // The converter answers only when its request is aborted, like a model that never replies.
+    interpret.mockImplementation(
+      (_guildId: string, _input: string, signal: AbortSignal) =>
+        new Promise<string>((_, reject) => {
+          converting();
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    const pending = session.propose({ ...args, schedule: "毎朝 9 時" }, controller.signal);
+    await started;
+    controller.abort();
+    expect(JSON.parse(await pending)).toEqual({ ok: false, reason: "cancelled" });
+    expect(proposals()).toBe(0);
+    expect(reply).not.toHaveBeenCalled();
+    expect(JSON.parse(await session.propose(args, new AbortController().signal))).toEqual({
+      ok: true,
+      status: "awaiting_approval",
+    });
+    expect(proposals()).toBe(1);
+  });
+
   test("an interruption after saving keeps the count and posts no card", async () => {
     const session = new CronToolSession(trigger, cron, settings);
     const controller = new AbortController();
-    interpret.mockImplementation(async () => {
+    const save = repo.createProposal.bind(repo);
+    const saved = spyOn(repo, "createProposal").mockImplementation((input) => {
+      const proposal = save(input);
       controller.abort();
-      return "30m";
+      return proposal;
     });
-    const result = JSON.parse(
-      await session.propose({ ...args, schedule: "毎朝 9 時" }, controller.signal),
-    );
+    const result = JSON.parse(await session.propose(args, controller.signal));
+    saved.mockRestore();
     expect(result.reason).toBe("cancelled");
     expect(reply).not.toHaveBeenCalled();
     expect(proposals()).toBe(0);

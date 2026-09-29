@@ -63,6 +63,8 @@ function interaction(customId: string, options: Options = {}) {
     isChannelSelectMenu: () => false,
     isRoleSelectMenu: () => false,
     isModalSubmit: () => kind === "modal",
+    // Panel modals are opened from the detail message.
+    isFromMessage: () => kind === "modal",
     isChatInputCommand: () => false,
     replied: false,
     deferred: false,
@@ -380,14 +382,52 @@ describe("cron panel interactions", () => {
     expect(repo.getProposal(id)).toBeNull();
   });
 
-  test("an edit modal for a changed version is refused", async () => {
+  test("an edit modal for a changed version redraws the detail and saves nothing", async () => {
     const job = await add();
     const fixture = await press(`cron:modal:edit:${job.id}:${job.version + 1}`, {
       kind: "modal",
+      fields: { name: "n", schedule: "毎朝", prompt: "p", channel: "channel", silent: "always" },
+    });
+    expect(text(fixture.update.mock.calls[0]?.[0])).toContain(
+      `cron:pause:${job.id}:${job.version}`,
+    );
+    expect(lastNotice(fixture)).toContain(CRON_STALE_MESSAGE.slice(0, 20));
+    expect(fixture.deferReply).not.toHaveBeenCalled();
+    expect(db.query("SELECT COUNT(*) AS c FROM cron_proposals").get()).toEqual({ c: 0 });
+  });
+
+  test("an edit modal whose job changes after the first check redraws the detail", async () => {
+    const job = await add();
+    const fixture = interaction(`cron:modal:edit:${job.id}:${job.version}`, {
+      kind: "modal",
       fields: { name: "n", schedule: "1h", prompt: "p", channel: "channel", silent: "always" },
     });
+    fixture.deferReply.mockImplementation(async () => {
+      repo.setStatus(job.id, job.version, "paused", null, Date.now());
+      fixture.deferred = true;
+    });
+    await handler(fixture as unknown as Interaction);
+    expect(db.query("SELECT COUNT(*) AS c FROM cron_proposals").get()).toEqual({ c: 0 });
     expect(text(fixture.editReply.mock.calls[0]?.[0])).toContain(
-      "編集対象のジョブが変更されました",
+      `cron:resume:${job.id}:${job.version + 1}`,
     );
+    expect(lastNotice(fixture)).toContain(CRON_STALE_MESSAGE.slice(0, 20));
+  });
+
+  test("run now that meets a changed version redraws the detail", async () => {
+    const job = await add();
+    const run = cron.runNow.bind(cron);
+    cron.runNow = mock(async (...args: Parameters<CronService["runNow"]>) => {
+      repo.setStatus(job.id, job.version, "paused", null, Date.now());
+      return run(...args);
+    });
+    const fixture = await press(
+      cronCustomId({ action: "run", jobId: job.id, version: job.version }),
+    );
+    expect(generate).not.toHaveBeenCalled();
+    expect(text(fixture.editReply.mock.calls[0]?.[0])).toContain(
+      `cron:resume:${job.id}:${job.version + 1}`,
+    );
+    expect(lastNotice(fixture)).toContain(CRON_STALE_MESSAGE.slice(0, 20));
   });
 });

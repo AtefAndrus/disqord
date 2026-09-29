@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { ComponentType } from "discord.js";
-import type { CronJob } from "../../../src/db/repositories/cronRepository";
+import type { CronJob, CronProposal } from "../../../src/db/repositories/cronRepository";
 import {
   buildCronDetail,
   buildCronList,
   buildCronModal,
+  buildCronProposalCard,
   type CronAction,
   cronCustomId,
   parseCronCustomId,
-  scheduleInputOf,
 } from "../../../src/utils/cronPanel";
 
 function job(overrides: Partial<CronJob> = {}): CronJob {
@@ -176,9 +176,52 @@ describe("cron panel layout", () => {
     expect(JSON.stringify(fresh)).toContain('"default_values":[{"id":"here","type":"channel"}]');
   });
 
-  test("schedule inputs reproduce the stored interval", () => {
-    expect(scheduleInputOf({ kind: "interval", expr: "1800000" })).toBe("30m");
-    expect(scheduleInputOf({ kind: "interval", expr: "86400000" })).toBe("1d");
-    expect(scheduleInputOf({ kind: "cron", expr: "0 9 * * *" })).toBe("0 9 * * *");
+  test("the edit modal shows a one-off time in JST", () => {
+    const modal = buildCronModal(job({ kind: "once", expr: "2026-10-01T00:00:00.000Z" })).toJSON();
+    expect(JSON.stringify(modal)).toContain('"value":"2026-10-01T09:00:00+09:00"');
+  });
+});
+
+describe("cron proposal card", () => {
+  function proposal(overrides: Partial<CronProposal> = {}): CronProposal {
+    return {
+      id: 9,
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      targetJobId: null,
+      targetVersion: null,
+      name: "巡回",
+      prompt: "近況を一言。",
+      kind: "interval",
+      expr: String(30 * 60_000),
+      silent: false,
+      expiresAt: Date.parse("2026-09-30T00:00:00Z"),
+      createdAt: 0,
+      ...overrides,
+    };
+  }
+  const text = (payload: ReturnType<typeof buildCronProposalCard>): string =>
+    JSON.stringify(payload.components[0]?.toJSON());
+  const runs = [Date.parse("2026-09-29T00:30:00Z"), Date.parse("2026-09-29T01:00:00Z")];
+
+  test("an interval is shown relative to approval, without absolute times", () => {
+    const card = text(buildCronProposalCard(proposal(), { state: "pending", nextRuns: runs }));
+    expect(card).toContain("承認から 30 分後、以後 30 分ごと");
+    // The expiry note is relative (`:R`); a next run would be an absolute `:f` timestamp.
+    expect(card).not.toContain(":f>");
+    expect(card).not.toContain("回分");
+  });
+
+  test("cron and once proposals keep their absolute next runs", () => {
+    for (const overrides of [
+      { kind: "cron" as const, expr: "0 9 * * *" },
+      { kind: "once" as const, expr: "2026-09-29T00:30:00.000Z" },
+    ]) {
+      const card = text(
+        buildCronProposalCard(proposal(overrides), { state: "pending", nextRuns: runs }),
+      );
+      expect(card).toContain(`<t:${runs[0] / 1000}:f>`);
+    }
   });
 });

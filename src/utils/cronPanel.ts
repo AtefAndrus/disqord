@@ -13,7 +13,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import type { CronJob, CronProposal } from "../db/repositories/cronRepository";
-import { type CronSchedule, describeSchedule } from "../services/cronSchedule";
+import { type CronSchedule, describeSchedule, formatScheduleInput } from "../services/cronSchedule";
 import { EmbedColors } from "../types/embed";
 
 export const CRON_PAGE_SIZE = 25;
@@ -150,15 +150,6 @@ export function formatSchedule(schedule: CronSchedule, forProposal = false): str
     : schedule.kind === "cron"
       ? `\`${schedule.expr}\``
       : reading;
-}
-
-/** The text a modal field needs to reproduce the stored schedule through `parseSchedule`. */
-export function scheduleInputOf(schedule: CronSchedule): string {
-  if (schedule.kind !== "interval") return schedule.expr;
-  const minutes = Number(schedule.expr) / 60_000;
-  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
 }
 
 function deliveryLabel(silent: boolean): string {
@@ -304,7 +295,7 @@ export function buildCronModal(job?: CronJob, defaultChannelId?: string): ModalB
             .setStyle(TextInputStyle.Short)
             .setMaxLength(100)
             .setRequired(true)
-            .setValue(job ? scheduleInputOf(job) : ""),
+            .setValue(job ? formatScheduleInput(job) : ""),
         ),
       new LabelBuilder()
         .setLabel("プロンプト")
@@ -348,7 +339,9 @@ export function buildCronProposalCard(
     `## ${heading}`,
     `**名前:** ${proposal.name}`,
     `**スケジュール:** ${formatSchedule(proposal, true)}`,
-    ...(options.nextRuns
+    // An interval's first run is counted from approval, so a time computed at proposal would be
+    // wrong; the schedule line already reads 「承認から 30 分後、以後 30 分ごと」.
+    ...(options.nextRuns && !(options.state === "pending" && proposal.kind === "interval")
       ? [
           `**${options.state === "pending" ? `次回から ${options.nextRuns.length} 回分` : "次回"}:** ${options.nextRuns.map((run) => timestamp(run)).join("、") || "なし"}`,
         ]

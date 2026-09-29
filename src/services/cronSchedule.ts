@@ -136,9 +136,17 @@ function intervalUnit(expr: string): string {
   return `${ms / 60_000} 分`;
 }
 
+const JST_OFFSET_MS = 9 * 3_600_000;
+
+/** The text that reproduces the stored schedule through `parseSchedule`; `once` is written in JST. */
 export function formatScheduleInput(schedule: CronSchedule): string {
   if (schedule.kind === "cron") return schedule.expr;
-  if (schedule.kind === "once") return new Date(schedule.expr).toISOString();
+  if (schedule.kind === "once") {
+    const ms = Date.parse(schedule.expr);
+    const local = new Date(ms + JST_OFFSET_MS).toISOString();
+    // Milliseconds are kept only when present, so that reading it back gives the same instant.
+    return `${ms % 1000 === 0 ? local.slice(0, 19) : local.slice(0, 23)}+09:00`;
+  }
   const ms = Number(schedule.expr);
   if (ms % 86_400_000 === 0) return `${ms / 86_400_000}d`;
   if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
@@ -161,10 +169,68 @@ export function describeScheduleDetails(
       isPlain: false,
     };
   }
-  const match = /^(\d{1,2}) (\d{1,2}) \* \* 1-5$/u.exec(schedule.expr);
-  return match
-    ? { text: `毎週平日 ${match[2]}:${match[1]?.padStart(2, "0")}`, isPlain: false }
-    : { text: schedule.expr, isPlain: true };
+  const text = readCron(schedule.expr);
+  return text ? { text, isPlain: false } : { text: schedule.expr, isPlain: true };
+}
+
+const DAY_ABBREVIATIONS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DAY_LABELS = ["日", "月", "火", "水", "木", "金", "土"];
+
+function cronNumber(field: string, min: number, max: number): number | undefined {
+  if (!/^\d{1,2}$/u.test(field)) return undefined;
+  const value = Number(field);
+  return value >= min && value <= max ? value : undefined;
+}
+
+function dayOfWeek(token: string): number | undefined {
+  const named = DAY_ABBREVIATIONS.indexOf(token.toLowerCase());
+  return named >= 0 ? named : cronNumber(token, 0, 7);
+}
+
+/** Days 0 (Sunday) to 6 for a list of days and ranges, or undefined for anything else (steps). */
+function daysOfWeek(field: string): Set<number> | undefined {
+  const days = new Set<number>();
+  for (const part of field.split(",")) {
+    const [first, last, extra] = part.split("-");
+    const from = first === undefined ? undefined : dayOfWeek(first);
+    const to = last === undefined ? from : dayOfWeek(last);
+    if (from === undefined || to === undefined || extra !== undefined || from > to)
+      return undefined;
+    for (let day = from; day <= to; day++) days.add(day % 7);
+  }
+  return days;
+}
+
+/**
+ * Reads the daily, hourly, weekly, and monthly shapes; anything else (steps,
+ * month fields, a day of month together with days of week) is left to the
+ * expression itself.
+ */
+function readCron(expr: string): string | undefined {
+  const fields = expr.trim().split(/\s+/u);
+  const [minuteField, hourField, dayField, monthField, weekField] = fields;
+  const minute = cronNumber(minuteField ?? "", 0, 59);
+  if (fields.length !== 5 || minute === undefined || monthField !== "*") return undefined;
+  if (hourField === "*")
+    return dayField === "*" && weekField === "*" ? `毎時 ${minute} 分` : undefined;
+  const hour = cronNumber(hourField ?? "", 0, 23);
+  if (hour === undefined) return undefined;
+  const time = `${hour}:${String(minute).padStart(2, "0")}`;
+  if (dayField !== "*") {
+    if (weekField !== "*") return undefined;
+    const dates = (dayField ?? "").split(",").map((day) => cronNumber(day, 1, 31));
+    return dates.every((date) => date !== undefined)
+      ? `毎月 ${dates.join("・")} 日 ${time}`
+      : undefined;
+  }
+  if (weekField === "*") return `毎日 ${time}`;
+  const days = daysOfWeek(weekField ?? "");
+  if (!days) return undefined;
+  if (days.size === 7) return `毎日 ${time}`;
+  if (days.size === 5 && ![0, 6].some((day) => days.has(day))) return `毎週平日 ${time}`;
+  // Listed from Monday, the way a Japanese week is read.
+  const labels = [1, 2, 3, 4, 5, 6, 0].filter((day) => days.has(day)).map((day) => DAY_LABELS[day]);
+  return `毎週 ${labels.join("・")} ${time}`;
 }
 
 export function describeSchedule(

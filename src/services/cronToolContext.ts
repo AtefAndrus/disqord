@@ -69,9 +69,13 @@ export class CronToolSession implements CronToolContext {
           prompt: args.prompt,
           schedule: args.schedule,
           silent: args.postOnlyWhenNotable,
+          signal,
         },
         actor,
       );
+      // An interruption before the proposal is saved (the tool timeout during the schedule
+      // conversion) saves nothing, so it is not counted either.
+      if (!created.ok && signal.aborted) return result({ ok: false, reason: "cancelled" });
       if (!created.ok)
         return result({ ok: false, reason: "invalid", message: created.reason.slice(0, 80) });
       this.used = true;

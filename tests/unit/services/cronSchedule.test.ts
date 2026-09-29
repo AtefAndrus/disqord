@@ -61,7 +61,12 @@ describe("cron schedules", () => {
     { kind: "interval" as const, expr: "7200000", input: "2h" },
     { kind: "interval" as const, expr: "86400000", input: "1d" },
     { kind: "cron" as const, expr: "0 9 * * mon-fri", input: "0 9 * * mon-fri" },
-    { kind: "once" as const, expr: "2026-10-01T00:00:00.000Z", input: "2026-10-01T00:00:00.000Z" },
+    { kind: "once" as const, expr: "2026-10-01T00:00:00.000Z", input: "2026-10-01T09:00:00+09:00" },
+    {
+      kind: "once" as const,
+      expr: "2026-09-30T15:30:00.250Z",
+      input: "2026-10-01T00:30:00.250+09:00",
+    },
   ])("formats a stored $kind schedule for modal round-trip ($input)", (schedule) => {
     expect(formatScheduleInput(schedule)).toBe(schedule.input);
     expect(parseSchedule(formatScheduleInput(schedule), NOW)).toEqual({
@@ -100,5 +105,31 @@ describe("cron schedules", () => {
       text: "0 9 1 jan *",
       isPlain: true,
     });
+  });
+  test.each([
+    ["30 7 * * *", "毎日 7:30"],
+    ["15 * * * *", "毎時 15 分"],
+    ["0 9 * * mon-fri", "毎週平日 9:00"],
+    ["0 17 * * 5", "毎週 金 17:00"],
+    ["0 17 * * fri", "毎週 金 17:00"],
+    ["0 10 * * 1,3,5", "毎週 月・水・金 10:00"],
+    ["0 10 * * 0,6", "毎週 土・日 10:00"],
+    ["0 10 * * 5-7", "毎週 金・土・日 10:00"],
+    ["0 8 * * 0-6", "毎日 8:00"],
+    ["0 9 1 * *", "毎月 1 日 9:00"],
+    ["0 9 1,15 * *", "毎月 1・15 日 9:00"],
+  ])("reads %s as %s", (expr, text) => {
+    expect(describeScheduleDetails({ kind: "cron", expr })).toEqual({ text, isPlain: false });
+  });
+  test.each([
+    "*/10 * * * *",
+    "0 */2 * * *",
+    "0 9 * 1 *",
+    "0 9 1 * 1",
+    "0 9 * * 1/2",
+    "0 9 * * 5-1",
+    "0 9 32 * *",
+  ])("leaves %s as written", (expr) => {
+    expect(describeScheduleDetails({ kind: "cron", expr })).toEqual({ text: expr, isPlain: true });
   });
 });
