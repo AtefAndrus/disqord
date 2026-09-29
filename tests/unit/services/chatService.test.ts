@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
 import type { CronJob } from "../../../src/db/repositories/cronRepository";
-import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
+import { AppError, BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
 import { createProposeCronJobTool } from "../../../src/llm/tools/proposeCronJob";
@@ -107,6 +107,74 @@ test("scheduled generation and schedule conversion never call a paid default mod
   ).rejects.toThrow();
   await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow();
   expect(llmClient.chat).not.toHaveBeenCalled();
+});
+
+test.each([false, true])(
+  "scheduled generation sends format, date, saved prompt and silent=%s instruction on a free model",
+  async (silent) => {
+    const { chatService, llmClient } = createFixture({
+      freeModelsOnly: true,
+      defaultModel: "model-1",
+    });
+    const job: CronJob = {
+      id: 1,
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      name: "name",
+      prompt: "saved prompt",
+      kind: "interval",
+      expr: "300000",
+      silent,
+      status: "active",
+      nextRunAt: 1,
+      lastRunAt: null,
+      failCount: 0,
+      lastError: null,
+      version: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const signal = new AbortController().signal;
+    await chatService.generateScheduledResponse(job, signal);
+    const [request, passedSignal] = llmClient.chat.mock.calls[0] as [
+      ChatCompletionRequest,
+      AbortSignal,
+    ];
+    expect(request.model).toBe("model-1");
+    expect(request.messages[0]?.content).toContain("Markdown の表");
+    expect(request.messages[1]?.content).toContain("現在日時");
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "saved prompt" });
+    expect(request.messages.some((message) => String(message.content).includes("[SILENT]"))).toBe(
+      silent,
+    );
+    expect(passedSignal).toBe(signal);
+  },
+);
+
+test("schedule interpretation accepts a fenced JSON object and hides parse errors", async () => {
+  const { chatService, llmClient } = createFixture();
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [
+      {
+        message: {
+          role: "assistant" as const,
+          content: 'schedule:\n```json\n{"schedule":"30m"}\n```',
+        },
+      },
+    ],
+  }));
+  expect(await chatService.interpretCronSchedule("guild", "every half hour")).toBe("30m");
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [{ message: { role: "assistant" as const, content: "{broken JSON}" } }],
+  }));
+  const error = await chatService
+    .interpretCronSchedule("guild", "invalid")
+    .catch((value: unknown) => value);
+  expect(error).toBeInstanceOf(AppError);
+  expect((error as AppError).userMessage).toBe("スケジュールを解釈できませんでした。");
 });
 
 function conversationContext(): ConversationWindowContext {

@@ -1,5 +1,5 @@
 import type { CronJob } from "../db/repositories/cronRepository";
-import { BadRequestError, WebSearchFailedError } from "../errors";
+import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
@@ -232,14 +232,28 @@ export class ChatService implements IChatService {
       signal,
     );
     const text = response.choices[0]?.message.content ?? "";
-    const parsed: unknown = JSON.parse(text);
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    let parsed: unknown;
+    try {
+      if (first < 0 || last < first) throw new Error("JSON object not found");
+      parsed = JSON.parse(text.slice(first, last + 1));
+    } catch (error) {
+      throw new AppError(
+        `Invalid schedule conversion: ${String(error)}`,
+        "スケジュールを解釈できませんでした。",
+      );
+    }
     if (
       typeof parsed !== "object" ||
       parsed === null ||
       !("schedule" in parsed) ||
       typeof parsed.schedule !== "string"
     )
-      throw new Error("スケジュールの変換結果を読み取れませんでした。");
+      throw new AppError(
+        "Schedule conversion has no schedule field",
+        "スケジュールを解釈できませんでした。",
+      );
     return parsed.schedule;
   }
 

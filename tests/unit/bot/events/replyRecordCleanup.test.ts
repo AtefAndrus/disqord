@@ -44,7 +44,12 @@ describe("reply record cleanup handlers", () => {
 
   test("reconciles against every guild the client is in at startup", async () => {
     const deleter = service();
-    const handlers = createReplyRecordCleanupHandlers(deleter);
+    const cron = {
+      deleteByGuild: mock((_id: string) => 0),
+      deleteByChannel: mock((_id: string) => 0),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 0),
+    };
+    const handlers = createReplyRecordCleanupHandlers(deleter, cron);
 
     await handlers.reconcileGuilds(
       new Map([
@@ -54,5 +59,25 @@ describe("reply record cleanup handlers", () => {
     );
 
     expect(deleter.deleteGuildsNotIn.mock.calls).toEqual([[["a", "b"]]]);
+    expect(cron.deleteGuildsNotIn.mock.calls).toEqual([[["a", "b"]]]);
+  });
+  test("both cleanup paths run even if either deletion fails", async () => {
+    const deleter = service();
+    const cron = {
+      deleteByGuild: mock((_id: string) => 1),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const handlers = createReplyRecordCleanupHandlers(deleter, cron);
+    deleter.deleteByGuild.mockImplementation(async () => {
+      throw new Error("reply failure");
+    });
+    await expect(handlers.guildDelete({ id: "guild" })).rejects.toThrow("reply failure");
+    expect(cron.deleteByGuild).toHaveBeenCalledWith("guild");
+    cron.deleteByChannel.mockImplementation(() => {
+      throw new Error("cron failure");
+    });
+    await expect(handlers.channelDelete({ id: "channel" })).rejects.toThrow("cron failure");
+    expect(deleter.deleteByChannel).toHaveBeenCalledWith("channel");
   });
 });

@@ -4,6 +4,8 @@ export type CronSchedule = { kind: "cron" | "interval" | "once"; expr: string };
 export type ScheduleResult = { ok: true; schedule: CronSchedule } | { ok: false; reason: string };
 
 const CRON_FIELD = /^[\d*,/\-A-Za-z]+$/u;
+const CRON_NAME =
+  /^(?:sun|mon|tue|wed|thu|fri|sat|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$/iu;
 const MIN_INTERVAL_MS = 5 * 60_000;
 
 function parseOnce(input: string, now: number): ScheduleResult {
@@ -71,17 +73,18 @@ export function parseSchedule(
 ): ScheduleResult | { ok: false; reason: "natural_language" } {
   const value = input.trim();
   const fields = value.split(/\s+/u);
+  const cronFields = fields.every(
+    (field) =>
+      CRON_FIELD.test(field) &&
+      field.split(/[\d*,/-]+/u).every((name) => !name || CRON_NAME.test(name)),
+  );
   if (
     (fields.length === 6 || fields.length === 7) &&
     /^[\d*,/-]+$/u.test(fields[0] ?? "") &&
-    fields.every((field) => CRON_FIELD.test(field))
+    cronFields
   )
     return { ok: false, reason: "cron 式は 5 フィールドで指定してください。" };
-  if (
-    fields.length === 5 &&
-    /^[\d*,/-]+$/u.test(fields[0] ?? "") &&
-    fields.every((field) => CRON_FIELD.test(field))
-  )
+  if (fields.length === 5 && /^[\d*,/-]+$/u.test(fields[0] ?? "") && cronFields)
     return validateSchedule({ kind: "cron", expr: value }, now);
   const interval = /^(?:every\s+)?(\d+)([mhd])$/iu.exec(value);
   if (interval) {
@@ -126,11 +129,47 @@ export function nextThreeRuns(schedule: CronSchedule, now: number): number[] {
   return result;
 }
 
-export function describeSchedule(schedule: CronSchedule): string {
+function intervalUnit(expr: string): string {
+  const ms = Number(expr);
+  if (ms % 86_400_000 === 0) return `${ms / 86_400_000} 日`;
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000} 時間`;
+  return `${ms / 60_000} 分`;
+}
+
+export function formatScheduleInput(schedule: CronSchedule): string {
+  if (schedule.kind === "cron") return schedule.expr;
+  if (schedule.kind === "once") return new Date(schedule.expr).toISOString();
+  const ms = Number(schedule.expr);
+  if (ms % 86_400_000 === 0) return `${ms / 86_400_000}d`;
+  if (ms % 3_600_000 === 0) return `${ms / 3_600_000}h`;
+  return `${ms / 60_000}m`;
+}
+
+export function describeScheduleDetails(
+  schedule: CronSchedule,
+  options: { context?: "proposal" | "job" } = {},
+): { text: string; isPlain: boolean } {
   if (schedule.kind === "once")
-    return new Date(schedule.expr).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" });
-  if (schedule.kind === "interval")
-    return `承認から ${Number(schedule.expr) / 60_000} 分後、以後 ${Number(schedule.expr) / 60_000} 分ごと`;
+    return {
+      text: new Date(schedule.expr).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
+      isPlain: false,
+    };
+  if (schedule.kind === "interval") {
+    const unit = intervalUnit(schedule.expr);
+    return {
+      text: options.context === "job" ? `${unit}ごと` : `承認から ${unit}後、以後 ${unit}ごと`,
+      isPlain: false,
+    };
+  }
   const match = /^(\d{1,2}) (\d{1,2}) \* \* 1-5$/u.exec(schedule.expr);
-  return match ? `毎週平日 ${match[2]}:${match[1]?.padStart(2, "0")}` : schedule.expr;
+  return match
+    ? { text: `毎週平日 ${match[2]}:${match[1]?.padStart(2, "0")}`, isPlain: false }
+    : { text: schedule.expr, isPlain: true };
+}
+
+export function describeSchedule(
+  schedule: CronSchedule,
+  options: { context?: "proposal" | "job" } = {},
+): string {
+  return describeScheduleDetails(schedule, options).text;
 }

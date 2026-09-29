@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   describeSchedule,
+  describeScheduleDetails,
   firstRunAfter,
+  formatScheduleInput,
   nextRunAfter,
   nextThreeRuns,
   parseSchedule,
@@ -37,6 +39,35 @@ describe("cron schedules", () => {
   });
   test("natural language is sent to the converter by the caller", () => {
     expect(parseSchedule("平日の朝九時", NOW)).toEqual({ ok: false, reason: "natural_language" });
+    expect(parseSchedule("9 am on weekdays please", NOW)).toEqual({
+      ok: false,
+      reason: "natural_language",
+    });
+    expect(parseSchedule("30 minutes past every hour daily", NOW)).toEqual({
+      ok: false,
+      reason: "natural_language",
+    });
+    expect(parseSchedule("0 9 * * mon-fri", NOW)).toMatchObject({
+      ok: true,
+      schedule: { kind: "cron" },
+    });
+    expect(parseSchedule("0 9 1 jan *", NOW)).toMatchObject({
+      ok: true,
+      schedule: { kind: "cron" },
+    });
+  });
+  test.each([
+    { kind: "interval" as const, expr: "1800000", input: "30m" },
+    { kind: "interval" as const, expr: "7200000", input: "2h" },
+    { kind: "interval" as const, expr: "86400000", input: "1d" },
+    { kind: "cron" as const, expr: "0 9 * * mon-fri", input: "0 9 * * mon-fri" },
+    { kind: "once" as const, expr: "2026-10-01T00:00:00.000Z", input: "2026-10-01T00:00:00.000Z" },
+  ])("formats a stored $kind schedule for modal round-trip ($input)", (schedule) => {
+    expect(formatScheduleInput(schedule)).toBe(schedule.input);
+    expect(parseSchedule(formatScheduleInput(schedule), NOW)).toEqual({
+      ok: true,
+      schedule: { kind: schedule.kind, expr: schedule.expr },
+    });
   });
   test("Croner nextRun is strictly after the boundary", () => {
     const schedule = { kind: "cron" as const, expr: "0 9 * * *" };
@@ -59,5 +90,15 @@ describe("cron schedules", () => {
   });
   test("description of weekdays", () => {
     expect(describeSchedule({ kind: "cron", expr: "0 9 * * 1-5" })).toBe("毎週平日 9:00");
+    expect(describeSchedule({ kind: "interval", expr: "86400000" })).toBe(
+      "承認から 1 日後、以後 1 日ごと",
+    );
+    expect(describeSchedule({ kind: "interval", expr: "7200000" }, { context: "job" })).toBe(
+      "2 時間ごと",
+    );
+    expect(describeScheduleDetails({ kind: "cron", expr: "0 9 1 jan *" })).toEqual({
+      text: "0 9 1 jan *",
+      isPlain: true,
+    });
   });
 });

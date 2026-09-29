@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes } from "discord.js";
 import { type CronJob, CronRepository } from "../../../src/db/repositories/cronRepository";
 import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
@@ -81,11 +81,15 @@ describe("cron service", () => {
   });
   test("disabled guild skips a due run without calling the model", async () => {
     const job = await add();
+    const once = await add("2026-09-29T00:05:00Z");
     await settings.setCronEnabled("guild", false);
     now += 5 * 60_000;
     await service.tick();
     expect(generate).not.toHaveBeenCalled();
     expect(repo.getJob(job.id)?.lastRunAt).toBeNull();
+    expect(repo.getJob(job.id)?.nextRunAt).toBeGreaterThan(now);
+    expect(repo.getJob(once.id)?.status).toBe("done");
+    expect(repo.getJob(once.id)?.nextRunAt).toBeNull();
   });
   test("startup skips old interval and marks old once done, preserving lastRunAt", async () => {
     const recurring = await add();
@@ -190,6 +194,227 @@ describe("cron service", () => {
     );
     expect(result.ok).toBe(false);
     expect(repo.listJobs("guild")).toHaveLength(0);
+  });
+  test("an already aborted proposal does not call schedule interpretation or save", async () => {
+    const interpret = mock(async () => "30m");
+    service = new CronService(
+      repo,
+      settings,
+      { generateScheduledResponse: generate, interpretCronSchedule: interpret },
+      { resolve },
+      () => now,
+    );
+    const controller = new AbortController();
+    controller.abort();
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "name",
+        prompt: "prompt",
+        schedule: "every weekday morning",
+        silent: false,
+        signal: controller.signal,
+      },
+      actor,
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: "スケジュールを解釈できませんでした: 中断されました。",
+    });
+    expect(interpret).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+  test("schedule interpretation uses the caller signal and stops at sixty seconds without saving", async () => {
+    const interpret = mock(
+      (_guildId: string, _input: string, _signal?: AbortSignal) => new Promise<string>(() => {}),
+    );
+    service = new CronService(
+      repo,
+      settings,
+      { generateScheduledResponse: generate, interpretCronSchedule: interpret },
+      { resolve },
+      () => now,
+    );
+    const controller = new AbortController();
+    const original = globalThis.setTimeout;
+    globalThis.setTimeout = ((...args: Parameters<typeof original>) => {
+      const [handler, delay, ...rest] = args;
+      return original(handler, delay === 60_000 ? 0 : delay, ...rest);
+    }) as typeof globalThis.setTimeout;
+    try {
+      const result = await service.createProposal(
+        {
+          guildId: "guild",
+          channelId: "channel",
+          userId: "user",
+          name: "name",
+          prompt: "prompt",
+          schedule: "every weekday morning",
+          silent: false,
+          signal: controller.signal,
+        },
+        actor,
+      );
+      expect(result.ok).toBe(false);
+      const passedSignal = interpret.mock.calls[0]?.[2];
+      expect(passedSignal).toBeInstanceOf(AbortSignal);
+      expect(passedSignal?.aborted).toBe(true);
+      expect(
+        db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM cron_proposals").get()
+          ?.count,
+      ).toBe(0);
+    } finally {
+      globalThis.setTimeout = original;
+    }
+  });
+  test("aborting the caller during interpretation returns without saving", async () => {
+    const controller = new AbortController();
+    const interpret = mock(() => {
+      controller.abort();
+      return new Promise<string>(() => {});
+    });
+    service = new CronService(
+      repo,
+      settings,
+      { generateScheduledResponse: generate, interpretCronSchedule: interpret },
+      { resolve },
+      () => now,
+    );
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "name",
+        prompt: "prompt",
+        schedule: "every weekday morning",
+        silent: false,
+        signal: controller.signal,
+      },
+      actor,
+    );
+    expect(result.ok).toBe(false);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(
+      db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM cron_proposals").get()?.count,
+    ).toBe(0);
+  });
+  test("an abort after destination resolution prevents generation", async () => {
+    const job = await add();
+    resolve.mockImplementation(async () => {
+      void service.stop();
+      return { parentId: null, send, notifyPaused: notify };
+    });
+    now += 5 * 60_000;
+    await service.tick();
+    expect(generate).not.toHaveBeenCalled();
+    expect(repo.getJob(job.id)?.failCount).toBe(0);
+  });
+  test("a manual run starting during settings lookup leaves the due time unconsumed", async () => {
+    const job = await add();
+    now += 5 * 60_000;
+    const dueTime = repo.getJob(job.id)?.nextRunAt;
+    const original = settings.getGuildSettings.bind(settings);
+    let releaseSettings: (() => void) | undefined;
+    let block = true;
+    settings.getGuildSettings = mock(async (guildId: string) => {
+      if (block) {
+        block = false;
+        await new Promise<void>((resolvePromise) => {
+          releaseSettings = resolvePromise;
+        });
+      }
+      return original(guildId);
+    });
+    let releaseGeneration: (() => void) | undefined;
+    generate.mockImplementation(
+      () =>
+        new Promise((resolvePromise) => {
+          releaseGeneration = () => resolvePromise({ text: "hello", model: "free/model" });
+        }),
+    );
+    const tick = service.tick();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    const manual = service.runNow(job.id, "guild", actor, job.version);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    releaseSettings?.();
+    await tick;
+    expect(repo.getJob(job.id)?.nextRunAt).toBe(dueTime);
+    expect(repo.getJob(job.id)?.lastRunAt).toBeNull();
+    releaseGeneration?.();
+    await manual;
+  });
+  test("an invalid due expression is logged and the next job still runs", async () => {
+    const broken = await add();
+    const valid = await add();
+    db.query("UPDATE cron_jobs SET expr='bad expression' WHERE id=?").run(broken.id);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      now += 5 * 60_000;
+      await service.tick();
+      expect(consoleError).toHaveBeenCalled();
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(generate.mock.calls[0]?.[0]).toMatchObject({ id: valid.id });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+  test("a scheduled version change during generation prevents post and outcome writes", async () => {
+    const job = await add();
+    const success = spyOn(repo, "saveSuccess");
+    const failure = spyOn(repo, "saveFailure");
+    generate.mockImplementation(async () => {
+      repo.setStatus(job.id, job.version, "paused", null, now);
+      return { text: "hello", model: "free/model" };
+    });
+    now += 5 * 60_000;
+    await service.tick();
+    expect(send).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
+  });
+  test("a generation timeout records one failure", async () => {
+    const job = await add();
+    const original = globalThis.setTimeout;
+    globalThis.setTimeout = ((...args: Parameters<typeof original>) => {
+      const [handler, delay, ...rest] = args;
+      return original(handler, delay === 120_000 ? 0 : delay, ...rest);
+    }) as typeof globalThis.setTimeout;
+    generate.mockImplementation(() => new Promise(() => {}));
+    try {
+      now += 5 * 60_000;
+      await service.tick();
+      expect(repo.getJob(job.id)?.failCount).toBe(1);
+      expect(repo.getJob(job.id)?.lastError).toContain("タイムアウト");
+    } finally {
+      globalThis.setTimeout = original;
+    }
+  });
+  test("run now preserves all scheduling and failure fields", async () => {
+    const job = await add();
+    repo.saveFailure(job.id, job.version, now, "previous failure");
+    const before = repo.getJob(job.id);
+    expect((await service.runNow(job.id, "guild", actor, job.version)).ok).toBe(true);
+    const after = repo.getJob(job.id);
+    for (const field of ["nextRunAt", "lastRunAt", "failCount", "lastError", "status"] as const)
+      expect(after?.[field]).toBe(before?.[field]);
+  });
+  test("stop during a scheduled generation does not record failure", async () => {
+    const job = await add();
+    generate.mockImplementation(
+      async (_job: CronJob, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
+    );
+    now += 5 * 60_000;
+    const tick = service.tick();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+    await service.stop();
+    await tick;
+    expect(repo.getJob(job.id)?.failCount).toBe(0);
   });
   test("pause, resume, edit and deletion invalidate a running version before posting", async () => {
     for (const operation of ["pause", "resume", "edit", "delete"] as const) {

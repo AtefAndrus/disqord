@@ -10,6 +10,7 @@ import { AppError } from "../errors";
 import type { ChatCompletionResponse } from "../types";
 import { EmbedColors } from "../types/embed";
 import {
+  badgeText,
   buildFinalContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
@@ -31,6 +32,7 @@ import type { ISettingsService } from "./settingsService";
 const PROPOSAL_TTL_MS = 24 * 60 * 60_000;
 const TICK_MS = 60_000;
 const GENERATION_TIMEOUT_MS = 120_000;
+const INTERPRET_TIMEOUT_MS = 60_000;
 const PAGE_TIMEOUT_MS = 15_000;
 const STARTUP_GRACE_MS = 10 * 60_000;
 
@@ -59,6 +61,7 @@ export interface CronProposalInput {
   silent: boolean;
   targetJobId?: number;
   targetVersion?: number;
+  signal?: AbortSignal;
 }
 export interface ICronService {
   createProposal(
@@ -140,21 +143,20 @@ async function withTimeout<T>(
   ms: number,
   parent: AbortSignal,
 ): Promise<T> {
+  if (parent.aborted) throw new Error("中断されました。");
   const controller = new AbortController();
   const abort = (): void => controller.abort();
   parent.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(abort, ms);
   try {
-    return await Promise.race([
-      operation(controller.signal),
-      new Promise<T>((_, reject) => {
-        controller.signal.addEventListener(
-          "abort",
-          () => reject(new Error(parent.aborted ? "中断されました。" : "タイムアウトしました。")),
-          { once: true },
-        );
-      }),
-    ]);
+    const interrupted = new Promise<T>((_, reject) => {
+      controller.signal.addEventListener(
+        "abort",
+        () => reject(new Error(parent.aborted ? "中断されました。" : "タイムアウトしました。")),
+        { once: true },
+      );
+    });
+    return await Promise.race([operation(controller.signal), interrupted]);
   } finally {
     clearTimeout(timer);
     parent.removeEventListener("abort", abort);
@@ -174,7 +176,7 @@ export function buildScheduledPages(
   const note = measureTextBudget(OMITTED_NOTE);
   const chunks = splitTextIntoMessages(
     `-# 定期実行「${name}」\n${text}`,
-    measureTextBudget(model),
+    measureTextBudget(badgeText(model)),
     {
       chars: footer.chars + note.chars,
       bytes: footer.bytes + note.bytes,
@@ -240,16 +242,25 @@ export class CronService implements ICronService {
     if (!parsed.ok && parsed.reason === "natural_language") {
       try {
         parsed = parseSchedule(
-          await this.chat.interpretCronSchedule(input.guildId, input.schedule),
+          await withTimeout(
+            (signal) => this.chat.interpretCronSchedule(input.guildId, input.schedule, signal),
+            INTERPRET_TIMEOUT_MS,
+            input.signal ?? new AbortController().signal,
+          ),
           this.now(),
         );
       } catch (error) {
-        return failure(`スケジュールを解釈できませんでした: ${errorText(error)}`);
+        return failure(
+          error instanceof AppError
+            ? error.userMessage
+            : `スケジュールを解釈できませんでした: ${errorText(error)}`,
+        );
       }
       if (!parsed.ok && parsed.reason === "natural_language")
         return failure("スケジュールを解釈できませんでした。");
     }
     if (!parsed.ok) return failure(parsed.reason);
+    if (input.signal?.aborted) return failure("中断されました。");
     const latestSettings = await this.settings.getGuildSettings(input.guildId);
     if (!latestSettings.cronEnabled || !canManageGuildSettings(actor, latestSettings))
       return failure("定期実行が無効か、操作権限がありません。");
@@ -267,6 +278,7 @@ export class CronService implements ICronService {
     } catch (error) {
       return failure(errorText(error));
     }
+    if (input.signal?.aborted) return failure("中断されました。");
     const now = this.now();
     const proposal = this.repo.createProposal({
       guildId: input.guildId,
@@ -450,21 +462,27 @@ export class CronService implements ICronService {
       this.repo.deleteExpiredProposals(this.now());
       for (const job of this.repo.dueJobs(this.now())) {
         if (this.closing) break;
-        if (this.running.has(job.id)) continue;
-        const settings = await this.settings.getGuildSettings(job.guildId);
-        if (this.closing) break;
-        const now = this.now();
-        const next = nextRunAfter(job, job.nextRunAt ?? now, now);
-        if (!settings.cronEnabled) {
-          this.repo.skip(
-            job,
-            job.kind === "once" ? null : nextRunAfter(job, job.nextRunAt ?? now, now + 1),
-            now,
-          );
-          continue;
+        try {
+          if (this.running.has(job.id)) continue;
+          const settings = await this.settings.getGuildSettings(job.guildId);
+          if (this.closing) break;
+          const now = this.now();
+          const next = nextRunAfter(job, job.nextRunAt ?? now, now);
+          if (!settings.cronEnabled) {
+            this.repo.skip(
+              job,
+              job.kind === "once" ? null : nextRunAfter(job, job.nextRunAt ?? now, now + 1),
+              now,
+            );
+            continue;
+          }
+          if (this.closing) break;
+          if (this.running.has(job.id)) continue;
+          if (!this.repo.consume(job, next, now)) continue;
+          await this.run(job, true);
+        } catch (error) {
+          logger.error("Cron job failed during tick", { jobId: job.id, error });
         }
-        if (!this.repo.consume(job, next, now)) continue;
-        await this.run(job, true);
       }
     } catch (error) {
       logger.error("Cron tick failed", { error });
@@ -500,6 +518,7 @@ export class CronService implements ICronService {
       const settings = await this.settings.getGuildSettings(job.guildId);
       if (this.closing || signal.aborted) return failure("中断されました。");
       destination = await this.delivery.resolve(job.guildId, job.channelId);
+      if (this.closing || signal.aborted) return failure("中断されました。");
       const channel = destination;
       if (
         settings.allowedChannels !== null &&

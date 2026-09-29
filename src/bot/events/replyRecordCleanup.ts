@@ -29,25 +29,62 @@ export function createReplyRecordCleanupHandlers(
   },
 ): ReplyRecordCleanupHandlers {
   const log = (scope: string, id: string, removed: number): void => {
-    if (removed > 0) console.info(`[replyRecord] removed ${removed} records for ${scope} ${id}`);
+    if (removed > 0)
+      console.info(
+        `[replyRecord] removed ${removed} records ${id ? `for ${scope} ${id}` : `of ${scope}`}`,
+      );
+  };
+  const clean = async (
+    scope: string,
+    id: string,
+    replyDelete: () => Promise<number>,
+    cronDelete: () => number | undefined,
+  ): Promise<void> => {
+    const [reply, cronResult] = await Promise.allSettled([
+      Promise.resolve().then(replyDelete),
+      Promise.resolve().then(cronDelete),
+    ]);
+    if (reply.status === "fulfilled") log(scope, id, reply.value);
+    if (cronResult.status === "fulfilled" && cronResult.value !== undefined && cronResult.value > 0)
+      console.info(
+        `[cron] removed ${cronResult.value} records ${id ? `for ${scope} ${id}` : `of ${scope}`}`,
+      );
+    if (reply.status === "rejected") throw reply.reason;
+    if (cronResult.status === "rejected") throw cronResult.reason;
   };
   return {
     guildDelete: async (guild) => {
-      log("guild", guild.id, await service.deleteByGuild(guild.id));
-      cron?.deleteByGuild(guild.id);
+      await clean(
+        "guild",
+        guild.id,
+        () => service.deleteByGuild(guild.id),
+        () => cron?.deleteByGuild(guild.id),
+      );
     },
     channelDelete: async (channel) => {
-      log("channel", channel.id, await service.deleteByChannel(channel.id));
-      cron?.deleteByChannel(channel.id);
+      await clean(
+        "channel",
+        channel.id,
+        () => service.deleteByChannel(channel.id),
+        () => cron?.deleteByChannel(channel.id),
+      );
     },
     threadDelete: async (thread) => {
-      log("thread", thread.id, await service.deleteByChannel(thread.id));
-      cron?.deleteByChannel(thread.id);
+      await clean(
+        "thread",
+        thread.id,
+        () => service.deleteByChannel(thread.id),
+        () => cron?.deleteByChannel(thread.id),
+      );
     },
     reconcileGuilds: async (guildIds) => {
-      const removed = await service.deleteGuildsNotIn([...guildIds]);
-      cron?.deleteGuildsNotIn([...guildIds]);
-      if (removed > 0) console.info(`[replyRecord] removed ${removed} records of guilds left`);
+      const ids = [...guildIds];
+      await clean(
+        "guilds left",
+        "",
+        () => service.deleteGuildsNotIn(ids),
+        () => cron?.deleteGuildsNotIn(ids),
+      );
     },
   };
 }

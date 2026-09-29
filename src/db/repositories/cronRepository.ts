@@ -307,7 +307,7 @@ export class CronRepository implements ICronRepository {
     const tx = this.db.transaction((): CronJob | null => {
       const job = this.getJob(id);
       if (!job || job.version !== version) return null;
-      const pause = job.kind !== "once" && job.failCount + 1 >= 3;
+      const pause = job.status === "active" && job.kind !== "once" && job.failCount + 1 >= 3;
       this.db
         .query(`UPDATE cron_jobs SET fail_count=fail_count+1,last_error=?,status=?,next_run_at=?,
         version=version+?,updated_at=? WHERE id=? AND version=?`)

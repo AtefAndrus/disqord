@@ -117,4 +117,17 @@ describe("cron repository", () => {
     expect(failed?.failCount).toBe(3);
     expect(failed?.version).toBe(job.version + 1);
   });
+  test("a completed recurring job stays done when a late failure is recorded", () => {
+    const result = repo.approveProposal(proposal().id, "guild", "user", actor, NOW);
+    if (!result.ok) throw new Error(result.reason);
+    const job = result.value;
+    db.query("UPDATE cron_jobs SET status='done', next_run_at=NULL, fail_count=2 WHERE id=?").run(
+      job.id,
+    );
+    const failed = repo.saveFailure(job.id, job.version, NOW, "late error");
+    expect(failed?.status).toBe("done");
+    expect(failed?.nextRunAt).toBeNull();
+    expect(failed?.failCount).toBe(3);
+    expect(failed?.version).toBe(job.version);
+  });
 });

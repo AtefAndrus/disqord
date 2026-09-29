@@ -317,7 +317,7 @@ CREATE TABLE IF NOT EXISTS cron_proposals (
 
 ## Tasks
 
-- [ ] `croner` を足す（実装時点の最新の安定版を確かめる）
+- [x] `croner` を足す（実装時点の最新の安定版を確かめる）
 - [x] `cron_enabled` の列と、「機能」ページの項目、`/status` の表示を足す
 - [x] `cron_jobs`、`cron_proposals` と `cronRepository` を足す
 - [x] スケジュールの解釈と検証、次の時刻の計算を実装する
