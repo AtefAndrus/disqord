@@ -112,6 +112,7 @@ interface MockMessage {
     isThread: () => boolean;
   };
   reply: ReturnType<typeof mock>;
+  poll?: unknown;
 }
 
 type AttachmentFixture = {
@@ -649,6 +650,34 @@ describe("createMessageCreateHandler", () => {
     expect(extractTextContents(container).join("\n")).toContain("## ⚠️ 入力エラー");
     expect(extractTextContents(container).join("\n")).toContain("メッセージを入力してください。");
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+  });
+
+  test("投票だけの発言は、票数を除いた投票のテキストを入力にする", async () => {
+    mockMessage.content = "<@123456789>";
+    // discord.js は Discord が票数を送らなくても voteCount を 0 で埋める。
+    mockMessage.poll = {
+      question: { text: "賛成ですか？" },
+      answers: new Collection([
+        [1, { id: 1, text: "はい", emoji: null, voteCount: 0 }],
+        [2, { id: 2, text: "いいえ", emoji: { id: null, name: "👎" }, voteCount: 0 }],
+      ]),
+      expiresTimestamp: Date.parse("2099-01-01T00:00:00.000Z"),
+      allowMultiselect: false,
+    };
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+
+    await handler(mockMessage as never);
+
+    expect(mockReply).not.toHaveBeenCalled();
+    const input = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[0]?.[1] as { text: string };
+    expect(input.text).toBe(
+      ['[投票 "賛成ですか？" 締め切り 2099-01-01 09:00 JST]', "- はい", "- 👎 いいえ"].join("\n"),
+    );
   });
 
   test("正常なメッセージに対してストリーミングレスポンスを生成する", async () => {

@@ -1,4 +1,10 @@
-import { AttachmentBuilder, type Message, MessageType, type ThreadChannel } from "discord.js";
+import {
+  AttachmentBuilder,
+  type Message,
+  MessageType,
+  type Poll,
+  type ThreadChannel,
+} from "discord.js";
 import { AppError } from "../../errors";
 import { formatSearchResultLinks } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
@@ -36,7 +42,12 @@ import {
   toComponentsV2ReplyPayload,
   ZERO_TEXT_BUDGET,
 } from "../../utils/chatContainerBuilder";
-import { normalizeAuthorLabel, type RawDiscordMessage } from "../../utils/discordMessageNormalizer";
+import {
+  formatPoll,
+  normalizeAuthorLabel,
+  type RawDiscordMessage,
+  type RawDiscordPoll,
+} from "../../utils/discordMessageNormalizer";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
@@ -107,6 +118,25 @@ function asJson(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Leaves out `results`: discord.js fills every answer's `voteCount` with 0
+ * when Discord sent no counts, so unknown and zero cannot be told apart here.
+ */
+export function toRawDiscordPoll(poll: Poll): RawDiscordPoll {
+  return {
+    question: { text: poll.question.text },
+    answers: [...poll.answers.values()].map((answer) => ({
+      answer_id: answer.id,
+      poll_media: {
+        text: answer.text,
+        emoji: answer.emoji ? { id: answer.emoji.id, name: answer.emoji.name } : null,
+      },
+    })),
+    expiry: poll.expiresTimestamp === null ? null : new Date(poll.expiresTimestamp).toISOString(),
+    allow_multiselect: poll.allowMultiselect,
+  };
+}
+
 function toRawDiscordMessage(message: Message): RawDiscordMessage {
   const attachments = [...message.attachments.values()].map((attachment) => ({
     id: attachment.id,
@@ -145,6 +175,7 @@ function toRawDiscordMessage(message: Message): RawDiscordMessage {
       : [],
     attachments,
     message_reference: reference,
+    poll: message.poll ? toRawDiscordPoll(message.poll) : null,
   };
 }
 
@@ -255,6 +286,10 @@ export function createMessageCreateHandler(
 
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
+    const pollText = message.poll
+      ? formatPoll(toRawDiscordPoll(message.poll), Date.now(), false)
+      : "";
+    const inputText = [content, pollText].filter((part) => part.length > 0).join("\n");
 
     // The tester bot must mention this bot and say something. Without this,
     // two development instances that name each other as tester in an
@@ -291,7 +326,7 @@ export function createMessageCreateHandler(
       return;
     }
 
-    if (!content && attachmentResult.parts.length === 0) {
+    if (!inputText && attachmentResult.parts.length === 0) {
       const errorContainer = buildErrorContainer("メッセージを入力してください。", "入力エラー");
       await message.reply(toComponentsV2ReplyPayload(errorContainer));
       return;
@@ -404,7 +439,7 @@ export function createMessageCreateHandler(
       const result = await chatService.generateChatResponse(
         message.guild.id,
         {
-          text: content,
+          text: inputText,
           parts: attachmentResult.parts,
           authorLabel: normalizeAuthorLabel(
             message.member?.nickname ??

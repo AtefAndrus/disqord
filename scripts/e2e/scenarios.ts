@@ -86,6 +86,17 @@ export interface Scenario {
   ) => Promise<string[]>;
 }
 
+interface PollMessage {
+  author?: { id?: string };
+  poll?: { answers?: { poll_media?: { text?: string } }[] };
+}
+
+function pollAnswers(poll: NonNullable<PollMessage["poll"]>): string[] {
+  return (poll.answers ?? []).flatMap((answer) =>
+    answer.poll_media?.text ? [answer.poll_media.text] : [],
+  );
+}
+
 // Discord component types.
 const TEXT_DISPLAY = 10;
 const CONTAINER = 17;
@@ -421,6 +432,70 @@ export const SCENARIOS: Scenario[] = [
         }
       }
       return problems;
+    },
+  },
+  {
+    // Paired with poll-recall, which must run right after it. The model picks
+    // the answers and is told to keep them out of its reply, so poll-recall
+    // can only learn them from the poll itself. Needs `/config → 機能 →
+    // 会話履歴` and `Discord 操作` enabled in the guild under test.
+    name: "poll-create",
+    manual: true,
+    prompt:
+      "[e2e] 『どれにしますか？』という投票を作って。選択肢は 3 つで、それぞれあなたがその場でランダムに作った英数字 8 文字の文字列にして。create_poll を必ず使い、返信の本文には選択肢を書かず「作成しました」とだけ書いて。",
+    check: (reply) => hasUsageFooter(reply),
+    verify: async (triggerId, channelId, request, botId) => {
+      const response = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!response.ok) return [`cannot read poll messages: HTTP ${response.status}`];
+      const messages = (await response.json()) as (PollMessage & DiscordMessage)[];
+      const poll = messages.find((item) => item.author?.id === botId && item.poll)?.poll;
+      if (!poll) return ["the bot did not post a poll (is /config → 機能 → Discord 操作 enabled?)"];
+      // Answers the model could guess, or that contain one another, would let
+      // poll-recall pass without reading the poll.
+      const answers = pollAnswers(poll);
+      if (answers.length !== 3 || !answers.every((answer) => /^[A-Za-z0-9]{8}$/.test(answer)))
+        return [`the poll answers ${answers.join(", ")} are not three 8-character codes`];
+      if (new Set(answers.map((answer) => answer.toLowerCase())).size !== 3)
+        return [`the poll answers ${answers.join(", ")} are not distinct`];
+      // An answer in the reply would let poll-recall pass without reading the poll.
+      const replyText = JSON.stringify(
+        messages.filter((item) => item.author?.id === botId).map((item) => item.components),
+      );
+      const leaked = pollAnswers(poll).filter((answer) => replyText.includes(answer));
+      return leaked.length === 0
+        ? []
+        : [
+            `the reply names the poll answers ${leaked.join(", ")}, so poll-recall would prove nothing`,
+          ];
+    },
+  },
+  {
+    name: "poll-recall",
+    manual: true,
+    prompt: "[e2e] さっき作った投票の質問と選択肢をすべて答えて。",
+    check: (reply) => hasUsageFooter(reply),
+    // The answers are known only from Discord, so this reads the poll and the
+    // reply over REST rather than checking the reply against fixed text.
+    verify: async (triggerId, channelId, request, botId) => {
+      const before = await request(`/channels/${channelId}/messages?before=${triggerId}&limit=20`);
+      if (!before.ok) return [`cannot read the poll: HTTP ${before.status}`];
+      const poll = ((await before.json()) as PollMessage[]).find(
+        (item) => item.author?.id === botId && item.poll,
+      )?.poll;
+      if (!poll) return ["no bot poll before the trigger (run poll-create first)"];
+      const after = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!after.ok) return [`cannot read the reply: HTTP ${after.status}`];
+      const replyText = JSON.stringify(
+        ((await after.json()) as (PollMessage & DiscordMessage)[])
+          .filter((item) => item.author?.id === botId)
+          .map((item) => item.components),
+      );
+      const missing = pollAnswers(poll).filter((answer) => !replyText.includes(answer));
+      return missing.length === 0
+        ? []
+        : [
+            `the reply lacks the poll answers ${missing.join(", ")} (is /config → 機能 → 会話履歴 enabled?)`,
+          ];
     },
   },
   {
