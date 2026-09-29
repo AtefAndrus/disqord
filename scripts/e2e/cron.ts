@@ -8,6 +8,8 @@ type Request = (path: string, init?: RequestInit) => Promise<Response>;
 export interface ScenarioEnv {
   databasePath: string;
   testerBotId: string;
+  /** Aborted on SIGINT or SIGTERM, whose cleanup can run before the scenario writes its rows. */
+  interrupted?: AbortSignal;
 }
 
 interface MessageLike {
@@ -115,24 +117,33 @@ export async function verifyCron(
   if (!card) problems.push("no confirmation card with a 登録する button replied to the request");
 
   const guildId = await guildOf(channelId, request);
+  // An interrupt's cleanup may already have run while the channel was read,
+  // and nothing would delete a job inserted after it.
+  if (env.interrupted?.aborted) return [...problems, "interrupted before the job was inserted"];
   const name = `e2e-${crypto.randomUUID().slice(0, 8)}`;
   const now = Date.now();
   const runAt = now + 60_000;
   const db = new Database(env.databasePath);
   try {
-    db.query(`INSERT INTO cron_jobs
+    const inserted = db
+      .query(`INSERT INTO cron_jobs
         (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,status,next_run_at,created_at,updated_at)
-        VALUES (?,?,?,?,?, 'once',?,0,'active',?,?,?)`).run(
-      guildId,
-      channelId,
-      env.testerBotId,
-      name,
-      "「定期実行OK」とだけ答えてください。",
-      new Date(runAt).toISOString(),
-      runAt,
-      now,
-      now,
-    );
+        VALUES (?,?,?,?,?, 'once',?,0,'active',?,?,?)`)
+      .run(
+        guildId,
+        channelId,
+        env.testerBotId,
+        name,
+        "「定期実行OK」とだけ答えてください。",
+        new Date(runAt).toISOString(),
+        runAt,
+        now,
+        now,
+      );
+    if (env.interrupted?.aborted) {
+      db.query("DELETE FROM cron_jobs WHERE id=?").run(inserted.lastInsertRowid);
+      return [...problems, "interrupted after the job was inserted; the job was deleted"];
+    }
   } finally {
     db.close();
   }

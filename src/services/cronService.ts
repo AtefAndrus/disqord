@@ -257,16 +257,17 @@ export class CronService implements ICronService {
     const schedule = input.schedule.trim();
     if (!schedule || schedule.length > MAX_SCHEDULE_LENGTH)
       return failure(`スケジュールは 1〜${MAX_SCHEDULE_LENGTH} 字で指定してください。`);
-    if (input.targetJobId !== undefined) {
+    const targetChanged = (): boolean => {
+      if (input.targetJobId === undefined) return false;
       const target = this.repo.getJob(input.targetJobId);
-      if (
+      return (
         !target ||
         target.guildId !== input.guildId ||
         target.version !== input.targetVersion ||
         target.status === "done"
-      )
-        return failure("編集対象のジョブが変更されました。");
-    }
+      );
+    };
+    if (targetChanged()) return failure("編集対象のジョブが変更されました。");
     let parsed = parseSchedule(schedule, this.now());
     if (!parsed.ok && parsed.reason === "natural_language") {
       try {
@@ -308,6 +309,8 @@ export class CronService implements ICronService {
       return failure(errorText(error));
     }
     if (input.signal?.aborted) return failure("中断されました。");
+    // Checked again because converting the schedule and resolving the destination can take a minute.
+    if (targetChanged()) return failure("編集対象のジョブが変更されました。");
     const now = this.now();
     const proposal = this.repo.createProposal({
       guildId: input.guildId,

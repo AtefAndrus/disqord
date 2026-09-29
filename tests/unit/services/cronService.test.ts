@@ -375,6 +375,39 @@ describe("cron service", () => {
       consoleError.mockRestore();
     }
   });
+  for (const expr of ["0", "60000"]) {
+    test(`a stored interval of ${expr} ms pauses its job on a tick without calling the model`, async () => {
+      const broken = await add();
+      db.query("UPDATE cron_jobs SET expr=? WHERE id=?").run(expr, broken.id);
+      const consoleError = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        now += 5 * 60_000;
+        await service.tick();
+        await service.tick();
+        expect(generate).not.toHaveBeenCalled();
+        expect(repo.getJob(broken.id)).toMatchObject({ status: "paused", nextRunAt: null });
+        expect(repo.getJob(broken.id)?.lastError).toContain("5 分以上");
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+    test(`startup pauses a job whose stored interval is ${expr} ms`, async () => {
+      const broken = await add();
+      db.query("UPDATE cron_jobs SET expr=? WHERE id=?").run(expr, broken.id);
+      const consoleError = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        now += 16 * 60_000;
+        await service.catchUpOnStartup();
+        now += 60_000;
+        await service.tick();
+        expect(generate).not.toHaveBeenCalled();
+        expect(repo.getJob(broken.id)).toMatchObject({ status: "paused", nextRunAt: null });
+        expect(repo.getJob(broken.id)?.lastError).toContain("5 分以上");
+      } finally {
+        consoleError.mockRestore();
+      }
+    });
+  }
   test("startup pauses a job whose stored cron expression is invalid", async () => {
     const broken = await add("0 9 * * *");
     const valid = await add();
@@ -585,6 +618,40 @@ describe("cron service", () => {
     );
     expect(result.ok).toBe(false);
     expect(interpret).not.toHaveBeenCalled();
+  });
+  test("an edit whose job changes during schedule conversion is not saved", async () => {
+    const job = await add();
+    service = new CronService(
+      repo,
+      settings,
+      {
+        generateScheduledResponse: generate,
+        interpretCronSchedule: async () => {
+          repo.setStatus(job.id, job.version, "paused", null, now);
+          return "30m";
+        },
+      },
+      { resolve },
+      () => now,
+    );
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "new",
+        prompt: "new",
+        schedule: "毎朝九時",
+        silent: false,
+        targetJobId: job.id,
+        targetVersion: job.version,
+      },
+      actor,
+    );
+    expect(result).toEqual({ ok: false, reason: "編集対象のジョブが変更されました。" });
+    expect(
+      db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM cron_proposals").get()?.count,
+    ).toBe(0);
   });
   test("a name is measured after trimming", async () => {
     const result = await service.createProposal(

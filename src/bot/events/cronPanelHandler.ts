@@ -304,12 +304,18 @@ async function submitModal(
   cronService: ICronService,
 ): Promise<void> {
   const userId = interaction.user.id;
-  /** The job being edited when it no longer has the version the modal was opened with. */
+  /**
+   * The job being edited when it no longer has the version the modal was
+   * opened with or can no longer be edited. A one-off job becomes `done`
+   * without a new version.
+   */
   const changedJob = async (): Promise<CronJob | null | undefined> => {
     if (action.action !== "modal-edit") return undefined;
     const job = await cronService.getJob(action.jobId, guildId, userId, actor);
-    return job?.version === action.version ? undefined : job;
+    return job?.version === action.version && job.status !== "done" ? undefined : job;
   };
+  // Checked before deferring: after `deferReply` the reply is a new ephemeral
+  // message, and the panel with the stale buttons can no longer be redrawn.
   const changed = await changedJob();
   if (changed !== undefined) {
     const payload = toNoticePayload(
@@ -354,14 +360,9 @@ async function submitModal(
     actor,
   );
   if (!created.ok) {
-    // The job can also change while the schedule is being converted.
-    const job = await changedJob();
-    if (job) {
-      await interaction.editReply(buildCronDetail(job));
-      await interaction.followUp(
-        toNoticePayload(buildErrorContainer(CRON_STALE_MESSAGE, "定期実行"), true),
-      );
-    } else await fail(created.reason);
+    // The job can also change while the schedule is being converted. Only
+    // the reply can be edited by now, so the panel is left as it is.
+    await fail((await changedJob()) === undefined ? created.reason : CRON_STALE_MESSAGE);
     return;
   }
   await interaction.editReply(

@@ -97,12 +97,28 @@ export function parseSchedule(
   return { ok: false, reason: "natural_language" };
 }
 
+/**
+ * Why a stored interval would not pass `validateSchedule`, or undefined when
+ * it would. A row written outside the panel can hold an interval of 0, which
+ * would make every tick due again. A cron expression is checked only by
+ * building it: its dense matches are skipped at execution time instead of
+ * refused, and it throws when it cannot be built.
+ */
+function storedScheduleError(schedule: CronSchedule, now: number): string | undefined {
+  if (schedule.kind !== "interval") return undefined;
+  const checked = validateSchedule(schedule, now);
+  return checked.ok ? undefined : checked.reason;
+}
+
+/** Throws when the stored schedule is invalid, so that the caller can pause the job. */
 export function nextRunAfter(
   schedule: CronSchedule,
   scheduledAt: number,
   now: number,
 ): number | null {
   if (schedule.kind === "once") return null;
+  const error = storedScheduleError(schedule, now);
+  if (error) throw new Error(error);
   if (schedule.kind === "interval") return now + Number(schedule.expr);
   const from = Math.max(scheduledAt + MIN_INTERVAL_MS, now) - 1;
   return (
@@ -110,9 +126,14 @@ export function nextRunAfter(
   );
 }
 
+/**
+ * Null also for an invalid stored interval: approval and resuming already
+ * refuse a schedule without a first time, and neither can pause a job.
+ */
 export function firstRunAfter(schedule: CronSchedule, now: number): number | null {
   if (schedule.kind === "once")
     return Date.parse(schedule.expr) > now ? Date.parse(schedule.expr) : null;
+  if (storedScheduleError(schedule, now)) return null;
   if (schedule.kind === "interval") return now + Number(schedule.expr);
   return (
     new Cron(schedule.expr, { timezone: "Asia/Tokyo" }).nextRun(new Date(now))?.getTime() ?? null

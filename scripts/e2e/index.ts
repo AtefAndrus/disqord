@@ -71,19 +71,24 @@ const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
 const channelId = process.env.E2E_CHANNEL_ID;
 const botId = config.applicationId;
+const interruption = new AbortController();
 const env: ScenarioEnv = {
   databasePath: config.databasePath,
   testerBotId: config.e2eTesterBotId ?? "",
+  interrupted: interruption.signal,
 };
 
 /**
  * What an interrupt undoes before the process exits: first the running
  * scenario's cleanup, since rows it inserted into the bot's database would
- * otherwise stay and run later, then the bot this script started.
+ * otherwise stay and run later, then the bot this script started. The
+ * scenario keeps running meanwhile, so it is told through `env.interrupted`
+ * not to insert anything more.
  */
 const interrupt: { cleanup?: () => Promise<unknown>; stopBot?: () => Promise<void> } = {};
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
+    interruption.abort();
     void (async (): Promise<void> => {
       console.log(`${signal}: cleaning up before exit`);
       await Promise.race([
@@ -300,10 +305,10 @@ async function main(): Promise<number> {
           }
         }
         let triggerId: string | undefined;
-        let cleaning: Promise<string[]> | undefined;
-        // Shared by the normal path and an interrupt, so the cleanup runs once.
-        const cleanup = (): Promise<string[]> => {
-          cleaning ??= (async (): Promise<string[]> => {
+        // Run by both an interrupt and the normal path, not once for both: the
+        // scenario can still write rows after an interrupt's cleanup started.
+        const cleanup = (): Promise<string[]> =>
+          (async (): Promise<string[]> => {
             if (!scenario.cleanup || !channelId) return [];
             const found: string[] = [];
             try {
@@ -323,15 +328,15 @@ async function main(): Promise<number> {
             for (const problem of found) console.log(`     cleanup: ${problem}`);
             return found;
           })();
-          return cleaning;
-        };
         interrupt.cleanup = cleanup;
-        const messageId = await send(scenario, deadline);
-        triggerId = messageId;
-        if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
         const cleanupProblems: string[] = [];
         const { reply, problems, toolWasInvoked } = await (async () => {
           try {
+            // Inside the cleanup's reach: Discord can accept the post and the
+            // bot can answer it even when reading the response fails.
+            const messageId = await send(scenario, deadline);
+            triggerId = messageId;
+            if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
             const reply = await waitForReply({
               read: () => repliesAfter(messageId, deadline, scenario.excludeFromReply),
               pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),

@@ -396,7 +396,23 @@ describe("cron panel interactions", () => {
     expect(db.query("SELECT COUNT(*) AS c FROM cron_proposals").get()).toEqual({ c: 0 });
   });
 
-  test("an edit modal whose job changes after the first check redraws the detail", async () => {
+  test("an edit modal for a one-off job that has run redraws the detail before deferring", async () => {
+    const job = await add("user", new Date(Date.now() + 60 * 60_000).toISOString());
+    repo.consume(job, null, Date.now());
+    expect(repo.getJob(job.id)).toMatchObject({ status: "done", version: job.version });
+    const fixture = await press(`cron:modal:edit:${job.id}:${job.version}`, {
+      kind: "modal",
+      fields: { name: "n", schedule: "1h", prompt: "p", channel: "channel", silent: "always" },
+    });
+    expect(fixture.deferReply).not.toHaveBeenCalled();
+    const panel = text(fixture.update.mock.calls[0]?.[0]);
+    expect(panel).toContain(`cron:run:${job.id}:${job.version}`);
+    expect(panel).not.toContain(`cron:edit:${job.id}`);
+    expect(lastNotice(fixture)).toContain(CRON_STALE_MESSAGE.slice(0, 20));
+    expect(db.query("SELECT COUNT(*) AS c FROM cron_proposals").get()).toEqual({ c: 0 });
+  });
+
+  test("an edit modal whose job changes after deferring answers only in the reply", async () => {
     const job = await add();
     const fixture = interaction(`cron:modal:edit:${job.id}:${job.version}`, {
       kind: "modal",
@@ -408,10 +424,10 @@ describe("cron panel interactions", () => {
     });
     await handler(fixture as unknown as Interaction);
     expect(db.query("SELECT COUNT(*) AS c FROM cron_proposals").get()).toEqual({ c: 0 });
-    expect(text(fixture.editReply.mock.calls[0]?.[0])).toContain(
-      `cron:resume:${job.id}:${job.version + 1}`,
-    );
-    expect(lastNotice(fixture)).toContain(CRON_STALE_MESSAGE.slice(0, 20));
+    const reply = text(fixture.editReply.mock.calls[0]?.[0]);
+    expect(reply).toContain(CRON_STALE_MESSAGE.slice(0, 20));
+    expect(reply).not.toContain(`cron:resume:${job.id}`);
+    expect(fixture.update).not.toHaveBeenCalled();
   });
 
   test("run now that meets a changed version redraws the detail", async () => {
