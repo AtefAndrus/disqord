@@ -1,6 +1,6 @@
 ---
 title: "定期実行での Web 検索"
-status: investigating  # investigating | planned | in-progress | implemented
+status: planned        # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "定期実行のジョブごとに Web 検索を使うかを選べるようにし、使うジョブは通常の返答と同じ回数の上限で検索して答える"
 ---
@@ -90,8 +90,8 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 - [ ] `generateScheduledResponse` の検索と、検索なしでの呼び直し
 - [ ] 投稿のリンクと、確認カードと詳細画面の表示とボタン
 - [ ] `propose_cron_job` の `web_search`
-- [ ] 単体テスト: 非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクが最終ページに残ること、検索なしで答えた注記が先頭ページにあり 2 ページ目の送信の失敗やページの間の `version` の変更でも残ること、呼び直しのリクエストが server tool と検索の system message を持たず日時の文面が検索なしのものであること、`done` のジョブに切り替えのボタンが出ず更新も断ること、詳細画面でオンにするときに確定の前は値が変わらず費用の説明が出ること、旧形式の承認の custom_id では登録せずにカードを描き直すこと、e2e の確認カードの判定が新しい custom_id を認識すること
-- [ ] e2e シナリオ `cron-search` を足し、確認カードの判定を新しい custom_id に合わせ、AGENTS.md の End-to-end 節に実行条件を書く。`bun run e2e cron` と `bun run e2e cron-search` を実行し、結果を PR に書く
+- [ ] 単体テスト: ジョブの `web_search` とギルドの `web_search_enabled` の 4 通りの組のうち、両方が有効なときだけ server tool と検索の system message を送ること、非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクが最終ページに残ること、検索なしで答えた注記が先頭ページにあり 2 ページ目の送信の失敗やページの間の `version` の変更でも残ること、呼び直しのリクエストが server tool と検索の system message を持たず日時の文面が検索なしのものであること、`done` のジョブに切り替えのボタンが出ず更新も断ること、詳細画面でオンにするときに確定の前は値が変わらず費用の説明が出ること、旧形式の承認の custom_id では登録せずにカードを描き直すこと、e2e の確認カードの判定が新しい custom_id を認識すること
+- [ ] e2e シナリオ `cron-search` を足し、確認カードの判定を新しい custom_id に合わせ、AGENTS.md の End-to-end 節に実行条件を書く。`bun run e2e`、`bun run e2e search`、`bun run e2e cron`、`bun run e2e cron-search` を実行し、結果を PR に書く
 - [ ] 手動確認: 確認カードと詳細画面で「Web 検索」ボタンを押し、表示と保存された値が切り替わること、詳細画面のボタンが 2 行に並ぶことを確かめる
 - [ ] `docs/changes/cron-web-search/` 削除（リリース完了時、git 履歴がアーカイブ）
 
