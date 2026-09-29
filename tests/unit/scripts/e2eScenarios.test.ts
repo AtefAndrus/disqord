@@ -100,6 +100,11 @@ describe("cron scenario preconditions", () => {
     const dir = mkdtempSync(join(tmpdir(), "disqord-e2e-"));
     const databasePath = join(dir, "bot.db");
     const db = new Database(databasePath);
+    // The scenario code opens the database by path, so these tests cannot use
+    // :memory:. Each commit to a file fsyncs, and on a slow disk (WSL) the
+    // migrations alone took seconds and pushed tests past the 5s timeout. A
+    // throwaway file needs no durability.
+    db.run("PRAGMA synchronous = OFF");
     applyMigrations(db);
     db.query(
       "INSERT INTO guild_settings (guild_id, default_model, cron_enabled, admin_role_id) VALUES ('guild', 'm', ?, ?)",
@@ -150,6 +155,7 @@ describe("cron scenario preconditions", () => {
     const { dir, env } = setup(1, null);
     try {
       const db = new Database(env.databasePath);
+      db.run("PRAGMA synchronous = OFF");
       const job = (user: string, channel: string, createdAt: number): void => {
         db.query(`INSERT INTO cron_jobs
           (guild_id,channel_id,user_id,name,prompt,kind,expr,status,next_run_at,created_at,updated_at)
