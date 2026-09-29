@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.10.0] - 2026-09-29
+
+
+### Added
+
+- 会話履歴の 24 時間の制限をなくし、tool の結果を context 予算で抑える (#176)
+- モデルが会話の流れでリアクション、投票、スレッド作成、ピン留めを行えるようにする (#178)
+- Discord で表示されない Markdown の表を使わないようモデルに指示する (#182)
+- 登録したプロンプトを決まった時刻に実行して投稿する定期実行を追加する (#188)
+
+
+### Fixed
+
+- 断った設定変更を警告として記録し、preview の Chromium に Windows のフォントを使わせない (#174)
+- ルーターのモデルで返答の見出しにフッタと同じモデルを出す (#181)
+
+
+### Documentation
+
+- 会話履歴の時間制限の撤廃と tool 結果の予算化の設計を追加する (#175)
+- 会話履歴の時間制限の撤廃の前後の計測を記録する (#177)
+- Bot の招待に必要な権限を README に書く (#179)
+- E2e の既定モデルを gemini-3.8-flash にし、Discord 操作に要る権限を書く (#180)
+- 投票の読み取り、Discord の情報を読む tool、自動応答の返答判定の design を追加する (#183)
+- 数式を画像で表示する design を追加する (#184)
+- 数式を画像で表示する design の描画、読み戻し、編集の規則を直す (#186)
+- 定期実行の design を設定パネルと client tool の作りに合わせて書き直す (#187)
+- 会話の区切りの design を追加する (#190)
+- 定期実行と Discord 操作ツールの手動確認の結果を design に書く (#192)
+
+
+### Testing
+
+- Cron シナリオのテストで一時 DB の fsync を止めてタイムアウトを防ぐ (#189)
+
+
 ## [1.9.0] - 2026-09-25
 
 
@@ -487,6 +523,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.10.0]: https://github.com/AtefAndrus/disqord/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/AtefAndrus/disqord/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/AtefAndrus/disqord/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/AtefAndrus/disqord/compare/v1.6.0...v1.7.0

@@ -15,7 +15,7 @@ summary: "会話の窓に入った投票を、質問、選択肢、票数、確�
 
 ## 依存 / 関連 change
 
-- 前提（実装済み）: [discord-tool](../discord-tool/design.md) — `create_poll` が bot を呼んだメッセージへの返信として投票を送る
+- 前提（実装済み）: [discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) — `create_poll` が bot を呼んだメッセージへの返信として投票を送る
 - 関連: [discord-info-tools](../discord-info-tools/design.md) — 読み取りの tool 群。投票は tool にせず本 change の context で扱う
 
 ## Goals / Non-Goals

@@ -16,7 +16,7 @@ bot の会話の窓は応答した発言のチャンネルだけを読む（`src
 ## 依存 / 関連 change
 
 - 先行（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話は応答のたびに Discord から読み、直近は窓として渡し、それより前はモデルが `read_earlier_messages` で取りに行く。窓と遡りはどちらも 24 時間（`CONVERSATION_MAX_AGE_MS`）より古い発言を読まない
-- 関連: [discord-tool](../discord-tool/design.md) — モデルが呼ぶ `create_thread` も `message.startThread()` でスレッドを作る。同 change のスレッドは親の会話を読まない普通のスレッドであり、本 change の分岐とはリリース単位が別なので統合しない。`create_thread` で作ったスレッドにも親の会話を読ませるかは、両方が揃った時点で本 change の系譜表に登録するかで決める
+- 関連: [discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) — モデルが呼ぶ `create_thread` も `message.startThread()` でスレッドを作る。同 change のスレッドは親の会話を読まない普通のスレッドであり、本 change の分岐とはリリース単位が別なので統合しない。`create_thread` で作ったスレッドにも親の会話を読ませるかは、両方が揃った時点で本 change の系譜表に登録するかで決める
 - 連携: [settings-hierarchy](../settings-hierarchy/design.md) — 分岐先スレッドに適用する設定の解決
 
 ## Goals / Non-Goals

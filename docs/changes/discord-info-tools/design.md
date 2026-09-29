@@ -15,7 +15,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 
 ## 依存 / 関連 change
 
-- 前提（実装済み）: [discord-tool](../discord-tool/design.md) — 副作用のある Discord 操作の認可（`discordActionService` の共通の確認）、1 応答あたりの上限、「Discord 操作」の設定。イベントの作成はこの仕組みに載せる
+- 前提（実装済み）: [discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) — 副作用のある Discord 操作の認可（`discordActionService` の共通の確認）、1 応答あたりの上限、「Discord 操作」の設定。イベントの作成はこの仕組みに載せる
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓、`read_earlier_messages` と `view_attachment`、窓の参照（`m7`）、応答ごとの REST の上限
 - 関連: [poll-results](../poll-results/design.md) — 投票の結果は tool にせず窓で扱う
 
@@ -32,7 +32,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 
 **Non-Goals:**
 
-- テキストチャンネルとその中のスレッド以外での利用。ボイスやステージのチャンネルのテキストチャットは、メッセージを読むのに Connect も要るなど権限の前提が異なり、[discord-tool](../discord-tool/design.md) と同じく対象にしない
+- テキストチャンネルとその中のスレッド以外での利用。ボイスやステージのチャンネルのテキストチャットは、メッセージを読むのに Connect も要るなど権限の前提が異なり、[discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) と同じく対象にしない
 - 他のチャンネルのピン留めや情報を読むこと（依頼者が見られるかの確認を広げる必要があり、使い道がはっきりしてから扱う）
 - イベントの編集、削除、参加者の一覧
 - ステージのイベントの作成（Manage Channels、Mute Members、Move Members を要し、bot にそこまで渡したくない）
@@ -40,7 +40,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 
 **将来別 change 候補:**
 
-- メンバー検索、メッセージ検索（[discord-tool](../discord-tool/design.md) の将来別 change 候補を参照）
+- メンバー検索、メッセージ検索（[discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) の将来別 change 候補を参照）
 
 ## Decisions
 

@@ -17,7 +17,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 ## 依存 / 関連 change
 
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — `/stats` のうち他のメンバーの使用量を見る操作は同 change の共通認可関数で判定する。同じ `guild_settings` を触るが、本 change は列を足さない
-- 連携: [スケジュール実行（cron）](../cron/design.md) — ジョブの実行も `usage_logs` に記録し、`user_id` にはジョブの登録者を入れる
+- 連携: [スケジュール実行（cron）](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/cron/design.md) — ジョブの実行も `usage_logs` に記録し、`user_id` にはジョブの登録者を入れる
 - 連携: [OAuth BYOK](../oauth-byok/design.md) — どのキーで支払ったか（ユーザー / Guild / デフォルト）を `key_source` 列に記録する。同 change より先に実装した場合、列は `default` だけを取る
 
 ## Goals / Non-Goals
@@ -41,7 +41,7 @@ summary: "サーバー/ユーザー/モデル別の使用量とコストを記�
 | 統計の保存先 | SQLite の新テーブル `usage_logs` | 既存の DB を使える。`reply_records` は Discord 上のページ管理のための表で、スケジュール実行のように返答ページを持たない実行を載せられない |
 | メッセージ内容の保存 | 保存しない | 個人情報保護 |
 | ログの保持期間 | 永続（削除機能は将来検討） | 長期トレンド分析を可能にする |
-| 記録する箇所 | チャットは `chatService.generateChatResponse` が再試行を含めた最終の結果を決めた直後に 1 回だけ記録する。Web 検索やツイート画像の失敗でループ全体をやり直すと 1 回の応答に複数の tool ループの結果ができ、現在のコードは各試行の usage を `addUsage` で合算して最終の結果に載せている（失敗した試行の費用も含む）。ターン数と `cost` を報告したターン数も同じく全試行で合算する。スケジュール実行は [cron](../cron/design.md) の `chatService.generateScheduledResponse` が OpenRouter の応答を受け取った直後 | tool ループの結果（`ToolLoopResult`）は完了・停止・エラーのどれでも `usage` を持つ。Discord への描画や配信が後で失敗してもクレジットは消費済みなので、描画結果を待つ `messageCreate` 側ではなくここで記録する。cron と本 change のどちらが後に実装されても、後の側が `generateScheduledResponse` の記録を実装する |
+| 記録する箇所 | チャットは `chatService.generateChatResponse` が再試行を含めた最終の結果を決めた直後に 1 回だけ記録する。Web 検索やツイート画像の失敗でループ全体をやり直すと 1 回の応答に複数の tool ループの結果ができ、現在のコードは各試行の usage を `addUsage` で合算して最終の結果に載せている（失敗した試行の費用も含む）。ターン数と `cost` を報告したターン数も同じく全試行で合算する。スケジュール実行は [cron](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/cron/design.md) の `chatService.generateScheduledResponse` が OpenRouter の応答を受け取った直後 | tool ループの結果（`ToolLoopResult`）は完了・停止・エラーのどれでも `usage` を持つ。Discord への描画や配信が後で失敗してもクレジットは消費済みなので、描画結果を待つ `messageCreate` 側ではなくここで記録する。cron と本 change のどちらが後に実装されても、後の側が `generateScheduledResponse` の記録を実装する |
 | トークン列の名前 | `prompt_tokens` / `completion_tokens` | 内部の usage 型は Chat Completions の名前を使う（`src/types/index.ts` の `ChatCompletionResponse.usage`）。Responses API の `input_tokens` / `output_tokens` はクライアントの境界で変換済みであり、列名を内部型に揃えると変換が要らない |
 | 不明な値 | NULL で保存する | 内部の usage 型では、報告されなかった項目は欠落しており、0 とは区別される。`cost` を 0 で埋めると「無料だった」と「不明」が見分けられない |
 | 停止・失敗した応答 | 行は記録し、`usage_complete = 0` を付けてトークンとコストの合計から除く | 停止時は進行中のターンの usage が届かない（`src/bot/events/messageCreate.ts:417` のコメント）。記録される値は完了済みのターンの分だけで、実際の消費より少ない。合計に混ぜると過少になり、捨てると停止率が出せない |
