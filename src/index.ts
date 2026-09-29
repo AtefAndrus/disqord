@@ -19,6 +19,7 @@ import { createAddReactionTool } from "./llm/tools/discord/addReaction";
 import { createCreatePollTool } from "./llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "./llm/tools/discord/createThread";
 import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
+import { createProposeCronJobTool } from "./llm/tools/proposeCronJob";
 import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
@@ -78,6 +79,7 @@ async function bootstrap(): Promise<void> {
   toolRegistry.register(createCreatePollTool());
   toolRegistry.register(createCreateThreadTool());
   toolRegistry.register(createPinMessageTool());
+  toolRegistry.register(createProposeCronJobTool());
   const chatService = new ChatService(
     llmClient,
     settingsService,
@@ -149,6 +151,7 @@ async function bootstrap(): Promise<void> {
       webSearchEngine: config.webSearchEngine,
       conversationWindow,
       replyRecordService,
+      cronService,
     },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
@@ -158,6 +161,7 @@ async function bootstrap(): Promise<void> {
     llmClient,
     chatService,
     config.webSearchEngine,
+    cronService,
   );
 
   const releaseAnnouncer = new ReleaseAnnouncer(

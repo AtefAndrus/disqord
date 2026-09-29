@@ -1,4 +1,4 @@
-import type { MessageCreateOptions } from "discord.js";
+import type { ContainerBuilder, MessageCreateOptions } from "discord.js";
 import { RESTJSONErrorCodes } from "discord.js";
 import type {
   CronJob,
@@ -159,6 +159,40 @@ async function withTimeout<T>(
     clearTimeout(timer);
     parent.removeEventListener("abort", abort);
   }
+}
+
+const OMITTED_NOTE = "\n-# 以降のページは省略しました。";
+
+/** A scheduled answer as the chat's final pages, headed by the job name and cut at five pages. */
+export function buildScheduledPages(
+  name: string,
+  text: string,
+  model: string,
+  metadata: FinalMetadata,
+): ContainerBuilder[] {
+  const footer = estimateFinalFooterBudget(metadata);
+  const note = measureTextBudget(OMITTED_NOTE);
+  const chunks = splitTextIntoMessages(
+    `-# 定期実行「${name}」\n${text}`,
+    measureTextBudget(model),
+    {
+      chars: footer.chars + note.chars,
+      bytes: footer.bytes + note.bytes,
+    },
+  );
+  const pages = chunks.slice(0, 5);
+  if (chunks.length > 5) pages[4] = `${pages[4]}${OMITTED_NOTE}`;
+  return pages.map((page, index) =>
+    buildFinalContainer({
+      text: page,
+      color: EmbedColors.BLURPLE,
+      modelName: model,
+      isFirst: index === 0,
+      isLast: index === pages.length - 1,
+      metadata,
+      pageInfo: { page: index + 1, total: pages.length },
+    }),
+  );
 }
 
 export class CronService implements ICronService {
@@ -485,28 +519,14 @@ export class CronService implements ICronService {
           model: response.model,
           usage: response.usage,
         };
-        const heading = `-# 定期実行「${job.name}」\n`;
-        const footer = estimateFinalFooterBudget(metadata);
-        const note = measureTextBudget("\n-# 以降のページは省略しました。");
-        const chunks = splitTextIntoMessages(
-          heading + response.text,
-          measureTextBudget(response.model),
-          { chars: footer.chars + note.chars, bytes: footer.bytes + note.bytes },
-        );
-        const pages = chunks.slice(0, 5);
-        if (chunks.length > 5) pages[4] = `${pages[4]}\n-# 以降のページは省略しました。`;
-        for (const [index, text] of pages.entries()) {
+        for (const [index, container] of buildScheduledPages(
+          job.name,
+          response.text,
+          response.model,
+          metadata,
+        ).entries()) {
           if (this.closing || signal.aborted || !this.current(job))
             return failure("中断されました。");
-          const container = buildFinalContainer({
-            text,
-            color: EmbedColors.BLURPLE,
-            modelName: response.model,
-            isFirst: index === 0,
-            isLast: index === pages.length - 1,
-            metadata,
-            pageInfo: { page: index + 1, total: pages.length },
-          });
           try {
             await withTimeout(
               () => channel.send(toComponentsV2Payload(container)),

@@ -1,4 +1,10 @@
+import { Database } from "bun:sqlite";
 import { describe, expect, mock, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PermissionFlagsBits } from "discord.js";
+import { cronPreconditions, type ScenarioEnv } from "../../../scripts/e2e/cron";
 import {
   costOf,
   type DiscordMessage,
@@ -12,6 +18,7 @@ import {
   snapshotKey,
   toReply,
 } from "../../../scripts/e2e/scenarios";
+import { applyMigrations } from "../../../src/db/schema";
 import { EmbedColors } from "../../../src/types/embed";
 import {
   buildErrorContainer,
@@ -62,6 +69,8 @@ function streamingPage(id: string, body: string): DiscordMessage {
   };
 }
 
+const env: ScenarioEnv = { databasePath: ":memory:", testerBotId: "tester" };
+
 function check(name: string, messages: DiscordMessage[]): string[] {
   const scenario = SCENARIOS.find((s) => s.name === name);
   if (!scenario) throw new Error(`no scenario ${name}`);
@@ -76,11 +85,81 @@ test("discord-tools cleanup removes the thread and pin after a failed verificati
     if (path === "/channels/thread") return new Response(null, { status: 403 });
     return new Response(null, { status: 204 });
   });
-  expect(await scenario.cleanup("trigger", "channel", request)).toEqual([
+  expect(await scenario.cleanup("trigger", "channel", request, env)).toEqual([
     "cannot delete thread: HTTP 403",
   ]);
   expect(request).toHaveBeenCalledWith("/channels/thread", { method: "DELETE" });
   expect(request).toHaveBeenCalledWith("/channels/channel/pins/trigger", { method: "DELETE" });
+});
+
+describe("cron scenario preconditions", () => {
+  function setup(
+    cronEnabled: number,
+    adminRoleId: string | null,
+  ): { dir: string; env: ScenarioEnv } {
+    const dir = mkdtempSync(join(tmpdir(), "disqord-e2e-"));
+    const databasePath = join(dir, "bot.db");
+    const db = new Database(databasePath);
+    applyMigrations(db);
+    db.query(
+      "INSERT INTO guild_settings (guild_id, default_model, cron_enabled, admin_role_id) VALUES ('guild', 'm', ?, ?)",
+    ).run(cronEnabled, adminRoleId);
+    db.close();
+    return { dir, env: { databasePath, testerBotId: "tester" } };
+  }
+  function discord(testerRoles: string[], rolePermissions: Record<string, bigint>) {
+    return mock(async (path: string) => {
+      if (path === "/channels/channel") return Response.json({ guild_id: "guild" });
+      if (path === "/guilds/guild/members/tester") return Response.json({ roles: testerRoles });
+      if (path === "/guilds/guild/roles")
+        return Response.json(
+          Object.entries(rolePermissions).map(([id, bits]) => ({ id, permissions: String(bits) })),
+        );
+      return new Response(null, { status: 404 });
+    });
+  }
+
+  test("passes with the setting on and a tester holding the admin role", async () => {
+    const { dir, env } = setup(1, "admin");
+    try {
+      expect(
+        await cronPreconditions("channel", discord(["admin"], { guild: 0n, admin: 0n }), env),
+      ).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test("reports the setting and a tester without ManageGuild or the admin role", async () => {
+    const { dir, env } = setup(0, null);
+    try {
+      const problems = await cronPreconditions(
+        "channel",
+        discord(["member"], { guild: 0n, member: PermissionFlagsBits.SendMessages }),
+        env,
+      );
+      expect(problems).toHaveLength(2);
+      expect(problems[0]).toContain("定期実行 is off");
+      expect(problems[1]).toContain("cannot propose");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test("accepts ManageGuild from a role", async () => {
+    const { dir, env } = setup(1, null);
+    try {
+      expect(
+        await cronPreconditions(
+          "channel",
+          discord(["mod"], { guild: 0n, mod: PermissionFlagsBits.ManageGuild }),
+          env,
+        ),
+      ).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
 });
 
 describe("e2e scenarios: レンダラの実出力との整合", () => {

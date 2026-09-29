@@ -4,7 +4,8 @@ import type { CronJob } from "../../../src/db/repositories/cronRepository";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
-import type { DiscordToolContext } from "../../../src/llm/tools/registry";
+import { createProposeCronJobTool } from "../../../src/llm/tools/proposeCronJob";
+import type { CronToolContext, DiscordToolContext } from "../../../src/llm/tools/registry";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
 import { ChatService } from "../../../src/services/chatService";
@@ -195,6 +196,45 @@ describe("ChatService", () => {
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
     expect(JSON.stringify(request.tools)).toContain('"name":"add_reaction"');
     expect(request.messages.at(-1)?.content).toBe("react");
+  });
+
+  test("offers propose_cron_job only when scheduled jobs are enabled", async () => {
+    const models = mock(async () => [
+      {
+        id: "test-model:fixture",
+        name: "Fixture",
+        created: 0,
+        contextLength: 128_000,
+        pricing: { prompt: "0", completion: "0" },
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+        supportedParameters: ["tools"],
+      },
+    ]);
+    const cron: CronToolContext = {
+      channelType: 0,
+      propose: async () => '{"ok":true}',
+    };
+    const toolsFor = async (cronEnabled: boolean): Promise<string> => {
+      const fixture = createFixture({
+        historyEnabled: false,
+        discordToolsEnabled: false,
+        cronEnabled,
+      });
+      fixture.toolRegistry.register(createProposeCronJobTool());
+      fixture.llmClient.listModelsWithPricing = models;
+      await fixture.chatService.generateChatResponse(
+        "guild",
+        { text: "毎朝挨拶して", cron },
+        "request",
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+      return JSON.stringify(request.tools ?? []);
+    };
+    expect(await toolsFor(true)).toContain('"name":"propose_cron_job"');
+    expect(await toolsFor(false)).not.toContain("propose_cron_job");
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {

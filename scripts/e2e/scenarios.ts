@@ -5,6 +5,13 @@ import {
   extractComponentsV2Footer,
   type RawDiscordMessage,
 } from "../../src/utils/discordMessageNormalizer";
+import {
+  cleanupCron,
+  cronPreconditions,
+  isProposalCard,
+  type ScenarioEnv,
+  verifyCron,
+} from "./cron";
 import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
 
 export interface DiscordMessage {
@@ -46,8 +53,16 @@ export interface Scenario {
   };
   mention?: boolean;
   files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
-  toolName?: "read_earlier_messages" | "view_attachment";
+  toolName?: "read_earlier_messages" | "view_attachment" | "propose_cron_job";
   timeoutMs?: number;
+  /** Bot messages that are not part of the reply, such as a separate card; the reply is read without them. */
+  excludeFromReply?: (message: DiscordMessage) => boolean;
+  /** Returns why the scenario cannot run; checked before anything is posted. */
+  before?: (
+    channelId: string,
+    request: (path: string, init?: RequestInit) => Promise<Response>,
+    env: ScenarioEnv,
+  ) => Promise<string[]>;
   /** Returns the reasons the reply is wrong; empty means it passed. */
   check: (reply: Reply) => string[];
   verify?: (
@@ -55,11 +70,13 @@ export interface Scenario {
     channelId: string,
     request: (path: string, init?: RequestInit) => Promise<Response>,
     botId: string,
+    env: ScenarioEnv,
   ) => Promise<string[]>;
   cleanup?: (
     triggerId: string,
     channelId: string,
     request: (path: string, init?: RequestInit) => Promise<Response>,
+    env: ScenarioEnv,
   ) => Promise<string[]>;
 }
 
@@ -301,6 +318,23 @@ export const LONG_NUMBER_COUNT = 1200;
 export const LONG_NUMBERS_PER_LINE = 20;
 
 export const SCENARIOS: Scenario[] = [
+  {
+    name: "cron",
+    manual: true,
+    prompt:
+      "[e2e] 毎朝 9 時に「おはようございます」と挨拶する定期投稿を登録したい。propose_cron_job ツールで、名前 e2e-morning、スケジュール 0 9 * * * で提案して。",
+    toolName: "propose_cron_job",
+    // The reply, then a one-off job that waits for the once-a-minute ticker.
+    timeoutMs: 420_000,
+    excludeFromReply: isProposalCard,
+    before: cronPreconditions,
+    check: (reply) => [
+      ...(reply.isError ? ["the reply ended in an error"] : []),
+      ...hasUsageFooter(reply),
+    ],
+    verify: verifyCron,
+    cleanup: (_triggerId, _channelId, _request, env) => cleanupCron(env),
+  },
   {
     name: "discord-tools",
     manual: true,

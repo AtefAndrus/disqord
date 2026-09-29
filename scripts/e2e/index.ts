@@ -30,6 +30,7 @@ import {
   type ScenarioCost,
   type UsageState,
 } from "./cost";
+import type { ScenarioEnv } from "./cron";
 import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
   costOf,
@@ -69,6 +70,10 @@ const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
 const channelId = process.env.E2E_CHANNEL_ID;
 const botId = config.applicationId;
+const env: ScenarioEnv = {
+  databasePath: config.databasePath,
+  testerBotId: config.e2eTesterBotId ?? "",
+};
 
 function requireEnv(): void {
   const missing = [
@@ -156,7 +161,11 @@ async function send(scenario: Scenario, deadline: number): Promise<string> {
   return post(scenario.prompt, scenario.mention ?? true, scenario.files, deadline);
 }
 
-async function repliesAfter(messageId: string, deadline: number): Promise<Reply> {
+async function repliesAfter(
+  messageId: string,
+  deadline: number,
+  exclude: Scenario["excludeFromReply"],
+): Promise<Reply> {
   const response = await discord(
     `/channels/${channelId}/messages?after=${messageId}&limit=50`,
     deadline,
@@ -164,6 +173,7 @@ async function repliesAfter(messageId: string, deadline: number): Promise<Reply>
   if (!response.ok) throw new Error(`read failed: HTTP ${response.status}`);
   const messages = ((await response.json()) as DiscordMessage[])
     .filter((message) => message.author.id === botId && ((message.flags ?? 0) & (1 << 15)) !== 0)
+    .filter((message) => !exclude?.(message))
     .reverse();
   return toReply(messages);
 }
@@ -257,13 +267,28 @@ async function main(): Promise<number> {
       const startedAt = Date.now();
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
+        if (scenario.before && channelId) {
+          const blockers = await scenario.before(
+            channelId,
+            (path, init) => discord(path, deadline, init),
+            env,
+          );
+          if (blockers.length > 0) {
+            // Nothing was posted, so the scenarios after this one stay attributable.
+            failures++;
+            costs.push({ name: scenario.name, cost: undefined });
+            console.log(`FAIL ${scenario.name}: not run`);
+            for (const blocker of blockers) console.log(`     - ${blocker}`);
+            continue;
+          }
+        }
         const messageId = await send(scenario, deadline);
         if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
         const cleanupProblems: string[] = [];
         const { reply, problems, toolWasInvoked } = await (async () => {
           try {
             const reply = await waitForReply({
-              read: () => repliesAfter(messageId, deadline),
+              read: () => repliesAfter(messageId, deadline, scenario.excludeFromReply),
               pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
               log: console.log,
             });
@@ -278,6 +303,7 @@ async function main(): Promise<number> {
                   channelId,
                   (path, init) => discord(path, deadline, init),
                   botId,
+                  env,
                 )),
               );
             }
@@ -287,8 +313,11 @@ async function main(): Promise<number> {
               try {
                 const cleanupDeadline = Date.now() + CLEANUP_TIMEOUT_MS;
                 cleanupProblems.push(
-                  ...(await scenario.cleanup(messageId, channelId, (path, init) =>
-                    discord(path, cleanupDeadline, init),
+                  ...(await scenario.cleanup(
+                    messageId,
+                    channelId,
+                    (path, init) => discord(path, cleanupDeadline, init),
+                    env,
                   )),
                 );
               } catch (error) {

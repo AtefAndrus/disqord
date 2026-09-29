@@ -4,7 +4,7 @@ import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
-import type { DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
+import type { CronToolContext, DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
   buildWebSearchStaticSystemMessage,
@@ -35,6 +35,7 @@ export interface ChatUserInput {
   authorLabel?: string;
   conversation?: ConversationWindowContext;
   discord?: DiscordToolContext;
+  cron?: CronToolContext;
 }
 
 export interface ChatRequestContext {
@@ -342,6 +343,7 @@ export class ChatService implements IChatService {
 
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
+      const cron = settings.cronEnabled ? input.cron : undefined;
       let supportsTools = false;
       let requestReasoning: ChatCompletionRequest["reasoning"];
       let contextLength: number | null = null;
@@ -350,7 +352,12 @@ export class ChatService implements IChatService {
       // wait on the models API, and without them there are no client tools
       // whose results need the reservation.
       let maxOutputTokens: number | undefined;
-      if (conversation || settings.discordToolsEnabled || settings.reasoningDisplayEnabled) {
+      if (
+        conversation ||
+        settings.discordToolsEnabled ||
+        settings.cronEnabled ||
+        settings.reasoningDisplayEnabled
+      ) {
         try {
           const detailsResult = await raceWithAbort(
             this.modelService.getModelDetails(settings.defaultModel),
@@ -358,7 +365,7 @@ export class ChatService implements IChatService {
           );
           if (!detailsResult.ok) return { status: "cancelled", history: initialMessages };
           const details = detailsResult.value;
-          if (conversation || settings.discordToolsEnabled)
+          if (conversation || settings.discordToolsEnabled || settings.cronEnabled)
             supportsTools = details?.supportsTools ?? false;
           if (
             settings.reasoningDisplayEnabled &&
@@ -462,6 +469,15 @@ export class ChatService implements IChatService {
               },
             }
           : undefined;
+        const cronContext: CronToolContext | undefined = cron
+          ? {
+              channelType: cron.channelType,
+              propose: (...args) => {
+                clientToolInvoked = true;
+                return cron.propose(...args);
+              },
+            }
+          : undefined;
         const tracked = createTrackingUpdater(updater);
         const result = await this.runChatLoop(
           requestWithout(dropTweetImages, dropWebSearch),
@@ -474,6 +490,7 @@ export class ChatService implements IChatService {
           conversation?.sessionId,
           toolContext,
           discordContext,
+          cronContext,
           settings.defaultModel,
           supportsTools,
           contextLength,
@@ -522,6 +539,7 @@ export class ChatService implements IChatService {
     sessionId: string | undefined,
     conversation: ConversationWindowContext["toolContext"] | undefined,
     discord: DiscordToolContext | undefined,
+    cron: CronToolContext | undefined,
     model: string,
     toolsAllowed: boolean,
     contextLength: number | null,
@@ -552,6 +570,7 @@ export class ChatService implements IChatService {
         toolsAllowed,
         ...(conversation && { conversation }),
         ...(discord && { discord }),
+        ...(cron && { cron }),
       },
       updater,
       signal,

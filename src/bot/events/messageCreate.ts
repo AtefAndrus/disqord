@@ -7,6 +7,8 @@ import type {
   ConversationWindowContext,
   ConversationWindowService,
 } from "../../services/conversationWindow";
+import type { ICronService } from "../../services/cronService";
+import { CronToolSession } from "../../services/cronToolContext";
 import { DiscordActionService } from "../../services/discordActionService";
 import type {
   AuthorizationChannelLike,
@@ -206,6 +208,7 @@ export function createMessageCreateHandler(
     webSearchEngine?: string;
     conversationWindow?: ConversationWindowService;
     replyRecordService?: IReplyRecordService;
+    cronService?: ICronService;
   } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
@@ -416,6 +419,14 @@ export function createMessageCreateHandler(
               conversation?.toolContext.resolveMessageRef(ref),
             ),
           }),
+          ...(settings.cronEnabled &&
+            options.cronService && {
+              cron: new CronToolSession(
+                message as Message<true>,
+                options.cronService,
+                settingsService,
+              ),
+            }),
         },
         message.id,
         updater,
