@@ -12,7 +12,7 @@
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
-| [スケジュール実行（cron）](changes/cron/design.md) | 中 | planned | ユーザ/LLM が登録した定期タスクを承認後にスケジュールし、指定チャンネルへ配信 |
+| [定期実行](changes/cron/design.md) | 中 | planned | 登録したプロンプトを決まった時刻に LLM で実行し、指定チャンネルへ投稿する。登録は /cron パネルの modal と会話中の tool の 2 経路で、どちらも確認カードの承認を経る |
 | [カスタム絵文字・スタンプ・GIF への対応](changes/discord-expressions/design.md) | 中 | planned | カスタム絵文字、スタンプ、GIF の埋め込みをモデルが読めるようにし、返信でサーバーのカスタム絵文字を使えるようにする |
 | [Discord の情報を読む tool とイベントの作成](changes/discord-info-tools/design.md) | 中 | planned | ピン留め一覧、チャンネル情報、サーバーのイベント一覧をモデルが読める tool と、イベントを作る tool |
 | [Discord 操作ツール](changes/discord-tool/design.md) | 中 | in-progress | リアクション、投票、スレッド作成、ピン留めを、会話の流れでモデルが行える client tool 群 |
