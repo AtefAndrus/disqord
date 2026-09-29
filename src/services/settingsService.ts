@@ -58,6 +58,7 @@ export interface ISettingsService {
     enabled: boolean,
     actorId?: string,
   ): Promise<GuildSettings>;
+  setCronEnabled?(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {
@@ -76,6 +77,14 @@ function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | und
 
 export class SettingsService implements ISettingsService {
   constructor(private readonly repo: IGuildSettingsRepository) {}
+
+  async setCronEnabled(
+    guildId: string,
+    enabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ cronEnabled: enabled }), actorId);
+  }
 
   async setDiscordToolsEnabled(
     guildId: string,

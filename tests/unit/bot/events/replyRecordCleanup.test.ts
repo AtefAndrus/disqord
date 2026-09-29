@@ -14,6 +14,21 @@ function service(): {
 }
 
 describe("reply record cleanup handlers", () => {
+  test("deletes cron jobs and proposals for removed guilds, channels and threads", async () => {
+    const cron = {
+      deleteByGuild: mock((_id: string) => 1),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const handlers = createReplyRecordCleanupHandlers(service(), cron);
+    await handlers.guildDelete({ id: "guild" });
+    await handlers.channelDelete({ id: "channel" });
+    await handlers.threadDelete({ id: "thread" });
+    await handlers.reconcileGuilds(["kept"]);
+    expect(cron.deleteByGuild.mock.calls).toEqual([["guild"]]);
+    expect(cron.deleteByChannel.mock.calls).toEqual([["channel"], ["thread"]]);
+    expect(cron.deleteGuildsNotIn.mock.calls).toEqual([[["kept"]]]);
+  });
   test("deletes the records of the guild left, the channel deleted, and the thread deleted", async () => {
     const deleter = service();
     const handlers = createReplyRecordCleanupHandlers(deleter);

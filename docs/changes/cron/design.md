@@ -1,6 +1,6 @@
 ---
 title: "定期実行"
-status: planned      # investigating | planned | in-progress | implemented
+status: in-progress      # investigating | planned | in-progress | implemented
 priority: medium     # high | medium | low
 summary: "登録したプロンプトを決まった時刻に LLM で実行し、指定チャンネルへ投稿する。登録は /cron パネルの modal と会話中の tool の 2 経路で、どちらも確認カードの承認を経る"
 ---
@@ -318,14 +318,14 @@ CREATE TABLE IF NOT EXISTS cron_proposals (
 ## Tasks
 
 - [ ] `croner` を足す（実装時点の最新の安定版を確かめる）
-- [ ] `cron_enabled` の列と、「機能」ページの項目、`/status` の表示を足す
-- [ ] `cron_jobs`、`cron_proposals` と `cronRepository` を足す
-- [ ] スケジュールの解釈と検証、次の時刻の計算を実装する
-- [ ] `chat()` に `signal` を足し、`generateScheduledResponse` を実装する
-- [ ] ティッカー、実行、配信、起動時の繰り越し、終了時の停止を実装する
+- [x] `cron_enabled` の列と、「機能」ページの項目、`/status` の表示を足す
+- [x] `cron_jobs`、`cron_proposals` と `cronRepository` を足す
+- [x] スケジュールの解釈と検証、次の時刻の計算を実装する
+- [x] `chat()` に `signal` を足し、`generateScheduledResponse` を実装する
+- [x] ティッカー、実行、配信、起動時の繰り越し、終了時の停止を実装する
 - [ ] `/cron` パネル、modal、確認カードと `interactionCreate` の振り分けを実装する
 - [ ] `CronToolContext` と `propose_cron_job` を実装して登録する
-- [ ] ギルド、チャンネル、スレッドの削除に連動した削除を足す
+- [x] ギルド、チャンネル、スレッドの削除に連動した削除を足す
 - [ ] preview の fixture を足す
 - [ ] テスト: 各形式の解釈と拒否（6 フィールドが LLM に回らず拒否されること、5 分未満、存在しない日付、オフセットの無い日時、過去の日時、今後一致しない cron 式）、`nextRun` が境界の時刻（`0 9 * * *` に 09:00:00 を渡す）で次の日を返すこと、`*/5 * * * *` が遅れて実行されても 5 分ごとに続くことと密集する式の時刻が飛ばされること、実行前の時刻の消費と条件付き更新、停止中に過ぎた時刻の繰り越しと 10 分の猶予、実行中の停止、停止してからの再開、編集、削除での投稿と結果の保存の中止、分割投稿の成否の数え方、`[SILENT]` が成功に数えられること、連続失敗での停止、承認の二重押しと上限と `version` の食い違い、承認時に過ぎた日時指定の拒否、提案者以外と権限の無い人の承認の拒否、無効なギルドでの操作と tool の提案の拒否、無料モデル限定のギルドで有料になった既定モデルを呼ばないこと、Unknown Channel での削除、終了中に新しい実行が始まらないこと、tool の 1 応答 1 回
 - [ ] e2e シナリオ `cron` を足し、AGENTS.md の End-to-end 節に実行条件を書く

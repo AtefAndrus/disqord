@@ -1,3 +1,4 @@
+import type { CronJob } from "../db/repositories/cronRepository";
 import { BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
@@ -197,6 +198,72 @@ export class ChatService implements IChatService {
     private readonly tweetService: ITweetService,
     private readonly modelService: IModelService,
   ) {}
+
+  async assertScheduledModel(guildId: string): Promise<string> {
+    const settings = await this.settingsService.getGuildSettings(guildId);
+    if (settings.freeModelsOnly) {
+      const free = await this.modelService.isFreeModelWithFreshData?.(settings.defaultModel);
+      if (free !== true)
+        throw new Error("無料モデル限定のため、既定モデルの無料状態を確認できません。");
+    }
+    return settings.defaultModel;
+  }
+
+  async interpretCronSchedule(
+    guildId: string,
+    input: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const model = await this.assertScheduledModel(guildId);
+    const response = await this.llmClient.chat(
+      {
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              '現在日時を基準に、入力を 5 フィールドの cron 式、5 分以上の固定間隔（例 30m）、またはオフセット付き ISO 8601 日時へ変換する。JSON の {"schedule":"..."} だけを返す。',
+          },
+          buildDateTimeSystemMessage(new Date(), false),
+          { role: "user", content: input },
+        ],
+      },
+      signal,
+    );
+    const text = response.choices[0]?.message.content ?? "";
+    const parsed: unknown = JSON.parse(text);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("schedule" in parsed) ||
+      typeof parsed.schedule !== "string"
+    )
+      throw new Error("スケジュールの変換結果を読み取れませんでした。");
+    return parsed.schedule;
+  }
+
+  async generateScheduledResponse(
+    job: CronJob,
+    signal: AbortSignal,
+  ): Promise<{ text: string; usage?: ChatCompletionResponse["usage"]; model: string }> {
+    const model = await this.assertScheduledModel(job.guildId);
+    const messages: ChatMessage[] = [
+      DISCORD_FORMAT_SYSTEM_MESSAGE,
+      buildDateTimeSystemMessage(new Date(), false),
+    ];
+    if (job.silent)
+      messages.push({
+        role: "system",
+        content: "特に伝えることが無ければ、本文を [SILENT] だけにすること。",
+      });
+    messages.push({ role: "user", content: job.prompt });
+    const response = await this.llmClient.chat({ model, messages }, signal);
+    return {
+      text: response.choices[0]?.message.content ?? "",
+      usage: response.usage,
+      model: response.model ?? model,
+    };
+  }
 
   async generateResponse(
     guildId: GuildId,

@@ -36,6 +36,7 @@ export interface IModelService {
   getFreeModels(options?: { noCache?: boolean }): Promise<OpenRouterModel[]>;
   isModelAvailable(modelId: string): Promise<boolean>;
   isFreeModel(modelId: string): Promise<boolean>;
+  isFreeModelWithFreshData?(modelId: string): Promise<boolean | null>;
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
   getModelName(modelId: string): Promise<string | null>;
   getModelDetails(modelId: string): Promise<ModelDetails | null>;
@@ -90,6 +91,13 @@ export class ModelService implements IModelService {
   async isFreeModel(modelId: string): Promise<boolean> {
     const freeModels = await this.getFreeModels();
     return freeModels.some((m) => m.id === modelId);
+  }
+
+  async isFreeModelWithFreshData(modelId: string): Promise<boolean | null> {
+    await this.getAllModels();
+    if (!this.modelsCache || this.modelsCache.expiresAt <= Date.now()) return null;
+    const model = this.modelsCache.data.find((entry) => entry.id === modelId);
+    return model ? model.pricing.prompt === "0" && model.pricing.completion === "0" : null;
   }
 
   async validateModelSelection(

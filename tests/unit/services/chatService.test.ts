@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
+import type { CronJob } from "../../../src/db/repositories/cronRepository";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
@@ -75,6 +76,37 @@ function createFixture(overrides: Partial<GuildSettings> = {}): ChatFixture {
   );
   return { chatService, llmClient, settingsService, tweetService, toolRegistry };
 }
+
+test("scheduled generation and schedule conversion never call a paid default model in a free-only guild", async () => {
+  const { chatService, llmClient } = createFixture({
+    freeModelsOnly: true,
+    defaultModel: "model-2",
+  });
+  const job: CronJob = {
+    id: 1,
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    name: "name",
+    prompt: "prompt",
+    kind: "interval",
+    expr: "300000",
+    silent: false,
+    status: "active",
+    nextRunAt: 1,
+    lastRunAt: null,
+    failCount: 0,
+    lastError: null,
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await expect(
+    chatService.generateScheduledResponse(job, new AbortController().signal),
+  ).rejects.toThrow();
+  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow();
+  expect(llmClient.chat).not.toHaveBeenCalled();
+});
 
 function conversationContext(): ConversationWindowContext {
   return {

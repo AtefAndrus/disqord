@@ -101,6 +101,7 @@ describe("config pages", () => {
       { id: "web_search:off", label: "無効にする", style: 3 },
       { id: "history:on", label: "有効にする", style: 2 },
       { id: "discord_tools:on", label: "有効にする", style: 2 },
+      { id: "cron:on", label: "有効にする", style: 2 },
     ]);
   });
 

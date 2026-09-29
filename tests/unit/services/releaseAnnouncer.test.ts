@@ -17,6 +17,7 @@ import { applyMigrations } from "../../../src/db/schema";
 import {
   createReleaseSender,
   ReleaseAnnouncer,
+  resolveMessageChannel,
   resolveReleaseChannel,
 } from "../../../src/services/releaseAnnouncer";
 import { parseChangelog, type ReleaseNotes } from "../../../src/services/releaseNotes";
@@ -320,5 +321,30 @@ describe("Discord release destination", () => {
   test("deleted channels are rejected", async () => {
     const guild = { id: "guild", channels: { fetch: async () => null } } as unknown as Guild;
     await expect(resolveReleaseChannel(guild, "deleted")).rejects.toThrow();
+  });
+  test("cron destinations accept a public thread and require ManageThreads when locked", async () => {
+    let permissions = new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessagesInThreads,
+    ]);
+    const channel = {
+      type: ChannelType.PublicThread,
+      guildId: "guild",
+      locked: true,
+      permissionsFor: () => permissions,
+    };
+    const guild = {
+      id: "guild",
+      channels: { fetch: mock(async () => channel) },
+      members: { fetchMe: mock(async () => ({})) },
+    } as unknown as Guild;
+    await expect(resolveMessageChannel(guild, "thread", true)).rejects.toThrow();
+    permissions = new PermissionsBitField([
+      PermissionFlagsBits.ViewChannel,
+      PermissionFlagsBits.SendMessagesInThreads,
+      PermissionFlagsBits.ManageThreads,
+    ]);
+    expect((await resolveMessageChannel(guild, "thread", true)).guildId).toBe("guild");
+    await expect(resolveMessageChannel(guild, "thread")).rejects.toThrow();
   });
 });

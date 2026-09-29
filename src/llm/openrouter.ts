@@ -209,7 +209,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 export interface ILLMClient {
-  chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse>;
+  chat(request: ChatCompletionRequest, signal?: AbortSignal): Promise<ChatCompletionResponse>;
   chatStream(
     request: ChatCompletionRequest,
     signal?: AbortSignal,
@@ -662,7 +662,10 @@ export class OpenRouterClient implements ILLMClient {
     return true;
   }
 
-  async chat(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
+  async chat(
+    request: ChatCompletionRequest,
+    signal?: AbortSignal,
+  ): Promise<ChatCompletionResponse> {
     if (this.isRateLimited()) {
       const retryAfterSeconds = this.rateLimitResetAt
         ? Math.max(0, Math.ceil((this.rateLimitResetAt - Date.now()) / 1000))
@@ -672,7 +675,7 @@ export class OpenRouterClient implements ILLMClient {
 
     metrics.increment("openrouter.requests");
     try {
-      const response = await this.postResponses(request, false);
+      const response = await this.postResponses(request, false, signal);
 
       if (!response.ok) {
         await this.handleErrorResponse(response);

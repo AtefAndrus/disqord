@@ -61,6 +61,12 @@ export const CONFIG_SWITCHES = {
     label: "Discord 操作",
     description: "リアクション、投票、スレッド作成、ピン留めをモデルに許可します。",
   },
+  cron: {
+    page: "features",
+    field: "cronEnabled",
+    label: "定期実行",
+    description: "登録したプロンプトを指定時刻に実行して投稿します。",
+  },
 } as const;
 export type ConfigSwitch = keyof typeof CONFIG_SWITCHES;
 /** The most options a select can hold or preselect. */
