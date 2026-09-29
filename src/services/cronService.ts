@@ -518,6 +518,8 @@ export class CronService implements ICronService {
       const settings = await this.settings.getGuildSettings(job.guildId);
       if (this.closing || signal.aborted) return failure("中断されました。");
       destination = await this.delivery.resolve(job.guildId, job.channelId);
+      // withTimeout also refuses an already aborted signal before generation starts; this
+      // check stays so that a stop during resolve does not depend on that helper alone.
       if (this.closing || signal.aborted) return failure("中断されました。");
       const channel = destination;
       if (
