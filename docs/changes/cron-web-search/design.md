@@ -41,8 +41,8 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 | 切り替える場所 | 確認カードの「Web 検索: オン / オフ」ボタンと、詳細画面の同じボタン。modal には足さない | `/cron` の modal は既に 5 項目あり、Discord の modal は 5 項目までしか持てない。確認カードで切り替えれば、modal と tool のどちらの経路でも登録前に選べる |
 | 提案の初期値 | 新規の提案（modal の追加、tool）は tool の引数、無ければ false。既存のジョブの編集の提案（modal の編集）は、`targetVersion` を照合した対象のジョブの `web_search` を引き継ぐ | modal に検索の項目が無いので、編集の提案を新規と同じ false で作ると、検索を使うジョブの名前を直しただけで検索が外れる |
 | tool 経路 | `propose_cron_job` に任意の `web_search`（boolean、省略時 false）を足し、`CronProposalArgs`（`registry.ts`）、`cronToolContext.ts` の引数の受け渡し、`CronService.createProposal()` の保存まで通す。description の「no tools」を「Web 検索だけは、実行時点の情報が要るときに `web_search: true` で使える」に書き換える | 会話の中で「毎朝ニュースをまとめて」と頼まれたとき、モデルが検索の要否を判断できる。確認カードで人が見直せる |
-| 確認カードのボタンの権限と照合 | 承認と同じく、提案者本人で `canManageGuildSettings` を満たすメンバーだけが押せる。「Web 検索」ボタンと「登録する」ボタンの custom_id に、カードを描いた時点の `web_search` の値を入れる。反転は、DB の値が custom_id の値と同じときだけ条件付きの UPDATE で行う。承認は、repository が提案を読み直して書き込む同じトランザクションの中で、提案の `web_search` が custom_id の値と同じことを確かめ、違えば登録せずにカードを今の値で描き直して押し直しを求める。承認後のカードは、登録したジョブの値から描く | 検索を有効にすると費用が増えるので、承認と同じ権限にそろえる。承認は配信先の REST の解決を待ってから書き込むので、その間に反転されると、押したカードと違う設定で登録されうる。表示した値で照合すれば、人が見て承認した内容だけが登録される |
-| 詳細画面のボタン | 編集と同じ権限と `version` の照合を通し、`version` を 1 上げる | 実行中にオフにしたら、その実行の投稿を止める既存の仕組み（`version` の照合）がそのまま効く |
+| 確認カードのボタンの権限と照合 | 承認と同じく、提案者本人で `canManageGuildSettings` を満たすメンバーだけが押せる。「Web 検索」ボタンと「登録する」ボタンの custom_id に、カードを描いた時点の `web_search` の値を入れる。反転は、DB の値が custom_id の値と同じときだけ条件付きの UPDATE で行う。値を含まない旧形式の承認の custom_id（`cron:proposal:approve:<id>`）が押されたら登録せず、今の値と費用の説明を載せた新形式のカードに描き直して押し直しを求める。承認は、repository が提案を読み直して書き込む同じトランザクションの中で、提案の `web_search` が custom_id の値と同じことを確かめ、違えば登録せずにカードを今の値で描き直して押し直しを求める。承認後のカードは、登録したジョブの値から描く | 検索を有効にすると費用が増えるので、承認と同じ権限にそろえる。承認は配信先の REST の解決を待ってから書き込むので、その間に反転されると、押したカードと違う設定で登録されうる。表示した値で照合すれば、人が見て承認した内容だけが登録される |
+| 詳細画面のボタン | 編集と同じ権限と `version` の照合を通し、`version` を 1 上げる。オフにするのは 1 回の操作で行う。オンにするのは削除と同じ 2 段階にし、「Web 検索をオンにする」を押すと、詳細画面に `describeSearchBilling()` の文面と「Web 検索をオンにする（確定）」ボタンを出し、確定を押したときだけオンにする | 実行中にオフにしたら、その実行の投稿を止める既存の仕組み（`version` の照合）がそのまま効く。登録済みのジョブで検索を有効にする経路にも、確認カードと同じく費用の説明を読んでから承認する手続きを通す。オフは費用を減らすだけなので確認を挟まない |
 | LLM の呼び出し | `generateScheduledResponse` は非ストリームの `chat()` のまま、request に `tools: [buildWebSearchServerTool(engine)]` を足す。`chat()` は、応答の `output` から `openrouter:web_search` の項目（`action.query` と `action.sources`）と、メッセージの `url_citation` の注釈を読み、ストリームと同じ `WebSearchTrace` を返す | 定期実行に tool loop と Discord の返答ページの更新は要らない。検索は OpenRouter のサーバー側で完結する server tool なので、非ストリームでも 1 回のリクエストで済む。非ストリームの応答がストリームと同じ型名の項目と注釈を持つことは、2026-09-30 に `google/gemini-3.8-flash` と Perplexity で確かめた |
 | system message | 検索するときは、通常の返答と同じく `buildWebSearchStaticSystemMessage()` と、検索ありの文面の現在日時（`buildDateTimeSystemMessage(now, true)`）を送る | 検索結果を学習時点より新しいという理由で疑わせない（`buildDateTimeSystemMessage` のコメントの計測）。通常の返答と同じ文面にすれば、同じ依頼の答えがそろう |
 | 検索の失敗 | 検索の失敗で応答が失敗したら、同じ実行の中で 1 回だけ検索なしで呼び直し、投稿の末尾に「Web 検索に失敗したため検索なしで答えた」旨を添える | 通常の返答（`chatService.ts` の `dropWebSearch`）と同じ扱いにする。無人の実行なので、検索の失敗だけでジョブの連続失敗を数えない |
@@ -63,7 +63,7 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 - 修正: `src/llm/tools/proposeCronJob.ts` — `web_search` 引数と description
 - 修正: `src/llm/tools/registry.ts` — `CronProposalArgs` に `webSearch`
 - 修正: `src/services/cronToolContext.ts` — `web_search` を提案まで渡す
-- 修正: `scripts/e2e/scenarios.ts` と `scripts/e2e/cron.ts` — `cron-search` シナリオ
+- 修正: `scripts/e2e/scenarios.ts` と `scripts/e2e/cron.ts` — `cron-search` シナリオ。確認カードの判定（`APPROVE_ID` と `isProposalCard()`）を、検索の値を含む新しい承認の custom_id に合わせる
 - テスト: 各修正の単体テスト
 
 ### DBスキーマ変更
@@ -90,8 +90,8 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 - [ ] `generateScheduledResponse` の検索と、検索なしでの呼び直し
 - [ ] 投稿のリンクと、確認カードと詳細画面の表示とボタン
 - [ ] `propose_cron_job` の `web_search`
-- [ ] 単体テスト: 非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクと注記が最終ページに残ること
-- [ ] e2e シナリオ `cron-search` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [ ] 単体テスト: 非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクと注記が最終ページに残ること、詳細画面でオンにするときに確定の前は値が変わらず費用の説明が出ること、旧形式の承認の custom_id では登録せずにカードを描き直すこと、e2e の確認カードの判定が新しい custom_id を認識すること
+- [ ] e2e シナリオ `cron-search` を足し、確認カードの判定を新しい custom_id に合わせ、AGENTS.md の End-to-end 節に実行条件を書く。`bun run e2e cron` と `bun run e2e cron-search` を実行し、結果を PR に書く
 - [ ] 手動確認: 確認カードと詳細画面で「Web 検索」ボタンを押し、表示と保存された値が切り替わること、詳細画面のボタンが 2 行に並ぶことを確かめる
 - [ ] `docs/changes/cron-web-search/` 削除（リリース完了時、git 履歴がアーカイブ）
 
