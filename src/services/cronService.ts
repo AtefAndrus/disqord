@@ -26,6 +26,7 @@ import {
   nextRunAfter,
   nextThreeRuns,
   parseSchedule,
+  validateSchedule,
 } from "./cronSchedule";
 import { canManageGuildSettings, type SettingsActor } from "./settingsAuthorization";
 import type { ISettingsService } from "./settingsService";
@@ -77,6 +78,8 @@ export interface ICronService {
     actor: SettingsActor,
   ): Promise<CronResult<CronJob>>;
   getProposal(id: number, guildId: string, userId: string): CronProposal | null;
+  /** Whether the proposal is still stored for the guild, whoever proposed it. */
+  hasProposal(id: number, guildId: string): boolean;
   getJob(
     id: number,
     guildId: string,
@@ -310,6 +313,9 @@ export class CronService implements ICronService {
       return failure("許可チャンネル外です。");
     if (targetChanged()) return failure("編集対象のジョブが変更されました。");
     const now = this.now();
+    // A date a few seconds ahead can pass while the destination is resolved.
+    const checked = validateSchedule(parsed.schedule, now);
+    if (!checked.ok) return failure(checked.reason);
     const proposal = this.repo.createProposal({
       guildId: input.guildId,
       channelId: input.channelId,
@@ -359,6 +365,9 @@ export class CronService implements ICronService {
   getProposal(id: number, guildId: string, userId: string): CronProposal | null {
     const proposal = this.repo.getProposal(id);
     return proposal?.guildId === guildId && proposal.userId === userId ? proposal : null;
+  }
+  hasProposal(id: number, guildId: string): boolean {
+    return this.repo.getProposal(id)?.guildId === guildId;
   }
   async getJob(
     id: number,
@@ -424,7 +433,14 @@ export class CronService implements ICronService {
     const job = this.repo.getJob(id);
     if (!job || job.guildId !== guildId || job.version !== version || job.status !== "paused")
       return failure("ジョブが変更されました。");
-    const next = firstRunAfter(job, this.now());
+    let next: number | null;
+    try {
+      next = firstRunAfter(job, this.now());
+    } catch (error) {
+      // A stored cron expression that cannot be built, from a row written outside the panel.
+      logger.error("Cron job has an unusable schedule", { jobId: job.id, error });
+      next = null;
+    }
     if (next === null) return failure("次の実行時刻がありません。");
     if (!this.repo.setStatus(id, version, "active", next, this.now()))
       return failure("ジョブが変更されました。");
@@ -456,7 +472,7 @@ export class CronService implements ICronService {
     const job = this.repo.getJob(id);
     if (!job || job.guildId !== guildId || job.version !== version || this.running.has(id))
       return failure("ジョブが変更されたか実行中です。");
-    return this.run(job, false);
+    return this.run(job, false, actor);
   }
 
   async catchUpOnStartup(): Promise<void> {
@@ -555,11 +571,16 @@ export class CronService implements ICronService {
     }
   }
 
-  private async run(job: CronJob, scheduled: boolean): Promise<CronResult<void>> {
+  /** `actor` is who pressed 今すぐ実行; a scheduled run has none. */
+  private async run(
+    job: CronJob,
+    scheduled: boolean,
+    actor?: SettingsActor,
+  ): Promise<CronResult<void>> {
     if (this.closing || this.running.has(job.id)) return failure("終了中か実行中です。");
     const controller = new AbortController();
     this.running.set(job.id, controller);
-    const promise = this.perform(job, scheduled, controller.signal);
+    const promise = this.perform(job, scheduled, controller.signal, actor);
     this.work.add(promise);
     try {
       return await promise;
@@ -573,13 +594,14 @@ export class CronService implements ICronService {
     job: CronJob,
     scheduled: boolean,
     signal: AbortSignal,
+    actor?: SettingsActor,
   ): Promise<CronResult<void>> {
     let destination: CronDestination | undefined;
     try {
       if (this.closing || signal.aborted) return failure("中断されました。");
       destination = await this.delivery.resolve(job.guildId, job.channelId);
       const channel = destination;
-      const settings = await this.checkRunnable(job, channel);
+      const settings = await this.checkRunnable(job, channel, actor);
       // withTimeout also refuses an already aborted signal before generation starts; this
       // check stays so that a stop during resolve does not depend on that helper alone.
       if (this.closing || signal.aborted) return failure("中断されました。");
@@ -647,14 +669,19 @@ export class CronService implements ICronService {
    * over REST so that a `/config` change made during that call is seen. Returns
    * the settings the run uses (the footer too), or null when the feature was
    * turned off, which is an interruption rather than a failure; a destination
-   * outside the allowed channels throws and counts as a failure.
+   * outside the allowed channels throws and counts as a failure. A manual run
+   * also rechecks its actor against the admin role read here; the actor's own
+   * roles stay as they were when the button was pressed.
    */
   private async checkRunnable(
     job: CronJob,
     destination: CronDestination,
+    actor?: SettingsActor,
   ): Promise<GuildSettings | null> {
     const settings = await this.settings.getGuildSettings(job.guildId);
     if (!settings.cronEnabled) return null;
+    if (actor && !canManageGuildSettings(actor, settings))
+      throw new Error("操作権限がありません。");
     if (!isChannelAllowed(settings.allowedChannels, job.channelId, destination.parentId))
       throw new Error("許可チャンネル外です。");
     return settings;

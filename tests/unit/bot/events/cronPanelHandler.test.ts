@@ -346,8 +346,22 @@ describe("cron panel interactions", () => {
     expect(text(owner.editReply.mock.calls[0]?.[0])).toContain("登録しました");
     expect(repo.listJobs("guild")).toHaveLength(1);
     const again = await press(approve);
-    expect(lastNotice(again)).toContain(CRON_PROPOSAL_UNAVAILABLE_MESSAGE.slice(0, 15));
+    expect(text(again.update.mock.calls[0]?.[0])).toContain("この提案は無効か期限切れです");
     expect(repo.listJobs("guild")).toHaveLength(1);
+  });
+
+  test("a card whose proposal the ticker dropped loses its buttons, whoever presses it", async () => {
+    const id = await proposal("user");
+    repo.deleteExpiredProposals(Date.now() + 25 * 60 * 60_000);
+    const fixture = await press(
+      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+      { user: "other" },
+    );
+    const card = text(fixture.update.mock.calls[0]?.[0]);
+    expect(card).toContain("この提案は無効か期限切れです");
+    expect(card).not.toContain("cron:proposal:");
+    expect(fixture.reply).not.toHaveBeenCalled();
+    expect(repo.listJobs("guild")).toHaveLength(0);
   });
 
   test("a proposer without permission cannot approve", async () => {

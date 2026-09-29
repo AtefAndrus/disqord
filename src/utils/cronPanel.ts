@@ -380,3 +380,12 @@ export function buildCronProposalCard(
   }
   return payload(container);
 }
+
+/** A confirmation card whose proposal is no longer stored, so nothing of it can be shown. */
+export function buildCronProposalGoneCard(): PanelPayload {
+  return payload(
+    new ContainerBuilder()
+      .setAccentColor(EmbedColors.BLURPLE)
+      .addTextDisplayComponents((text) => text.setContent("## この提案は無効か期限切れです")),
+  );
+}

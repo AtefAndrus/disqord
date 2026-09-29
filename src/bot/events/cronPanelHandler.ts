@@ -21,6 +21,7 @@ import {
   buildCronList,
   buildCronModal,
   buildCronProposalCard,
+  buildCronProposalGoneCard,
   CRON_CHANNEL_TYPES,
   CRON_INVALID_MESSAGE,
   CRON_MODAL_FIELDS,
@@ -121,7 +122,11 @@ export async function handleCronPanelInteraction(
       }
       const proposal = cronService.getProposal(action.proposalId, guildId, userId);
       if (!proposal) {
-        await notice(CRON_PROPOSAL_UNAVAILABLE_MESSAGE);
+        // A card whose proposal is gone (the ticker drops expired ones) can never be approved,
+        // so anyone's press clears its buttons. Someone else's live proposal stays untouched.
+        if (!cronService.hasProposal(action.proposalId, guildId))
+          await show(buildCronProposalGoneCard());
+        else await notice(CRON_PROPOSAL_UNAVAILABLE_MESSAGE);
         return;
       }
       if (proposal.expiresAt <= Date.now()) {

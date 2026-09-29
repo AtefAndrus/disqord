@@ -650,6 +650,65 @@ describe("cron service", () => {
     expect(send).not.toHaveBeenCalled();
     expect(repo.getJob(job.id)).toMatchObject({ failCount: 0, lastError: null });
   });
+  test("run now by an admin role holder whose role stops being the admin role while the destination is resolved is neither generated nor posted", async () => {
+    const job = await add();
+    await settings.setAdminRoleId("guild", "admin");
+    const roleHolder = { permissions: new PermissionsBitField(), roleIds: ["admin"] };
+    resolve.mockImplementation(async () => {
+      await settings.setAdminRoleId("guild", "other");
+      return { parentId: null, send, notifyPaused: notify };
+    });
+    const result = await service.runNow(job.id, "guild", roleHolder, job.version);
+    expect(resolve).toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "操作権限がありません。" });
+    expect(generate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(repo.getJob(job.id)).toMatchObject({ failCount: 0, lastError: null });
+  });
+  test("a scheduled run does not depend on the admin role", async () => {
+    await add();
+    await settings.setAdminRoleId("guild", "other");
+    now += 5 * 60_000;
+    await service.tick();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  test("a date that passes while the destination is resolved is not proposed", async () => {
+    resolve.mockImplementation(async () => {
+      now += 10_000;
+      return { parentId: null, send, notifyPaused: notify };
+    });
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "name",
+        prompt: "prompt",
+        schedule: new Date(now + 5_000).toISOString(),
+        silent: false,
+      },
+      actor,
+    );
+    expect(result).toEqual({ ok: false, reason: "日時は現在より後を指定してください。" });
+    expect(
+      db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM cron_proposals").get()?.count,
+    ).toBe(0);
+  });
+  test("resuming a job whose stored cron expression cannot be built reports no next time", async () => {
+    const job = await add("0 9 * * *");
+    await service.pauseJob(job.id, "guild", "user", actor, job.version);
+    db.query("UPDATE cron_jobs SET expr='61 25 * * *' WHERE id=?").run(job.id);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await service.resumeJob(job.id, "guild", actor, job.version + 1)).toEqual({
+        ok: false,
+        reason: "次の実行時刻がありません。",
+      });
+      expect(repo.getJob(job.id)?.status).toBe("paused");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
   test("a stored cron expression that never matches again pauses on a tick without calling the model", async () => {
     const broken = await add("0 9 * * *");
     db.query("UPDATE cron_jobs SET expr='0 0 30 2 *' WHERE id=?").run(broken.id);
