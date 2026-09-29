@@ -20,9 +20,6 @@ interface MessageLike {
 const APPROVE_ID = /^cron:proposal:approve:(\d+)$/u;
 const DELIVERY_POLL_MS = 5_000;
 
-/** Rows this run created, so that cleanup removes exactly them. */
-const created: { jobId?: number; proposalIds: number[] } = { proposalIds: [] };
-
 function customIds(node: unknown): string[] {
   if (Array.isArray(node)) return node.flatMap(customIds);
   if (typeof node !== "object" || node === null) return [];
@@ -115,13 +112,7 @@ export async function verifyCron(
       isProposalCard(message),
   );
   const problems: string[] = [];
-  const proposalId = card
-    ? customIds(card.components)
-        .map((id) => APPROVE_ID.exec(id)?.[1])
-        .find((id) => id !== undefined)
-    : undefined;
-  if (proposalId) created.proposalIds.push(Number(proposalId));
-  else problems.push("no confirmation card with a 登録する button replied to the request");
+  if (!card) problems.push("no confirmation card with a 登録する button replied to the request");
 
   const guildId = await guildOf(channelId, request);
   const name = `e2e-${crypto.randomUUID().slice(0, 8)}`;
@@ -129,22 +120,19 @@ export async function verifyCron(
   const runAt = now + 60_000;
   const db = new Database(env.databasePath);
   try {
-    const result = db
-      .query(`INSERT INTO cron_jobs
+    db.query(`INSERT INTO cron_jobs
         (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,status,next_run_at,created_at,updated_at)
-        VALUES (?,?,?,?,?, 'once',?,0,'active',?,?,?)`)
-      .run(
-        guildId,
-        channelId,
-        env.testerBotId,
-        name,
-        "「定期実行OK」とだけ答えてください。",
-        new Date(runAt).toISOString(),
-        runAt,
-        now,
-        now,
-      );
-    created.jobId = Number(result.lastInsertRowid);
+        VALUES (?,?,?,?,?, 'once',?,0,'active',?,?,?)`).run(
+      guildId,
+      channelId,
+      env.testerBotId,
+      name,
+      "「定期実行OK」とだけ答えてください。",
+      new Date(runAt).toISOString(),
+      runAt,
+      now,
+      now,
+    );
   } finally {
     db.close();
   }
@@ -163,16 +151,29 @@ export async function verifyCron(
   }
 }
 
-export async function cleanupCron(env: ScenarioEnv): Promise<string[]> {
+/**
+ * Deletes what the scenario created, found in the database rather than
+ * remembered, so that it also works when the reply never finished or the run
+ * was interrupted: rows of the tester in this channel created since the
+ * scenario started. Only this script creates jobs for the tester (a bot
+ * cannot press 登録する), and the channel is reserved for the run.
+ */
+export async function cleanupCron(
+  channelId: string,
+  env: ScenarioEnv,
+  startedAt: number,
+): Promise<string[]> {
   const db = new Database(env.databasePath);
   try {
-    if (created.jobId !== undefined)
-      db.query("DELETE FROM cron_jobs WHERE id=?").run(created.jobId);
-    for (const id of created.proposalIds) db.query("DELETE FROM cron_proposals WHERE id=?").run(id);
+    for (const table of ["cron_jobs", "cron_proposals"]) {
+      db.query(`DELETE FROM ${table} WHERE user_id=? AND channel_id=? AND created_at>=?`).run(
+        env.testerBotId,
+        channelId,
+        startedAt,
+      );
+    }
   } finally {
     db.close();
-    created.jobId = undefined;
-    created.proposalIds = [];
   }
   return [];
 }

@@ -72,11 +72,17 @@ export interface Scenario {
     botId: string,
     env: ScenarioEnv,
   ) => Promise<string[]>;
+  /**
+   * Undoes what the scenario changed. It also runs when the run is interrupted,
+   * possibly before the trigger was posted, so `triggerId` can be undefined.
+   * `startedAt` is when the scenario began, before anything was posted.
+   */
   cleanup?: (
-    triggerId: string,
+    triggerId: string | undefined,
     channelId: string,
     request: (path: string, init?: RequestInit) => Promise<Response>,
     env: ScenarioEnv,
+    startedAt: number,
   ) => Promise<string[]>;
 }
 
@@ -333,7 +339,8 @@ export const SCENARIOS: Scenario[] = [
       ...hasUsageFooter(reply),
     ],
     verify: verifyCron,
-    cleanup: (_triggerId, _channelId, _request, env) => cleanupCron(env),
+    cleanup: (_triggerId, channelId, _request, env, startedAt) =>
+      cleanupCron(channelId, env, startedAt),
   },
   {
     name: "discord-tools",
@@ -390,6 +397,7 @@ export const SCENARIOS: Scenario[] = [
       return problems;
     },
     cleanup: async (triggerId, channelId, request) => {
+      if (triggerId === undefined) return [];
       const problems: string[] = [];
       const response = await request(`/channels/${channelId}/messages/${triggerId}`);
       if (!response.ok) return [`cannot read trigger for cleanup: HTTP ${response.status}`];

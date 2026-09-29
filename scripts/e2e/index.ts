@@ -65,6 +65,7 @@ const BOT_READY_TIMEOUT_MS = 30_000;
 const BOT_EXIT_TIMEOUT_MS = 5_000;
 const USAGE_POLL_INTERVAL_MS = 3_000;
 const CLEANUP_TIMEOUT_MS = 30_000;
+const INTERRUPT_CLEANUP_TIMEOUT_MS = 10_000;
 
 const config = loadConfig();
 const testerToken = process.env.E2E_TESTER_BOT_TOKEN;
@@ -74,6 +75,26 @@ const env: ScenarioEnv = {
   databasePath: config.databasePath,
   testerBotId: config.e2eTesterBotId ?? "",
 };
+
+/**
+ * What an interrupt undoes before the process exits: first the running
+ * scenario's cleanup, since rows it inserted into the bot's database would
+ * otherwise stay and run later, then the bot this script started.
+ */
+const interrupt: { cleanup?: () => Promise<unknown>; stopBot?: () => Promise<void> } = {};
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    void (async (): Promise<void> => {
+      console.log(`${signal}: cleaning up before exit`);
+      await Promise.race([
+        interrupt.cleanup?.().catch(() => undefined),
+        Bun.sleep(INTERRUPT_CLEANUP_TIMEOUT_MS),
+      ]);
+      await interrupt.stopBot?.();
+      process.exit(130);
+    })();
+  });
+}
 
 function requireEnv(): void {
   const missing = [
@@ -186,13 +207,9 @@ interface RunningBot {
 async function startBot(): Promise<RunningBot> {
   const child = Bun.spawn(["bun", "run", "src/index.ts"], { stdout: "pipe", stderr: "inherit" });
   const stop = createStopper(child, BOT_EXIT_TIMEOUT_MS, (ms) => Bun.sleep(ms));
-  // Registered before waiting for readiness: an interrupt during startup
+  // Set before waiting for readiness: an interrupt during startup
   // must not leave a bot connected to Discord for the next run to collide with.
-  for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      void stop().finally(() => process.exit(130));
-    });
-  }
+  interrupt.stopBot = stop;
 
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -282,7 +299,35 @@ async function main(): Promise<number> {
             continue;
           }
         }
+        let triggerId: string | undefined;
+        let cleaning: Promise<string[]> | undefined;
+        // Shared by the normal path and an interrupt, so the cleanup runs once.
+        const cleanup = (): Promise<string[]> => {
+          cleaning ??= (async (): Promise<string[]> => {
+            if (!scenario.cleanup || !channelId) return [];
+            const found: string[] = [];
+            try {
+              const cleanupDeadline = Date.now() + CLEANUP_TIMEOUT_MS;
+              found.push(
+                ...(await scenario.cleanup(
+                  triggerId,
+                  channelId,
+                  (path, init) => discord(path, cleanupDeadline, init),
+                  env,
+                  startedAt,
+                )),
+              );
+            } catch (error) {
+              found.push(`cleanup failed: ${error instanceof Error ? error.message : error}`);
+            }
+            for (const problem of found) console.log(`     cleanup: ${problem}`);
+            return found;
+          })();
+          return cleaning;
+        };
+        interrupt.cleanup = cleanup;
         const messageId = await send(scenario, deadline);
+        triggerId = messageId;
         if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
         const cleanupProblems: string[] = [];
         const { reply, problems, toolWasInvoked } = await (async () => {
@@ -309,24 +354,7 @@ async function main(): Promise<number> {
             }
             return { reply, problems, toolWasInvoked };
           } finally {
-            if (scenario.cleanup && channelId) {
-              try {
-                const cleanupDeadline = Date.now() + CLEANUP_TIMEOUT_MS;
-                cleanupProblems.push(
-                  ...(await scenario.cleanup(
-                    messageId,
-                    channelId,
-                    (path, init) => discord(path, cleanupDeadline, init),
-                    env,
-                  )),
-                );
-              } catch (error) {
-                cleanupProblems.push(
-                  `cleanup failed: ${error instanceof Error ? error.message : error}`,
-                );
-              }
-              for (const problem of cleanupProblems) console.log(`     cleanup: ${problem}`);
-            }
+            cleanupProblems.push(...(await cleanup()));
           }
         })();
         problems.push(...cleanupProblems);
@@ -368,6 +396,8 @@ async function main(): Promise<number> {
           );
           break;
         }
+      } finally {
+        interrupt.cleanup = undefined;
       }
     }
   } finally {

@@ -85,7 +85,7 @@ test("discord-tools cleanup removes the thread and pin after a failed verificati
     if (path === "/channels/thread") return new Response(null, { status: 403 });
     return new Response(null, { status: 204 });
   });
-  expect(await scenario.cleanup("trigger", "channel", request, env)).toEqual([
+  expect(await scenario.cleanup("trigger", "channel", request, env, 0)).toEqual([
     "cannot delete thread: HTTP 403",
   ]);
   expect(request).toHaveBeenCalledWith("/channels/thread", { method: "DELETE" });
@@ -141,6 +141,57 @@ describe("cron scenario preconditions", () => {
       expect(problems).toHaveLength(2);
       expect(problems[0]).toContain("定期実行 is off");
       expect(problems[1]).toContain("cannot propose");
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  test("cleanup removes the tester's rows in the channel created since the start, without a trigger", async () => {
+    const { dir, env } = setup(1, null);
+    try {
+      const db = new Database(env.databasePath);
+      const job = (user: string, channel: string, createdAt: number): void => {
+        db.query(`INSERT INTO cron_jobs
+          (guild_id,channel_id,user_id,name,prompt,kind,expr,status,next_run_at,created_at,updated_at)
+          VALUES ('guild',?,?,'e2e-x','p','once','2026-10-01T00:00:00.000Z','active',1,?,?)`).run(
+          channel,
+          user,
+          createdAt,
+          createdAt,
+        );
+        db.query(`INSERT INTO cron_proposals
+          (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,expires_at,created_at)
+          VALUES ('guild',?,?,'n','p','interval','1800000',0,9999999999999,?)`).run(
+          channel,
+          user,
+          createdAt,
+        );
+      };
+      job("tester", "channel", 2_000);
+      job("tester", "channel", 500);
+      job("tester", "other", 2_000);
+      job("someone", "channel", 2_000);
+      db.close();
+      const scenario = SCENARIOS.find((item) => item.name === "cron");
+      if (!scenario?.cleanup) throw new Error("cron cleanup missing");
+      expect(await scenario.cleanup(undefined, "channel", mock(), env, 1_000)).toEqual([]);
+      const check = new Database(env.databasePath, { readonly: true });
+      try {
+        for (const table of ["cron_jobs", "cron_proposals"]) {
+          const rows = check
+            .query<{ user: string; channel: string; createdAt: number }, []>(
+              `SELECT user_id AS user, channel_id AS channel, created_at AS createdAt FROM ${table} ORDER BY id`,
+            )
+            .all();
+          expect(rows).toEqual([
+            { user: "tester", channel: "channel", createdAt: 500 },
+            { user: "tester", channel: "other", createdAt: 2_000 },
+            { user: "someone", channel: "channel", createdAt: 2_000 },
+          ]);
+        }
+      } finally {
+        check.close();
+      }
     } finally {
       rmSync(dir, { recursive: true });
     }
