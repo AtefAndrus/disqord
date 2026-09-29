@@ -240,6 +240,7 @@ Discord への投稿は取り消せないので、投稿の要求が timeout し
 - 新規: `src/llm/tools/proposeCronJob.ts` — `propose_cron_job`
 - 修正: `src/llm/tools/registry.ts` — `IToolContext` に `cron?: CronToolContext` を足す
 - 修正: `src/bot/events/messageCreate.ts` / `src/services/chatService.ts` — `cron_enabled` のギルドで `CronToolContext` を作って ctx に載せ、`clientToolInvoked` を立てる包みを通す。`supportsTools` の判定条件に加える。`generateScheduledResponse` を足す
+- 修正: `src/services/modelService.ts` — 期限内のモデル情報で無料かを判定し、判定できなければそのことを返す関数を足す
 - 修正: `src/llm/openrouter.ts` — `chat()` に `signal?: AbortSignal` を足し、内部の要求に渡す
 - 修正: `src/bot/events/interactionCreate.ts` — `cron:` で始まるボタン、選択欄、modal の送信を `cronPanelHandler` に回す。`/cron` を回す
 - 修正: `src/services/releaseAnnouncer.ts` — 配信先の解決を公開スレッドにも使えるように一般化する
