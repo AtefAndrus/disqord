@@ -26,3 +26,20 @@ pre-commit:
       run: bun run typecheck
     05_test:
       run: bun test
+
+# bun.lock が変わった後に node_modules が古いままだと、次のコミットの typecheck が
+# 見つからないモジュールで落ちる。Renovate の PR で lockfile は頻繁に変わる。
+post-merge:
+  commands:
+    bun-install:
+      run: git diff --quiet ORIG_HEAD HEAD -- bun.lock || bun install --frozen-lockfile
+
+post-checkout:
+  commands:
+    bun-install:
+      # {3} はブランチの checkout なら 1、ファイル単位の checkout なら 0。
+      # 新しい worktree では {1} が空の SHA になるので対象外（mise run setup が入れる）。
+      run: |
+        [ "{3}" = "1" ] || exit 0
+        case "{1}" in 0000000000000000000000000000000000000000) exit 0 ;; esac
+        git diff --quiet {1} {2} -- bun.lock || bun install --frozen-lockfile
