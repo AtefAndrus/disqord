@@ -19,6 +19,7 @@ import type {
   MessageId,
   ServerTool,
 } from "../types";
+import { messageBody } from "../utils/discordMessageNormalizer";
 import { PDF_PARSER_PLUGIN } from "./attachmentParser";
 import type { ConversationWindowContext } from "./conversationWindow";
 import type { IModelService } from "./modelService";
@@ -135,7 +136,7 @@ export function buildChatRequest(
 }
 
 function formatConversationMessage(message: ConversationWindowContext["messages"][number]): string {
-  const body = message.text.length > 0 ? message.text : "（本文なし）";
+  const body = messageBody(message);
   const attachments = message.attachments.map((attachment) => {
     const kind =
       attachment.kind === "image" ? "画像" : attachment.kind === "pdf" ? "PDF" : "その他";

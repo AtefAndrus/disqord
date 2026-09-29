@@ -10,6 +10,31 @@ export interface RawDiscordAttachment {
   size: number;
 }
 
+export interface RawDiscordPollMedia {
+  text?: string | null;
+  emoji?: { id?: string | null; name?: string | null } | null;
+}
+
+export interface RawDiscordPoll {
+  question: RawDiscordPollMedia;
+  answers: Array<{ answer_id: number; poll_media: RawDiscordPollMedia }>;
+  expiry?: string | null;
+  allow_multiselect?: boolean;
+  /** Discord may omit this; that means the counts are unknown, not zero. */
+  results?: {
+    is_finalized: boolean;
+    answer_counts: Array<{ id: number; count: number }>;
+  } | null;
+}
+
+export interface RawDiscordEmbed {
+  type?: string;
+  fields?: Array<{ name: string; value: string }>;
+}
+
+/** MessageType.PollResult: the notice Discord posts when a poll closes. */
+export const POLL_RESULT_MESSAGE_TYPE = 46;
+
 export interface RawDiscordMessage {
   id: string;
   channel_id: string;
@@ -28,6 +53,8 @@ export interface RawDiscordMessage {
   components?: unknown[];
   attachments?: RawDiscordAttachment[];
   message_reference?: { channel_id?: string; message_id?: string } | null;
+  poll?: RawDiscordPoll | null;
+  embeds?: RawDiscordEmbed[];
 }
 
 export type NormalizedMessageKind = "user" | "assistant";
@@ -51,6 +78,8 @@ export interface NormalizedMessage {
   time: string;
   timestampMs: number;
   text: string;
+  /** The message's poll as text, placed after `text`. */
+  poll?: string;
   attachments: NormalizedAttachment[];
   exchangeId: string;
   triggerMsgId?: string;
@@ -166,12 +195,85 @@ function attachmentsOf(message: RawDiscordMessage): NormalizedAttachment[] {
   }));
 }
 
+function oneLine(text: string): string {
+  return text.replace(/[\p{Cc}\p{Cf}]+/gu, " ").trim();
+}
+
+function pollMediaText(media: RawDiscordPollMedia): string {
+  const emoji = media.emoji;
+  // A custom emoji carries an id; its name alone is what the model can read.
+  const emojiText = emoji?.name ? (emoji.id ? `:${emoji.name}:` : emoji.name) : "";
+  return oneLine([emojiText, media.text ?? ""].filter((part) => part.length > 0).join(" "));
+}
+
+const JST_OFFSET_MS = 9 * 3_600_000;
+
+function formatJst(ms: number): string {
+  return `${new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ")} JST`;
+}
+
+/**
+ * Formats a poll for the model. `includeCounts: false` is for a poll in the
+ * message that called the bot, whose counts mean nothing yet and which
+ * discord.js reports as 0 even when Discord sent none.
+ */
+export function formatPoll(poll: RawDiscordPoll, nowMs: number, includeCounts = true): string {
+  const expiryMs = poll.expiry ? Date.parse(poll.expiry) : Number.NaN;
+  const expiry = Number.isFinite(expiryMs)
+    ? expiryMs <= nowMs
+      ? `締め切り済み（${formatJst(expiryMs)}）`
+      : `締め切り ${formatJst(expiryMs)}`
+    : undefined;
+  const results = includeCounts ? poll.results : undefined;
+  const state = results ? (results.is_finalized ? "確定" : "集計中") : undefined;
+  const header = [`投票 "${pollMediaText(poll.question)}"`, expiry].filter(Boolean).join(" ");
+  const lines = [`[${header}${state ? `・${state}` : ""}]`];
+  const counts = new Map(results?.answer_counts.map((entry) => [entry.id, entry.count]));
+  for (const answer of poll.answers) {
+    const label = pollMediaText(answer.poll_media);
+    if (!includeCounts) {
+      lines.push(`- ${label}`);
+      continue;
+    }
+    // An answer nobody picked is absent from answer_counts.
+    const count = results ? `${counts.get(answer.answer_id) ?? 0} 票` : "不明";
+    lines.push(`- ${label}: ${count}`);
+  }
+  if (results) {
+    const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+    lines.push(`（延べ票数 ${total}${poll.allow_multiselect ? "、複数選択" : ""}）`);
+  }
+  return lines.join("\n");
+}
+
+/** The one line for a poll-closed notice (type 46), or undefined when it is not one. */
+export function formatPollResultNotice(message: RawDiscordMessage): string | undefined {
+  if (message.type !== POLL_RESULT_MESSAGE_TYPE) return undefined;
+  const embed = message.embeds?.find((candidate) => candidate.type === "poll_result");
+  if (!embed) return undefined;
+  const field = (name: string): string | undefined =>
+    embed.fields?.find((candidate) => candidate.name === name)?.value;
+  const question = oneLine(field("poll_question_text") ?? "");
+  const total = field("total_votes") ?? "0";
+  const victor = field("victor_answer_text");
+  const victorVotes = field("victor_answer_votes");
+  // Discord names no victor on a tie or when nobody voted.
+  const outcome =
+    victor !== undefined && victorVotes !== undefined
+      ? `「${oneLine(victor)}」が ${victorVotes} 票で最多（総票数 ${total}）`
+      : `総票数 ${total}`;
+  return `[投票の締め切り "${question}": ${outcome}]`;
+}
+
 function timestampMs(message: RawDiscordMessage): number {
   const parsed = Date.parse(message.timestamp);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-export function normalizeHumanMessage(message: RawDiscordMessage): NormalizedMessage {
+export function normalizeHumanMessage(
+  message: RawDiscordMessage,
+  nowMs = Date.now(),
+): NormalizedMessage {
   return {
     id: message.id,
     channelId: message.channel_id,
@@ -180,8 +282,52 @@ export function normalizeHumanMessage(message: RawDiscordMessage): NormalizedMes
     time: message.timestamp,
     timestampMs: timestampMs(message),
     text: message.content,
+    ...(message.poll && { poll: formatPoll(message.poll, nowMs) }),
     attachments: attachmentsOf(message),
     exchangeId: message.id,
+  };
+}
+
+/**
+ * A poll the bot sent with `create_poll`. It is not a reply page, so it has
+ * no reply record; `exchangeId` is the message it answered, so deleting that
+ * message hides the poll the way it hides the reply.
+ */
+export function normalizeBotPoll(
+  message: RawDiscordMessage,
+  exchangeId: string,
+  nowMs = Date.now(),
+): NormalizedMessage {
+  return {
+    id: message.id,
+    channelId: message.channel_id,
+    kind: "assistant",
+    author: "assistant",
+    time: message.timestamp,
+    timestampMs: timestampMs(message),
+    text: message.content,
+    ...(message.poll && { poll: formatPoll(message.poll, nowMs) }),
+    attachments: [],
+    exchangeId,
+  };
+}
+
+/** A poll-closed notice, placed as its author's message; `exchangeId` is the poll's. */
+export function normalizePollResultNotice(
+  message: RawDiscordMessage,
+  exchangeId: string,
+  fromBot: boolean,
+): NormalizedMessage {
+  return {
+    id: message.id,
+    channelId: message.channel_id,
+    kind: fromBot ? "assistant" : "user",
+    author: fromBot ? "assistant" : authorLabel(message),
+    time: message.timestamp,
+    timestampMs: timestampMs(message),
+    text: formatPollResultNotice(message) ?? "",
+    attachments: [],
+    exchangeId,
   };
 }
 
@@ -215,11 +361,17 @@ function formatAttachment(attachment: NormalizedAttachment, ref: string): string
   return `[添付 ${ref}/${attachment.index}: ${kind} "${attachment.filename}" ${attachment.sizeBytes} bytes]`;
 }
 
+/** The text and the poll, or a placeholder when the message has neither. */
+export function messageBody(message: NormalizedMessage): string {
+  const parts = [message.text, message.poll ?? ""].filter((part) => part.length > 0);
+  return parts.length > 0 ? parts.join("\n") : "（本文なし）";
+}
+
 export function formatMessageForModel(
   message: NormalizedMessage,
   ref = message.ref ?? "m1",
 ): string {
-  const body = message.text.length > 0 ? message.text : "（本文なし）";
+  const body = messageBody(message);
   const attachments = message.attachments.map((attachment) => formatAttachment(attachment, ref));
   return [`[${ref}] ${message.author}: ${body}`, ...attachments].join("\n");
 }
@@ -230,6 +382,7 @@ export function formatMessageForTool(message: NormalizedMessage): {
   kind: NormalizedMessageKind;
   time: string;
   text: string;
+  poll?: string;
   attachments: Array<{
     index: number;
     kind: NormalizedAttachmentKind;
@@ -244,6 +397,7 @@ export function formatMessageForTool(message: NormalizedMessage): {
     kind: message.kind,
     time: message.time,
     text: message.text,
+    ...(message.poll !== undefined && { poll: message.poll }),
     attachments: message.attachments.map(({ index, kind, filename, sizeBytes }) => ({
       index,
       kind,

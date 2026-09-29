@@ -3,7 +3,10 @@ import type {
   ReplyPage,
   ReplyRecord,
 } from "../db/repositories/replyRecord";
-import type { RawDiscordMessage } from "../utils/discordMessageNormalizer";
+import {
+  POLL_RESULT_MESSAGE_TYPE,
+  type RawDiscordMessage,
+} from "../utils/discordMessageNormalizer";
 import type {
   DiscordMessageFetchResult,
   DiscordRestBudget,
@@ -22,7 +25,9 @@ export type MessageEligibilityReason =
   | "record-incomplete"
   | "finalized-after-current"
   | "externally-deleted"
-  | "unconfirmable";
+  | "unconfirmable"
+  | "bot-poll"
+  | "poll-result";
 
 export interface VerifiedReply {
   record: ReplyRecord;
@@ -36,6 +41,12 @@ export interface MessageEligibilityResult {
   externallyDeleted: boolean;
   reason: MessageEligibilityReason;
   reply?: VerifiedReply;
+  /**
+   * For `bot-poll` and `poll-result`, which have no reply record: the message
+   * whose deletion hides this one (the message a bot poll answered, or the
+   * poll a notice closes, resolved the same way).
+   */
+  exchangeId?: string;
 }
 
 export interface MessageEligibilityInput {
@@ -107,6 +118,13 @@ function isHumanMessage(message: RawDiscordMessage, input: MessageEligibilityInp
   return message.type === undefined || message.type === 0 || message.type === 19;
 }
 
+function ineligible(
+  reason: MessageEligibilityReason,
+  externallyDeleted = false,
+): MessageEligibilityResult {
+  return { eligible: false, isHuman: false, externallyDeleted, reason };
+}
+
 function sameMessageId(left: RawDiscordMessage, right: RawDiscordMessage): boolean {
   return left.id === right.id;
 }
@@ -138,6 +156,72 @@ export class MessageEligibilityService {
     if (message.webhook_id !== undefined) {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason: "webhook" };
     }
+    const evaluateReferenced = async (
+      referencing: RawDiscordMessage,
+    ): Promise<
+      | { status: "evaluated"; message: RawDiscordMessage; result: MessageEligibilityResult }
+      | { status: "rejected"; result: MessageEligibilityResult }
+    > => {
+      const reference = referencing.message_reference;
+      const targetId = reference?.message_id;
+      if (!targetId || (reference.channel_id && reference.channel_id !== input.channelId)) {
+        return { status: "rejected", result: ineligible("system") };
+      }
+      if (externalDeletions.has(targetId)) {
+        return { status: "rejected", result: ineligible("externally-deleted", true) };
+      }
+      const fetched = await this.fetchKnownOrRemote(
+        input.channelId,
+        targetId,
+        knownMessages.get(targetId),
+        budget,
+        externalDeletions,
+        signal,
+        fetchedMessages,
+      );
+      if (fetched.status === "not-found") {
+        return { status: "rejected", result: ineligible("externally-deleted", true) };
+      }
+      if (fetched.status !== "found") {
+        return { status: "rejected", result: ineligible("unconfirmable") };
+      }
+      const result = await this.evaluate(
+        fetched.message,
+        input,
+        budget,
+        knownMessages,
+        verificationCache,
+        externalDeletions,
+        signal,
+        fetchedMessages,
+      );
+      return { status: "evaluated", message: fetched.message, result };
+    };
+
+    if (message.type === POLL_RESULT_MESSAGE_TYPE) {
+      // Discord posts the notice as the poll's author, so this also drops
+      // notices of polls by other bots, which the window leaves out.
+      const fromBot = message.author.id === input.botUserId;
+      if (!fromBot && message.author.bot === true && !isE2eTester(message, input)) {
+        return ineligible("other-bot");
+      }
+      const referenced = await evaluateReferenced(message);
+      if (referenced.status === "rejected") return referenced.result;
+      const { message: poll, result } = referenced;
+      if (!result.eligible) return ineligible(result.reason, result.externallyDeleted);
+      if (result.reason === "unconfirmable") return ineligible("unconfirmable");
+      if (!poll.poll || (!result.isHuman && result.reason !== "bot-poll")) {
+        return ineligible("system");
+      }
+      return {
+        eligible: true,
+        isHuman: false,
+        externallyDeleted: false,
+        reason: "poll-result",
+        exchangeId: result.exchangeId ?? result.reply?.record.triggerMsgId ?? poll.id,
+      };
+    }
+
     if (isHumanMessage(message, input)) {
       if (externalDeletions.has(message.id)) {
         return {
@@ -213,6 +297,24 @@ export class MessageEligibilityService {
 
     if (message.author.id !== input.botUserId) {
       return { eligible: false, isHuman: false, externallyDeleted: false, reason: "other-bot" };
+    }
+
+    if (message.poll && !this.records.findByPage(message.id)) {
+      // A poll from `create_poll` is not a reply page. It is shown only while
+      // the message it answered would itself be shown, reply pages included.
+      const referenced = await evaluateReferenced(message);
+      if (referenced.status === "rejected") return referenced.result;
+      const { message: target, result } = referenced;
+      if (!result.eligible) return ineligible(result.reason, result.externallyDeleted);
+      if (result.reason === "unconfirmable") return ineligible("unconfirmable");
+      if (!result.isHuman) return ineligible("system");
+      return {
+        eligible: true,
+        isHuman: false,
+        externallyDeleted: false,
+        reason: "bot-poll",
+        exchangeId: target.id,
+      };
     }
 
     const record = this.records.findByPage(message.id);

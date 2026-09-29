@@ -86,6 +86,11 @@ export interface Scenario {
   ) => Promise<string[]>;
 }
 
+interface PollMessage {
+  author?: { id?: string };
+  poll?: { answers?: { poll_media?: { text?: string } }[] };
+}
+
 // Discord component types.
 const TEXT_DISPLAY = 10;
 const CONTAINER = 17;
@@ -421,6 +426,57 @@ export const SCENARIOS: Scenario[] = [
         }
       }
       return problems;
+    },
+  },
+  {
+    // Paired with poll-recall, which must run right after it. The model picks
+    // the answers and is told to keep them out of its reply, so poll-recall
+    // can only learn them from the poll itself. Needs `/config → 機能 →
+    // 会話履歴` and `Discord 操作` enabled in the guild under test.
+    name: "poll-create",
+    manual: true,
+    prompt:
+      "[e2e] 好きな果物を尋ねる投票を、あなたが選んだ果物 3 つを選択肢にして作って。create_poll を必ず使い、返信の本文には選択肢を書かず「作成しました」とだけ書いて。",
+    check: (reply) => hasUsageFooter(reply),
+    verify: async (triggerId, channelId, request, botId) => {
+      const response = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!response.ok) return [`cannot read poll messages: HTTP ${response.status}`];
+      const messages = (await response.json()) as PollMessage[];
+      return messages.some((item) => item.author?.id === botId && item.poll)
+        ? []
+        : ["the bot did not post a poll (is /config → 機能 → Discord 操作 enabled?)"];
+    },
+  },
+  {
+    name: "poll-recall",
+    manual: true,
+    prompt: "[e2e] さっき作った投票の質問と選択肢をすべて答えて。",
+    check: (reply) => hasUsageFooter(reply),
+    // The answers are known only from Discord, so this reads the poll and the
+    // reply over REST rather than checking the reply against fixed text.
+    verify: async (triggerId, channelId, request, botId) => {
+      const before = await request(`/channels/${channelId}/messages?before=${triggerId}&limit=20`);
+      if (!before.ok) return [`cannot read the poll: HTTP ${before.status}`];
+      const poll = ((await before.json()) as PollMessage[]).find(
+        (item) => item.author?.id === botId && item.poll,
+      )?.poll;
+      if (!poll) return ["no bot poll before the trigger (run poll-create first)"];
+      const after = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!after.ok) return [`cannot read the reply: HTTP ${after.status}`];
+      const replyText = JSON.stringify(
+        ((await after.json()) as (PollMessage & DiscordMessage)[])
+          .filter((item) => item.author?.id === botId)
+          .map((item) => item.components),
+      );
+      const answers = (poll.answers ?? []).flatMap((answer) =>
+        answer.poll_media?.text ? [answer.poll_media.text] : [],
+      );
+      const missing = answers.filter((answer) => !replyText.includes(answer));
+      return missing.length === 0
+        ? []
+        : [
+            `the reply lacks the poll answers ${missing.join(", ")} (is /config → 機能 → 会話履歴 enabled?)`,
+          ];
     },
   },
   {

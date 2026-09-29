@@ -7,8 +7,10 @@ import {
   buildConversationUntrustedDataSystemMessage,
   estimateNormalizedMessageTokens,
   formatMessageForTool,
+  normalizeBotPoll,
   normalizeBotReply,
   normalizeHumanMessage,
+  normalizePollResultNotice,
 } from "../utils/discordMessageNormalizer";
 import { estimateTextTokens } from "../utils/tokenEstimate";
 import type {
@@ -29,6 +31,7 @@ import {
   type MessageEligibilityCache,
   type MessageEligibilityExternalDeletionSet,
   type MessageEligibilityFetchedMessages,
+  type MessageEligibilityResult,
   MessageEligibilityService,
 } from "./messageEligibility";
 
@@ -764,8 +767,13 @@ export class ConversationWindowService {
       );
       if (signal?.aborted) return [];
       if (!result.eligible) continue;
+      const pollEntry = this.normalizePollEntry(message, result, input.botUserId);
+      if (pollEntry) {
+        entries.push(pollEntry);
+        continue;
+      }
       if (result.isHuman) {
-        const normalized = normalizeHumanMessage(message);
+        const normalized = normalizeHumanMessage(message, this.now());
         if (result.reply) normalized.exchangeId = result.reply.record.triggerMsgId;
         entries.push(normalized);
         continue;
@@ -840,12 +848,30 @@ export class ConversationWindowService {
       fetchedMessages,
     );
     if (!result.eligible) return undefined;
-    const resolved = result.isHuman
-      ? normalizeHumanMessage(target.message)
-      : result.reply
-        ? normalizeBotReply(result.reply.record.triggerMsgId, result.reply.pages)
-        : undefined;
+    const resolved =
+      this.normalizePollEntry(target.message, result, input.botUserId) ??
+      (result.isHuman
+        ? normalizeHumanMessage(target.message, this.now())
+        : result.reply
+          ? normalizeBotReply(result.reply.record.triggerMsgId, result.reply.pages)
+          : undefined);
     return resolved && !externalDeletions.has(resolved.exchangeId) ? resolved : undefined;
+  }
+
+  /** A bot poll or a poll-closed notice, which have no reply record to normalize from. */
+  private normalizePollEntry(
+    message: RawDiscordMessage,
+    result: MessageEligibilityResult,
+    botUserId: string,
+  ): NormalizedMessage | undefined {
+    if (result.exchangeId === undefined) return undefined;
+    if (result.reason === "bot-poll") {
+      return normalizeBotPoll(message, result.exchangeId, this.now());
+    }
+    if (result.reason === "poll-result") {
+      return normalizePollResultNotice(message, result.exchangeId, message.author.id === botUserId);
+    }
+    return undefined;
   }
 
   private async fetchMessage(
