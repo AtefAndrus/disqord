@@ -96,7 +96,7 @@ summary: "会話の窓に入った投票を、質問、選択肢、票数、確�
 - [x] bot を呼んだ発言そのものの投票を、票数を除いて入力に足す
 - [x] 単体テストを足す
 - [x] e2e シナリオ `poll-create` と `poll-recall` を足し、AGENTS.md の End-to-end 節に実行条件を書く
-- [ ] `bun run e2e` と `bun run e2e poll-create poll-recall history-set history-recall history-window read-earlier view-attachment view-image` を実行し、結果を PR に書く
+- [x] `bun run e2e`、`bun run e2e history-set history-recall history-window read-earlier view-attachment view-image`、`bun run e2e poll-create poll-recall` を実行し、結果を PR に書く
 - [ ] 手動確認: 実クライアントで投票に票を入れ、bot に結果を尋ねて票数が合うことを確かめる
 - [ ] `docs/changes/poll-results/` 削除（リリース完了時、git 履歴がアーカイブ）
 
