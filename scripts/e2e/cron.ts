@@ -174,6 +174,7 @@ export async function cleanupCron(
   env: ScenarioEnv,
   startedAt: number,
 ): Promise<string[]> {
+  startedRuns.push({ channelId, startedAt });
   const db = new Database(env.databasePath);
   try {
     for (const table of ["cron_jobs", "cron_proposals"]) {
@@ -187,4 +188,34 @@ export async function cleanupCron(
     db.close();
   }
   return [];
+}
+
+const startedRuns: { channelId: string; startedAt: number }[] = [];
+
+/**
+ * Deletes the proposals again at the end of the run, for every cron scenario
+ * that reached its cleanup. When only the HTTP response of the request post
+ * fails, the scenario's cleanup runs while the bot is still waiting on the
+ * LLM, and the proposal the bot saves afterwards would stay. The run calls
+ * this after stopping the bot it started, so nothing is saved after it.
+ * Under `--no-spawn` the bot keeps running, and a proposal it saves after
+ * this pass is not deleted by anything in this script.
+ */
+export function cleanupLateCronProposals(env: ScenarioEnv): string[] {
+  if (startedRuns.length === 0) return [];
+  try {
+    const db = new Database(env.databasePath);
+    try {
+      for (const { channelId, startedAt } of startedRuns) {
+        db.query(
+          "DELETE FROM cron_proposals WHERE user_id=? AND channel_id=? AND created_at>=?",
+        ).run(env.testerBotId, channelId, startedAt);
+      }
+    } finally {
+      db.close();
+    }
+    return [];
+  } catch (error) {
+    return [`late proposal cleanup failed: ${error instanceof Error ? error.message : error}`];
+  }
 }

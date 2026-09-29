@@ -1,13 +1,14 @@
 import type { ContainerBuilder, MessageCreateOptions } from "discord.js";
 import { RESTJSONErrorCodes } from "discord.js";
-import type {
-  CronJob,
-  CronProposal,
-  CronResult,
-  ICronRepository,
+import {
+  type CronJob,
+  type CronProposal,
+  type CronResult,
+  type ICronRepository,
+  isChannelAllowed,
 } from "../db/repositories/cronRepository";
 import { AppError } from "../errors";
-import type { ChatCompletionResponse } from "../types";
+import type { ChatCompletionResponse, GuildSettings } from "../types";
 import { EmbedColors } from "../types/embed";
 import {
   badgeText,
@@ -291,25 +292,22 @@ export class CronService implements ICronService {
     }
     if (!parsed.ok) return failure(parsed.reason);
     if (input.signal?.aborted) return failure("中断されました。");
-    const latestSettings = await this.settings.getGuildSettings(input.guildId);
-    if (!latestSettings.cronEnabled || !canManageGuildSettings(actor, latestSettings))
-      return failure("定期実行が無効か、操作権限がありません。");
+    let parentId: string | null;
     try {
-      const destination = await this.delivery.resolve(input.guildId, input.channelId, input.userId);
-      const currentSettings = await this.settings.getGuildSettings(input.guildId);
-      if (!currentSettings.cronEnabled || !canManageGuildSettings(actor, currentSettings))
-        return failure("定期実行が無効か、操作権限がありません。");
-      if (
-        currentSettings.allowedChannels !== null &&
-        !currentSettings.allowedChannels.includes(input.channelId) &&
-        !(destination.parentId && currentSettings.allowedChannels.includes(destination.parentId))
-      )
-        return failure("許可チャンネル外です。");
+      parentId = (await this.delivery.resolve(input.guildId, input.channelId, input.userId))
+        .parentId;
     } catch (error) {
       return failure(errorText(error));
     }
+    // The checks above only spare a doomed conversion. What decides the save is
+    // read here, after the last await, and nothing is awaited until the INSERT:
+    // converting the schedule and resolving the destination can take a minute.
+    const current = await this.settings.getGuildSettings(input.guildId);
     if (input.signal?.aborted) return failure("中断されました。");
-    // Checked again because converting the schedule and resolving the destination can take a minute.
+    if (!current.cronEnabled || !canManageGuildSettings(actor, current))
+      return failure("定期実行が無効か、操作権限がありません。");
+    if (!isChannelAllowed(current.allowedChannels, input.channelId, parentId))
+      return failure("許可チャンネル外です。");
     if (targetChanged()) return failure("編集対象のジョブが変更されました。");
     const now = this.now();
     const proposal = this.repo.createProposal({
@@ -345,19 +343,15 @@ export class CronService implements ICronService {
     const proposal = this.repo.getProposal(id);
     if (!proposal || proposal.guildId !== guildId || proposal.userId !== userId)
       return failure("提案が無効です。");
+    let parentId: string | null;
     try {
-      const settings = await this.settings.getGuildSettings(guildId);
-      const destination = await this.delivery.resolve(guildId, proposal.channelId, userId);
-      if (
-        settings.allowedChannels !== null &&
-        !settings.allowedChannels.includes(proposal.channelId) &&
-        !(destination.parentId && settings.allowedChannels.includes(destination.parentId))
-      )
-        return failure("許可チャンネル外です。");
+      parentId = (await this.delivery.resolve(guildId, proposal.channelId, userId)).parentId;
     } catch (error) {
       return failure(errorText(error));
     }
-    return this.repo.approveProposal(id, guildId, userId, actor, this.now());
+    // The settings are judged only inside the approval's transaction, after the
+    // REST call, not from a read taken before it: `/config` can change meanwhile.
+    return this.repo.approveProposal(id, guildId, userId, actor, parentId, this.now());
   }
   rejectProposal(id: number, guildId: string, userId: string): boolean {
     return this.repo.rejectProposal(id, guildId, userId);
@@ -480,9 +474,10 @@ export class CronService implements ICronService {
     }
   }
   /**
-   * The next time from the stored expression, or undefined after pausing a job
-   * whose expression cannot give one (a row written outside the panel). Left
-   * active, such a job would stay due and be picked first on every tick.
+   * The next time from the stored expression, or undefined after pausing a
+   * repeating job whose expression cannot give one (a row written outside the
+   * panel). Left active, such a job would stay due and be picked first on
+   * every tick.
    */
   private nextOrPause(
     job: CronJob,
@@ -494,6 +489,11 @@ export class CronService implements ICronService {
     try {
       next = nextRunAfter(job, scheduledAt, from);
       if (next !== null && !Number.isFinite(next)) throw new Error(`not a time: ${next}`);
+      // Croner returns null rather than throwing for an expression that builds
+      // but never matches again (`0 0 30 2 *`); consumed as-is it would run once
+      // and end as `done` with no error. Only `once` ends by design.
+      if (next === null && job.kind === "cron")
+        throw new Error("今後一致する実行時刻がありません。");
     } catch (error) {
       logger.error("Cron job has an unusable schedule", { jobId: job.id, error });
       this.repo.pauseInvalid(
@@ -576,19 +576,14 @@ export class CronService implements ICronService {
   ): Promise<CronResult<void>> {
     let destination: CronDestination | undefined;
     try {
-      const settings = await this.settings.getGuildSettings(job.guildId);
       if (this.closing || signal.aborted) return failure("中断されました。");
       destination = await this.delivery.resolve(job.guildId, job.channelId);
+      const channel = destination;
+      const settings = await this.checkRunnable(job, channel);
       // withTimeout also refuses an already aborted signal before generation starts; this
       // check stays so that a stop during resolve does not depend on that helper alone.
       if (this.closing || signal.aborted) return failure("中断されました。");
-      const channel = destination;
-      if (
-        settings.allowedChannels !== null &&
-        !settings.allowedChannels.includes(job.channelId) &&
-        !(destination.parentId && settings.allowedChannels.includes(destination.parentId))
-      )
-        throw new Error("許可チャンネル外です。");
+      if (!settings) return failure("定期実行が無効になりました。");
       const response = await withTimeout(
         (s) => this.chat.generateScheduledResponse(job, s),
         GENERATION_TIMEOUT_MS,
@@ -646,6 +641,23 @@ export class CronService implements ICronService {
       }
       return failure(reason);
     }
+  }
+  /**
+   * The one check before generation, placed after the destination is resolved
+   * over REST so that a `/config` change made during that call is seen. Returns
+   * the settings the run uses (the footer too), or null when the feature was
+   * turned off, which is an interruption rather than a failure; a destination
+   * outside the allowed channels throws and counts as a failure.
+   */
+  private async checkRunnable(
+    job: CronJob,
+    destination: CronDestination,
+  ): Promise<GuildSettings | null> {
+    const settings = await this.settings.getGuildSettings(job.guildId);
+    if (!settings.cronEnabled) return null;
+    if (!isChannelAllowed(settings.allowedChannels, job.channelId, destination.parentId))
+      throw new Error("許可チャンネル外です。");
+    return settings;
   }
   private current(job: CronJob): boolean {
     return this.repo.getJob(job.id)?.version === job.version;

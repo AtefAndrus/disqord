@@ -30,7 +30,7 @@ import {
   type ScenarioCost,
   type UsageState,
 } from "./cost";
-import type { ScenarioEnv } from "./cron";
+import { cleanupLateCronProposals, type ScenarioEnv } from "./cron";
 import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
   costOf,
@@ -86,6 +86,12 @@ const env: ScenarioEnv = {
  * not to insert anything more.
  */
 const interrupt: { cleanup?: () => Promise<unknown>; stopBot?: () => Promise<void> } = {};
+
+/** Run after the bot is stopped, whichever way the run ends; see `cleanupLateCronProposals`. */
+function lateCleanup(): void {
+  for (const problem of cleanupLateCronProposals(env)) console.log(`     cleanup: ${problem}`);
+}
+
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     interruption.abort();
@@ -96,6 +102,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         Bun.sleep(INTERRUPT_CLEANUP_TIMEOUT_MS),
       ]);
       await interrupt.stopBot?.();
+      lateCleanup();
       process.exit(130);
     })();
   });
@@ -407,6 +414,7 @@ async function main(): Promise<number> {
     }
   } finally {
     await bot?.stop();
+    lateCleanup();
   }
   for (const line of formatCostSummary(costs, await usageDelta(usageBefore, costs))) {
     console.log(line);

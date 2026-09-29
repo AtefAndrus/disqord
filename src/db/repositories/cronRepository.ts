@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { type CronSchedule, firstRunAfter, validateSchedule } from "../../services/cronSchedule";
 import { canManageGuildSettings, type SettingsActor } from "../../services/settingsAuthorization";
+import { parseAutoReplyChannels } from "./guildSettings";
 
 export interface CronJob {
   id: number;
@@ -50,14 +51,33 @@ type RawProposal = Omit<CronProposal, "silent"> & { silent: number };
 const jobFrom = (row: RawJob): CronJob => ({ ...row, silent: Boolean(row.silent) });
 const proposalFrom = (row: RawProposal): CronProposal => ({ ...row, silent: Boolean(row.silent) });
 
+/** Whether a destination passes the allowed channels: null allows all, and a thread passes by its parent. */
+export function isChannelAllowed(
+  allowedChannels: readonly string[] | null,
+  channelId: string,
+  parentId: string | null,
+): boolean {
+  return (
+    allowedChannels === null ||
+    allowedChannels.includes(channelId) ||
+    (parentId !== null && allowedChannels.includes(parentId))
+  );
+}
+
 export interface ICronRepository {
   createProposal(input: NewCronProposal): CronProposal;
   getProposal(id: number): CronProposal | null;
+  /**
+   * `parentId` is the destination's parent as resolved over REST before the
+   * call; the allowed channels are read inside the transaction, so that a
+   * change made while the destination was being resolved is not missed.
+   */
   approveProposal(
     id: number,
     guildId: string,
     userId: string,
     actor: SettingsActor,
+    parentId: string | null,
     now: number,
   ): CronResult<CronJob>;
   rejectProposal(id: number, guildId: string, userId: string): boolean;
@@ -126,6 +146,7 @@ export class CronRepository implements ICronRepository {
     guildId: string,
     userId: string,
     actor: SettingsActor,
+    parentId: string | null,
     now: number,
   ): CronResult<CronJob> {
     const tx = this.db.transaction((): CronResult<CronJob> => {
@@ -138,12 +159,19 @@ export class CronRepository implements ICronRepository {
       )
         return { ok: false, reason: "提案が無効か期限切れです。" };
       const settings = this.db
-        .query<{ cronEnabled: number; adminRoleId: string | null }, [string]>(
-          "SELECT cron_enabled AS cronEnabled, admin_role_id AS adminRoleId FROM guild_settings WHERE guild_id=?",
+        .query<
+          { cronEnabled: number; adminRoleId: string | null; allowedChannels: string | null },
+          [string]
+        >(
+          "SELECT cron_enabled AS cronEnabled, admin_role_id AS adminRoleId, allowed_channels AS allowedChannels FROM guild_settings WHERE guild_id=?",
         )
         .get(guildId);
       if (!settings?.cronEnabled || !canManageGuildSettings(actor, settings))
         return { ok: false, reason: "定期実行が無効か、操作権限がありません。" };
+      const allowedChannels =
+        settings.allowedChannels === null ? null : parseAutoReplyChannels(settings.allowedChannels);
+      if (!isChannelAllowed(allowedChannels, proposal.channelId, parentId))
+        return { ok: false, reason: "許可チャンネル外です。" };
       const schedule: CronSchedule = { kind: proposal.kind, expr: proposal.expr };
       const validation = validateSchedule(schedule, now);
       const first = firstRunAfter(schedule, now);

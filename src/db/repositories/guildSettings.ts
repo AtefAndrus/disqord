@@ -59,7 +59,7 @@ interface RawGuildSettings {
   updatedAt: string;
 }
 
-function parseAutoReplyChannels(raw: string | null): string[] {
+export function parseAutoReplyChannels(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);

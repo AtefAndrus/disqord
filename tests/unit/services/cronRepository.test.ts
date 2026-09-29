@@ -44,60 +44,69 @@ describe("cron repository", () => {
   }
   test("approval is atomic, rejects a second click and consumed proposals", () => {
     const input = proposal();
-    const first = repo.approveProposal(input.id, "guild", "user", actor, NOW);
+    const first = repo.approveProposal(input.id, "guild", "user", actor, null, NOW);
     expect(first.ok).toBe(true);
-    expect(repo.approveProposal(input.id, "guild", "user", actor, NOW).ok).toBe(false);
+    expect(repo.approveProposal(input.id, "guild", "user", actor, null, NOW).ok).toBe(false);
     expect(repo.countJobs("guild")).toBe(1);
   });
   test("approval rejects another user, missing permissions, disabled guild and past once", async () => {
     const p = proposal();
-    expect(repo.approveProposal(p.id, "guild", "other", actor, NOW).ok).toBe(false);
-    expect(repo.approveProposal(p.id, "guild", "user", stranger, NOW).ok).toBe(false);
+    expect(repo.approveProposal(p.id, "guild", "other", actor, null, NOW).ok).toBe(false);
+    expect(repo.approveProposal(p.id, "guild", "user", stranger, null, NOW).ok).toBe(false);
     await settings.setCronEnabled("guild", false);
-    expect(repo.approveProposal(p.id, "guild", "user", actor, NOW).ok).toBe(false);
+    expect(repo.approveProposal(p.id, "guild", "user", actor, null, NOW).ok).toBe(false);
     await settings.setCronEnabled("guild", true);
     const once = proposal({ kind: "once", expr: new Date(NOW + 1_000).toISOString() });
-    expect(repo.approveProposal(once.id, "guild", "user", actor, NOW + 2_000).ok).toBe(false);
+    expect(repo.approveProposal(once.id, "guild", "user", actor, null, NOW + 2_000).ok).toBe(false);
   });
   test("guild and user limits count active and paused but not done", () => {
     for (let i = 0; i < 10; i++) {
       const p = proposal();
-      expect(repo.approveProposal(p.id, "guild", "user", actor, NOW).ok).toBe(true);
+      expect(repo.approveProposal(p.id, "guild", "user", actor, null, NOW).ok).toBe(true);
     }
-    expect(repo.approveProposal(proposal().id, "guild", "user", actor, NOW).ok).toBe(false);
+    expect(repo.approveProposal(proposal().id, "guild", "user", actor, null, NOW).ok).toBe(false);
     expect(
-      repo.approveProposal(proposal({ userId: "other" }).id, "guild", "other", actor, NOW).ok,
+      repo.approveProposal(proposal({ userId: "other" }).id, "guild", "other", actor, null, NOW).ok,
     ).toBe(true);
   });
   test("guild limit rejects the fifty-first active job", () => {
     for (let i = 0; i < 50; i++) {
       const p = proposal({ userId: `user-${i}` });
-      expect(repo.approveProposal(p.id, "guild", `user-${i}`, actor, NOW).ok).toBe(true);
+      expect(repo.approveProposal(p.id, "guild", `user-${i}`, actor, null, NOW).ok).toBe(true);
     }
     const extra = proposal({ userId: "last" });
-    expect(repo.approveProposal(extra.id, "guild", "last", actor, NOW).ok).toBe(false);
+    expect(repo.approveProposal(extra.id, "guild", "last", actor, null, NOW).ok).toBe(false);
   });
   test("edit checks version and keeps paused status", () => {
-    const created = repo.approveProposal(proposal().id, "guild", "user", actor, NOW);
+    const created = repo.approveProposal(proposal().id, "guild", "user", actor, null, NOW);
     if (!created.ok) throw new Error(created.reason);
     const job = created.value;
     expect(repo.setStatus(job.id, job.version, "paused", null, NOW)).toBe(true);
     const stale = proposal({ targetJobId: job.id, targetVersion: job.version });
-    expect(repo.approveProposal(stale.id, "guild", "user", actor, NOW).ok).toBe(false);
+    expect(repo.approveProposal(stale.id, "guild", "user", actor, null, NOW).ok).toBe(false);
     const edit = proposal({
       targetJobId: job.id,
       targetVersion: job.version + 1,
       prompt: "changed",
     });
-    const result = repo.approveProposal(edit.id, "guild", "user", actor, NOW);
+    const result = repo.approveProposal(edit.id, "guild", "user", actor, null, NOW);
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.status).toBe("paused");
       expect(result.value.nextRunAt).toBeNull();
     }
   });
+  test("approval reads the allowed channels in its transaction and passes a thread by its parent", async () => {
+    await settings.addAllowedChannel("guild", "parent");
+    const p = proposal();
+    expect(repo.approveProposal(p.id, "guild", "user", actor, null, NOW)).toEqual({
+      ok: false,
+      reason: "許可チャンネル外です。",
+    });
+    expect(repo.approveProposal(p.id, "guild", "user", actor, "parent", NOW).ok).toBe(true);
+  });
   test("time is consumed before execution and conditional updates reject a changed version", () => {
-    const result = repo.approveProposal(proposal().id, "guild", "user", actor, NOW);
+    const result = repo.approveProposal(proposal().id, "guild", "user", actor, null, NOW);
     if (!result.ok) throw new Error(result.reason);
     const job = result.value;
     expect(repo.consume(job, NOW + 600_000, NOW + 300_000)).toBe(true);
@@ -107,7 +116,7 @@ describe("cron repository", () => {
     expect(repo.saveSuccess(job.id, job.version, NOW + 300_002)).toBe(false);
   });
   test("three failures pause recurring jobs and increment version", () => {
-    const result = repo.approveProposal(proposal().id, "guild", "user", actor, NOW);
+    const result = repo.approveProposal(proposal().id, "guild", "user", actor, null, NOW);
     if (!result.ok) throw new Error(result.reason);
     const job = result.value;
     repo.saveFailure(job.id, job.version, NOW, "error");
@@ -118,7 +127,7 @@ describe("cron repository", () => {
     expect(failed?.version).toBe(job.version + 1);
   });
   test("a completed recurring job stays done when a late failure is recorded", () => {
-    const result = repo.approveProposal(proposal().id, "guild", "user", actor, NOW);
+    const result = repo.approveProposal(proposal().id, "guild", "user", actor, null, NOW);
     if (!result.ok) throw new Error(result.reason);
     const job = result.value;
     db.query("UPDATE cron_jobs SET status='done', next_run_at=NULL, fail_count=2 WHERE id=?").run(
