@@ -1,5 +1,6 @@
 import { REST, Routes } from "discord.js";
 import { configCommand } from "./config";
+import { cronCommand } from "./cron";
 import { helpCommand } from "./help";
 import { modelCommand } from "./model";
 import { releaseNoteCommand } from "./releaseNote";
@@ -10,6 +11,7 @@ export const commandDefinitions = [
   statusCommand,
   modelCommand,
   configCommand,
+  cronCommand,
   releaseNoteCommand,
 ];
 

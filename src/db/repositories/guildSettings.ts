@@ -14,6 +14,7 @@ export type GuildSettingsChanges = Partial<
     | "twitterExpandEnabled"
     | "historyEnabled"
     | "discordToolsEnabled"
+    | "cronEnabled"
     | "allowedChannels"
     | "adminRoleId"
     | "releaseAnnounceChannelId"
@@ -53,11 +54,12 @@ interface RawGuildSettings {
   twitterExpandEnabled: number;
   historyEnabled: number;
   discordToolsEnabled: number;
+  cronEnabled: number;
   createdAt: string;
   updatedAt: string;
 }
 
-function parseAutoReplyChannels(raw: string | null): string[] {
+export function parseAutoReplyChannels(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -85,6 +87,7 @@ function rawToGuildSettings(raw: RawGuildSettings): GuildSettings {
     twitterExpandEnabled: Boolean(raw.twitterExpandEnabled ?? 1),
     historyEnabled: Boolean(raw.historyEnabled),
     discordToolsEnabled: Boolean(raw.discordToolsEnabled),
+    cronEnabled: Boolean(raw.cronEnabled),
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -94,7 +97,7 @@ const SELECT_ROW = `SELECT guild_id as guildId, admin_role_id as adminRoleId, de
   show_llm_details as showLlmDetails, auto_reply_channels as autoReplyChannels,
   web_search_enabled as webSearchEnabled, reasoning_display_enabled as reasoningDisplayEnabled,
   twitter_expand_enabled as twitterExpandEnabled,
-  history_enabled as historyEnabled, discord_tools_enabled as discordToolsEnabled, allowed_channels as allowedChannels,
+  history_enabled as historyEnabled, discord_tools_enabled as discordToolsEnabled, cron_enabled as cronEnabled, allowed_channels as allowedChannels,
   settings_version as settingsVersion, updated_by as updatedBy,
   release_announce_channel_id as releaseAnnounceChannelId,
   created_at as createdAt, updated_at as updatedAt
@@ -198,7 +201,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         `UPDATE guild_settings
          SET default_model = ?, free_models_only = ?, show_llm_details = ?,
              auto_reply_channels = ?, web_search_enabled = ?, reasoning_display_enabled = ?,
-             twitter_expand_enabled = ?, history_enabled = ?, discord_tools_enabled = ?, updated_at = ?,
+             twitter_expand_enabled = ?, history_enabled = ?, discord_tools_enabled = ?, cron_enabled = ?, updated_at = ?,
              allowed_channels = ?, admin_role_id = ?, settings_version = ?, updated_by = ?,
              release_announce_channel_id = ?
          WHERE guild_id = ?`,
@@ -213,6 +216,7 @@ export class GuildSettingsRepository implements IGuildSettingsRepository {
         settings.twitterExpandEnabled ? 1 : 0,
         settings.historyEnabled ? 1 : 0,
         settings.discordToolsEnabled ? 1 : 0,
+        settings.cronEnabled ? 1 : 0,
         settings.updatedAt,
         settings.allowedChannels === null ? null : JSON.stringify(settings.allowedChannels),
         settings.adminRoleId,

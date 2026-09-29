@@ -1,5 +1,6 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { createReplyRecordCleanupHandlers } from "../../../../src/bot/events/replyRecordCleanup";
+import { logger } from "../../../../src/utils/logger";
 
 function service(): {
   deleteByGuild: ReturnType<typeof mock>;
@@ -14,6 +15,21 @@ function service(): {
 }
 
 describe("reply record cleanup handlers", () => {
+  test("deletes cron jobs and proposals for removed guilds, channels and threads", async () => {
+    const cron = {
+      deleteByGuild: mock((_id: string) => 1),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const handlers = createReplyRecordCleanupHandlers(service(), cron);
+    await handlers.guildDelete({ id: "guild" });
+    await handlers.channelDelete({ id: "channel" });
+    await handlers.threadDelete({ id: "thread" });
+    await handlers.reconcileGuilds(["kept"]);
+    expect(cron.deleteByGuild.mock.calls).toEqual([["guild"]]);
+    expect(cron.deleteByChannel.mock.calls).toEqual([["channel"], ["thread"]]);
+    expect(cron.deleteGuildsNotIn.mock.calls).toEqual([[["kept"]]]);
+  });
   test("deletes the records of the guild left, the channel deleted, and the thread deleted", async () => {
     const deleter = service();
     const handlers = createReplyRecordCleanupHandlers(deleter);
@@ -29,7 +45,12 @@ describe("reply record cleanup handlers", () => {
 
   test("reconciles against every guild the client is in at startup", async () => {
     const deleter = service();
-    const handlers = createReplyRecordCleanupHandlers(deleter);
+    const cron = {
+      deleteByGuild: mock((_id: string) => 0),
+      deleteByChannel: mock((_id: string) => 0),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 0),
+    };
+    const handlers = createReplyRecordCleanupHandlers(deleter, cron);
 
     await handlers.reconcileGuilds(
       new Map([
@@ -39,5 +60,51 @@ describe("reply record cleanup handlers", () => {
     );
 
     expect(deleter.deleteGuildsNotIn.mock.calls).toEqual([[["a", "b"]]]);
+    expect(cron.deleteGuildsNotIn.mock.calls).toEqual([[["a", "b"]]]);
+  });
+  test("both cleanup paths run even if either deletion fails", async () => {
+    const deleter = service();
+    const cron = {
+      deleteByGuild: mock((_id: string) => 1),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const handlers = createReplyRecordCleanupHandlers(deleter, cron);
+    deleter.deleteByGuild.mockImplementation(async () => {
+      throw new Error("reply failure");
+    });
+    await expect(handlers.guildDelete({ id: "guild" })).rejects.toThrow("reply failure");
+    expect(cron.deleteByGuild).toHaveBeenCalledWith("guild");
+    cron.deleteByChannel.mockImplementation(() => {
+      throw new Error("cron failure");
+    });
+    await expect(handlers.channelDelete({ id: "channel" })).rejects.toThrow("cron failure");
+    expect(deleter.deleteByChannel).toHaveBeenCalledWith("channel");
+  });
+  test("logs the cron failure when both deletions fail", async () => {
+    const deleter = service();
+    deleter.deleteByGuild.mockImplementation(async () => {
+      throw new Error("reply failure");
+    });
+    const cronError = new Error("cron failure");
+    const cron = {
+      deleteByGuild: mock((_id: string): number => {
+        throw cronError;
+      }),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const logged = spyOn(logger, "error").mockImplementation(() => {});
+    try {
+      const handlers = createReplyRecordCleanupHandlers(deleter, cron);
+      await expect(handlers.guildDelete({ id: "guild" })).rejects.toThrow("reply failure");
+      expect(logged).toHaveBeenCalledWith("Cron cleanup failed", {
+        scope: "guild",
+        id: "guild",
+        error: cronError,
+      });
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

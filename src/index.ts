@@ -1,4 +1,4 @@
-import { Events } from "discord.js";
+import { Events, PermissionFlagsBits } from "discord.js";
 import packageJson from "../package.json";
 import { createBotClient } from "./bot/client";
 import { registerCommands } from "./bot/commands";
@@ -10,6 +10,7 @@ import { createReplyRecordCleanupHandlers } from "./bot/events/replyRecordCleanu
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
 import { BotStateRepository } from "./db/repositories/botState";
+import { CronRepository } from "./db/repositories/cronRepository";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
@@ -18,14 +19,20 @@ import { createAddReactionTool } from "./llm/tools/discord/addReaction";
 import { createCreatePollTool } from "./llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "./llm/tools/discord/createThread";
 import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
+import { createProposeCronJobTool } from "./llm/tools/proposeCronJob";
 import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
 import { ChatService } from "./services/chatService";
 import { ConversationWindowService, WINDOW_REBUILD_AFTER_MS } from "./services/conversationWindow";
+import { CronService, startCronService } from "./services/cronService";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
-import { createReleaseSender, ReleaseAnnouncer } from "./services/releaseAnnouncer";
+import {
+  createReleaseSender,
+  ReleaseAnnouncer,
+  resolveMessageChannel,
+} from "./services/releaseAnnouncer";
 import { loadReleaseNotes } from "./services/releaseNotes";
 import { ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
@@ -54,6 +61,7 @@ async function bootstrap(): Promise<void> {
   logger.info("Database initialized");
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
+  const cronRepository = new CronRepository(db);
   const replyRecordRepository = new ReplyRecordRepository(db);
   const replyRecordService = new ReplyRecordService(replyRecordRepository);
   await replyRecordService.markPendingFailed();
@@ -69,6 +77,7 @@ async function bootstrap(): Promise<void> {
   toolRegistry.register(createCreatePollTool());
   toolRegistry.register(createCreateThreadTool());
   toolRegistry.register(createPinMessageTool());
+  toolRegistry.register(createProposeCronJobTool());
   const chatService = new ChatService(
     llmClient,
     settingsService,
@@ -84,10 +93,34 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     config.webSearchEngine,
+    (guildId) => cronRepository.countJobs(guildId),
     releaseNotes,
   );
 
   const client = await createBotClient();
+  const cronService = new CronService(cronRepository, settingsService, chatService, {
+    resolve: async (guildId, channelId, userId) => {
+      const guild = await client.guilds.fetch(guildId);
+      const channel = await resolveMessageChannel(guild, channelId, true);
+      if (userId) {
+        const member = await guild.members.fetch({ user: userId, force: true, cache: false });
+        if (!channel.permissionsFor(member)?.has(PermissionFlagsBits.ViewChannel))
+          throw new Error("提案者が配信先を閲覧できません。");
+      }
+      return {
+        parentId: channel.isThread() ? channel.parentId : null,
+        send: async (payload) => {
+          await channel.send(payload);
+        },
+        notifyPaused: async (recipientId, name) => {
+          await channel.send({
+            content: `<@${recipientId}> 定期実行「${name}」は 3 回連続で失敗したため停止しました。`,
+            allowedMentions: { users: [recipientId], parse: [] },
+          });
+        },
+      };
+    },
+  });
   const messageReader = new DiscordMessageReader({
     get: (route, options) => {
       const query = options?.query
@@ -117,6 +150,7 @@ async function bootstrap(): Promise<void> {
       webSearchEngine: config.webSearchEngine,
       conversationWindow,
       replyRecordService,
+      cronService,
     },
   );
   const interactionCreateHandler = createInteractionCreateHandler(
@@ -126,6 +160,7 @@ async function bootstrap(): Promise<void> {
     llmClient,
     chatService,
     config.webSearchEngine,
+    cronService,
   );
 
   const releaseAnnouncer = new ReleaseAnnouncer(
@@ -134,10 +169,12 @@ async function bootstrap(): Promise<void> {
     () => client.guilds.cache.keys(),
     createReleaseSender(client),
   );
-  const replyRecordCleanup = createReplyRecordCleanupHandlers(replyRecordService);
+  const replyRecordCleanup = createReplyRecordCleanupHandlers(replyRecordService, cronRepository);
   client.once(Events.ClientReady, () => {
     onReady(client);
-    void replyRecordCleanup.reconcileGuilds(client.guilds.cache.keys());
+    void startCronService(cronService, () =>
+      replyRecordCleanup.reconcileGuilds(client.guilds.cache.keys()),
+    );
     void releaseAnnouncer.announce(packageJson.version, releaseNotes);
   });
   client.on(Events.GuildDelete, (guild) => void replyRecordCleanup.guildDelete(guild));
@@ -166,10 +203,14 @@ async function bootstrap(): Promise<void> {
   );
   windowSweepTimer.unref();
 
-  const shutdown = (signal: string): void => {
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info(`Received ${signal}, shutting down gracefully...`);
     clearInterval(windowSweepTimer);
     httpServer.stop();
+    await cronService.stop();
     client.destroy();
     db.close();
     logFileWriter.flush();
@@ -178,8 +219,8 @@ async function bootstrap(): Promise<void> {
     process.exit(0);
   };
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   process.on("unhandledRejection", (reason: unknown) => {
     logger.error("Unhandled rejection", { reason });
@@ -187,7 +228,7 @@ async function bootstrap(): Promise<void> {
 
   process.on("uncaughtException", (error: Error) => {
     logger.error("Uncaught exception, shutting down", { error });
-    shutdown("uncaughtException");
+    void shutdown("uncaughtException");
   });
 }
 

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import { getEventListeners } from "node:events";
-import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
+import type { CronJob } from "../../../src/db/repositories/cronRepository";
+import { AppError, BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
-import type { DiscordToolContext } from "../../../src/llm/tools/registry";
+import { createProposeCronJobTool } from "../../../src/llm/tools/proposeCronJob";
+import type { CronToolContext, DiscordToolContext } from "../../../src/llm/tools/registry";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { PDF_PARSER_PLUGIN } from "../../../src/services/attachmentParser";
 import { ChatService } from "../../../src/services/chatService";
@@ -75,6 +77,131 @@ function createFixture(overrides: Partial<GuildSettings> = {}): ChatFixture {
   );
   return { chatService, llmClient, settingsService, tweetService, toolRegistry };
 }
+
+test("scheduled generation and schedule conversion never call a paid default model in a free-only guild", async () => {
+  const { chatService, llmClient } = createFixture({
+    freeModelsOnly: true,
+    defaultModel: "model-2",
+  });
+  const job: CronJob = {
+    id: 1,
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    name: "name",
+    prompt: "prompt",
+    kind: "interval",
+    expr: "300000",
+    silent: false,
+    status: "active",
+    nextRunAt: 1,
+    lastRunAt: null,
+    failCount: 0,
+    lastError: null,
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+  await expect(
+    chatService.generateScheduledResponse(job, new AbortController().signal),
+  ).rejects.toThrow("有料の既定モデル `model-2`");
+  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow(
+    "有料の既定モデル",
+  );
+  expect(llmClient.chat).not.toHaveBeenCalled();
+});
+
+test("a free-only guild whose model cannot be checked is told apart from a paid model", async () => {
+  const { chatService, llmClient } = createFixture({
+    freeModelsOnly: true,
+    defaultModel: "model-1",
+  });
+  // The client reports a failed Models API request as an empty list.
+  llmClient.listModelsWithPricing.mockImplementation(async () => []);
+  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow(
+    "無料状態を確認できません",
+  );
+  expect(llmClient.chat).not.toHaveBeenCalled();
+});
+
+test("schedule conversion tells the model that cron expressions are in Asia/Tokyo", async () => {
+  const { chatService, llmClient } = createFixture();
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [{ message: { role: "assistant" as const, content: '{"schedule":"0 9 * * *"}' } }],
+  }));
+  await chatService.interpretCronSchedule("guild", "毎朝九時");
+  const [request] = llmClient.chat.mock.calls[0] as [ChatCompletionRequest];
+  expect(String(request.messages[0]?.content)).toContain("cron 式は Asia/Tokyo");
+});
+
+test.each([false, true])(
+  "scheduled generation sends format, date, saved prompt and silent=%s instruction on a free model",
+  async (silent) => {
+    const { chatService, llmClient } = createFixture({
+      freeModelsOnly: true,
+      defaultModel: "model-1",
+    });
+    const job: CronJob = {
+      id: 1,
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      name: "name",
+      prompt: "saved prompt",
+      kind: "interval",
+      expr: "300000",
+      silent,
+      status: "active",
+      nextRunAt: 1,
+      lastRunAt: null,
+      failCount: 0,
+      lastError: null,
+      version: 1,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const signal = new AbortController().signal;
+    await chatService.generateScheduledResponse(job, signal);
+    const [request, passedSignal] = llmClient.chat.mock.calls[0] as [
+      ChatCompletionRequest,
+      AbortSignal,
+    ];
+    expect(request.model).toBe("model-1");
+    expect(request.messages[0]?.content).toContain("Markdown の表");
+    expect(request.messages[1]?.content).toContain("現在日時");
+    expect(request.messages.at(-1)).toEqual({ role: "user", content: "saved prompt" });
+    expect(request.messages.some((message) => String(message.content).includes("[SILENT]"))).toBe(
+      silent,
+    );
+    expect(passedSignal).toBe(signal);
+  },
+);
+
+test("schedule interpretation accepts a fenced JSON object and hides parse errors", async () => {
+  const { chatService, llmClient } = createFixture();
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [
+      {
+        message: {
+          role: "assistant" as const,
+          content: 'schedule:\n```json\n{"schedule":"30m"}\n```',
+        },
+      },
+    ],
+  }));
+  expect(await chatService.interpretCronSchedule("guild", "every half hour")).toBe("30m");
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [{ message: { role: "assistant" as const, content: "{broken JSON}" } }],
+  }));
+  const error = await chatService
+    .interpretCronSchedule("guild", "invalid")
+    .catch((value: unknown) => value);
+  expect(error).toBeInstanceOf(AppError);
+  expect((error as AppError).userMessage).toBe("スケジュールを解釈できませんでした。");
+});
 
 function conversationContext(): ConversationWindowContext {
   return {
@@ -163,6 +290,45 @@ describe("ChatService", () => {
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
     expect(JSON.stringify(request.tools)).toContain('"name":"add_reaction"');
     expect(request.messages.at(-1)?.content).toBe("react");
+  });
+
+  test("offers propose_cron_job only when scheduled jobs are enabled", async () => {
+    const models = mock(async () => [
+      {
+        id: "test-model:fixture",
+        name: "Fixture",
+        created: 0,
+        contextLength: 128_000,
+        pricing: { prompt: "0", completion: "0" },
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+        supportedParameters: ["tools"],
+      },
+    ]);
+    const cron: CronToolContext = {
+      channelType: 0,
+      propose: async () => '{"ok":true}',
+    };
+    const toolsFor = async (cronEnabled: boolean): Promise<string> => {
+      const fixture = createFixture({
+        historyEnabled: false,
+        discordToolsEnabled: false,
+        cronEnabled,
+      });
+      fixture.toolRegistry.register(createProposeCronJobTool());
+      fixture.llmClient.listModelsWithPricing = models;
+      await fixture.chatService.generateChatResponse(
+        "guild",
+        { text: "毎朝挨拶して", cron },
+        "request",
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+      return JSON.stringify(request.tools ?? []);
+    };
+    expect(await toolsFor(true)).toContain('"name":"propose_cron_job"');
+    expect(await toolsFor(false)).not.toContain("propose_cron_job");
   });
 
   test("SettingsServiceからギルド設定を取得する", async () => {

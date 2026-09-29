@@ -23,6 +23,7 @@
     "prepare": "lefthook install"
   },
   "dependencies": {
+    "croner": "10.0.1",
     "discord.js": "14.27.0",
     "zod": "4.6.5"
   },

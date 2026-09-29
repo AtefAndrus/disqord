@@ -42,6 +42,7 @@ export function createCommandHandlers(
   settingsService: ISettingsService,
   modelService: IModelService,
   webSearchEngine: WebSearchEngine,
+  countCronJobs: (guildId: string) => number,
   /** Undefined when CHANGELOG.md could not be read at startup. */
   releaseNotes?: ReleaseNotes,
 ): CommandHandlers {
@@ -60,6 +61,7 @@ export function createCommandHandlers(
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/release-note [version]\` - リリースノート（変更点）を表示
 - \`/config\` - 設定パネルを開く
+- \`/cron\` - 定期実行のパネルを開く
 
 設定の変更には「サーバーの管理」権限または管理ロールが必要です。管理ロールの変更は「サーバーの管理」権限の持ち主だけが行えます。`;
 
@@ -189,6 +191,7 @@ export function createCommandHandlers(
         settings,
         webSearchEngine,
         version: packageJson.version,
+        ...(interaction.guildId && { cronJobCount: countCronJobs(interaction.guildId) }),
       });
 
       await interaction.editReply(message);

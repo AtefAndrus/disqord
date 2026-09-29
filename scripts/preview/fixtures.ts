@@ -7,6 +7,9 @@
  */
 
 import type { ContainerBuilder } from "discord.js";
+import type { CronJob, CronProposal } from "../../src/db/repositories/cronRepository";
+import { nextThreeRuns } from "../../src/services/cronSchedule";
+import { buildScheduledPages } from "../../src/services/cronService";
 import type { ModelDetails } from "../../src/services/modelService";
 import { buildReleaseNotePages } from "../../src/services/releaseNotes";
 import type { GuildSettings } from "../../src/types";
@@ -25,6 +28,7 @@ import {
   splitTextIntoMessages,
 } from "../../src/utils/chatContainerBuilder";
 import { buildConfigPanel, CONFIG_PAGES, type ConfigPage } from "../../src/utils/configPanel";
+import { buildCronDetail, buildCronList, buildCronProposalCard } from "../../src/utils/cronPanel";
 import { getColorForModel } from "../../src/utils/embedBuilder";
 import { buildModelDetailsContainer } from "../../src/utils/modelDetailsContainer";
 import { buildStatusMessage } from "../../src/utils/statusMessage";
@@ -62,6 +66,7 @@ const settings: GuildSettings = {
   twitterExpandEnabled: true,
   historyEnabled: false,
   discordToolsEnabled: false,
+  cronEnabled: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -78,7 +83,8 @@ const HELP_TEXT = `**使い方:**
 - \`/model list\` - OpenRouterのモデル一覧ページへ
 - \`/model refresh\` - モデルキャッシュを更新
 - \`/release-note [version]\` - リリースノート（変更点）を表示
-- \`/config\` - 設定パネルを開く`;
+- \`/config\` - 設定パネルを開く
+- \`/cron\` - 定期実行のパネルを開く`;
 
 const RELEASE_NOTE_BODY = (() => {
   const items = Array.from(
@@ -138,6 +144,131 @@ export function buildFixtures(): IFixture[] {
     });
   }
 
+  const now = Date.now();
+  const cronJobs: CronJob[] = [
+    {
+      id: 3,
+      guildId: settings.guildId,
+      channelId: "300000000000000000",
+      userId: "200000000000000000",
+      name: "朝の英単語",
+      prompt: "英語の中級者向けに、英単語を 1 つ選び、意味と例文を 1 つずつ紹介してください。",
+      kind: "cron",
+      expr: "0 9 * * 1-5",
+      silent: false,
+      status: "active",
+      nextRunAt: now + 3 * 3_600_000,
+      lastRunAt: now - 21 * 3_600_000,
+      failCount: 0,
+      lastError: null,
+      version: 4,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 2,
+      guildId: settings.guildId,
+      channelId: "300000000000000000",
+      userId: "200000000000000000",
+      name: "週報の書き方",
+      prompt: "週報の書き方のコツを 3 行で投稿してください。",
+      kind: "cron",
+      expr: "0 17 * * 5",
+      silent: true,
+      status: "paused",
+      nextRunAt: null,
+      lastRunAt: now - 6 * 86_400_000,
+      failCount: 3,
+      lastError: "配信先で bot に投稿権限が必要です。",
+      version: 7,
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      id: 1,
+      guildId: settings.guildId,
+      channelId: "300000000000000000",
+      userId: "200000000000000000",
+      name: "リリース当日の告知",
+      prompt: "今日が新バージョンの公開日であることを告知してください。",
+      kind: "once",
+      expr: new Date(now - 86_400_000).toISOString(),
+      silent: false,
+      status: "done",
+      nextRunAt: null,
+      lastRunAt: now - 86_400_000,
+      failCount: 0,
+      lastError: null,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+  fixtures.push({
+    id: "cron-list",
+    title: "/cron · 一覧",
+    note: "buildCronList: 自分にだけ見えるパネル。選択欄と追加ボタン",
+    messages: packContainers(buildCronList(cronJobs, 0).components),
+  });
+  for (const job of cronJobs) {
+    fixtures.push({
+      id: `cron-detail-${job.status}`,
+      title: `/cron · 詳細（${job.status}）`,
+      note: "buildCronDetail: 状態によってボタンが変わる",
+      messages: packContainers(buildCronDetail(job).components),
+    });
+  }
+  const proposal: CronProposal = {
+    id: 5,
+    guildId: settings.guildId,
+    channelId: "300000000000000000",
+    userId: "200000000000000000",
+    targetJobId: null,
+    targetVersion: null,
+    name: "朝の英単語",
+    prompt: cronJobs[0]?.prompt ?? "",
+    kind: "cron",
+    expr: "0 9 * * 1-5",
+    silent: false,
+    expiresAt: now + 86_400_000,
+    createdAt: now,
+  };
+  fixtures.push({
+    id: "cron-proposal",
+    title: "定期実行: 確認カード",
+    note: "buildCronProposalCard: 読み下し、次の 3 回、登録と取り消しのボタン",
+    messages: packContainers(
+      buildCronProposalCard(proposal, {
+        state: "pending",
+        nextRuns: nextThreeRuns(proposal, now),
+      }).components,
+    ),
+  });
+  fixtures.push({
+    id: "cron-proposal-approved",
+    title: "定期実行: 確認カード（承認後）",
+    note: "buildCronProposalCard: ボタンを外して登録済みを示す",
+    messages: packContainers(
+      buildCronProposalCard(proposal, {
+        state: "approved",
+        nextRuns: nextThreeRuns(proposal, now).slice(0, 1),
+      }).components,
+    ),
+  });
+  fixtures.push({
+    id: "cron-delivery",
+    title: "定期実行: 配信",
+    note: "buildScheduledPages: チャットの最終ページにジョブ名の見出しを足したもの",
+    messages: packContainers(
+      buildScheduledPages(
+        "朝の英単語",
+        "**serendipity**（名詞）: 思いがけない幸運な発見\n\n> I found this café by serendipity.\n> この喫茶店は偶然見つけた。",
+        DEMO_MODEL,
+        { showDetails: false, model: DEMO_MODEL },
+      ),
+    ),
+  });
+
   // 1. /status（ギルド内・ボタンあり）
   const statusGuild = buildStatusMessage({
     credits: { remaining: 1.2345 },
@@ -145,6 +276,7 @@ export function buildFixtures(): IFixture[] {
     settings,
     webSearchEngine: "perplexity",
     version: "1.4.0",
+    cronJobCount: 3,
   });
   fixtures.push({
     id: "status-guild",

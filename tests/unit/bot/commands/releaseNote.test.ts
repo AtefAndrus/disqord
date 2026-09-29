@@ -21,6 +21,7 @@ function handlersFor(notes: ReleaseNotes | undefined): ReturnType<typeof createC
     createMockSettingsService(),
     {} as IModelService,
     "perplexity",
+    () => 0,
     notes,
   );
 }

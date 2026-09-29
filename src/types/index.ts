@@ -19,6 +19,7 @@ export interface GuildSettings {
   twitterExpandEnabled: boolean;
   historyEnabled: boolean;
   discordToolsEnabled: boolean;
+  cronEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

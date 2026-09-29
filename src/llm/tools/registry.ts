@@ -33,6 +33,19 @@ export interface DiscordToolContext {
   pinMessage(messageRef: string | undefined, signal: AbortSignal): Promise<string>;
 }
 
+export interface CronProposalArgs {
+  name: string;
+  schedule: string;
+  prompt: string;
+  postOnlyWhenNotable: boolean;
+}
+
+/** Built per response, only in guilds with scheduled jobs enabled. */
+export interface CronToolContext {
+  channelType: number;
+  propose(args: CronProposalArgs, signal: AbortSignal): Promise<string>;
+}
+
 /**
  * Opaque render fragment interpreted by the chat-response-v2 updater. This
  * foundation only passes it through untouched — the shape is owned by each
@@ -48,6 +61,7 @@ export interface IToolContext {
   toolsAllowed?: boolean;
   conversation?: ConversationToolContext;
   discord?: DiscordToolContext;
+  cron?: CronToolContext;
   /**
    * Tokens this call's result may add to the request, as estimated by
    * `estimateToolResultTokens()`. Set by the tool loop per call. A tool

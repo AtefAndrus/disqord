@@ -106,6 +106,14 @@ export function applyMigrations(db: Database): void {
       "ALTER TABLE guild_settings ADD COLUMN discord_tools_enabled INTEGER NOT NULL DEFAULT 0",
     );
   }
+  if (
+    !db
+      .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+      .all()
+      .some((c) => c.name === "cron_enabled")
+  ) {
+    db.run("ALTER TABLE guild_settings ADD COLUMN cron_enabled INTEGER NOT NULL DEFAULT 0");
+  }
 
   // Migration: Add the optional guild settings administrator role
   const columnsAfterHistory = db
@@ -168,4 +176,22 @@ export function applyMigrations(db: Database): void {
     )
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_reply_records_finalized ON reply_records(finalized_at)");
+  db.run(`CREATE TABLE IF NOT EXISTS cron_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+    user_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('cron','interval','once')), expr TEXT NOT NULL,
+    silent INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0,1)),
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','done')),
+    next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT, version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL, CHECK (status != 'active' OR next_run_at IS NOT NULL))`);
+  db.run("CREATE INDEX IF NOT EXISTS idx_cron_jobs_due ON cron_jobs (status, next_run_at)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_cron_jobs_guild ON cron_jobs (guild_id)");
+  db.run(`CREATE TABLE IF NOT EXISTS cron_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+    user_id TEXT NOT NULL, target_job_id INTEGER, target_version INTEGER,
+    name TEXT NOT NULL, prompt TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('cron','interval','once')), expr TEXT NOT NULL,
+    silent INTEGER NOT NULL CHECK (silent IN (0,1)), expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL)`);
 }

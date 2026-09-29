@@ -99,6 +99,7 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | `/model list` | OpenRouterのモデル一覧ページへ |
 | `/model refresh` | モデルキャッシュを更新 |
 | `/config` | 設定パネルを開く |
+| `/cron` | 定期実行のパネルを開く |
 | `/release-note` | リリースノート（変更点）を表示 |
 <!-- AUTO:COMMANDS:END -->
 

@@ -1,6 +1,6 @@
 ---
 title: "定期実行"
-status: planned      # investigating | planned | in-progress | implemented
+status: in-progress      # investigating | planned | in-progress | implemented
 priority: medium     # high | medium | low
 summary: "登録したプロンプトを決まった時刻に LLM で実行し、指定チャンネルへ投稿する。登録は /cron パネルの modal と会話中の tool の 2 経路で、どちらも確認カードの承認を経る"
 ---
@@ -317,19 +317,19 @@ CREATE TABLE IF NOT EXISTS cron_proposals (
 
 ## Tasks
 
-- [ ] `croner` を足す（実装時点の最新の安定版を確かめる）
-- [ ] `cron_enabled` の列と、「機能」ページの項目、`/status` の表示を足す
-- [ ] `cron_jobs`、`cron_proposals` と `cronRepository` を足す
-- [ ] スケジュールの解釈と検証、次の時刻の計算を実装する
-- [ ] `chat()` に `signal` を足し、`generateScheduledResponse` を実装する
-- [ ] ティッカー、実行、配信、起動時の繰り越し、終了時の停止を実装する
-- [ ] `/cron` パネル、modal、確認カードと `interactionCreate` の振り分けを実装する
-- [ ] `CronToolContext` と `propose_cron_job` を実装して登録する
-- [ ] ギルド、チャンネル、スレッドの削除に連動した削除を足す
-- [ ] preview の fixture を足す
-- [ ] テスト: 各形式の解釈と拒否（6 フィールドが LLM に回らず拒否されること、5 分未満、存在しない日付、オフセットの無い日時、過去の日時、今後一致しない cron 式）、`nextRun` が境界の時刻（`0 9 * * *` に 09:00:00 を渡す）で次の日を返すこと、`*/5 * * * *` が遅れて実行されても 5 分ごとに続くことと密集する式の時刻が飛ばされること、実行前の時刻の消費と条件付き更新、停止中に過ぎた時刻の繰り越しと 10 分の猶予、実行中の停止、停止してからの再開、編集、削除での投稿と結果の保存の中止、分割投稿の成否の数え方、`[SILENT]` が成功に数えられること、連続失敗での停止、承認の二重押しと上限と `version` の食い違い、承認時に過ぎた日時指定の拒否、提案者以外と権限の無い人の承認の拒否、無効なギルドでの操作と tool の提案の拒否、無料モデル限定のギルドで有料になった既定モデルを呼ばないこと、Unknown Channel での削除、終了中に新しい実行が始まらないこと、tool の 1 応答 1 回
-- [ ] e2e シナリオ `cron` を足し、AGENTS.md の End-to-end 節に実行条件を書く
-- [ ] `bun run e2e` と `bun run e2e cron` を実行し、結果を PR に書く
+- [x] `croner` を足す（実装時点の最新の安定版を確かめる）
+- [x] `cron_enabled` の列と、「機能」ページの項目、`/status` の表示を足す
+- [x] `cron_jobs`、`cron_proposals` と `cronRepository` を足す
+- [x] スケジュールの解釈と検証、次の時刻の計算を実装する
+- [x] `chat()` に `signal` を足し、`generateScheduledResponse` を実装する
+- [x] ティッカー、実行、配信、起動時の繰り越し、終了時の停止を実装する
+- [x] `/cron` パネル、modal、確認カードと `interactionCreate` の振り分けを実装する
+- [x] `CronToolContext` と `propose_cron_job` を実装して登録する
+- [x] ギルド、チャンネル、スレッドの削除に連動した削除を足す
+- [x] preview の fixture を足す
+- [x] テスト: 各形式の解釈と拒否（6 フィールドが LLM に回らず拒否されること、5 分未満、存在しない日付、オフセットの無い日時、過去の日時、今後一致しない cron 式）、`nextRun` が境界の時刻（`0 9 * * *` に 09:00:00 を渡す）で次の日を返すこと、`*/5 * * * *` が遅れて実行されても 5 分ごとに続くことと密集する式の時刻が飛ばされること、実行前の時刻の消費と条件付き更新、停止中に過ぎた時刻の繰り越しと 10 分の猶予、実行中の停止、停止してからの再開、編集、削除での投稿と結果の保存の中止、分割投稿の成否の数え方、`[SILENT]` が成功に数えられること、連続失敗での停止、承認の二重押しと上限と `version` の食い違い、承認時に過ぎた日時指定の拒否、提案者以外と権限の無い人の承認の拒否、無効なギルドでの操作と tool の提案の拒否、無料モデル限定のギルドで有料になった既定モデルを呼ばないこと、Unknown Channel での削除、終了中に新しい実行が始まらないこと、tool の 1 応答 1 回
+- [x] e2e シナリオ `cron` を足し、AGENTS.md の End-to-end 節に実行条件を書く
+- [x] `bun run e2e` と `bun run e2e cron` を実行し、結果を PR に書く
 - [ ] 手動確認: `/cron` から追加の modal を開き、選択欄を含む 5 項目が表示されて送信でき、確認カードの「登録する」で一覧に載ることを確かめる
 - [ ] 手動確認: 会話で定期投稿を頼み、公開の確認カードを提案者以外が押すと断られ、提案者が押すと登録されることを確かめる
 - [ ] 手動確認: 詳細画面の編集、今すぐ実行、停止、再開、削除の 2 段階を一通り操作する
@@ -337,7 +337,7 @@ CREATE TABLE IF NOT EXISTS cron_proposals (
 
 ## Open Questions / Risks
 
-- **croner の境界の扱い（未検証）**: `nextRun(from)` が `from` より厳密に後の時刻を返すこと、Bun 上で IANA タイムゾーンを正しく扱うことは、README の記載だけで確かめていない。テストで確かめる。
+- **croner の境界の扱い**: `nextRun(from)` が `from` より厳密に後の時刻を返すことと、Bun 上で `Asia/Tokyo` の式を正しく UTC の時刻にすることは、`tests/unit/services/cronSchedule.test.ts` で確かめている（JST 09:00:00 に `0 9 * * *` を渡すと翌日の JST 09:00 を返す）。croner を更新したときは、このテストが境界の挙動の変化を検出する。
 - **modal の選択欄の表示（未検証）**: discord.js 14.27.0 の型定義には `LabelBuilder` と、選択欄を含める `setChannelSelectMenuComponent` / `setStringSelectMenuComponent` がある。実際のクライアントでの表示と送信の値は手動確認で確かめる。
 - **起動時の 10 分の猶予**: 本番のデプロイで bot が止まっている時間を計っていない。デプロイがこれより長くかかるなら、その時刻の実行が 1 回飛ぶ。
 - **スケジュールの変換の質**: 既定モデルが無料モデルのギルドでは、自然言語のスケジュールを誤って変換することがありうる。確認カードで読み下しと実行時刻を示すので、承認前に気付ける前提である。

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { ILLMClient } from "../../../src/llm/openrouter";
 import { ModelService } from "../../../src/services/modelService";
 import type { OpenRouterModel } from "../../../src/types";
@@ -115,6 +115,22 @@ describe("ModelService", () => {
   });
 
   describe("getFreeModels", () => {
+    test("fresh data distinguishes free, paid and unknown models", async () => {
+      expect(await modelService.isFreeModelWithFreshData("free-model-1")).toBe(true);
+      expect(await modelService.isFreeModelWithFreshData("paid-model-1")).toBe(false);
+      expect(await modelService.isFreeModelWithFreshData("missing")).toBeNull();
+    });
+    test("expired fallback data cannot authorize scheduled paid requests", async () => {
+      await modelService.getAllModels();
+      mockLLMClient.listModelsWithPricing = mock(() => Promise.resolve([]));
+      const now = Date.now();
+      const clock = spyOn(Date, "now").mockReturnValue(now + 3_600_001);
+      try {
+        expect(await modelService.isFreeModelWithFreshData("free-model-1")).toBeNull();
+      } finally {
+        clock.mockRestore();
+      }
+    });
     test("returns only free models (pricing.prompt === '0' and pricing.completion === '0')", async () => {
       const freeModels = await modelService.getFreeModels();
       expect(freeModels).toHaveLength(2);

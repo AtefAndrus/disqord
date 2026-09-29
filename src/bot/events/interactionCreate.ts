@@ -10,6 +10,7 @@ import { isSettingsRejection } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
 import type { IChatService } from "../../services/chatService";
+import type { ICronService } from "../../services/cronService";
 import type { IModelService } from "../../services/modelService";
 import type { ISettingsService } from "../../services/settingsService";
 import {
@@ -23,6 +24,7 @@ import { metrics } from "../../utils/metrics";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 import { handleConfigPanelInteraction } from "./configPanelHandler";
+import { handleCronPanelInteraction, openCronPanel } from "./cronPanelHandler";
 
 /**
  * A rejected settings change carries text meant for the user (a conflict
@@ -55,6 +57,7 @@ export function createInteractionCreateHandler(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
+  cronService: ICronService,
 ): (interaction: Interaction) => Promise<void> {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -82,6 +85,14 @@ export function createInteractionCreateHandler(
       return;
     }
 
+    if (
+      (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
+      interaction.customId.startsWith("cron:")
+    ) {
+      await handleCronPanelInteraction(interaction, cronService, settingsService);
+      return;
+    }
+
     if (interaction.isButton()) {
       await handleButtonInteraction(
         interaction,
@@ -90,6 +101,7 @@ export function createInteractionCreateHandler(
         llmClient,
         chatService,
         webSearchEngine,
+        cronService,
       );
       return;
     }
@@ -138,6 +150,10 @@ export function createInteractionCreateHandler(
           await handlers.config(interaction);
           break;
 
+        case "cron":
+          await openCronPanel(interaction, cronService);
+          break;
+
         default:
           logger.warn("Unknown command", { commandName });
       }
@@ -154,7 +170,12 @@ export function createInteractionCreateHandler(
         const settingsError = settingsErrorContainer(error);
         const container =
           settingsError ?? buildErrorContainer("コマンドの実行中にエラーが発生しました。");
-        await reply(toNoticePayload(container, interaction.commandName === "config"));
+        await reply(
+          toNoticePayload(
+            container,
+            interaction.commandName === "config" || interaction.commandName === "cron",
+          ),
+        );
       } catch (replyError) {
         logger.error("Failed to send error message", { replyError });
       }
@@ -169,6 +190,7 @@ async function handleButtonInteraction(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
+  cronService: ICronService,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply(
@@ -256,6 +278,7 @@ async function handleButtonInteraction(
       settings: updatedSettings,
       webSearchEngine,
       version: packageJson.version,
+      cronJobCount: cronService.countJobs(interaction.guildId),
     });
 
     await interaction.editReply(message);

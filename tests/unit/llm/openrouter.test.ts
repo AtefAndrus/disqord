@@ -143,6 +143,12 @@ describe("OpenRouterClient", () => {
   }
 
   describe("chat", () => {
+    test("passes an abort signal to the non-streaming request", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ output: [] }) });
+      const signal = new AbortController().signal;
+      await client.chat(REQUEST, signal);
+      expect(mockFetch.mock.calls[0]?.[1].signal).toBe(signal);
+    });
     test("Responses の結果を ChatCompletionResponse の形へ写像する", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,

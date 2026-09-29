@@ -1,9 +1,10 @@
-import { BadRequestError, WebSearchFailedError } from "../errors";
+import type { CronJob } from "../db/repositories/cronRepository";
+import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
-import type { DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
+import type { CronToolContext, DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
   buildWebSearchStaticSystemMessage,
@@ -34,6 +35,7 @@ export interface ChatUserInput {
   authorLabel?: string;
   conversation?: ConversationWindowContext;
   discord?: DiscordToolContext;
+  cron?: CronToolContext;
 }
 
 export interface ChatRequestContext {
@@ -198,6 +200,91 @@ export class ChatService implements IChatService {
     private readonly modelService: IModelService,
   ) {}
 
+  async assertScheduledModel(guildId: string): Promise<string> {
+    const settings = await this.settingsService.getGuildSettings(guildId);
+    if (settings.freeModelsOnly) {
+      const free = await this.modelService.isFreeModelWithFreshData(settings.defaultModel);
+      // Two messages so that last_error tells a paid model from a models list that could not be read.
+      if (free === false)
+        throw new Error(
+          `無料モデル限定のため、有料の既定モデル \`${settings.defaultModel}\` では実行しません。`,
+        );
+      if (free !== true)
+        throw new Error("無料モデル限定のため、既定モデルの無料状態を確認できません。");
+    }
+    return settings.defaultModel;
+  }
+
+  async interpretCronSchedule(
+    guildId: string,
+    input: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const model = await this.assertScheduledModel(guildId);
+    const response = await this.llmClient.chat(
+      {
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              '現在日時を基準に、入力を 5 フィールドの cron 式、5 分以上の固定間隔（例 30m）、またはオフセット付き ISO 8601 日時へ変換する。cron 式は Asia/Tokyo（日本時間）の時刻で書く。JSON の {"schedule":"..."} だけを返す。',
+          },
+          buildDateTimeSystemMessage(new Date(), false),
+          { role: "user", content: input },
+        ],
+      },
+      signal,
+    );
+    const text = response.choices[0]?.message.content ?? "";
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    let parsed: unknown;
+    try {
+      if (first < 0 || last < first) throw new Error("JSON object not found");
+      parsed = JSON.parse(text.slice(first, last + 1));
+    } catch (error) {
+      throw new AppError(
+        `Invalid schedule conversion: ${String(error)}`,
+        "スケジュールを解釈できませんでした。",
+      );
+    }
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("schedule" in parsed) ||
+      typeof parsed.schedule !== "string"
+    )
+      throw new AppError(
+        "Schedule conversion has no schedule field",
+        "スケジュールを解釈できませんでした。",
+      );
+    return parsed.schedule;
+  }
+
+  async generateScheduledResponse(
+    job: CronJob,
+    signal: AbortSignal,
+  ): Promise<{ text: string; usage?: ChatCompletionResponse["usage"]; model: string }> {
+    const model = await this.assertScheduledModel(job.guildId);
+    const messages: ChatMessage[] = [
+      DISCORD_FORMAT_SYSTEM_MESSAGE,
+      buildDateTimeSystemMessage(new Date(), false),
+    ];
+    if (job.silent)
+      messages.push({
+        role: "system",
+        content: "特に伝えることが無ければ、本文を [SILENT] だけにすること。",
+      });
+    messages.push({ role: "user", content: job.prompt });
+    const response = await this.llmClient.chat({ model, messages }, signal);
+    return {
+      text: response.choices[0]?.message.content ?? "",
+      usage: response.usage,
+      model: response.model ?? model,
+    };
+  }
+
   async generateResponse(
     guildId: GuildId,
     input: ChatUserInput,
@@ -275,6 +362,7 @@ export class ChatService implements IChatService {
 
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
+      const cron = settings.cronEnabled ? input.cron : undefined;
       let supportsTools = false;
       let requestReasoning: ChatCompletionRequest["reasoning"];
       let contextLength: number | null = null;
@@ -283,7 +371,12 @@ export class ChatService implements IChatService {
       // wait on the models API, and without them there are no client tools
       // whose results need the reservation.
       let maxOutputTokens: number | undefined;
-      if (conversation || settings.discordToolsEnabled || settings.reasoningDisplayEnabled) {
+      if (
+        conversation ||
+        settings.discordToolsEnabled ||
+        settings.cronEnabled ||
+        settings.reasoningDisplayEnabled
+      ) {
         try {
           const detailsResult = await raceWithAbort(
             this.modelService.getModelDetails(settings.defaultModel),
@@ -291,7 +384,7 @@ export class ChatService implements IChatService {
           );
           if (!detailsResult.ok) return { status: "cancelled", history: initialMessages };
           const details = detailsResult.value;
-          if (conversation || settings.discordToolsEnabled)
+          if (conversation || settings.discordToolsEnabled || settings.cronEnabled)
             supportsTools = details?.supportsTools ?? false;
           if (
             settings.reasoningDisplayEnabled &&
@@ -395,6 +488,15 @@ export class ChatService implements IChatService {
               },
             }
           : undefined;
+        const cronContext: CronToolContext | undefined = cron
+          ? {
+              channelType: cron.channelType,
+              propose: (...args) => {
+                clientToolInvoked = true;
+                return cron.propose(...args);
+              },
+            }
+          : undefined;
         const tracked = createTrackingUpdater(updater);
         const result = await this.runChatLoop(
           requestWithout(dropTweetImages, dropWebSearch),
@@ -407,6 +509,7 @@ export class ChatService implements IChatService {
           conversation?.sessionId,
           toolContext,
           discordContext,
+          cronContext,
           settings.defaultModel,
           supportsTools,
           contextLength,
@@ -455,6 +558,7 @@ export class ChatService implements IChatService {
     sessionId: string | undefined,
     conversation: ConversationWindowContext["toolContext"] | undefined,
     discord: DiscordToolContext | undefined,
+    cron: CronToolContext | undefined,
     model: string,
     toolsAllowed: boolean,
     contextLength: number | null,
@@ -485,6 +589,7 @@ export class ChatService implements IChatService {
         toolsAllowed,
         ...(conversation && { conversation }),
         ...(discord && { discord }),
+        ...(cron && { cron }),
       },
       updater,
       signal,
