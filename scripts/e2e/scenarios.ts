@@ -91,6 +91,12 @@ interface PollMessage {
   poll?: { answers?: { poll_media?: { text?: string } }[] };
 }
 
+function pollAnswers(poll: NonNullable<PollMessage["poll"]>): string[] {
+  return (poll.answers ?? []).flatMap((answer) =>
+    answer.poll_media?.text ? [answer.poll_media.text] : [],
+  );
+}
+
 // Discord component types.
 const TEXT_DISPLAY = 10;
 const CONTAINER = 17;
@@ -441,10 +447,19 @@ export const SCENARIOS: Scenario[] = [
     verify: async (triggerId, channelId, request, botId) => {
       const response = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
       if (!response.ok) return [`cannot read poll messages: HTTP ${response.status}`];
-      const messages = (await response.json()) as PollMessage[];
-      return messages.some((item) => item.author?.id === botId && item.poll)
+      const messages = (await response.json()) as (PollMessage & DiscordMessage)[];
+      const poll = messages.find((item) => item.author?.id === botId && item.poll)?.poll;
+      if (!poll) return ["the bot did not post a poll (is /config → 機能 → Discord 操作 enabled?)"];
+      // An answer in the reply would let poll-recall pass without reading the poll.
+      const replyText = JSON.stringify(
+        messages.filter((item) => item.author?.id === botId).map((item) => item.components),
+      );
+      const leaked = pollAnswers(poll).filter((answer) => replyText.includes(answer));
+      return leaked.length === 0
         ? []
-        : ["the bot did not post a poll (is /config → 機能 → Discord 操作 enabled?)"];
+        : [
+            `the reply names the poll answers ${leaked.join(", ")}, so poll-recall would prove nothing`,
+          ];
     },
   },
   {
@@ -468,10 +483,7 @@ export const SCENARIOS: Scenario[] = [
           .filter((item) => item.author?.id === botId)
           .map((item) => item.components),
       );
-      const answers = (poll.answers ?? []).flatMap((answer) =>
-        answer.poll_media?.text ? [answer.poll_media.text] : [],
-      );
-      const missing = answers.filter((answer) => !replyText.includes(answer));
+      const missing = pollAnswers(poll).filter((answer) => !replyText.includes(answer));
       return missing.length === 0
         ? []
         : [

@@ -297,6 +297,13 @@ describe("poll-closed notices in the window", () => {
     expect(messages.map((message) => message.id)).toEqual(["900"]);
   });
 
+  test("leaves out a notice without its result embed", async () => {
+    const poll = human("900", { content: "", poll: POLL });
+    const bare = { ...notice("950", "900", { id: "user-900", username: "alice" }), embeds: [] };
+    const { messages } = await windowOf([poll, bare]);
+    expect(messages.map((message) => message.id)).toEqual(["900"]);
+  });
+
   test("leaves out a notice whose poll was deleted", async () => {
     const { messages } = await windowOf([notice("950", "500", { id: "user-500", username: "a" })]);
     expect(messages).toEqual([]);
@@ -309,6 +316,34 @@ describe("poll-closed notices in the window", () => {
     ]);
     expect(messages).toEqual([]);
   });
+});
+
+test("read_earlier_messages cuts a poll that alone exceeds the result budget", async () => {
+  const longPoll: RawDiscordPoll = {
+    ...POLL,
+    question: { text: "質".repeat(300) },
+    answers: Array.from({ length: 10 }, (_, index) => ({
+      answer_id: index + 1,
+      poll_media: { text: `${index}`.repeat(55) },
+    })),
+  };
+  // Older than the shrunk window's age limit, so only the tool reaches it.
+  const old = human("900", { content: "", poll: longPoll, timestamp: at(-2 * 3_600_000) });
+  const reader = new MapReader([old]);
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(current()));
+  expect(context?.messages).toEqual([]);
+  const result = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(
+      1,
+      new AbortController().signal,
+      300,
+    )) as string,
+  ) as { messages: Array<{ text: string; poll?: string; truncated: boolean }> };
+  expect(result.messages).toHaveLength(1);
+  expect(result.messages[0]?.truncated).toBe(true);
+  expect(result.messages[0]?.poll).toBeUndefined();
+  expect(result.messages[0]?.text.startsWith(`[投票 "${"質".repeat(10)}`)).toBe(true);
 });
 
 describe("poll eligibility when a check cannot finish", () => {

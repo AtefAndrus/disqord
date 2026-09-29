@@ -1166,10 +1166,16 @@ export class ConversationWindowService {
   }
 
   private truncateToFit(
-    message: NormalizedMessage,
+    whole: NormalizedMessage,
     ref: string,
     budgetTokens: number,
   ): NormalizedMessage | undefined {
+    // The poll is folded into the text so that it is cut too; a poll left
+    // whole could alone exceed the budget and stop the tool from paging on.
+    const message: NormalizedMessage =
+      whole.poll === undefined
+        ? whole
+        : { ...whole, text: [whole.text, whole.poll].filter(Boolean).join("\n"), poll: undefined };
     const withText = (length: number): NormalizedMessage => {
       const end =
         length > 0 &&

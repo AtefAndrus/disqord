@@ -4,6 +4,7 @@ import type {
   ReplyRecord,
 } from "../db/repositories/replyRecord";
 import {
+  formatPollResultNotice,
   POLL_RESULT_MESSAGE_TYPE,
   type RawDiscordMessage,
 } from "../utils/discordMessageNormalizer";
@@ -205,6 +206,8 @@ export class MessageEligibilityService {
       if (!fromBot && message.author.bot === true && !isE2eTester(message, input)) {
         return ineligible("other-bot");
       }
+      // Without its result embed the notice would reach the model as an empty message.
+      if (formatPollResultNotice(message) === undefined) return ineligible("system");
       const referenced = await evaluateReferenced(message);
       if (referenced.status === "rejected") return referenced.result;
       const { message: poll, result } = referenced;
