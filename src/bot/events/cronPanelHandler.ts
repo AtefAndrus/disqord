@@ -143,6 +143,14 @@ export async function handleCronPanelInteraction(
       await interaction.deferUpdate();
       const approved = await cronService.approveProposal(proposal.id, guildId, userId, actor);
       if (!approved.ok) {
+        // The proposal can lapse or be swept while the approval waits on REST; the card then
+        // gets the same rewrite a press after expiry gets, so no dead buttons stay behind.
+        const current = cronService.getProposal(proposal.id, guildId, userId);
+        if (!current) await show(buildCronProposalGoneCard());
+        else if (current.expiresAt <= Date.now()) {
+          cronService.rejectProposal(current.id, guildId, userId);
+          await show(buildCronProposalCard(current, { state: "expired" }));
+        }
         await notice(approved.reason);
         return;
       }

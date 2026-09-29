@@ -148,6 +148,18 @@ describe("cron service", () => {
     expect(repo.getJob(job.id)?.failCount).toBe(3);
     expect(notify).toHaveBeenCalledTimes(1);
   });
+  test("a job paused for running outside the allowed channels is not announced there", async () => {
+    const job = await add();
+    await settings.addAllowedChannel("guild", "other");
+    for (let i = 0; i < 3; i++) {
+      now += 5 * 60_000;
+      await service.tick();
+    }
+    expect(repo.getJob(job.id)).toMatchObject({ status: "paused", failCount: 3 });
+    expect(generate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
   test("Unknown Channel deletes jobs and proposals for that destination", async () => {
     const job = await add();
     const pending = await service.createProposal(

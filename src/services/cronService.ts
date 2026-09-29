@@ -655,7 +655,11 @@ export class CronService implements ICronService {
         const updated = this.repo.saveFailure(job.id, job.version, this.now(), reason);
         if (updated?.status === "paused" && updated.failCount === 3 && destination) {
           try {
-            await destination.notifyPaused(job.userId, job.name);
+            // A destination taken off the allowed channels is not posted to even for this
+            // notice; the panel's status and last error are left to tell the owner.
+            const settings = await this.settings.getGuildSettings(job.guildId);
+            if (isChannelAllowed(settings.allowedChannels, job.channelId, destination.parentId))
+              await destination.notifyPaused(job.userId, job.name);
           } catch (notifyError) {
             logger.error("Cron pause notice failed", { jobId: job.id, error: notifyError });
           }

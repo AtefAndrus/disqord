@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ChannelType,
   type Interaction,
@@ -361,6 +361,23 @@ describe("cron panel interactions", () => {
     expect(card).toContain("この提案は無効か期限切れです");
     expect(card).not.toContain("cron:proposal:");
     expect(fixture.reply).not.toHaveBeenCalled();
+    expect(repo.listJobs("guild")).toHaveLength(0);
+  });
+
+  test("a proposal that lapses while its approval waits loses its buttons", async () => {
+    const id = await proposal("user");
+    const approve = spyOn(cron, "approveProposal").mockImplementation(async () => {
+      repo.deleteExpiredProposals(Date.now() + 25 * 60 * 60_000);
+      return { ok: false, reason: "提案が無効か期限切れです。" };
+    });
+    const fixture = await press(
+      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+    );
+    approve.mockRestore();
+    const card = text(fixture.editReply.mock.calls[0]?.[0]);
+    expect(card).toContain("この提案は無効か期限切れです");
+    expect(card).not.toContain("cron:proposal:");
+    expect(lastNotice(fixture)).toContain("提案が無効か期限切れです");
     expect(repo.listJobs("guild")).toHaveLength(0);
   });
 
