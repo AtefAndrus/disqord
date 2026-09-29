@@ -66,6 +66,7 @@ const settings: GuildSettings = {
   twitterExpandEnabled: true,
   historyEnabled: false,
   discordToolsEnabled: false,
+  cronEnabled: true,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
@@ -275,6 +276,7 @@ export function buildFixtures(): IFixture[] {
     settings,
     webSearchEngine: "perplexity",
     version: "1.4.0",
+    cronJobCount: 3,
   });
   fixtures.push({
     id: "status-guild",

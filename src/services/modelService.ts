@@ -36,7 +36,7 @@ export interface IModelService {
   getFreeModels(options?: { noCache?: boolean }): Promise<OpenRouterModel[]>;
   isModelAvailable(modelId: string): Promise<boolean>;
   isFreeModel(modelId: string): Promise<boolean>;
-  isFreeModelWithFreshData?(modelId: string): Promise<boolean | null>;
+  isFreeModelWithFreshData(modelId: string): Promise<boolean | null>;
   validateModelSelection(modelId: string, freeModelsOnly: boolean): Promise<ModelValidationResult>;
   getModelName(modelId: string): Promise<string | null>;
   getModelDetails(modelId: string): Promise<ModelDetails | null>;

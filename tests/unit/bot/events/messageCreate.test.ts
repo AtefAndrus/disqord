@@ -315,6 +315,7 @@ describe("createMessageCreateHandler", () => {
       twitterExpandEnabled: true,
       historyEnabled: true,
       discordToolsEnabled: false,
+      cronEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -336,6 +337,7 @@ describe("createMessageCreateHandler", () => {
       setTwitterExpandEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setDiscordToolsEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setCronEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -343,6 +345,7 @@ describe("createMessageCreateHandler", () => {
       getFreeModels: mock(() => Promise.resolve([])),
       isModelAvailable: mock(() => Promise.resolve(true)),
       isFreeModel: mock(() => Promise.resolve(true)),
+      isFreeModelWithFreshData: mock(() => Promise.resolve<boolean | null>(true)),
       validateModelSelection: mock(() => Promise.resolve({ valid: true })),
       getModelName: mock(() => Promise.resolve("Test Model (fixture)")),
       getModelDetails: mock(() => Promise.resolve(null)),
@@ -529,6 +532,7 @@ describe("createMessageCreateHandler", () => {
             twitterExpandEnabled: true,
             historyEnabled: false,
             discordToolsEnabled: false,
+            cronEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),

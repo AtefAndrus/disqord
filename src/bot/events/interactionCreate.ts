@@ -57,7 +57,7 @@ export function createInteractionCreateHandler(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
-  cronService?: ICronService,
+  cronService: ICronService,
 ): (interaction: Interaction) => Promise<void> {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -89,9 +89,7 @@ export function createInteractionCreateHandler(
       (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
       interaction.customId.startsWith("cron:")
     ) {
-      if (cronService) await handleCronPanelInteraction(interaction, cronService, settingsService);
-      else
-        logger.warn("Cron interaction without a cron service", { customId: interaction.customId });
+      await handleCronPanelInteraction(interaction, cronService, settingsService);
       return;
     }
 
@@ -103,6 +101,7 @@ export function createInteractionCreateHandler(
         llmClient,
         chatService,
         webSearchEngine,
+        cronService,
       );
       return;
     }
@@ -152,7 +151,6 @@ export function createInteractionCreateHandler(
           break;
 
         case "cron":
-          if (!cronService) throw new Error("Cron service is not configured");
           await openCronPanel(interaction, cronService);
           break;
 
@@ -192,6 +190,7 @@ async function handleButtonInteraction(
   llmClient: ILLMClient,
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
+  cronService: ICronService,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply(
@@ -279,6 +278,7 @@ async function handleButtonInteraction(
       settings: updatedSettings,
       webSearchEngine,
       version: packageJson.version,
+      cronJobCount: cronService.countJobs(interaction.guildId),
     });
 
     await interaction.editReply(message);

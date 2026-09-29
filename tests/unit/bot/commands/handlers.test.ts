@@ -78,6 +78,7 @@ describe("Components V2 command replies", () => {
       createMockSettingsService(),
       new ModelService(createMockLLMClient()),
       "perplexity",
+      () => 0,
     );
     const { interaction, reply } = createInteraction();
     await handlers.config(interaction);
@@ -91,6 +92,7 @@ describe("Components V2 command replies", () => {
       createMockSettingsService(),
       new ModelService(llmClient),
       "perplexity",
+      () => 0,
     );
     const help = createInteraction();
     const modelList = createInteraction();
@@ -114,6 +116,7 @@ describe("Components V2 command replies", () => {
       createMockSettingsService(),
       new ModelService(llmClient),
       "perplexity",
+      (guildId) => (guildId === "guild-1" ? 4 : 0),
     );
     const status = createInteraction();
 
@@ -122,6 +125,9 @@ describe("Components V2 command replies", () => {
     expect(isRateLimited).not.toHaveBeenCalled();
     expect(status.deferReply).toHaveBeenCalledTimes(1);
     expect(repliedText(status.editReply)).toContain("## ステータス");
+    expect(JSON.stringify(status.editReply.mock.calls[0]?.[0])).toContain(
+      "定期実行の登録数**\\n4 件",
+    );
     const payload = status.editReply.mock.calls[0]?.[0] as { flags: number; embeds: [] };
     expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
     expect(payload.embeds).toEqual([]);
@@ -134,6 +140,7 @@ describe("Components V2 command replies", () => {
       createMockSettingsService(),
       new ModelService(llmClient),
       "perplexity",
+      () => 0,
     );
     const refresh = createInteraction();
 
@@ -154,7 +161,13 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ guildId: "guild-1", defaultModel: "model-1" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      modelService,
+      "perplexity",
+      () => 0,
+    );
     const current = createInteraction();
     const set = createInteraction("model-1");
 
@@ -190,7 +203,13 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "missing/model:free" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      modelService,
+      "perplexity",
+      () => 0,
+    );
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -208,7 +227,13 @@ describe("model command handlers", () => {
       Promise.resolve(createMockGuildSettings({ defaultModel: "fallback/model" })),
     );
     const modelService = new ModelService(llmClient);
-    const handlers = createCommandHandlers(llmClient, settingsService, modelService, "perplexity");
+    const handlers = createCommandHandlers(
+      llmClient,
+      settingsService,
+      modelService,
+      "perplexity",
+      () => 0,
+    );
     const current = createInteraction();
 
     await handlers.modelCurrent(current.interaction);
@@ -240,6 +265,7 @@ describe("model set と無料モデル限定の競合", () => {
       settingsService,
       modelService,
       "perplexity",
+      () => 0,
     );
     const { interaction, reply } = createInteraction("paid/model");
 

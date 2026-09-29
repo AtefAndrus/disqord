@@ -42,6 +42,7 @@ export function createCommandHandlers(
   settingsService: ISettingsService,
   modelService: IModelService,
   webSearchEngine: WebSearchEngine,
+  countCronJobs: (guildId: string) => number,
   /** Undefined when CHANGELOG.md could not be read at startup. */
   releaseNotes?: ReleaseNotes,
 ): CommandHandlers {
@@ -190,6 +191,7 @@ export function createCommandHandlers(
         settings,
         webSearchEngine,
         version: packageJson.version,
+        ...(interaction.guildId && { cronJobCount: countCronJobs(interaction.guildId) }),
       });
 
       await interaction.editReply(message);

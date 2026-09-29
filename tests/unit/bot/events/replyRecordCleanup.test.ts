@@ -1,5 +1,6 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { createReplyRecordCleanupHandlers } from "../../../../src/bot/events/replyRecordCleanup";
+import { logger } from "../../../../src/utils/logger";
 
 function service(): {
   deleteByGuild: ReturnType<typeof mock>;
@@ -79,5 +80,31 @@ describe("reply record cleanup handlers", () => {
     });
     await expect(handlers.channelDelete({ id: "channel" })).rejects.toThrow("cron failure");
     expect(deleter.deleteByChannel).toHaveBeenCalledWith("channel");
+  });
+  test("logs the cron failure when both deletions fail", async () => {
+    const deleter = service();
+    deleter.deleteByGuild.mockImplementation(async () => {
+      throw new Error("reply failure");
+    });
+    const cronError = new Error("cron failure");
+    const cron = {
+      deleteByGuild: mock((_id: string): number => {
+        throw cronError;
+      }),
+      deleteByChannel: mock((_id: string) => 1),
+      deleteGuildsNotIn: mock((_ids: readonly string[]) => 1),
+    };
+    const logged = spyOn(logger, "error").mockImplementation(() => {});
+    try {
+      const handlers = createReplyRecordCleanupHandlers(deleter, cron);
+      await expect(handlers.guildDelete({ id: "guild" })).rejects.toThrow("reply failure");
+      expect(logged).toHaveBeenCalledWith("Cron cleanup failed", {
+        scope: "guild",
+        id: "guild",
+        error: cronError,
+      });
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

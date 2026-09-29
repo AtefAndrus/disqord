@@ -40,7 +40,8 @@ export async function resolveMessageChannel(
       "このサーバーの投稿可能なチャンネルを選択してください。",
     );
   }
-  const member = await guild.members.fetchMe();
+  // Forced over REST: the cached member can miss a role change made while the bot ran.
+  const member = await guild.members.fetchMe({ force: true });
   const thread = channel.type === ChannelType.PublicThread;
   const required = [
     PermissionFlagsBits.ViewChannel,
@@ -48,7 +49,7 @@ export async function resolveMessageChannel(
   ];
   if (thread && channel.locked) required.push(PermissionFlagsBits.ManageThreads);
   if (!channel.permissionsFor(member)?.has(required)) {
-    throw new AppError("Missing destination permissions", "通知先で bot に投稿権限が必要です。");
+    throw new AppError("Missing destination permissions", "配信先で bot に投稿権限が必要です。");
   }
   return channel;
 }

@@ -4,7 +4,12 @@ import { PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes } from "di
 import { type CronJob, CronRepository } from "../../../src/db/repositories/cronRepository";
 import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../src/db/schema";
-import { CronService, type ICronChat, type ICronDelivery } from "../../../src/services/cronService";
+import {
+  CronService,
+  type ICronChat,
+  type ICronDelivery,
+  startCronService,
+} from "../../../src/services/cronService";
 import { SettingsService } from "../../../src/services/settingsService";
 
 const START = Date.parse("2026-09-29T00:00:00Z");
@@ -346,7 +351,7 @@ describe("cron service", () => {
     releaseGeneration?.();
     await manual;
   });
-  test("an invalid due expression is logged and the next job still runs", async () => {
+  test("an invalid due expression pauses its job and the next job still runs", async () => {
     const broken = await add();
     const valid = await add();
     db.query("UPDATE cron_jobs SET expr='bad expression' WHERE id=?").run(broken.id);
@@ -357,9 +362,244 @@ describe("cron service", () => {
       expect(consoleError).toHaveBeenCalled();
       expect(generate).toHaveBeenCalledTimes(1);
       expect(generate.mock.calls[0]?.[0]).toMatchObject({ id: valid.id });
+      const paused = repo.getJob(broken.id);
+      expect(paused).toMatchObject({
+        status: "paused",
+        nextRunAt: null,
+        version: broken.version + 1,
+      });
+      expect(paused?.lastError).toContain("次の実行時刻を計算できません");
+      // No longer due, so it is not picked first on every later tick.
+      expect(repo.dueJobs(now + 24 * 60 * 60_000).map((job) => job.id)).not.toContain(broken.id);
     } finally {
       consoleError.mockRestore();
     }
+  });
+  test("startup pauses a job whose stored cron expression is invalid", async () => {
+    const broken = await add("0 9 * * *");
+    const valid = await add();
+    db.query("UPDATE cron_jobs SET expr='61 25 * * *' WHERE id=?").run(broken.id);
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      now = Date.parse("2026-09-30T03:00:00Z");
+      await service.catchUpOnStartup();
+      expect(repo.getJob(broken.id)).toMatchObject({
+        status: "paused",
+        nextRunAt: null,
+        version: broken.version + 1,
+      });
+      expect(repo.getJob(broken.id)?.lastError).toContain("次の実行時刻を計算できません");
+      expect(repo.getJob(valid.id)?.nextRunAt).toBeGreaterThan(now);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+  test("startup starts the ticker even when reconciliation or catch-up fails", async () => {
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const start = mock(() => {});
+      const catchUpOnStartup = mock(async () => {
+        throw new Error("catch-up failed");
+      });
+      await startCronService({ catchUpOnStartup, start }, async () => {
+        throw new Error("reconcile failed");
+      });
+      expect(catchUpOnStartup).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+  test("startup catch-up still advances the other jobs when one fails", async () => {
+    const failing = await add();
+    const other = await add();
+    const skip = repo.skip.bind(repo);
+    spyOn(repo, "skip").mockImplementation((job, next, at) => {
+      if (job.id === failing.id) throw new Error("database is locked");
+      return skip(job, next, at);
+    });
+    const consoleError = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      now += 16 * 60_000;
+      await service.catchUpOnStartup();
+      expect(repo.getJob(other.id)?.nextRunAt).toBeGreaterThan(now);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+  test("startup runs a time 9:59 late and advances one 10:01 late without running it", async () => {
+    const job = await add();
+    const due = START + 5 * 60_000;
+    now = due + 9 * 60_000 + 59_000;
+    await service.catchUpOnStartup();
+    expect(repo.getJob(job.id)?.nextRunAt).toBe(due);
+    now = due + 10 * 60_000 + 1_000;
+    await service.catchUpOnStartup();
+    expect(repo.getJob(job.id)?.nextRunAt).toBeGreaterThan(now);
+    expect(repo.getJob(job.id)?.lastRunAt).toBeNull();
+    expect(generate).not.toHaveBeenCalled();
+  });
+  test("startup carries a cron job over to its next matching time", async () => {
+    const job = await add("0 9 * * *");
+    expect(job.nextRunAt).toBe(Date.parse("2026-09-30T00:00:00Z"));
+    now = Date.parse("2026-09-30T03:00:00Z");
+    await service.catchUpOnStartup();
+    expect(repo.getJob(job.id)?.nextRunAt).toBe(Date.parse("2026-10-01T00:00:00Z"));
+    expect(repo.getJob(job.id)?.lastRunAt).toBeNull();
+    expect(generate).not.toHaveBeenCalled();
+  });
+  test("the run succeeds once the first page is posted, even if a stop cuts the rest", async () => {
+    const job = await add();
+    repo.saveFailure(job.id, job.version, now, "previous failure");
+    generate.mockImplementation(async () => ({ text: "long text ".repeat(900), model: "m" }));
+    let page = 0;
+    send.mockImplementation(async () => {
+      if (++page === 2) {
+        void service.stop();
+        await new Promise(() => {});
+      }
+    });
+    now += 5 * 60_000;
+    await service.tick();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(repo.getJob(job.id)).toMatchObject({ failCount: 0, lastError: null });
+  });
+  test("a stop, pause, edit, or deletion between the first and second page posts nothing more", async () => {
+    for (const operation of ["pause", "edit", "delete", "stop"] as const) {
+      const job = await add();
+      send.mockClear();
+      generate.mockImplementation(async () => ({ text: "long text ".repeat(900), model: "m" }));
+      send.mockImplementation(async () => {
+        if (send.mock.calls.length !== 1) return;
+        if (operation === "pause") repo.setStatus(job.id, job.version, "paused", null, now);
+        if (operation === "delete") repo.deleteJob(job.id, job.version);
+        if (operation === "stop") void service.stop();
+        if (operation === "edit") {
+          const edit = await service.createProposal(
+            {
+              guildId: "guild",
+              channelId: "channel",
+              userId: "user",
+              name: "edited",
+              prompt: "edited",
+              schedule: "10m",
+              silent: false,
+              targetJobId: job.id,
+              targetVersion: job.version,
+            },
+            actor,
+          );
+          if (!edit.ok) throw new Error(edit.reason);
+          await service.approveProposal(edit.value.proposal.id, "guild", "user", actor);
+        }
+      });
+      await service.runNow(job.id, "guild", actor, job.version);
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  });
+  test("posts at most five pages, headed by the job name, with a note on the last", async () => {
+    await add();
+    generate.mockImplementation(async () => ({ text: "long text ".repeat(5_000), model: "m" }));
+    now += 5 * 60_000;
+    await service.tick();
+    expect(send).toHaveBeenCalledTimes(5);
+    const pages = send.mock.calls.map((call) => JSON.stringify(call[0]));
+    expect(pages[0]).toContain("-# 定期実行「name」");
+    expect(pages.slice(1).some((page) => page.includes("定期実行「"))).toBe(false);
+    expect(pages[4]).toContain("以降のページは省略しました");
+    expect(pages.slice(0, 4).some((page) => page.includes("以降のページは省略しました"))).toBe(
+      false,
+    );
+  });
+  test("allowed channels gate runs, proposals, and approvals, and a thread passes by its parent", async () => {
+    const job = await add();
+    const input = {
+      guildId: "guild",
+      channelId: "channel",
+      userId: "user",
+      name: "name",
+      prompt: "prompt",
+      schedule: "5m",
+      silent: false,
+    };
+    const pending = await service.createProposal(input, actor);
+    if (!pending.ok) throw new Error(pending.reason);
+    await settings.addAllowedChannel("guild", "parent");
+
+    now += 5 * 60_000;
+    await service.tick();
+    expect(generate).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(repo.getJob(job.id)?.lastError).toContain("許可チャンネル外");
+    expect(await service.createProposal(input, actor)).toEqual({
+      ok: false,
+      reason: "許可チャンネル外です。",
+    });
+    expect(
+      await service.approveProposal(pending.value.proposal.id, "guild", "user", actor),
+    ).toEqual({ ok: false, reason: "許可チャンネル外です。" });
+
+    resolve.mockImplementation(async () => ({ parentId: "parent", send, notifyPaused: notify }));
+    expect((await service.createProposal(input, actor)).ok).toBe(true);
+    expect(
+      (await service.approveProposal(pending.value.proposal.id, "guild", "user", actor)).ok,
+    ).toBe(true);
+    expect((await service.runNow(job.id, "guild", actor, job.version)).ok).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  test("a disabled guild refuses run now and resume", async () => {
+    const job = await add();
+    await service.pauseJob(job.id, "guild", "user", actor, job.version);
+    await settings.setCronEnabled("guild", false);
+    expect((await service.runNow(job.id, "guild", actor, job.version + 1)).ok).toBe(false);
+    expect((await service.resumeJob(job.id, "guild", actor, job.version + 1)).ok).toBe(false);
+    expect(generate).not.toHaveBeenCalled();
+    expect(repo.getJob(job.id)?.status).toBe("paused");
+  });
+  test.each([
+    ["an empty schedule", { schedule: "   " }],
+    ["a schedule over 200 characters", { schedule: "毎".repeat(201) }],
+    ["a name with a line break", { name: "first\nsecond" }],
+    ["a name over 50 characters after trimming", { name: "x".repeat(51) }],
+  ])("refuses %s without converting the schedule", async (_label, overrides) => {
+    const interpret = mock(async () => "30m");
+    service = new CronService(
+      repo,
+      settings,
+      { generateScheduledResponse: generate, interpretCronSchedule: interpret },
+      { resolve },
+      () => now,
+    );
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "name",
+        prompt: "prompt",
+        schedule: "毎朝九時",
+        silent: false,
+        ...overrides,
+      },
+      actor,
+    );
+    expect(result.ok).toBe(false);
+    expect(interpret).not.toHaveBeenCalled();
+  });
+  test("a name is measured after trimming", async () => {
+    const result = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: `  ${"x".repeat(50)}  `,
+        prompt: "prompt",
+        schedule: " 5m ",
+        silent: false,
+      },
+      actor,
+    );
+    expect(result.ok && result.value.proposal.name).toBe("x".repeat(50));
   });
   test("a scheduled version change during generation prevents post and outcome writes", async () => {
     const job = await add();

@@ -58,7 +58,7 @@ export interface ISettingsService {
     enabled: boolean,
     actorId?: string,
   ): Promise<GuildSettings>;
-  setCronEnabled?(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
+  setCronEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {

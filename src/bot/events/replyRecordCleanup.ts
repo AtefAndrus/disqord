@@ -1,4 +1,5 @@
 import type { IReplyRecordService } from "../../services/replyRecordService";
+import { logger } from "../../utils/logger";
 
 type ReplyRecordDeleter = Pick<
   IReplyRecordService,
@@ -49,7 +50,12 @@ export function createReplyRecordCleanupHandlers(
       console.info(
         `[cron] removed ${cronResult.value} records ${id ? `for ${scope} ${id}` : `of ${scope}`}`,
       );
-    if (reply.status === "rejected") throw reply.reason;
+    if (reply.status === "rejected") {
+      // Only one error can be thrown, so the cron one is logged here rather than lost.
+      if (cronResult.status === "rejected")
+        logger.error("Cron cleanup failed", { scope, id, error: cronResult.reason });
+      throw reply.reason;
+    }
     if (cronResult.status === "rejected") throw cronResult.reason;
   };
   return {

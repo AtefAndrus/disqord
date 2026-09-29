@@ -69,6 +69,8 @@ export interface ICronRepository {
   allActiveJobs(): CronJob[];
   consume(job: CronJob, next: number | null, now: number): boolean;
   skip(job: CronJob, next: number | null, now: number): boolean;
+  /** Pauses an active job whose stored schedule gives no next time, keeping the reason. */
+  pauseInvalid(job: CronJob, now: number, error: string): boolean;
   saveSuccess(id: number, version: number, now: number): boolean;
   saveFailure(id: number, version: number, now: number, error: string): CronJob | null;
   setStatus(
@@ -292,6 +294,14 @@ export class CronRepository implements ICronRepository {
       WHERE id=? AND version=? AND status='active' AND next_run_at=?`)
         .run(next, next === null ? "done" : "active", now, job.id, job.version, job.nextRunAt)
         .changes > 0
+    );
+  }
+  pauseInvalid(job: CronJob, now: number, error: string): boolean {
+    return (
+      this.db
+        .query(`UPDATE cron_jobs SET status='paused',next_run_at=NULL,version=version+1,
+      last_error=?,updated_at=? WHERE id=? AND version=? AND status='active'`)
+        .run(error.slice(0, 500), now, job.id, job.version).changes > 0
     );
   }
   saveSuccess(id: number, version: number, now: number): boolean {

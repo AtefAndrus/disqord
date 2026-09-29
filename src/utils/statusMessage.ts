@@ -15,11 +15,8 @@ interface StatusMessageData {
   settings?: GuildSettings;
   webSearchEngine: string;
   version: string;
+  /** Registered jobs in the guild; shown only with `settings`. */
   cronJobCount?: number;
-}
-let cronJobCounter: ((guildId: string) => number) | undefined;
-export function setCronJobCounter(counter: (guildId: string) => number): void {
-  cronJobCounter = counter;
 }
 
 interface SwitchRow {
@@ -43,7 +40,7 @@ function switchRows(settings: GuildSettings, webSearchEngine: string): SwitchRow
     { key: "twitter_expand", label: "ツイート展開", enabled: settings.twitterExpandEnabled },
     { key: "history", label: "会話履歴", enabled: settings.historyEnabled },
     { key: "discord_tools", label: "Discord 操作", enabled: settings.discordToolsEnabled },
-    { key: "cron", label: "定期実行", enabled: settings.cronEnabled ?? false },
+    { key: "cron", label: "定期実行", enabled: settings.cronEnabled },
     { key: "reasoning_display", label: "推論表示", enabled: settings.reasoningDisplayEnabled },
   ];
 }
@@ -92,9 +89,7 @@ export function buildStatusMessage(data: StatusMessageData): {
       container.addTextDisplayComponents((td) => td.setContent(`**${row.label}**\n${state}`));
     }
     container.addTextDisplayComponents((td) =>
-      td.setContent(
-        `**定期実行の登録数**\n${data.cronJobCount ?? cronJobCounter?.(settings.guildId) ?? 0} 件`,
-      ),
+      td.setContent(`**定期実行の登録数**\n${data.cronJobCount ?? 0} 件`),
     );
     container.addSeparatorComponents((sep) => sep.setSpacing(SeparatorSpacingSize.Small));
     container.addActionRowComponents(

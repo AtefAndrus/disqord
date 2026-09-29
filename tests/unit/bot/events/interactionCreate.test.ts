@@ -10,6 +10,7 @@ import { createInteractionCreateHandler } from "../../../../src/bot/events/inter
 import { SettingsConflictError, SettingsRuleError } from "../../../../src/errors";
 import type { ILLMClient } from "../../../../src/llm/openrouter";
 import type { IChatService } from "../../../../src/services/chatService";
+import type { ICronService } from "../../../../src/services/cronService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
@@ -82,6 +83,7 @@ function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
     llmClient,
     {} as IChatService,
     "perplexity",
+    { countJobs: mock(() => 2) } as unknown as ICronService,
   );
   return { handler, settingsService, modelService, llmClient };
 }
@@ -139,6 +141,9 @@ describe("interactionCreate: 停止ボタン", () => {
     expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
     expect(modelService.refreshCache).toHaveBeenCalledTimes(1);
     expectComponentsV2(interaction.editReply);
+    expect(JSON.stringify(interaction.editReply.mock.calls[0]?.[0])).toContain(
+      "定期実行の登録数**\\n2 件",
+    );
     expect(settingsService.setShowLlmDetails).not.toHaveBeenCalled();
   });
   test("old auto-reply list button still returns the list", async () => {
@@ -160,6 +165,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ILLMClient,
       { cancelRequest } as unknown as IChatService,
       "perplexity",
+      {} as ICronService,
     );
     const interaction = buttonInteraction("stop_response_1234567890");
 
@@ -179,6 +185,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ILLMClient,
       { cancelRequest } as unknown as IChatService,
       "perplexity",
+      {} as ICronService,
     );
     const interaction = buttonInteraction("stop_response_1234567890");
 
@@ -200,6 +207,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ILLMClient,
       { cancelRequest } as unknown as IChatService,
       "perplexity",
+      {} as ICronService,
     );
     const interaction = buttonInteraction("stop_response_1234567890", null);
 
@@ -220,6 +228,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ILLMClient,
       {} as IChatService,
       "perplexity",
+      {} as ICronService,
     );
 
     await handler({
@@ -249,6 +258,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ILLMClient,
       {} as IChatService,
       "perplexity",
+      {} as ICronService,
     );
     const reply = mock(() => Promise.resolve());
     await handler({
@@ -296,6 +306,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ILLMClient,
       {} as IChatService,
       "perplexity",
+      {} as ICronService,
     );
     const followUp = mock(() => Promise.resolve());
 

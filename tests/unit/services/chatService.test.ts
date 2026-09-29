@@ -104,9 +104,35 @@ test("scheduled generation and schedule conversion never call a paid default mod
   };
   await expect(
     chatService.generateScheduledResponse(job, new AbortController().signal),
-  ).rejects.toThrow();
-  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow();
+  ).rejects.toThrow("有料の既定モデル `model-2`");
+  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow(
+    "有料の既定モデル",
+  );
   expect(llmClient.chat).not.toHaveBeenCalled();
+});
+
+test("a free-only guild whose model cannot be checked is told apart from a paid model", async () => {
+  const { chatService, llmClient } = createFixture({
+    freeModelsOnly: true,
+    defaultModel: "model-1",
+  });
+  // The client reports a failed Models API request as an empty list.
+  llmClient.listModelsWithPricing.mockImplementation(async () => []);
+  await expect(chatService.interpretCronSchedule("guild", "明日朝九時")).rejects.toThrow(
+    "無料状態を確認できません",
+  );
+  expect(llmClient.chat).not.toHaveBeenCalled();
+});
+
+test("schedule conversion tells the model that cron expressions are in Asia/Tokyo", async () => {
+  const { chatService, llmClient } = createFixture();
+  llmClient.chat.mockImplementation(async () => ({
+    id: "id",
+    choices: [{ message: { role: "assistant" as const, content: '{"schedule":"0 9 * * *"}' } }],
+  }));
+  await chatService.interpretCronSchedule("guild", "毎朝九時");
+  const [request] = llmClient.chat.mock.calls[0] as [ChatCompletionRequest];
+  expect(String(request.messages[0]?.content)).toContain("cron 式は Asia/Tokyo");
 });
 
 test.each([false, true])(

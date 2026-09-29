@@ -35,6 +35,7 @@ const GENERATION_TIMEOUT_MS = 120_000;
 const INTERPRET_TIMEOUT_MS = 60_000;
 const PAGE_TIMEOUT_MS = 15_000;
 const STARTUP_GRACE_MS = 10 * 60_000;
+const MAX_SCHEDULE_LENGTH = 200;
 
 export interface CronDestination {
   parentId: string | null;
@@ -197,6 +198,28 @@ export function buildScheduledPages(
   );
 }
 
+/**
+ * Startup: drop the jobs of guilds left while stopped, carry over missed
+ * times, then start the ticker. A failed step is logged and the next still
+ * runs, because without `start()` no job would run until the next restart.
+ */
+export async function startCronService(
+  cron: Pick<ICronService, "catchUpOnStartup" | "start">,
+  reconcileGuilds: () => Promise<void>,
+): Promise<void> {
+  try {
+    await reconcileGuilds();
+  } catch (error) {
+    logger.error("Guild reconciliation failed", { error });
+  }
+  try {
+    await cron.catchUpOnStartup();
+  } catch (error) {
+    logger.error("Cron startup catch-up failed", { error });
+  }
+  cron.start();
+}
+
 export class CronService implements ICronService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private closing = false;
@@ -221,13 +244,19 @@ export class CronService implements ICronService {
     const settings = await this.settings.getGuildSettings(input.guildId);
     if (!settings.cronEnabled || !canManageGuildSettings(actor, settings))
       return failure("定期実行が無効か、操作権限がありません。");
+    const name = input.name.trim();
     if (
-      !input.name.trim() ||
-      input.name.length > 50 ||
+      !name ||
+      name.length > 50 ||
+      /[\r\n]/u.test(name) ||
       !input.prompt.trim() ||
       input.prompt.length > 2000
     )
-      return failure("名前またはプロンプトの長さが無効です。");
+      return failure("名前（1 行、50 字まで）またはプロンプトの長さが無効です。");
+    // Checked before parsing so that an empty or oversized schedule never reaches the LLM.
+    const schedule = input.schedule.trim();
+    if (!schedule || schedule.length > MAX_SCHEDULE_LENGTH)
+      return failure(`スケジュールは 1〜${MAX_SCHEDULE_LENGTH} 字で指定してください。`);
     if (input.targetJobId !== undefined) {
       const target = this.repo.getJob(input.targetJobId);
       if (
@@ -238,12 +267,12 @@ export class CronService implements ICronService {
       )
         return failure("編集対象のジョブが変更されました。");
     }
-    let parsed = parseSchedule(input.schedule, this.now());
+    let parsed = parseSchedule(schedule, this.now());
     if (!parsed.ok && parsed.reason === "natural_language") {
       try {
         parsed = parseSchedule(
           await withTimeout(
-            (signal) => this.chat.interpretCronSchedule(input.guildId, input.schedule, signal),
+            (signal) => this.chat.interpretCronSchedule(input.guildId, schedule, signal),
             INTERPRET_TIMEOUT_MS,
             input.signal ?? new AbortController().signal,
           ),
@@ -286,7 +315,7 @@ export class CronService implements ICronService {
       userId: input.userId,
       targetJobId: input.targetJobId ?? null,
       targetVersion: input.targetVersion ?? null,
-      name: input.name.trim(),
+      name,
       prompt: input.prompt.trim(),
       kind: parsed.schedule.kind,
       expr: parsed.schedule.expr,
@@ -436,14 +465,42 @@ export class CronService implements ICronService {
   async catchUpOnStartup(): Promise<void> {
     const now = this.now();
     for (const job of this.repo.allActiveJobs()) {
-      if (job.nextRunAt !== null && job.nextRunAt < now - STARTUP_GRACE_MS) {
-        this.repo.skip(
-          job,
-          job.kind === "once" ? null : nextRunAfter(job, job.nextRunAt, now + 1),
-          now,
-        );
+      // One job's failure must not leave the jobs after it unadvanced.
+      try {
+        if (job.nextRunAt !== null && job.nextRunAt < now - STARTUP_GRACE_MS) {
+          const next = this.nextOrPause(job, job.nextRunAt, now + 1, now);
+          if (next !== undefined) this.repo.skip(job, next, now);
+        }
+      } catch (error) {
+        logger.error("Cron startup catch-up failed for a job", { jobId: job.id, error });
       }
     }
+  }
+  /**
+   * The next time from the stored expression, or undefined after pausing a job
+   * whose expression cannot give one (a row written outside the panel). Left
+   * active, such a job would stay due and be picked first on every tick.
+   */
+  private nextOrPause(
+    job: CronJob,
+    scheduledAt: number,
+    from: number,
+    now: number,
+  ): number | null | undefined {
+    let next: number | null;
+    try {
+      next = nextRunAfter(job, scheduledAt, from);
+      if (next !== null && !Number.isFinite(next)) throw new Error(`not a time: ${next}`);
+    } catch (error) {
+      logger.error("Cron job has an unusable schedule", { jobId: job.id, error });
+      this.repo.pauseInvalid(
+        job,
+        now,
+        `スケジュールから次の実行時刻を計算できません: ${errorText(error)}`,
+      );
+      return undefined;
+    }
+    return next;
   }
   start(): void {
     if (this.timer || this.closing) return;
@@ -467,7 +524,8 @@ export class CronService implements ICronService {
           const settings = await this.settings.getGuildSettings(job.guildId);
           if (this.closing) break;
           const now = this.now();
-          const next = nextRunAfter(job, job.nextRunAt ?? now, now);
+          const next = this.nextOrPause(job, job.nextRunAt ?? now, now, now);
+          if (next === undefined) continue;
           if (!settings.cronEnabled) {
             this.repo.skip(
               job,
@@ -559,9 +617,11 @@ export class CronService implements ICronService {
             logger.error("Cron later page failed", { jobId: job.id, page: index + 1, error });
             break;
           }
+          // The run succeeds once the first page is out; what happens to the later pages
+          // (an interruption or a failure) is not counted against the job.
+          if (index === 0 && scheduled) this.repo.saveSuccess(job.id, job.version, this.now());
         }
-      }
-      if (scheduled && !this.closing && !signal.aborted && this.current(job))
+      } else if (scheduled && !this.closing && !signal.aborted && this.current(job))
         this.repo.saveSuccess(job.id, job.version, this.now());
       return { ok: true, value: undefined };
     } catch (error) {

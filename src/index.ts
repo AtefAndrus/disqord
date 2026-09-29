@@ -25,7 +25,7 @@ import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
 import { ChatService } from "./services/chatService";
 import { ConversationWindowService, WINDOW_REBUILD_AFTER_MS } from "./services/conversationWindow";
-import { CronService } from "./services/cronService";
+import { CronService, startCronService } from "./services/cronService";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
 import {
@@ -40,7 +40,6 @@ import { TweetService } from "./services/tweetService";
 import { createLogFileWriter } from "./utils/logFile";
 import { logger, setLogFileWriter } from "./utils/logger";
 import { metrics } from "./utils/metrics";
-import { setCronJobCounter } from "./utils/statusMessage";
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -63,7 +62,6 @@ async function bootstrap(): Promise<void> {
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
   const cronRepository = new CronRepository(db);
-  setCronJobCounter((guildId) => cronRepository.countJobs(guildId));
   const replyRecordRepository = new ReplyRecordRepository(db);
   const replyRecordService = new ReplyRecordService(replyRecordRepository);
   await replyRecordService.markPendingFailed();
@@ -95,6 +93,7 @@ async function bootstrap(): Promise<void> {
     settingsService,
     modelService,
     config.webSearchEngine,
+    (guildId) => cronRepository.countJobs(guildId),
     releaseNotes,
   );
 
@@ -173,11 +172,9 @@ async function bootstrap(): Promise<void> {
   const replyRecordCleanup = createReplyRecordCleanupHandlers(replyRecordService, cronRepository);
   client.once(Events.ClientReady, () => {
     onReady(client);
-    void replyRecordCleanup
-      .reconcileGuilds(client.guilds.cache.keys())
-      .then(() => cronService.catchUpOnStartup())
-      .then(() => cronService.start())
-      .catch((error: unknown) => logger.error("Cron startup failed", { error }));
+    void startCronService(cronService, () =>
+      replyRecordCleanup.reconcileGuilds(client.guilds.cache.keys()),
+    );
     void releaseAnnouncer.announce(packageJson.version, releaseNotes);
   });
   client.on(Events.GuildDelete, (guild) => void replyRecordCleanup.guildDelete(guild));

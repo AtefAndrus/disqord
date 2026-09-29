@@ -15,6 +15,7 @@ import { GuildSettingsRepository } from "../../../../src/db/repositories/guildSe
 import { applyMigrations } from "../../../../src/db/schema";
 import { describeSearchBilling } from "../../../../src/llm/tools/webSearch";
 import type { IChatService } from "../../../../src/services/chatService";
+import type { ICronService } from "../../../../src/services/cronService";
 import type { IModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
 import {
@@ -88,6 +89,7 @@ describe("config panel interactions", () => {
       llm,
       {} as IChatService,
       "perplexity",
+      {} as ICronService,
     );
   });
   afterEach(() => {
@@ -171,6 +173,7 @@ describe("config panel interactions", () => {
       llm,
       {} as IChatService,
       "native",
+      {} as ICronService,
     );
     const press = interaction("cfg:features:set:web_search:on");
     await handler(press as unknown as Interaction);

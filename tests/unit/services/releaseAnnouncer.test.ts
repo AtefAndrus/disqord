@@ -338,7 +338,10 @@ describe("Discord release destination", () => {
       channels: { fetch: mock(async () => channel) },
       members: { fetchMe: mock(async () => ({})) },
     } as unknown as Guild;
-    await expect(resolveMessageChannel(guild, "thread", true)).rejects.toThrow();
+    await expect(resolveMessageChannel(guild, "thread", true)).rejects.toMatchObject({
+      userMessage: "配信先で bot に投稿権限が必要です。",
+    });
+    expect(guild.members.fetchMe).toHaveBeenCalledWith({ force: true });
     permissions = new PermissionsBitField([
       PermissionFlagsBits.ViewChannel,
       PermissionFlagsBits.SendMessagesInThreads,

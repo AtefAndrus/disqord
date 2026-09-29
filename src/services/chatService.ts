@@ -203,7 +203,12 @@ export class ChatService implements IChatService {
   async assertScheduledModel(guildId: string): Promise<string> {
     const settings = await this.settingsService.getGuildSettings(guildId);
     if (settings.freeModelsOnly) {
-      const free = await this.modelService.isFreeModelWithFreshData?.(settings.defaultModel);
+      const free = await this.modelService.isFreeModelWithFreshData(settings.defaultModel);
+      // Two messages so that last_error tells a paid model from a models list that could not be read.
+      if (free === false)
+        throw new Error(
+          `無料モデル限定のため、有料の既定モデル \`${settings.defaultModel}\` では実行しません。`,
+        );
       if (free !== true)
         throw new Error("無料モデル限定のため、既定モデルの無料状態を確認できません。");
     }
@@ -223,7 +228,7 @@ export class ChatService implements IChatService {
           {
             role: "system",
             content:
-              '現在日時を基準に、入力を 5 フィールドの cron 式、5 分以上の固定間隔（例 30m）、またはオフセット付き ISO 8601 日時へ変換する。JSON の {"schedule":"..."} だけを返す。',
+              '現在日時を基準に、入力を 5 フィールドの cron 式、5 分以上の固定間隔（例 30m）、またはオフセット付き ISO 8601 日時へ変換する。cron 式は Asia/Tokyo（日本時間）の時刻で書く。JSON の {"schedule":"..."} だけを返す。',
           },
           buildDateTimeSystemMessage(new Date(), false),
           { role: "user", content: input },
