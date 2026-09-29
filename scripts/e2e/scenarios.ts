@@ -442,7 +442,7 @@ export const SCENARIOS: Scenario[] = [
     name: "poll-create",
     manual: true,
     prompt:
-      "[e2e] 好きな果物を尋ねる投票を、あなたが選んだ果物 3 つを選択肢にして作って。create_poll を必ず使い、返信の本文には選択肢を書かず「作成しました」とだけ書いて。",
+      "[e2e] 『どれにしますか？』という投票を作って。選択肢は 3 つで、それぞれあなたがその場でランダムに作った英数字 8 文字の文字列にして。create_poll を必ず使い、返信の本文には選択肢を書かず「作成しました」とだけ書いて。",
     check: (reply) => hasUsageFooter(reply),
     verify: async (triggerId, channelId, request, botId) => {
       const response = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
@@ -450,6 +450,13 @@ export const SCENARIOS: Scenario[] = [
       const messages = (await response.json()) as (PollMessage & DiscordMessage)[];
       const poll = messages.find((item) => item.author?.id === botId && item.poll)?.poll;
       if (!poll) return ["the bot did not post a poll (is /config → 機能 → Discord 操作 enabled?)"];
+      // Answers the model could guess, or that contain one another, would let
+      // poll-recall pass without reading the poll.
+      const answers = pollAnswers(poll);
+      if (answers.length !== 3 || !answers.every((answer) => /^[A-Za-z0-9]{8}$/.test(answer)))
+        return [`the poll answers ${answers.join(", ")} are not three 8-character codes`];
+      if (new Set(answers.map((answer) => answer.toLowerCase())).size !== 3)
+        return [`the poll answers ${answers.join(", ")} are not distinct`];
       // An answer in the reply would let poll-recall pass without reading the poll.
       const replyText = JSON.stringify(
         messages.filter((item) => item.author?.id === botId).map((item) => item.components),

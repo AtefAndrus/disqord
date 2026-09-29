@@ -253,8 +253,11 @@ export function formatPollResultNotice(message: RawDiscordMessage): string | und
   if (!embed) return undefined;
   const field = (name: string): string | undefined =>
     embed.fields?.find((candidate) => candidate.name === name)?.value;
-  const question = oneLine(field("poll_question_text") ?? "");
-  const total = field("total_votes") ?? "0";
+  const rawQuestion = field("poll_question_text");
+  const total = field("total_votes");
+  // A notice without these would name no poll or invent a total.
+  if (rawQuestion === undefined || total === undefined) return undefined;
+  const question = oneLine(rawQuestion);
   const victor = field("victor_answer_text");
   const victorVotes = field("victor_answer_votes");
   // Discord names no victor on a tie or when nobody voted.

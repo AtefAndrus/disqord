@@ -136,6 +136,13 @@ describe("formatPollResultNotice", () => {
   test("returns undefined for a message that is not a notice", () => {
     expect(formatPollResultNotice({ ...notice([]), type: 0 })).toBeUndefined();
   });
+
+  test("returns undefined when the embed lacks the question or the total", () => {
+    expect(formatPollResultNotice(notice([{ name: "total_votes", value: "1" }]))).toBeUndefined();
+    expect(
+      formatPollResultNotice(notice([{ name: "poll_question_text", value: "賛成ですか？" }])),
+    ).toBeUndefined();
+  });
 });
 
 test("places a poll after the text, and a poll-only message has no placeholder", () => {
