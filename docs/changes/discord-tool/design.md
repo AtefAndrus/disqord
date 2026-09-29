@@ -137,12 +137,12 @@ bot は `GuildMembers` と `GuildExpressions` の intent を持たないので�
 - [x] テスト: 共通の確認（取り直しの失敗、`ViewChannel` の無い依頼者、非公開スレッドの非参加者、タイムアウト中の依頼者と管理者の例外、ロックされたスレッド）、操作ごとの権限（bot だけが持つ、依頼者だけが持つ、`ManageMessages` だけではピン留めできない）、ロール制限付きの絵文字、上限、エラーの分類、チャンネル種別による非提示、無効な guild と DM での非提示
 - [x] e2e シナリオ `discord-tools` を足し、AGENTS.md の End-to-end 節に実行条件を書く
 - [x] `bun run e2e` と `bun run e2e discord-tools` を実行し、結果を PR に書く
-- [ ] 手動確認: bot のロールから `SendPolls` を外した状態で投票を頼み、Discord が投票の作成を断るかを確かめる（結果に応じて bot 側の事前確認を残すか外す）
+- [x] 手動確認: bot のロールから `SendPolls` を外した状態で投票を頼み、Discord が投票の作成を断るかを確かめる（結果に応じて bot 側の事前確認を残すか外す）
 - [ ] `docs/changes/discord-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **`SEND_POLLS` の bot への適用（未検証）**: Discord の権限の文書（`developers/topics/permissions.mdx`、2026-09-27 の main）は `SEND_POLLS` を「Allows sending polls」とだけ書き、bot が投票を作るときに要求されるかは書いていない。bot 側の事前確認には含め、`手動確認` で権限を外した bot の挙動を確かめる。要求されないと分かれば、bot 側の確認から外す。
+- **`SEND_POLLS` の bot への適用**: Discord の権限の文書（`developers/topics/permissions.mdx`、2026-09-27 の main）は `SEND_POLLS` を「Allows sending polls」とだけ書くが、チャンネルの権限上書きで bot の `SendPolls` だけを拒否して投票を送ると、Discord は `50013 Missing Permissions` で断る（2026-09-30 に REST で確認）。それでも bot 側の事前確認から外さないのは、依頼者と bot に同じ権限の一覧を当てはめているためである。依頼者の `SendPolls` は Discord が確かめないので、一覧から外すと依頼者の確認も失われる。bot 側の確認は、足りない権限を名前で返す役にも立つ。
 - **ボイスチャンネルでの履歴の読み取り**: 会話の窓と `read_earlier_messages` が使う `canReadConversation()` は、ボイスチャンネルのテキストチャットで要る `Connect` を確かめていない。本 change の tool はボイスチャンネルで提示しないので影響しないが、履歴の読み取り側の抜けとして別に直す。
 - **モデルの呼びすぎ**: tool があると、頼まれていないのにリアクションや投票をするモデルがありうる。tool の description に「ユーザが頼んだときだけ使う」と書き、e2e とログで様子を見る。
 
