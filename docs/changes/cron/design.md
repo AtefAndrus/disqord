@@ -337,7 +337,7 @@ CREATE TABLE IF NOT EXISTS cron_proposals (
 
 ## Open Questions / Risks
 
-- **croner の境界の扱い（未検証）**: `nextRun(from)` が `from` より厳密に後の時刻を返すこと、Bun 上で IANA タイムゾーンを正しく扱うことは、README の記載だけで確かめていない。テストで確かめる。
+- **croner の境界の扱い**: `nextRun(from)` が `from` より厳密に後の時刻を返すことと、Bun 上で `Asia/Tokyo` の式を正しく UTC の時刻にすることは、`tests/unit/services/cronSchedule.test.ts` で確かめている（JST 09:00:00 に `0 9 * * *` を渡すと翌日の JST 09:00 を返す）。croner を更新したときは、このテストが境界の挙動の変化を検出する。
 - **modal の選択欄の表示（未検証）**: discord.js 14.27.0 の型定義には `LabelBuilder` と、選択欄を含める `setChannelSelectMenuComponent` / `setStringSelectMenuComponent` がある。実際のクライアントでの表示と送信の値は手動確認で確かめる。
 - **起動時の 10 分の猶予**: 本番のデプロイで bot が止まっている時間を計っていない。デプロイがこれより長くかかるなら、その時刻の実行が 1 回飛ぶ。
 - **スケジュールの変換の質**: 既定モデルが無料モデルのギルドでは、自然言語のスケジュールを誤って変換することがありうる。確認カードで読み下しと実行時刻を示すので、承認前に気付ける前提である。
