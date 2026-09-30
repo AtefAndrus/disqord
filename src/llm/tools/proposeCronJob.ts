@@ -12,7 +12,7 @@ export class ProposeCronJobTool implements IClientTool<CronProposalArgs> {
   readonly description =
     "Propose a scheduled job that runs a prompt on a schedule and posts the answer to this channel. " +
     "Only when the user asks for something recurring or at a later time. Nothing is registered until the user approves the confirmation card, so never say it is registered. " +
-    "`prompt` runs later with no conversation context and no tools: write a self-contained instruction. " +
+    "`prompt` runs later with no conversation context. Web search alone is available with `web_search: true` when the job needs information current at run time: write a self-contained instruction. " +
     "`schedule` should be a 5-field cron expression in Asia/Tokyo (0 9 * * 1-5), an interval of at least 5 minutes (30m, 2h, 1d), or an ISO 8601 date-time with an offset. " +
     "Set post_only_when_notable to post only when there is something to report.";
   readonly parameters: Record<string, unknown> = {
@@ -22,6 +22,7 @@ export class ProposeCronJobTool implements IClientTool<CronProposalArgs> {
       schedule: { type: "string", minLength: 1, maxLength: 100 },
       prompt: { type: "string", minLength: 1, maxLength: 2000 },
       post_only_when_notable: { type: "boolean", default: false },
+      web_search: { type: "boolean", default: false },
     },
     required: ["name", "schedule", "prompt"],
     additionalProperties: false,
@@ -59,6 +60,8 @@ export class ProposeCronJobTool implements IClientTool<CronProposalArgs> {
       typeof args.post_only_when_notable !== "boolean"
     )
       return { ok: false, error: "post_only_when_notable must be boolean" };
+    if (args.web_search !== undefined && typeof args.web_search !== "boolean")
+      return { ok: false, error: "web_search must be boolean" };
     return {
       ok: true,
       value: {
@@ -66,6 +69,7 @@ export class ProposeCronJobTool implements IClientTool<CronProposalArgs> {
         schedule,
         prompt,
         postOnlyWhenNotable: args.post_only_when_notable === true,
+        webSearch: args.web_search === true,
       },
     };
   }

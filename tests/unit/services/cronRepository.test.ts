@@ -32,6 +32,7 @@ describe("cron repository", () => {
       userId: "user",
       targetJobId: null,
       targetVersion: null,
+      webSearch: false,
       name: "name",
       prompt: "prompt",
       kind: "interval",
@@ -48,6 +49,32 @@ describe("cron repository", () => {
     expect(first.ok).toBe(true);
     expect(repo.approveProposal(input.id, "guild", "user", actor, null, NOW).ok).toBe(false);
     expect(repo.countJobs("guild")).toBe(1);
+  });
+  test("approval refuses a card whose shown search value changed", () => {
+    const input = proposal();
+    expect(repo.setProposalWebSearch(input.id, false)).toBe(true);
+    expect(repo.approveProposal(input.id, "guild", "user", actor, null, NOW, false).ok).toBe(false);
+    expect(repo.countJobs("guild")).toBe(0);
+    const approved = repo.approveProposal(input.id, "guild", "user", actor, null, NOW, true);
+    expect(approved.ok && approved.value.webSearch).toBe(true);
+  });
+
+  test("search columns migrate existing cron tables and remain stable on a second run", () => {
+    const old = new Database(":memory:");
+    try {
+      old.run(
+        "CREATE TABLE cron_jobs (id INTEGER PRIMARY KEY, status TEXT, next_run_at INTEGER, guild_id TEXT)",
+      );
+      old.run("CREATE TABLE cron_proposals (id INTEGER PRIMARY KEY)");
+      applyMigrations(old);
+      applyMigrations(old);
+      for (const table of ["cron_jobs", "cron_proposals"]) {
+        const columns = old.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+        expect(columns.filter((column) => column.name === "web_search")).toHaveLength(1);
+      }
+    } finally {
+      old.close();
+    }
   });
   test("approval rejects another user, missing permissions, disabled guild and past once", async () => {
     const p = proposal();

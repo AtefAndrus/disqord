@@ -6,7 +6,7 @@ import {
   type ThreadChannel,
 } from "discord.js";
 import { AppError } from "../../errors";
-import { formatSearchResultLinks } from "../../llm/tools/webSearch";
+import { formatSearchResultLinks, type WebSearchEngine } from "../../llm/tools/webSearch";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
 import type {
@@ -236,7 +236,7 @@ export function createMessageCreateHandler(
   modelService: IModelService,
   options: {
     e2eTesterBotId?: string;
-    webSearchEngine?: string;
+    webSearchEngine?: WebSearchEngine;
     conversationWindow?: ConversationWindowService;
     replyRecordService?: IReplyRecordService;
     cronService?: ICronService;
@@ -460,6 +460,7 @@ export function createMessageCreateHandler(
                 message as Message<true>,
                 options.cronService,
                 settingsService,
+                options.webSearchEngine ?? "perplexity",
               ),
             }),
         },

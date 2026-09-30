@@ -19,7 +19,7 @@ interface MessageLike {
   components?: unknown[];
 }
 
-const APPROVE_ID = /^cron:proposal:approve:(\d+)$/u;
+const APPROVE_ID = /^cron:proposal:approve:(\d+):[01]$/u;
 const DELIVERY_POLL_MS = 5_000;
 
 function customIds(node: unknown): string[] {
@@ -92,6 +92,78 @@ export async function cronPreconditions(
       "the tester bot has neither ManageGuild nor the admin role set in /config, so it cannot propose a job",
     );
   return problems;
+}
+
+export async function cronSearchPreconditions(
+  channelId: string,
+  request: Request,
+  env: ScenarioEnv,
+): Promise<string[]> {
+  const problems = await cronPreconditions(channelId, request, env);
+  const guildId = await guildOf(channelId, request);
+  const db = new Database(env.databasePath, { readonly: true });
+  try {
+    const enabled = db
+      .query<{ webSearchEnabled: number }, [string]>(
+        "SELECT web_search_enabled AS webSearchEnabled FROM guild_settings WHERE guild_id=?",
+      )
+      .get(guildId)?.webSearchEnabled;
+    if (!enabled)
+      problems.push(`Web 検索 is off for guild ${guildId}: turn on 機能 → Web 検索 in /config`);
+  } finally {
+    db.close();
+  }
+  return problems;
+}
+
+export async function verifyCronSearch(
+  triggerId: string,
+  channelId: string,
+  request: Request,
+  botId: string,
+  env: ScenarioEnv,
+): Promise<string[]> {
+  const guildId = await guildOf(channelId, request);
+  if (env.interrupted?.aborted) return ["interrupted before the job was inserted"];
+  const name = `e2e-search-${crypto.randomUUID().slice(0, 8)}`;
+  const now = Date.now();
+  const runAt = now + 60_000;
+  const db = new Database(env.databasePath);
+  try {
+    db.query(`INSERT INTO cron_jobs (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,web_search,status,next_run_at,created_at,updated_at)
+      VALUES (?,?,?,?,?, 'once',?,0,1,'active',?,?,?)`).run(
+      guildId,
+      channelId,
+      env.testerBotId,
+      name,
+      "Web 検索で oven-sh/bun の GitHub Release のタグ bun-v1.4.0 の公開日を UTC で調べ、日付と出典を答えて。",
+      new Date(runAt).toISOString(),
+      runAt,
+      now,
+      now,
+    );
+  } finally {
+    db.close();
+  }
+  const heading = `定期実行「${name}」`;
+  let headingSeenAt: number | undefined;
+  while (true) {
+    const response = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+    if (!response.ok) return [`cannot read messages: HTTP ${response.status}`];
+    const posts = ((await response.json()) as MessageLike[]).filter(
+      (message) => message.author?.id === botId,
+    );
+    if (posts.some((message) => JSON.stringify(message.components ?? []).includes(heading)))
+      headingSeenAt ??= Date.now();
+    if (
+      headingSeenAt !== undefined &&
+      posts.some((message) => JSON.stringify(message.components ?? []).includes("-# 検索結果"))
+    )
+      return [];
+    if (headingSeenAt !== undefined && Date.now() - headingSeenAt > 30_000)
+      return ["scheduled post has no search result links"];
+    await Bun.sleep(DELIVERY_POLL_MS);
+  }
 }
 
 /**

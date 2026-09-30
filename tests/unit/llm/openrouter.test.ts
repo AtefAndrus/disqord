@@ -143,6 +143,57 @@ describe("OpenRouterClient", () => {
   }
 
   describe("chat", () => {
+    test("non-stream response includes web search calls and cited links", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          status: "completed",
+          output: [
+            {
+              type: "openrouter:web_search",
+              action: { query: "news", sources: [{ url: "https://example.com" }] },
+            },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "answer",
+                  annotations: [
+                    { type: "url_citation", url: "https://example.com", title: "Source" },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      const result = await client.chat(REQUEST);
+      expect(result.webSearch).toEqual({
+        calls: [{ query: "news", sources: ["https://example.com"] }],
+        results: [{ url: "https://example.com", title: "Source" }],
+      });
+    });
+    test.each([false, true])(
+      "non-stream search failure maps to WebSearchFailedError with HTTP 200=%s",
+      async (ok) => {
+        mockFetch.mockResolvedValueOnce({
+          ok,
+          status: ok ? 200 : 500,
+          json: async () =>
+            ok
+              ? {
+                  status: "failed",
+                  error: {
+                    code: 500,
+                    message: 'Server tool "openrouter:web_search" failed: upstream',
+                  },
+                }
+              : { error: { message: 'Server tool "openrouter:web_search" failed: upstream' } },
+        });
+        await expect(client.chat(REQUEST)).rejects.toBeInstanceOf(WebSearchFailedError);
+      },
+    );
     test("passes an abort signal to the non-streaming request", async () => {
       mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ output: [] }) });
       const signal = new AbortController().signal;

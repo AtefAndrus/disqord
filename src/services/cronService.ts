@@ -8,7 +8,8 @@ import {
   isChannelAllowed,
 } from "../db/repositories/cronRepository";
 import { AppError } from "../errors";
-import type { ChatCompletionResponse, GuildSettings } from "../types";
+import { formatSearchResultLinks } from "../llm/tools/webSearch";
+import type { ChatCompletionResponse, GuildSettings, WebSearchTrace } from "../types";
 import { EmbedColors } from "../types/embed";
 import {
   badgeText,
@@ -51,7 +52,13 @@ export interface ICronChat {
   generateScheduledResponse(
     job: CronJob,
     signal: AbortSignal,
-  ): Promise<{ text: string; usage?: ChatCompletionResponse["usage"]; model: string }>;
+  ): Promise<{
+    text: string;
+    usage?: ChatCompletionResponse["usage"];
+    model: string;
+    webSearch?: WebSearchTrace;
+    webSearchSkipped?: true;
+  }>;
   interpretCronSchedule(guildId: string, input: string, signal?: AbortSignal): Promise<string>;
 }
 export interface CronProposalInput {
@@ -62,6 +69,7 @@ export interface CronProposalInput {
   prompt: string;
   schedule: string;
   silent: boolean;
+  webSearch?: boolean;
   targetJobId?: number;
   targetVersion?: number;
   signal?: AbortSignal;
@@ -76,6 +84,21 @@ export interface ICronService {
     guildId: string,
     userId: string,
     actor: SettingsActor,
+    shownWebSearch?: boolean,
+  ): Promise<CronResult<CronJob>>;
+  toggleProposalWebSearch(
+    id: number,
+    guildId: string,
+    userId: string,
+    actor: SettingsActor,
+    shownWebSearch: boolean,
+  ): Promise<CronResult<CronProposal>>;
+  setJobWebSearch(
+    id: number,
+    guildId: string,
+    actor: SettingsActor,
+    version: number,
+    webSearch: boolean,
   ): Promise<CronResult<CronJob>>;
   getProposal(id: number, guildId: string, userId: string): CronProposal | null;
   /** Whether the proposal is still stored for the guild, whoever proposed it. */
@@ -176,19 +199,23 @@ export function buildScheduledPages(
   text: string,
   model: string,
   metadata: FinalMetadata,
+  extras: { notice?: string; links?: string } = {},
 ): ContainerBuilder[] {
   const footer = estimateFinalFooterBudget(metadata);
   const note = measureTextBudget(OMITTED_NOTE);
+  const links = extras.links ? `\n${extras.links}` : "";
+  const linksBudget = measureTextBudget(links);
   const chunks = splitTextIntoMessages(
-    `-# 定期実行「${name}」\n${text}`,
+    `-# 定期実行「${name}」\n${extras.notice ? `${extras.notice}\n` : ""}${text}`,
     measureTextBudget(badgeText(model)),
     {
-      chars: footer.chars + note.chars,
-      bytes: footer.bytes + note.bytes,
+      chars: footer.chars + note.chars + linksBudget.chars,
+      bytes: footer.bytes + note.bytes + linksBudget.bytes,
     },
   );
   const pages = chunks.slice(0, 5);
   if (chunks.length > 5) pages[4] = `${pages[4]}${OMITTED_NOTE}`;
+  pages[pages.length - 1] += links;
   return pages.map((page, index) =>
     buildFinalContainer({
       text: page,
@@ -272,6 +299,8 @@ export class CronService implements ICronService {
       );
     };
     if (targetChanged()) return failure("編集対象のジョブが変更されました。");
+    const targetWebSearch =
+      input.targetJobId === undefined ? undefined : this.repo.getJob(input.targetJobId)?.webSearch;
     let parsed = parseSchedule(schedule, this.now());
     if (!parsed.ok && parsed.reason === "natural_language") {
       try {
@@ -327,6 +356,7 @@ export class CronService implements ICronService {
       kind: parsed.schedule.kind,
       expr: parsed.schedule.expr,
       silent: input.silent,
+      webSearch: targetWebSearch ?? input.webSearch ?? false,
       createdAt: now,
       expiresAt: now + PROPOSAL_TTL_MS,
     });
@@ -345,6 +375,7 @@ export class CronService implements ICronService {
     guildId: string,
     userId: string,
     actor: SettingsActor,
+    shownWebSearch = false,
   ): Promise<CronResult<CronJob>> {
     const proposal = this.repo.getProposal(id);
     if (!proposal || proposal.guildId !== guildId || proposal.userId !== userId)
@@ -357,7 +388,58 @@ export class CronService implements ICronService {
     }
     // The settings are judged only inside the approval's transaction, after the
     // REST call, not from a read taken before it: `/config` can change meanwhile.
-    return this.repo.approveProposal(id, guildId, userId, actor, parentId, this.now());
+    return this.repo.approveProposal(
+      id,
+      guildId,
+      userId,
+      actor,
+      parentId,
+      this.now(),
+      shownWebSearch,
+    );
+  }
+  async toggleProposalWebSearch(
+    id: number,
+    guildId: string,
+    userId: string,
+    actor: SettingsActor,
+    shownWebSearch: boolean,
+  ): Promise<CronResult<CronProposal>> {
+    const settings = await this.settings.getGuildSettings(guildId);
+    const proposal = this.getProposal(id, guildId, userId);
+    if (
+      !settings.cronEnabled ||
+      !canManageGuildSettings(actor, settings) ||
+      !proposal ||
+      proposal.expiresAt <= this.now()
+    )
+      return failure("提案が無効か、操作権限がありません。");
+    if (!this.repo.setProposalWebSearch(id, shownWebSearch))
+      return failure("提案が変更されました。");
+    return { ok: true, value: this.repo.getProposal(id) as CronProposal };
+  }
+  async setJobWebSearch(
+    id: number,
+    guildId: string,
+    actor: SettingsActor,
+    version: number,
+    webSearch: boolean,
+  ): Promise<CronResult<CronJob>> {
+    const settings = await this.settings.getGuildSettings(guildId);
+    if (!settings.cronEnabled || !canManageGuildSettings(actor, settings))
+      return failure("定期実行が無効か、操作権限がありません。");
+    const job = this.repo.getJob(id);
+    if (
+      !job ||
+      job.guildId !== guildId ||
+      job.version !== version ||
+      job.status === "done" ||
+      job.webSearch === webSearch
+    )
+      return failure("ジョブが変更されました。");
+    if (!this.repo.setJobWebSearch(id, version, webSearch, this.now()))
+      return failure("ジョブが変更されました。");
+    return { ok: true, value: this.repo.getJob(id) as CronJob };
   }
   rejectProposal(id: number, guildId: string, userId: string): boolean {
     return this.repo.rejectProposal(id, guildId, userId);
@@ -623,6 +705,14 @@ export class CronService implements ICronService {
           response.text,
           response.model,
           metadata,
+          {
+            ...(response.webSearchSkipped && {
+              notice: "Web 検索に失敗したため検索なしで答えました。",
+            }),
+            ...(response.webSearch && {
+              links: formatSearchResultLinks(response.webSearch.results),
+            }),
+          },
         ).entries()) {
           if (this.closing || signal.aborted || !this.current(job))
             return failure("中断されました。");

@@ -78,6 +78,73 @@ function createFixture(overrides: Partial<GuildSettings> = {}): ChatFixture {
   return { chatService, llmClient, settingsService, tweetService, toolRegistry };
 }
 
+function scheduledJob(webSearch: boolean): CronJob {
+  return {
+    id: 1,
+    guildId: "guild",
+    channelId: "channel",
+    userId: "user",
+    name: "name",
+    prompt: "current news",
+    kind: "interval",
+    expr: "300000",
+    silent: false,
+    webSearch,
+    status: "active",
+    nextRunAt: 1,
+    lastRunAt: null,
+    failCount: 0,
+    lastError: null,
+    version: 1,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+test.each([
+  [false, false],
+  [false, true],
+  [true, false],
+  [true, true],
+])("scheduled search requires job=%s and guild=%s", async (jobSearch, guildSearch) => {
+  const { chatService, llmClient } = createFixture({ webSearchEnabled: guildSearch });
+  await chatService.generateScheduledResponse(
+    scheduledJob(jobSearch),
+    new AbortController().signal,
+  );
+  const [request] = llmClient.chat.mock.calls[0] as [ChatCompletionRequest];
+  expect(request.tools?.some((tool) => tool.type === "openrouter:web_search") ?? false).toBe(
+    jobSearch && guildSearch,
+  );
+  expect(
+    request.messages.some((message) => String(message.content).includes("Web 検索ツールを使える")),
+  ).toBe(jobSearch && guildSearch);
+});
+
+test("scheduled search failure retries without tool and with no-search date message", async () => {
+  const { chatService, llmClient } = createFixture({ webSearchEnabled: true });
+  llmClient.chat.mockRejectedValueOnce(new WebSearchFailedError("search failed"));
+  const result = await chatService.generateScheduledResponse(
+    scheduledJob(true),
+    new AbortController().signal,
+  );
+  expect(result.webSearchSkipped).toBe(true);
+  expect(llmClient.chat).toHaveBeenCalledTimes(2);
+  const [retry] = llmClient.chat.mock.calls[1] as [ChatCompletionRequest];
+  expect(retry.tools).toBeUndefined();
+  expect(
+    retry.messages.some((message) => String(message.content).includes("Web 検索ツールを使える")),
+  ).toBe(false);
+  expect(
+    retry.messages.some((message) => String(message.content).includes("最新の情報を問われたら")),
+  ).toBe(true);
+  expect(
+    retry.messages.some((message) =>
+      String(message.content).includes("検索結果に学習時点より新しい"),
+    ),
+  ).toBe(false);
+});
+
 test("scheduled generation and schedule conversion never call a paid default model in a free-only guild", async () => {
   const { chatService, llmClient } = createFixture({
     freeModelsOnly: true,
@@ -93,6 +160,7 @@ test("scheduled generation and schedule conversion never call a paid default mod
     kind: "interval",
     expr: "300000",
     silent: false,
+    webSearch: false,
     status: "active",
     nextRunAt: 1,
     lastRunAt: null,
@@ -152,6 +220,7 @@ test.each([false, true])(
       kind: "interval",
       expr: "300000",
       silent,
+      webSearch: false,
       status: "active",
       nextRunAt: 1,
       lastRunAt: null,

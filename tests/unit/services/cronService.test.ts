@@ -5,6 +5,7 @@ import { type CronJob, CronRepository } from "../../../src/db/repositories/cronR
 import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../src/db/schema";
 import {
+  buildScheduledPages,
   CronService,
   type ICronChat,
   type ICronDelivery,
@@ -72,6 +73,64 @@ describe("cron service", () => {
     if (!approved.ok) throw new Error(approved.reason);
     return approved.value;
   }
+  test("modal edit inherits the job search value and approval keeps it", async () => {
+    const job = await add();
+    const enabled = await service.setJobWebSearch(job.id, "guild", actor, job.version, true);
+    if (!enabled.ok) throw new Error(enabled.reason);
+    const edit = await service.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "renamed",
+        prompt: "prompt",
+        schedule: "5m",
+        silent: false,
+        targetJobId: job.id,
+        targetVersion: enabled.value.version,
+      },
+      actor,
+    );
+    if (!edit.ok) throw new Error(edit.reason);
+    expect(edit.value.proposal.webSearch).toBe(true);
+    const approved = await service.approveProposal(
+      edit.value.proposal.id,
+      "guild",
+      "user",
+      actor,
+      true,
+    );
+    expect(approved.ok && approved.value.webSearch).toBe(true);
+  });
+  test("search setting changes only an editable job at its current version", async () => {
+    const job = await add();
+    const changed = await service.setJobWebSearch(job.id, "guild", actor, job.version, true);
+    expect(changed.ok).toBe(true);
+    expect(repo.getJob(job.id)).toMatchObject({ webSearch: true, version: job.version + 1 });
+    expect((await service.setJobWebSearch(job.id, "guild", actor, job.version, false)).ok).toBe(
+      false,
+    );
+    const once = await add("2026-09-29T00:05:00Z");
+    db.query("UPDATE cron_jobs SET status='done',next_run_at=NULL WHERE id=?").run(once.id);
+    expect((await service.setJobWebSearch(once.id, "guild", actor, once.version, true)).ok).toBe(
+      false,
+    );
+  });
+  test("search failure notice is on page one and links survive the five-page cut", () => {
+    const pages = buildScheduledPages(
+      "news",
+      "本文".repeat(12_000),
+      "free/model",
+      { showDetails: false },
+      { notice: "検索なしで回答しました", links: "-# 検索結果\n- [source](<https://example.com>)" },
+    );
+    expect(pages).toHaveLength(5);
+    const first = JSON.stringify(pages[0]?.toJSON());
+    const last = JSON.stringify(pages.at(-1)?.toJSON());
+    expect(first).toContain("定期実行「news」\\n検索なしで回答しました");
+    expect(last).toContain("-# 検索結果");
+    expect(last).toContain("https://example.com");
+  });
   test("tick consumes time before model call and retains five minute cadence", async () => {
     const job = await add();
     now += 5 * 60_000 + 20_000;
@@ -119,6 +178,47 @@ describe("cron service", () => {
     await service.tick();
     expect(send).not.toHaveBeenCalled();
     expect(repo.getJob(job.id)?.failCount).toBe(0);
+  });
+  test("SILENT after search fallback remains a success without a post", async () => {
+    const job = await add("5m", true);
+    now += 5 * 60_000;
+    generate.mockImplementation(async () => ({
+      text: "[SILENT]",
+      model: "free/model",
+      webSearchSkipped: true,
+      webSearch: { calls: [{ query: "news", sources: [] }], results: [] },
+    }));
+    await service.tick();
+    expect(send).not.toHaveBeenCalled();
+    expect(repo.getJob(job.id)?.failCount).toBe(0);
+  });
+  test("a successful search fallback clears the prior failure", async () => {
+    const job = await add();
+    repo.saveFailure(job.id, job.version, now, "prior");
+    generate.mockImplementation(async () => ({
+      text: "answer",
+      model: "free/model",
+      webSearchSkipped: true,
+    }));
+    now += 5 * 60_000;
+    await service.tick();
+    expect(repo.getJob(job.id)).toMatchObject({ failCount: 0, lastError: null });
+    expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain("検索なしで答えました");
+  });
+  test("a failed search retry counts as one failed execution", async () => {
+    const job = await add();
+    generate.mockRejectedValueOnce(new Error("retry failed"));
+    now += 5 * 60_000;
+    await service.tick();
+    expect(repo.getJob(job.id)).toMatchObject({ failCount: 1, lastError: "retry failed" });
+  });
+  test("a non-search failure still counts when guild search is off", async () => {
+    const job = await add();
+    expect(repo.setJobWebSearch(job.id, job.version, true, now)).toBe(true);
+    generate.mockRejectedValueOnce(new Error("model failed"));
+    now += 5 * 60_000;
+    await service.tick();
+    expect(repo.getJob(job.id)).toMatchObject({ failCount: 1, lastError: "model failed" });
   });
   test("later page failure does not count as a failed execution", async () => {
     const job = await add();

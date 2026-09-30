@@ -1,5 +1,6 @@
 import type { GuildMember, Message } from "discord.js";
 import type { CronProposalArgs, CronToolContext } from "../llm/tools/registry";
+import type { WebSearchEngine } from "../llm/tools/webSearch";
 import { buildCronProposalCard, CRON_CHANNEL_TYPES } from "../utils/cronPanel";
 import { logger } from "../utils/logger";
 import type { ICronService } from "./cronService";
@@ -26,6 +27,7 @@ export class CronToolSession implements CronToolContext {
     private readonly trigger: Message<true>,
     private readonly cronService: ICronService,
     private readonly settingsService: ISettingsService,
+    private readonly webSearchEngine: WebSearchEngine = "perplexity",
   ) {
     this.channelType = (CRON_CHANNEL_TYPES as readonly number[]).includes(trigger.channel.type)
       ? trigger.channel.type
@@ -69,6 +71,7 @@ export class CronToolSession implements CronToolContext {
           prompt: args.prompt,
           schedule: args.schedule,
           silent: args.postOnlyWhenNotable,
+          webSearch: args.webSearch ?? false,
           signal,
         },
         actor,
@@ -86,7 +89,11 @@ export class CronToolSession implements CronToolContext {
       }
       try {
         await this.trigger.reply({
-          ...buildCronProposalCard(proposal, { state: "pending", nextRuns }),
+          ...buildCronProposalCard(proposal, {
+            state: "pending",
+            nextRuns,
+            webSearchEngine: this.webSearchEngine,
+          }),
           allowedMentions: { parse: [], repliedUser: false },
         });
       } catch (error) {

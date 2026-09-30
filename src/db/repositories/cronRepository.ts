@@ -13,6 +13,7 @@ export interface CronJob {
   kind: CronSchedule["kind"];
   expr: string;
   silent: boolean;
+  webSearch: boolean;
   status: "active" | "paused" | "done";
   nextRunAt: number | null;
   lastRunAt: number | null;
@@ -34,6 +35,7 @@ export interface CronProposal {
   kind: CronSchedule["kind"];
   expr: string;
   silent: boolean;
+  webSearch: boolean;
   expiresAt: number;
   createdAt: number;
 }
@@ -41,15 +43,26 @@ export type NewCronProposal = Omit<CronProposal, "id">;
 export type CronResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 const JOB_COLUMNS = `id, guild_id AS guildId, channel_id AS channelId, user_id AS userId, name, prompt,
-  kind, expr, silent, status, next_run_at AS nextRunAt, last_run_at AS lastRunAt,
+  kind, expr, silent, web_search AS webSearch, status, next_run_at AS nextRunAt, last_run_at AS lastRunAt,
   fail_count AS failCount, last_error AS lastError, version, created_at AS createdAt, updated_at AS updatedAt`;
 const PROPOSAL_COLUMNS = `id, guild_id AS guildId, channel_id AS channelId, user_id AS userId,
   target_job_id AS targetJobId, target_version AS targetVersion, name, prompt,
-  kind, expr, silent, expires_at AS expiresAt, created_at AS createdAt`;
-type RawJob = Omit<CronJob, "silent"> & { silent: number };
-type RawProposal = Omit<CronProposal, "silent"> & { silent: number };
-const jobFrom = (row: RawJob): CronJob => ({ ...row, silent: Boolean(row.silent) });
-const proposalFrom = (row: RawProposal): CronProposal => ({ ...row, silent: Boolean(row.silent) });
+  kind, expr, silent, web_search AS webSearch, expires_at AS expiresAt, created_at AS createdAt`;
+type RawJob = Omit<CronJob, "silent" | "webSearch"> & { silent: number; webSearch: number };
+type RawProposal = Omit<CronProposal, "silent" | "webSearch"> & {
+  silent: number;
+  webSearch: number;
+};
+const jobFrom = (row: RawJob): CronJob => ({
+  ...row,
+  silent: Boolean(row.silent),
+  webSearch: Boolean(row.webSearch),
+});
+const proposalFrom = (row: RawProposal): CronProposal => ({
+  ...row,
+  silent: Boolean(row.silent),
+  webSearch: Boolean(row.webSearch),
+});
 
 /** Whether a destination passes the allowed channels: null allows all, and a thread passes by its parent. */
 export function isChannelAllowed(
@@ -79,7 +92,10 @@ export interface ICronRepository {
     actor: SettingsActor,
     parentId: string | null,
     now: number,
+    shownWebSearch?: boolean,
   ): CronResult<CronJob>;
+  setProposalWebSearch(id: number, shownWebSearch: boolean): boolean;
+  setJobWebSearch(id: number, version: number, webSearch: boolean, now: number): boolean;
   rejectProposal(id: number, guildId: string, userId: string): boolean;
   getJob(id: number): CronJob | null;
   listJobs(guildId: string, userId?: string): CronJob[];
@@ -113,8 +129,8 @@ export class CronRepository implements ICronRepository {
   createProposal(input: NewCronProposal): CronProposal {
     const result = this.db
       .query(`INSERT INTO cron_proposals
-      (guild_id,channel_id,user_id,target_job_id,target_version,name,prompt,kind,expr,silent,expires_at,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      (guild_id,channel_id,user_id,target_job_id,target_version,name,prompt,kind,expr,silent,web_search,expires_at,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(
         input.guildId,
         input.channelId,
@@ -126,6 +142,7 @@ export class CronRepository implements ICronRepository {
         input.kind,
         input.expr,
         input.silent ? 1 : 0,
+        input.webSearch ? 1 : 0,
         input.expiresAt,
         input.createdAt,
       );
@@ -141,6 +158,23 @@ export class CronRepository implements ICronRepository {
     return row ? proposalFrom(row) : null;
   }
 
+  setProposalWebSearch(id: number, shownWebSearch: boolean): boolean {
+    return (
+      this.db
+        .query("UPDATE cron_proposals SET web_search=? WHERE id=? AND web_search=?")
+        .run(shownWebSearch ? 0 : 1, id, shownWebSearch ? 1 : 0).changes > 0
+    );
+  }
+
+  setJobWebSearch(id: number, version: number, webSearch: boolean, now: number): boolean {
+    return (
+      this.db
+        .query(`UPDATE cron_jobs SET web_search=?,version=version+1,updated_at=?
+      WHERE id=? AND version=? AND status IN ('active','paused') AND web_search!=?`)
+        .run(webSearch ? 1 : 0, now, id, version, webSearch ? 1 : 0).changes > 0
+    );
+  }
+
   approveProposal(
     id: number,
     guildId: string,
@@ -148,6 +182,7 @@ export class CronRepository implements ICronRepository {
     actor: SettingsActor,
     parentId: string | null,
     now: number,
+    shownWebSearch = false,
   ): CronResult<CronJob> {
     const tx = this.db.transaction((): CronResult<CronJob> => {
       const proposal = this.getProposal(id);
@@ -158,6 +193,11 @@ export class CronRepository implements ICronRepository {
         proposal.expiresAt <= now
       )
         return { ok: false, reason: "提案が無効か期限切れです。" };
+      if (proposal.webSearch !== shownWebSearch)
+        return {
+          ok: false,
+          reason: "提案の Web 検索設定が変更されました。表示を確認して押し直してください。",
+        };
       const settings = this.db
         .query<
           { cronEnabled: number; adminRoleId: string | null; allowedChannels: string | null },
@@ -192,8 +232,8 @@ export class CronRepository implements ICronRepository {
           return { ok: false, reason: "登録数の上限に達しています。" };
         const result = this.db
           .query(`INSERT INTO cron_jobs
-          (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,status,next_run_at,created_at,updated_at)
-          VALUES (?,?,?,?,?,?,?,?, 'active',?,?,?)`)
+          (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,web_search,status,next_run_at,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?, 'active',?,?,?)`)
           .run(
             guildId,
             proposal.channelId,
@@ -203,6 +243,7 @@ export class CronRepository implements ICronRepository {
             proposal.kind,
             proposal.expr,
             proposal.silent ? 1 : 0,
+            proposal.webSearch ? 1 : 0,
             first,
             now,
             now,
@@ -219,7 +260,7 @@ export class CronRepository implements ICronRepository {
           return { ok: false, reason: "編集対象のジョブが変更されました。" };
         jobId = old.id;
         const result = this.db
-          .query(`UPDATE cron_jobs SET channel_id=?,name=?,prompt=?,kind=?,expr=?,silent=?,
+          .query(`UPDATE cron_jobs SET channel_id=?,name=?,prompt=?,kind=?,expr=?,silent=?,web_search=?,
           next_run_at=?,last_run_at=?,fail_count=0,last_error=NULL,version=version+1,updated_at=?
           WHERE id=? AND version=? AND status IN ('active','paused')`)
           .run(
@@ -229,6 +270,7 @@ export class CronRepository implements ICronRepository {
             proposal.kind,
             proposal.expr,
             proposal.silent ? 1 : 0,
+            proposal.webSearch ? 1 : 0,
             old.status === "active" ? first : null,
             old.kind === proposal.kind && old.expr === proposal.expr ? old.lastRunAt : null,
             now,

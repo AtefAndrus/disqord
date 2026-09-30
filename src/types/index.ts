@@ -148,6 +148,7 @@ export interface ChatCompletionResponse {
   id?: string;
   model?: string;
   provider?: string;
+  webSearch?: WebSearchTrace;
   choices: {
     message: {
       role: "assistant";

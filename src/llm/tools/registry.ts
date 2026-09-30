@@ -38,6 +38,7 @@ export interface CronProposalArgs {
   schedule: string;
   prompt: string;
   postOnlyWhenNotable: boolean;
+  webSearch?: boolean;
 }
 
 /** Built per response, only in guilds with scheduled jobs enabled. */
