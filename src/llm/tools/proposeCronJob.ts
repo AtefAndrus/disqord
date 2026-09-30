@@ -12,7 +12,7 @@ export class ProposeCronJobTool implements IClientTool<CronProposalArgs> {
   readonly description =
     "Propose a scheduled job that runs a prompt on a schedule and posts the answer to this channel. " +
     "Only when the user asks for something recurring or at a later time. Nothing is registered until the user approves the confirmation card, so never say it is registered. " +
-    "`prompt` runs later with no conversation context. Web search alone is available with `web_search: true` when the job needs information current at run time: write a self-contained instruction. " +
+    "`prompt` runs later with no conversation context: write a self-contained instruction. Web search alone is available with `web_search: true` when the job needs information current at run time. " +
     "`schedule` should be a 5-field cron expression in Asia/Tokyo (0 9 * * 1-5), an interval of at least 5 minutes (30m, 2h, 1d), or an ISO 8601 date-time with an offset. " +
     "Set post_only_when_notable to post only when there is something to report.";
   readonly parameters: Record<string, unknown> = {

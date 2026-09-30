@@ -388,6 +388,7 @@ export function buildCronProposalCard(
   options: {
     state: CronProposalState;
     nextRuns?: readonly number[];
+    guildWebSearchEnabled?: boolean;
     webSearchEngine?: WebSearchEngine;
   },
 ): PanelPayload {
@@ -410,7 +411,11 @@ export function buildCronProposalCard(
       : []),
     `**配信先:** <#${proposal.channelId}>`,
     `**投稿の条件:** ${deliveryLabel(proposal.silent)}`,
-    `**Web 検索:** ${proposal.webSearch ? `使う（${describeSearchBilling(options.webSearchEngine ?? "perplexity")}）` : "使わない"}`,
+    `**Web 検索:** ${proposal.webSearch ? `使う${options.guildWebSearchEnabled === false ? "（ギルドの設定が無効のため使われない）" : ""}` : "使わない"}`,
+    // On its own line: the billing text carries its own parentheses.
+    ...(proposal.webSearch
+      ? [`-# ${describeSearchBilling(options.webSearchEngine ?? "perplexity")}`]
+      : []),
     `**提案者:** <@${proposal.userId}>`,
   ];
   const container = new ContainerBuilder()

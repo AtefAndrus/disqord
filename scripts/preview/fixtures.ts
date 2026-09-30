@@ -260,6 +260,52 @@ export function buildFixtures(): IFixture[] {
     ),
   });
   fixtures.push({
+    id: "cron-proposal-search-on",
+    title: "定期実行: 確認カード（Web 検索オン）",
+    note: "検索の課金説明を表示する",
+    messages: packContainers(
+      buildCronProposalCard(
+        { ...proposal, webSearch: true },
+        {
+          state: "pending",
+          nextRuns: nextThreeRuns(proposal, now),
+          guildWebSearchEnabled: true,
+        },
+      ).components,
+    ),
+  });
+  fixtures.push({
+    id: "cron-proposal-search-guild-off",
+    title: "定期実行: 確認カード（ギルドの Web 検索オフ）",
+    note: "検索が使われないことを表示する",
+    messages: packContainers(
+      buildCronProposalCard(
+        { ...proposal, webSearch: true },
+        {
+          state: "pending",
+          nextRuns: nextThreeRuns(proposal, now),
+          guildWebSearchEnabled: false,
+        },
+      ).components,
+    ),
+  });
+  const previewCronJob = cronJobs[0];
+  if (!previewCronJob) throw new Error("cron preview job is missing");
+  fixtures.push({
+    id: "cron-detail-search-confirm",
+    title: "/cron · 詳細（Web 検索オンの確認）",
+    note: "検索の課金説明と確定ボタンを表示する",
+    messages: packContainers(
+      buildCronDetail(
+        { ...previewCronJob, webSearch: false },
+        {
+          confirmSearchOn: true,
+          guildWebSearchEnabled: true,
+        },
+      ).components,
+    ),
+  });
+  fixtures.push({
     id: "cron-delivery",
     title: "定期実行: 配信",
     note: "buildScheduledPages: チャットの最終ページにジョブ名の見出しを足したもの",

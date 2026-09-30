@@ -145,7 +145,7 @@ test("scheduled search failure retries without tool and with no-search date mess
   ).toBe(false);
 });
 
-test("scheduled generation and schedule conversion never call a paid default model in a free-only guild", async () => {
+test("scheduled search generation and schedule conversion never call a paid default model in a free-only guild", async () => {
   const { chatService, llmClient } = createFixture({
     freeModelsOnly: true,
     defaultModel: "model-2",
@@ -160,7 +160,7 @@ test("scheduled generation and schedule conversion never call a paid default mod
     kind: "interval",
     expr: "300000",
     silent: false,
-    webSearch: false,
+    webSearch: true,
     status: "active",
     nextRunAt: 1,
     lastRunAt: null,

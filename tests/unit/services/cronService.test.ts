@@ -4,6 +4,9 @@ import { PermissionFlagsBits, PermissionsBitField, RESTJSONErrorCodes } from "di
 import { type CronJob, CronRepository } from "../../../src/db/repositories/cronRepository";
 import { GuildSettingsRepository } from "../../../src/db/repositories/guildSettings";
 import { applyMigrations } from "../../../src/db/schema";
+import { WebSearchFailedError } from "../../../src/errors";
+import { ToolRegistry } from "../../../src/llm/tools/registry";
+import { ChatService } from "../../../src/services/chatService";
 import {
   buildScheduledPages,
   CronService,
@@ -11,7 +14,9 @@ import {
   type ICronDelivery,
   startCronService,
 } from "../../../src/services/cronService";
+import { ModelService } from "../../../src/services/modelService";
 import { SettingsService } from "../../../src/services/settingsService";
+import { createMockLLMClient, createMockTweetService } from "../../helpers/mockFactories";
 
 const START = Date.parse("2026-09-29T00:00:00Z");
 const actor = {
@@ -131,6 +136,41 @@ describe("cron service", () => {
     expect(last).toContain("-# 検索結果");
     expect(last).toContain("https://example.com");
   });
+  test("body fitting in five pages without search still fits with short links", () => {
+    const metadata = { showDetails: false };
+    const links = "-# 検索結果\n- [source](<https://example.com>)";
+    const body = "x".repeat(18_500);
+    expect(buildScheduledPages("news", body, "free/model", metadata)).toHaveLength(5);
+    const pages = buildScheduledPages("news", body, "free/model", metadata, { links });
+    expect(pages).toHaveLength(5);
+    expect(JSON.stringify(pages[4]?.toJSON())).toContain("https://example.com");
+    expect(JSON.stringify(pages[4]?.toJSON())).not.toContain("以降のページは省略");
+  });
+  test.each(["second page rejects", "version changes after page one"])(
+    "no-search notice is delivered on page one when %s",
+    async (interruption) => {
+      const job = await add();
+      generate.mockImplementation(async () => ({
+        text: "long text ".repeat(900),
+        model: "free/model",
+        webSearchSkipped: true as const,
+      }));
+      let page = 0;
+      send.mockImplementation(async () => {
+        page++;
+        if (page === 1 && interruption === "version changes after page one")
+          repo.setStatus(job.id, job.version, "paused", null, now);
+        if (page === 2 && interruption === "second page rejects")
+          throw new Error("page two failed");
+      });
+      now += 5 * 60_000;
+      await service.tick();
+      expect(JSON.stringify(send.mock.calls[0]?.[0])).toContain(
+        "定期実行「name」\\nWeb 検索に失敗したため検索なしで答えました。",
+      );
+      expect(send).toHaveBeenCalledTimes(interruption === "second page rejects" ? 2 : 1);
+    },
+  );
   test("tick consumes time before model call and retains five minute cadence", async () => {
     const job = await add();
     now += 5 * 60_000 + 20_000;
@@ -215,10 +255,90 @@ describe("cron service", () => {
   test("a non-search failure still counts when guild search is off", async () => {
     const job = await add();
     expect(repo.setJobWebSearch(job.id, job.version, true, now)).toBe(true);
-    generate.mockRejectedValueOnce(new Error("model failed"));
+    await settings.setWebSearchEnabled("guild", false);
+    const llm = createMockLLMClient();
+    const chat = new ChatService(
+      llm,
+      settings,
+      new ToolRegistry(),
+      "perplexity",
+      createMockTweetService(),
+      new ModelService(llm),
+    );
+    const modelCall = spyOn(llm, "chat").mockImplementation(async (request) => {
+      expect(request.tools).toBeUndefined();
+      throw new Error("model failed");
+    });
+    service = new CronService(
+      repo,
+      settings,
+      {
+        generateScheduledResponse: (current, signal) =>
+          chat.generateScheduledResponse(current, signal),
+        interpretCronSchedule: mock(async () => "30m"),
+      },
+      { resolve },
+      () => now,
+    );
     now += 5 * 60_000;
     await service.tick();
+    expect(modelCall).toHaveBeenCalledTimes(1);
     expect(repo.getJob(job.id)).toMatchObject({ failCount: 1, lastError: "model failed" });
+  });
+  test("an edit during the no-search retry prevents the old version from posting or saving", async () => {
+    const job = await add();
+    expect(repo.setJobWebSearch(job.id, job.version, true, now)).toBe(true);
+    await settings.setWebSearchEnabled("guild", true);
+    const success = spyOn(repo, "saveSuccess");
+    const failure = spyOn(repo, "saveFailure");
+    const llm = createMockLLMClient();
+    let releaseRetry: (() => void) | undefined;
+    let retryStarted: (() => void) | undefined;
+    const waitingForRetry = new Promise<void>((resolvePromise) => {
+      retryStarted = resolvePromise;
+    });
+    const modelCall = spyOn(llm, "chat").mockImplementation(async (request) => {
+      if (request.tools) throw new WebSearchFailedError("search failed");
+      retryStarted?.();
+      return new Promise((resolvePromise) => {
+        releaseRetry = () =>
+          resolvePromise({
+            id: "retry",
+            choices: [{ message: { role: "assistant", content: "answer" } }],
+          });
+      });
+    });
+    const chat = new ChatService(
+      llm,
+      settings,
+      new ToolRegistry(),
+      "perplexity",
+      createMockTweetService(),
+      new ModelService(llm),
+    );
+    service = new CronService(
+      repo,
+      settings,
+      {
+        generateScheduledResponse: (current, signal) =>
+          chat.generateScheduledResponse(current, signal),
+        interpretCronSchedule: mock(async () => "30m"),
+      },
+      { resolve },
+      () => now,
+    );
+    now += 5 * 60_000;
+    const ticking = service.tick();
+    await waitingForRetry;
+    const current = repo.getJob(job.id);
+    if (!current) throw new Error("job disappeared");
+    expect(repo.setJobWebSearch(job.id, current.version, false, now)).toBe(true);
+    releaseRetry?.();
+    await ticking;
+    expect(modelCall).toHaveBeenCalledTimes(2);
+    expect(send).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+    expect(failure).not.toHaveBeenCalled();
   });
   test("later page failure does not count as a failed execution", async () => {
     const job = await add();
@@ -977,9 +1097,11 @@ describe("cron service", () => {
   });
   test("run now preserves all scheduling and failure fields", async () => {
     const job = await add();
+    expect(repo.setJobWebSearch(job.id, job.version, true, now)).toBe(true);
     repo.saveFailure(job.id, job.version, now, "previous failure");
     const before = repo.getJob(job.id);
-    expect((await service.runNow(job.id, "guild", actor, job.version)).ok).toBe(true);
+    expect((await service.runNow(job.id, "guild", actor, job.version + 1)).ok).toBe(true);
+    expect(generate.mock.calls[0]?.[0]).toMatchObject({ webSearch: true });
     const after = repo.getJob(job.id);
     for (const field of ["nextRunAt", "lastRunAt", "failCount", "lastError", "status"] as const)
       expect(after?.[field]).toBe(before?.[field]);

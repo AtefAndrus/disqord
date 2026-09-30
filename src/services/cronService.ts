@@ -16,6 +16,8 @@ import {
   buildFinalContainer,
   estimateFinalFooterBudget,
   type FinalMetadata,
+  MAX_TOTAL_BYTES_PER_MESSAGE,
+  MAX_TOTAL_CHARS_PER_MESSAGE,
   measureTextBudget,
   splitTextIntoMessages,
   toComponentsV2Payload,
@@ -205,14 +207,24 @@ export function buildScheduledPages(
   const note = measureTextBudget(OMITTED_NOTE);
   const links = extras.links ? `\n${extras.links}` : "";
   const linksBudget = measureTextBudget(links);
-  const chunks = splitTextIntoMessages(
-    `-# 定期実行「${name}」\n${extras.notice ? `${extras.notice}\n` : ""}${text}`,
-    measureTextBudget(badgeText(model)),
-    {
-      chars: footer.chars + note.chars + linksBudget.chars,
-      bytes: footer.bytes + note.bytes + linksBudget.bytes,
-    },
-  );
+  const body = `-# 定期実行「${name}」\n${extras.notice ? `${extras.notice}\n` : ""}${text}`;
+  const badge = measureTextBudget(badgeText(model));
+  const reserve = { chars: footer.chars + note.chars, bytes: footer.bytes + note.bytes };
+  let chunks = splitTextIntoMessages(body, badge, reserve);
+  const lastBudget = measureTextBudget(chunks.at(-1) ?? "");
+  if (
+    links &&
+    (chunks.length > 5 ||
+      lastBudget.chars + badge.chars + reserve.chars + linksBudget.chars >
+        MAX_TOTAL_CHARS_PER_MESSAGE ||
+      lastBudget.bytes + badge.bytes + reserve.bytes + linksBudget.bytes >
+        MAX_TOTAL_BYTES_PER_MESSAGE)
+  ) {
+    chunks = splitTextIntoMessages(body, badge, {
+      chars: reserve.chars + linksBudget.chars,
+      bytes: reserve.bytes + linksBudget.bytes,
+    });
+  }
   const pages = chunks.slice(0, 5);
   if (chunks.length > 5) pages[4] = `${pages[4]}${OMITTED_NOTE}`;
   pages[pages.length - 1] += links;

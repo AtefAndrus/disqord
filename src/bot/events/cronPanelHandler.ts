@@ -8,6 +8,7 @@ import {
 } from "discord.js";
 import type { CronJob } from "../../db/repositories/cronRepository";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
+import { nextThreeRuns } from "../../services/cronSchedule";
 import type { ICronService } from "../../services/cronService";
 import {
   canManageGuildSettings,
@@ -113,7 +114,13 @@ export async function handleCronPanelInteraction(
     const card = (
       proposal: Parameters<typeof buildCronProposalCard>[0],
       options: Parameters<typeof buildCronProposalCard>[1],
-    ): Payload => buildCronProposalCard(proposal, { ...options, webSearchEngine });
+    ): Payload =>
+      buildCronProposalCard(proposal, {
+        ...options,
+        nextRuns: options.nextRuns ?? nextThreeRuns(proposal, Date.now()),
+        guildWebSearchEnabled,
+        webSearchEngine,
+      });
     if (interaction.isModalSubmit()) {
       if (action.action !== "modal-new" && action.action !== "modal-edit") {
         await notice(CRON_INVALID_MESSAGE);

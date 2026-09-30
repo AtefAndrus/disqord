@@ -71,10 +71,20 @@ describe("cron repository", () => {
       for (const table of ["cron_jobs", "cron_proposals"]) {
         const columns = old.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
         expect(columns.filter((column) => column.name === "web_search")).toHaveLength(1);
+        expect(() => old.run(`INSERT INTO ${table} (web_search) VALUES (2)`)).toThrow();
       }
     } finally {
       old.close();
     }
+  });
+  test("new cron tables reject web_search values outside zero and one", () => {
+    const p = proposal();
+    expect(() => db.query("UPDATE cron_proposals SET web_search=2 WHERE id=?").run(p.id)).toThrow();
+    const approved = repo.approveProposal(p.id, "guild", "user", actor, null, NOW);
+    if (!approved.ok) throw new Error(approved.reason);
+    expect(() =>
+      db.query("UPDATE cron_jobs SET web_search=2 WHERE id=?").run(approved.value.id),
+    ).toThrow();
   });
   test("approval rejects another user, missing permissions, disabled guild and past once", async () => {
     const p = proposal();

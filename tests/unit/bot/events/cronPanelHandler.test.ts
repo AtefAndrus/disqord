@@ -361,13 +361,32 @@ describe("cron panel interactions", () => {
     expect(text(fixture.update.mock.calls[0]?.[0])).toContain(`cron:proposal:approve:${id}:0`);
   });
   test("proposal search toggle changes the card and requires its shown value", async () => {
-    const id = await proposal();
+    const created = await cron.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "daily",
+        prompt: "news",
+        schedule: "0 9 * * *",
+        silent: false,
+      },
+      manager,
+    );
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.value.proposal.id;
     const first = await press(`cron:proposal:search:${id}:0`);
     expect(repo.getProposal(id)?.webSearch).toBe(true);
     expect(text(first.update.mock.calls[0]?.[0])).toContain(`cron:proposal:approve:${id}:1`);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain("次回から 3 回分");
     const stale = await press(`cron:proposal:search:${id}:0`);
     expect(repo.getProposal(id)?.webSearch).toBe(true);
     expect(lastNotice(stale)).toContain("提案が変更されました");
+  });
+  test("a search proposal explains when the guild setting is off", async () => {
+    const id = await proposal();
+    const first = await press(`cron:proposal:search:${id}:0`);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain("ギルドの設定が無効のため使われない");
   });
   test("job search enable requires confirmation and bumps version", async () => {
     const job = await add();

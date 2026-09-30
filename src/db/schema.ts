@@ -181,7 +181,7 @@ export function applyMigrations(db: Database): void {
     user_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('cron','interval','once')), expr TEXT NOT NULL,
     silent INTEGER NOT NULL DEFAULT 0 CHECK (silent IN (0,1)),
-    web_search INTEGER NOT NULL DEFAULT 0,
+    web_search INTEGER NOT NULL DEFAULT 0 CHECK (web_search IN (0,1)),
     status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','done')),
     next_run_at INTEGER, last_run_at INTEGER, fail_count INTEGER NOT NULL DEFAULT 0,
     last_error TEXT, version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL,
@@ -193,12 +193,14 @@ export function applyMigrations(db: Database): void {
     user_id TEXT NOT NULL, target_job_id INTEGER, target_version INTEGER,
     name TEXT NOT NULL, prompt TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('cron','interval','once')), expr TEXT NOT NULL,
-    silent INTEGER NOT NULL CHECK (silent IN (0,1)), web_search INTEGER NOT NULL DEFAULT 0,
+    silent INTEGER NOT NULL CHECK (silent IN (0,1)), web_search INTEGER NOT NULL DEFAULT 0 CHECK (web_search IN (0,1)),
     expires_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL)`);
   for (const table of ["cron_jobs", "cron_proposals"] as const) {
     const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
     if (!columns.some((column) => column.name === "web_search"))
-      db.run(`ALTER TABLE ${table} ADD COLUMN web_search INTEGER NOT NULL DEFAULT 0`);
+      db.run(
+        `ALTER TABLE ${table} ADD COLUMN web_search INTEGER NOT NULL DEFAULT 0 CHECK (web_search IN (0,1))`,
+      );
   }
 }
