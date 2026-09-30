@@ -465,6 +465,17 @@ describe("cron panel interactions", () => {
     expect(repo.listJobs("guild")).toHaveLength(0);
   });
 
+  test("an expired card forecasts no runs", async () => {
+    const id = await proposal("user");
+    db.query("UPDATE cron_proposals SET expires_at=1 WHERE id=?").run(id);
+    const fixture = await press(
+      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+    );
+    const card = text(fixture.update.mock.calls[0]?.[0]);
+    expect(card).toContain("期限切れのため取り消しました");
+    expect(card).not.toContain("次回");
+  });
+
   test("reject removes the proposal and the buttons", async () => {
     const id = await proposal("user");
     const fixture = await press(

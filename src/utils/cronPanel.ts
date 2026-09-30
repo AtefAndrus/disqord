@@ -412,10 +412,13 @@ export function buildCronProposalCard(
     `**配信先:** <#${proposal.channelId}>`,
     `**投稿の条件:** ${deliveryLabel(proposal.silent)}`,
     `**Web 検索:** ${proposal.webSearch ? `使う${options.guildWebSearchEnabled === false ? "（ギルドの設定が無効のため使われない）" : ""}` : "使わない"}`,
-    // On its own line: the billing text carries its own parentheses.
-    // Billing is left out while the guild has search off: nothing would be billed.
-    ...(proposal.webSearch && options.guildWebSearchEnabled !== false
-      ? [`-# ${describeSearchBilling(options.webSearchEngine ?? "perplexity")}`]
+    // On its own line: the billing text carries its own parentheses. It stays while the guild
+    // has search off, because approving here is the only time the job's cost is accepted and
+    // turning the guild setting on later starts billing without another card.
+    ...(proposal.webSearch
+      ? [
+          `-# ${options.guildWebSearchEnabled === false ? "ギルドの設定で Web 検索が有効になると: " : ""}${describeSearchBilling(options.webSearchEngine ?? "perplexity")}`,
+        ]
       : []),
     `**提案者:** <@${proposal.userId}>`,
   ];
