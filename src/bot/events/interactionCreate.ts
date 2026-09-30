@@ -89,7 +89,7 @@ export function createInteractionCreateHandler(
       (interaction.isButton() || interaction.isStringSelectMenu() || interaction.isModalSubmit()) &&
       interaction.customId.startsWith("cron:")
     ) {
-      await handleCronPanelInteraction(interaction, cronService, settingsService);
+      await handleCronPanelInteraction(interaction, cronService, settingsService, webSearchEngine);
       return;
     }
 

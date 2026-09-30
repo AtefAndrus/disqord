@@ -13,7 +13,7 @@
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [会話の区切り](changes/conversation-boundary/design.md) | 中 | planned | チャンネルに区切りを置き、以後の応答にそれより前の会話を自動では渡さず、モデルには区切りの存在を助言として示して必要なときだけ遡らせる |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
-| [定期実行での Web 検索](changes/cron-web-search/design.md) | 中 | planned | 定期実行のジョブごとに Web 検索を使うかを選べるようにし、使うジョブは通常の返答と同じ回数の上限で検索して答える |
+| [定期実行での Web 検索](changes/cron-web-search/design.md) | 中 | in-progress | 定期実行のジョブごとに Web 検索を使うかを選べるようにし、使うジョブは通常の返答と同じ回数の上限で検索して答える |
 | [カスタム絵文字・スタンプ・GIF への対応](changes/discord-expressions/design.md) | 中 | planned | カスタム絵文字、スタンプ、GIF の埋め込みをモデルが読めるようにし、返信でサーバーのカスタム絵文字を使えるようにする |
 | [Discord の情報を読む tool とイベントの作成](changes/discord-info-tools/design.md) | 中 | planned | ピン留め一覧、チャンネル情報、サーバーのイベント一覧をモデルが読める tool と、イベントを作る tool |
 | [終了時の進行中返信の後始末](changes/graceful-shutdown/design.md) | 中 | investigating | bot の終了時に、生成途中の返信を停止表示へ書き換えてから落とす |

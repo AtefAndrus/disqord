@@ -18,6 +18,7 @@ import type {
   GuildId,
   MessageId,
   ServerTool,
+  WebSearchTrace,
 } from "../types";
 import { messageBody } from "../utils/discordMessageNormalizer";
 import { PDF_PARSER_PLUGIN } from "./attachmentParser";
@@ -266,23 +267,50 @@ export class ChatService implements IChatService {
   async generateScheduledResponse(
     job: CronJob,
     signal: AbortSignal,
-  ): Promise<{ text: string; usage?: ChatCompletionResponse["usage"]; model: string }> {
+  ): Promise<{
+    text: string;
+    usage?: ChatCompletionResponse["usage"];
+    model: string;
+    webSearch?: WebSearchTrace;
+    webSearchSkipped?: true;
+  }> {
     const model = await this.assertScheduledModel(job.guildId);
-    const messages: ChatMessage[] = [
-      DISCORD_FORMAT_SYSTEM_MESSAGE,
-      buildDateTimeSystemMessage(new Date(), false),
-    ];
-    if (job.silent)
-      messages.push({
-        role: "system",
-        content: "特に伝えることが無ければ、本文を [SILENT] だけにすること。",
-      });
-    messages.push({ role: "user", content: job.prompt });
-    const response = await this.llmClient.chat({ model, messages }, signal);
+    const settings = await this.settingsService.getGuildSettings(job.guildId);
+    const search = job.webSearch && settings.webSearchEnabled;
+    const now = new Date();
+    const request = (withSearch: boolean): ChatCompletionRequest => ({
+      model,
+      messages: [
+        DISCORD_FORMAT_SYSTEM_MESSAGE,
+        ...(withSearch ? [buildWebSearchStaticSystemMessage()] : []),
+        buildDateTimeSystemMessage(now, withSearch),
+        ...(job.silent
+          ? [
+              {
+                role: "system" as const,
+                content: "特に伝えることが無ければ、本文を [SILENT] だけにすること。",
+              },
+            ]
+          : []),
+        { role: "user", content: job.prompt },
+      ],
+      ...(withSearch ? { tools: [buildWebSearchServerTool(this.webSearchEngine)] } : {}),
+    });
+    let response: ChatCompletionResponse;
+    let webSearchSkipped: true | undefined;
+    try {
+      response = await this.llmClient.chat(request(search), signal);
+    } catch (error) {
+      if (!search || !(error instanceof WebSearchFailedError)) throw error;
+      webSearchSkipped = true;
+      response = await this.llmClient.chat(request(false), signal);
+    }
     return {
       text: response.choices[0]?.message.content ?? "",
       usage: response.usage,
       model: response.model ?? model,
+      ...(response.webSearch && { webSearch: response.webSearch }),
+      ...(webSearchSkipped && { webSearchSkipped }),
     };
   }
 

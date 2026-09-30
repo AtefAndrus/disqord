@@ -8,9 +8,11 @@ import {
 import {
   cleanupCron,
   cronPreconditions,
+  cronSearchPreconditions,
   isProposalCard,
   type ScenarioEnv,
   verifyCron,
+  verifyCronSearch,
 } from "./cron";
 import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
 
@@ -335,6 +337,20 @@ export const LONG_NUMBER_COUNT = 1200;
 export const LONG_NUMBERS_PER_LINE = 20;
 
 export const SCENARIOS: Scenario[] = [
+  {
+    name: "cron-search",
+    manual: true,
+    prompt: "[e2e] 定期実行の Web 検索を確認します。準備ができたと一言答えて。",
+    timeoutMs: 420_000,
+    before: cronSearchPreconditions,
+    check: (reply) => [
+      ...(reply.isError ? ["the reply ended in an error"] : []),
+      ...hasUsageFooter(reply),
+    ],
+    verify: verifyCronSearch,
+    cleanup: (_triggerId, channelId, _request, env, startedAt) =>
+      cleanupCron(channelId, env, startedAt),
+  },
   {
     name: "cron",
     manual: true,

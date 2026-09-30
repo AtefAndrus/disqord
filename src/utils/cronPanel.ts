@@ -13,6 +13,7 @@ import {
   TextInputStyle,
 } from "discord.js";
 import type { CronJob, CronProposal } from "../db/repositories/cronRepository";
+import { describeSearchBilling, type WebSearchEngine } from "../llm/tools/webSearch";
 import { type CronSchedule, describeSchedule, formatScheduleInput } from "../services/cronSchedule";
 import { EmbedColors } from "../types/embed";
 
@@ -32,7 +33,17 @@ export const CRON_MODAL_FIELDS = {
   silent: "silent",
 } as const;
 
-type JobAction = "view" | "edit" | "run" | "pause" | "resume" | "delete" | "confirm-delete";
+type JobAction =
+  | "view"
+  | "edit"
+  | "run"
+  | "pause"
+  | "resume"
+  | "delete"
+  | "confirm-delete"
+  | "search-on"
+  | "confirm-search-on"
+  | "search-off";
 export type CronAction =
   | { action: "list"; page: number }
   | { action: "select"; page: number }
@@ -40,7 +51,12 @@ export type CronAction =
   | { action: JobAction; jobId: number; version: number }
   | { action: "modal-new" }
   | { action: "modal-edit"; jobId: number; version: number }
-  | { action: "proposal"; decision: "approve" | "reject"; proposalId: number };
+  | {
+      action: "proposal";
+      decision: "approve" | "reject" | "search";
+      proposalId: number;
+      shownWebSearch?: boolean;
+    };
 
 const JOB_ACTIONS: readonly string[] = [
   "view",
@@ -50,6 +66,9 @@ const JOB_ACTIONS: readonly string[] = [
   "resume",
   "delete",
   "confirm-delete",
+  "search-on",
+  "confirm-search-on",
+  "search-off",
 ];
 
 export function cronCustomId(action: CronAction): string {
@@ -64,7 +83,7 @@ export function cronCustomId(action: CronAction): string {
     case "modal-edit":
       return `cron:modal:edit:${action.jobId}:${action.version}`;
     case "proposal":
-      return `cron:proposal:${action.decision}:${action.proposalId}`;
+      return `cron:proposal:${action.decision}:${action.proposalId}${action.shownWebSearch === undefined ? "" : `:${action.shownWebSearch ? 1 : 0}`}`;
     default:
       return `cron:${action.action}:${action.jobId}:${action.version}`;
   }
@@ -94,9 +113,24 @@ export function parseCronCustomId(value: string): CronAction | undefined {
       ? { action: "modal-edit", jobId, version }
       : undefined;
   }
-  if (action === "proposal" && parts.length === 4 && (first === "approve" || first === "reject")) {
+  if (
+    action === "proposal" &&
+    (parts.length === 4 || parts.length === 5) &&
+    (first === "approve" || first === "reject" || first === "search")
+  ) {
     const proposalId = toId(second);
-    return proposalId === undefined ? undefined : { action, decision: first, proposalId };
+    if (
+      proposalId === undefined ||
+      (parts.length === 5 && third !== "0" && third !== "1") ||
+      (first === "search" && parts.length !== 5)
+    )
+      return undefined;
+    return {
+      action,
+      decision: first,
+      proposalId,
+      ...(parts.length === 5 && { shownWebSearch: third === "1" }),
+    };
   }
   if (action !== undefined && JOB_ACTIONS.includes(action) && parts.length === 4) {
     const jobId = toId(first);
@@ -214,7 +248,12 @@ export function buildCronList(jobs: readonly CronJob[], page: number): PanelPayl
 
 export function buildCronDetail(
   job: CronJob,
-  options: { confirmDelete?: boolean } = {},
+  options: {
+    confirmDelete?: boolean;
+    confirmSearchOn?: boolean;
+    guildWebSearchEnabled?: boolean;
+    webSearchEngine?: WebSearchEngine;
+  } = {},
 ): PanelPayload {
   const lines = [
     `## ${job.name}`,
@@ -224,6 +263,10 @@ export function buildCronDetail(
     `**直近の実行:** ${timestamp(job.lastRunAt)}`,
     `**配信先:** <#${job.channelId}>`,
     `**投稿の条件:** ${deliveryLabel(job.silent)}`,
+    `**Web 検索:** ${job.webSearch ? (options.guildWebSearchEnabled === false ? "オン（ギルドの設定が無効のため使われない）" : "オン") : "オフ"}`,
+    ...(options.confirmSearchOn
+      ? [searchBillingLine(options.webSearchEngine, options.guildWebSearchEnabled)]
+      : []),
     `**登録者:** <@${job.userId}>`,
     ...(job.lastError ? [`**直近のエラー:** ${job.lastError}`] : []),
   ];
@@ -243,7 +286,16 @@ export function buildCronDetail(
       .setStyle(style);
   const buttons: ButtonBuilder[] = [];
   // A done job never returns to active or paused (design: done を再開しない), so it has no edit either.
-  if (job.status !== "done") buttons.push(button("edit", "編集"));
+  if (job.status !== "done") {
+    buttons.push(button("edit", "編集"));
+    buttons.push(
+      job.webSearch
+        ? button("search-off", "Web 検索をオフにする")
+        : options.confirmSearchOn
+          ? button("confirm-search-on", "Web 検索をオンにする（確定）", ButtonStyle.Success)
+          : button("search-on", "Web 検索をオンにする"),
+    );
+  }
   buttons.push(button("run", "今すぐ実行"));
   if (job.status === "active") buttons.push(button("pause", "停止"));
   if (job.status === "paused") buttons.push(button("resume", "再開", ButtonStyle.Success));
@@ -253,8 +305,27 @@ export function buildCronDetail(
       : button("delete", "削除", ButtonStyle.Danger),
   );
   buttons.push(button("list", "一覧へ戻る"));
-  container.addActionRowComponents(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons));
+  container.addActionRowComponents(
+    new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(0, 5)),
+  );
+  if (buttons.length > 5)
+    container.addActionRowComponents(
+      new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(5)),
+    );
   return payload(container);
+}
+
+/**
+ * The billing text shown before search is turned on, on the proposal card and the detail
+ * screen alike. While the guild has search off it is prefixed rather than dropped: turning
+ * the guild setting on later starts billing with no further confirmation.
+ */
+function searchBillingLine(
+  engine: WebSearchEngine | undefined,
+  guildWebSearchEnabled: boolean | undefined,
+): string {
+  const prefix = guildWebSearchEnabled === false ? "ギルドの設定で Web 検索が有効になると: " : "";
+  return `${prefix}${describeSearchBilling(engine ?? "perplexity")}`;
 }
 
 export function buildCronModal(job?: CronJob, defaultChannelId?: string): ModalBuilder {
@@ -327,7 +398,12 @@ export type CronProposalState = "pending" | "approved" | "rejected" | "expired";
 
 export function buildCronProposalCard(
   proposal: CronProposal,
-  options: { state: CronProposalState; nextRuns?: readonly number[] },
+  options: {
+    state: CronProposalState;
+    nextRuns?: readonly number[];
+    guildWebSearchEnabled?: boolean;
+    webSearchEngine?: WebSearchEngine;
+  },
 ): PanelPayload {
   const heading = {
     pending: proposal.targetJobId === null ? "定期実行の登録の確認" : "定期実行の編集の確認",
@@ -348,6 +424,11 @@ export function buildCronProposalCard(
       : []),
     `**配信先:** <#${proposal.channelId}>`,
     `**投稿の条件:** ${deliveryLabel(proposal.silent)}`,
+    `**Web 検索:** ${proposal.webSearch ? `使う${options.guildWebSearchEnabled === false ? "（ギルドの設定が無効のため使われない）" : ""}` : "使わない"}`,
+    // On its own line: the billing text carries its own parentheses.
+    ...(proposal.webSearch
+      ? [`-# ${searchBillingLine(options.webSearchEngine, options.guildWebSearchEnabled)}`]
+      : []),
     `**提案者:** <@${proposal.userId}>`,
   ];
   const container = new ContainerBuilder()
@@ -365,10 +446,26 @@ export function buildCronProposalCard(
         new ActionRowBuilder<ButtonBuilder>().addComponents(
           new ButtonBuilder()
             .setCustomId(
-              cronCustomId({ action: "proposal", decision: "approve", proposalId: proposal.id }),
+              cronCustomId({
+                action: "proposal",
+                decision: "approve",
+                proposalId: proposal.id,
+                shownWebSearch: proposal.webSearch,
+              }),
             )
             .setLabel("登録する")
             .setStyle(ButtonStyle.Success),
+          new ButtonBuilder()
+            .setCustomId(
+              cronCustomId({
+                action: "proposal",
+                decision: "search",
+                proposalId: proposal.id,
+                shownWebSearch: proposal.webSearch,
+              }),
+            )
+            .setLabel(`Web 検索: ${proposal.webSearch ? "オン" : "オフ"}`)
+            .setStyle(ButtonStyle.Secondary),
           new ButtonBuilder()
             .setCustomId(
               cronCustomId({ action: "proposal", decision: "reject", proposalId: proposal.id }),

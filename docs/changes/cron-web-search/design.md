@@ -1,6 +1,6 @@
 ---
 title: "定期実行での Web 検索"
-status: planned        # investigating | planned | in-progress | implemented
+status: in-progress    # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "定期実行のジョブごとに Web 検索を使うかを選べるようにし、使うジョブは通常の返答と同じ回数の上限で検索して答える"
 ---
@@ -73,8 +73,8 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 
 ### 実装内容
 
-- 確認カードは、`web_search` が 1 のとき「**Web 検索:** 使う（{describeSearchBilling(engine)}）」の行を出す。
-- 詳細画面のボタンの並びは「編集」「Web 検索をオンにする / オフにする」「今すぐ実行」「停止 / 再開」「削除」「一覧へ戻る」とする。Discord の 1 行 5 ボタンに収まらないので 2 行にする。
+- 確認カードは、`web_search` が 1 のとき「**Web 検索:** 使う」の行と、その下に `describeSearchBilling(engine)` の文面の行を出す。文面自体が括弧を含むので、状態の行とは分ける。ギルドの設定が無効なら、状態の行に「（ギルドの設定が無効のため使われない）」を添え、費用の行は「ギルドの設定で Web 検索が有効になると:」を前置して残す。ギルドの設定を後で有効にすると、新しい確認を経ずに課金が始まるので、費用を受け入れる機会はこのカードだけになる。詳細画面でオンにする確定の前の画面も、同じ前置きで費用の行を出す。
+- 詳細画面のボタンの並びは「編集」「Web 検索をオンにする / オフにする」「今すぐ実行」「停止 / 再開」「削除」「一覧へ戻る」とする。Discord の 1 行 5 ボタンに収まらないので複数行にする。
 - 「今すぐ実行」もジョブの `web_search` に従う。
 
 ### e2e
@@ -85,17 +85,18 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 
 ## Tasks
 
-- [ ] 非ストリームの `chat()` で検索の記録と失敗を読む
-- [ ] `web_search` 列、repository、提案とジョブの受け渡し
-- [ ] `generateScheduledResponse` の検索と、検索なしでの呼び直し
-- [ ] 投稿のリンクと、確認カードと詳細画面の表示とボタン
-- [ ] `propose_cron_job` の `web_search`
-- [ ] 単体テスト: ジョブの `web_search` とギルドの `web_search_enabled` の 4 通りの組のうち、両方が有効なときだけ server tool と検索の system message を送ること、非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクが最終ページに残ること、検索なしで答えた注記が先頭ページにあり 2 ページ目の送信の失敗やページの間の `version` の変更でも残ること、呼び直しのリクエストが server tool と検索の system message を持たず日時の文面が検索なしのものであること、`done` のジョブに切り替えのボタンが出ず更新も断ること、詳細画面でオンにするときに確定の前は値が変わらず費用の説明が出ること、旧形式の承認の custom_id では登録せずにカードを描き直すこと、e2e の確認カードの判定が新しい custom_id を認識すること
-- [ ] e2e シナリオ `cron-search` を足し、確認カードの判定を新しい custom_id に合わせ、AGENTS.md の End-to-end 節に実行条件を書く。`bun run e2e`、`bun run e2e search`、`bun run e2e cron`、`bun run e2e cron-search` を実行し、結果を PR に書く
-- [ ] 手動確認: 確認カードと詳細画面で「Web 検索」ボタンを押し、表示と保存された値が切り替わること、詳細画面のボタンが 2 行に並ぶことを確かめる
+- [x] 非ストリームの `chat()` で検索の記録と失敗を読む
+- [x] `web_search` 列、repository、提案とジョブの受け渡し
+- [x] `generateScheduledResponse` の検索と、検索なしでの呼び直し
+- [x] 投稿のリンクと、確認カードと詳細画面の表示とボタン
+- [x] `propose_cron_job` の `web_search`
+- [x] 単体テスト: ジョブの `web_search` とギルドの `web_search_enabled` の 4 通りの組のうち、両方が有効なときだけ server tool と検索の system message を送ること、非ストリームの検索の失敗が HTTP のエラーでも HTTP 200 の `status: "failed"` でも `WebSearchFailedError` になること、検索なしの呼び直しが成功したら連続失敗の数を 0 に戻すこと、呼び直しも失敗したら 1 回だけ数えること、ギルドの設定が無効でも検索以外の失敗は数えること、`[SILENT]` の応答は検索の記録や注記があっても投稿せずに成功とすること、呼び直しの間にジョブが編集されたら古い `version` の投稿と結果を保存しないこと、「今すぐ実行」が実行の記録を変えないこと、無料モデル限定のギルドで検索を使うジョブも同じ確認を通ること、`web_search` 列の追加が既存の DB で動き再実行しても壊れないこと、tool の `web_search: true` が提案に保存されること、編集の提案がジョブの値を引き継ぎ反転しなければ承認後も保つこと、反転と承認が競合したときに表示と違う値で登録しないこと、長い本文でもリンクが最終ページに残ること、検索なしで答えた注記が先頭ページにあり 2 ページ目の送信の失敗やページの間の `version` の変更でも残ること、呼び直しのリクエストが server tool と検索の system message を持たず日時の文面が検索なしのものであること、`done` のジョブに切り替えのボタンが出ず更新も断ること、詳細画面でオンにするときに確定の前は値が変わらず費用の説明が出ること、旧形式の承認の custom_id では登録せずにカードを描き直すこと、e2e の確認カードの判定が新しい custom_id を認識すること
+- [x] e2e シナリオ `cron-search` を足し、確認カードの判定を新しい custom_id に合わせ、AGENTS.md の End-to-end 節に実行条件を書く。`bun run e2e`、`bun run e2e search`、`bun run e2e cron`、`bun run e2e cron-search` を実行し、結果を PR に書く
+- [ ] 手動確認: 確認カードと詳細画面で「Web 検索」ボタンを押し、表示と保存された値が切り替わること、詳細画面のボタンが 1 行 5 個以内で複数行に並ぶことを確かめる
 - [ ] `docs/changes/cron-web-search/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
 - **非ストリームでの検索の失敗（未検証）**: ストリームでは、検索の失敗を `Server tool "openrouter:web_search" failed` で始まるエラーのイベントから `WebSearchFailedError` にしている（`openrouter.ts` の `throwForStreamErrorPayload`）。非ストリームで同じ失敗が HTTP 200 の `status: "failed"` と HTTP のエラーのどちらで返るかは確かめていない。実装では両方の経路で同じ文面を見て `WebSearchFailedError` にし、どちらかが違う形なら、検索なしの呼び直しが働かずにその実行が失敗として数えられる。
+- **検索なしで答え直すときの失敗**: `google/gemini-3.8-flash` は、「Web 検索で調べて」と明示したプロンプトを tool なしで送ると、HTTP 200 の `status: "failed"`（`server_error`）を返した（2026-09-30 に同じリクエストを 2 回送って再現）。検索に失敗して検索なしで答え直す経路や、ギルドの設定が無効なときの実行では、この種のプロンプトのジョブが失敗として数えられうる。モデル側の振る舞いなので、bot 側では対策しない。
 - **native 検索の費用**: エンジンが `native` か `auto` のとき、Anthropic 以外のモデルでは `max_uses` が効かず、1 回の実行の検索の費用に上限が無い。確認カードでそのことを示すが、無人で繰り返す実行の費用を bot 側では止められない。

@@ -338,7 +338,12 @@ describe("cron panel interactions", () => {
 
   test("only the proposer can approve, and a second press finds nothing", async () => {
     const id = await proposal("user");
-    const approve = cronCustomId({ action: "proposal", decision: "approve", proposalId: id });
+    const approve = cronCustomId({
+      action: "proposal",
+      decision: "approve",
+      proposalId: id,
+      shownWebSearch: false,
+    });
     const stranger = await press(approve, { user: "other" });
     expect(lastNotice(stranger)).toContain(CRON_PROPOSAL_UNAVAILABLE_MESSAGE.slice(0, 15));
     expect(repo.listJobs("guild")).toHaveLength(0);
@@ -349,12 +354,64 @@ describe("cron panel interactions", () => {
     expect(text(again.update.mock.calls[0]?.[0])).toContain("この提案は無効か期限切れです");
     expect(repo.listJobs("guild")).toHaveLength(1);
   });
+  test("old approval id redraws without registering", async () => {
+    const id = await proposal();
+    const fixture = await press(`cron:proposal:approve:${id}`);
+    expect(repo.listJobs("guild")).toHaveLength(0);
+    expect(text(fixture.update.mock.calls[0]?.[0])).toContain(`cron:proposal:approve:${id}:0`);
+  });
+  test("proposal search toggle changes the card and requires its shown value", async () => {
+    const created = await cron.createProposal(
+      {
+        guildId: "guild",
+        channelId: "channel",
+        userId: "user",
+        name: "daily",
+        prompt: "news",
+        schedule: "0 9 * * *",
+        silent: false,
+      },
+      manager,
+    );
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.value.proposal.id;
+    const first = await press(`cron:proposal:search:${id}:0`);
+    expect(repo.getProposal(id)?.webSearch).toBe(true);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain(`cron:proposal:approve:${id}:1`);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain("次回から 3 回分");
+    const stale = await press(`cron:proposal:search:${id}:0`);
+    expect(repo.getProposal(id)?.webSearch).toBe(true);
+    expect(lastNotice(stale)).toContain("提案が変更されました");
+  });
+  test("a search proposal explains when the guild setting is off", async () => {
+    const id = await proposal();
+    const first = await press(`cron:proposal:search:${id}:0`);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain("ギルドの設定が無効のため使われない");
+  });
+  test("job search enable requires confirmation and bumps version", async () => {
+    const job = await add();
+    const first = await press(`cron:search-on:${job.id}:${job.version}`);
+    expect(repo.getJob(job.id)?.webSearch).toBe(false);
+    expect(text(first.update.mock.calls[0]?.[0])).toContain("Web 検索をオンにする（確定）");
+    // The guild has search off here, so the cost is stated as conditional, as on the card.
+    expect(text(first.update.mock.calls[0]?.[0])).toContain(
+      "ギルドの設定で Web 検索が有効になると: 検索の費用",
+    );
+    const second = await press(`cron:confirm-search-on:${job.id}:${job.version}`);
+    expect(repo.getJob(job.id)).toMatchObject({ webSearch: true, version: job.version + 1 });
+    expect(text(second.update.mock.calls[0]?.[0])).toContain("Web 検索:** オン");
+  });
 
   test("a card whose proposal the ticker dropped loses its buttons, whoever presses it", async () => {
     const id = await proposal("user");
     repo.deleteExpiredProposals(Date.now() + 25 * 60 * 60_000);
     const fixture = await press(
-      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+      cronCustomId({
+        action: "proposal",
+        decision: "approve",
+        proposalId: id,
+        shownWebSearch: false,
+      }),
       { user: "other" },
     );
     const card = text(fixture.update.mock.calls[0]?.[0]);
@@ -371,7 +428,12 @@ describe("cron panel interactions", () => {
       return { ok: false, reason: "提案が無効か期限切れです。" };
     });
     const fixture = await press(
-      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+      cronCustomId({
+        action: "proposal",
+        decision: "approve",
+        proposalId: id,
+        shownWebSearch: false,
+      }),
     );
     approve.mockRestore();
     const card = text(fixture.editReply.mock.calls[0]?.[0]);
@@ -384,10 +446,15 @@ describe("cron panel interactions", () => {
   test("a proposer without permission cannot approve", async () => {
     const id = await proposal("user");
     const fixture = await press(
-      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+      cronCustomId({
+        action: "proposal",
+        decision: "approve",
+        proposalId: id,
+        shownWebSearch: false,
+      }),
       { manage: false },
     );
-    expect(lastNotice(fixture)).toContain("操作権限がありません");
+    expect(lastNotice(fixture)).toContain("サーバーの管理");
     expect(repo.listJobs("guild")).toHaveLength(0);
     expect(repo.getProposal(id)).not.toBeNull();
   });
@@ -402,6 +469,17 @@ describe("cron panel interactions", () => {
     expect(repo.listJobs("guild")).toHaveLength(0);
   });
 
+  test("an expired card forecasts no runs", async () => {
+    const id = await proposal("user");
+    db.query("UPDATE cron_proposals SET expires_at=1 WHERE id=?").run(id);
+    const fixture = await press(
+      cronCustomId({ action: "proposal", decision: "approve", proposalId: id }),
+    );
+    const card = text(fixture.update.mock.calls[0]?.[0]);
+    expect(card).toContain("期限切れのため取り消しました");
+    expect(card).not.toContain("次回");
+  });
+
   test("reject removes the proposal and the buttons", async () => {
     const id = await proposal("user");
     const fixture = await press(
@@ -409,6 +487,7 @@ describe("cron panel interactions", () => {
     );
     const card = text(fixture.update.mock.calls[0]?.[0]);
     expect(card).toContain("取り消しました");
+    expect(card).not.toContain("次回");
     expect(card).not.toContain("cron:proposal:");
     expect(repo.getProposal(id)).toBeNull();
   });

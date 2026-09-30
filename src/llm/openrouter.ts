@@ -692,12 +692,30 @@ export class OpenRouterClient implements ILLMClient {
         this.throwForFailedResponse(data);
       }
       const { model, provider, usage } = readResultMetadata(data);
+      const webSearch: WebSearchTrace = { calls: [], results: [] };
+      if (Array.isArray(data.output))
+        for (const item of data.output) {
+          if (!isPlainObject(item)) continue;
+          if (item.type === "openrouter:web_search") {
+            const call = readWebSearchCall(item);
+            if (call) webSearch.calls.push(call);
+          }
+          if (item.type === "message" && Array.isArray(item.content))
+            for (const part of item.content) {
+              if (!isPlainObject(part) || !Array.isArray(part.annotations)) continue;
+              for (const annotation of part.annotations) {
+                const link = readUrlCitation(annotation);
+                if (link) webSearch.results.push(link);
+              }
+            }
+        }
       return {
         ...(typeof data.id === "string" && { id: data.id }),
         ...(model !== undefined && { model }),
         ...(provider !== undefined && { provider }),
         choices: [{ message: { role: "assistant", content: readOutputText(data.output) } }],
         ...(usage !== undefined && { usage }),
+        ...(webSearch.calls.length > 0 || webSearch.results.length > 0 ? { webSearch } : {}),
       };
     } catch (err) {
       metrics.increment("openrouter.errors");
@@ -1324,6 +1342,9 @@ export class OpenRouterClient implements ILLMClient {
       ...(metadata && { metadata }),
     });
 
+    if (message.startsWith('Server tool "openrouter:web_search" failed'))
+      throw new WebSearchFailedError(message);
+
     if (response.status === 429) {
       const resetHeader = response.headers.get("X-RateLimit-Reset");
       let retryAfterSeconds: number | undefined;
@@ -1359,10 +1380,9 @@ export class OpenRouterClient implements ILLMClient {
       message,
       ...(metadata && { metadata }),
     });
+    if (message.startsWith('Server tool "openrouter:web_search" failed'))
+      throw new WebSearchFailedError(message);
     if (typeof code === "string") {
-      if (/^Server tool "openrouter:web_search" failed/u.test(message)) {
-        throw new WebSearchFailedError(message);
-      }
       throw new UnknownApiError(message);
     }
     throw this.buildApiError(code, message);

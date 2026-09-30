@@ -22,6 +22,7 @@ function job(overrides: Partial<CronJob> = {}): CronJob {
     kind: "cron",
     expr: "0 9 * * 1-5",
     silent: false,
+    webSearch: false,
     status: "active",
     nextRunAt: Date.parse("2026-09-30T00:00:00Z"),
     lastRunAt: null,
@@ -118,6 +119,14 @@ describe("cron panel custom ids", () => {
 });
 
 describe("cron panel layout", () => {
+  test("search enable confirmation shows billing before the value changes", () => {
+    const initial = buildCronDetail(job());
+    const confirm = buildCronDetail(job(), { confirmSearchOn: true, webSearchEngine: "native" });
+    expect(customIds(initial.components[0]?.toJSON())).toContain("cron:search-on:7:3");
+    expect(customIds(confirm.components[0]?.toJSON())).toContain("cron:confirm-search-on:7:3");
+    expect(JSON.stringify(confirm.components[0]?.toJSON())).toContain("上限が効きません");
+    expect(JSON.stringify(confirm.components[0]?.toJSON())).toContain("Web 検索:** オフ");
+  });
   test("a done job offers only run now, delete, and back", () => {
     expect(buttonLabels(buildCronDetail(job({ status: "done", nextRunAt: null })))).toEqual([
       "今すぐ実行",
@@ -127,8 +136,13 @@ describe("cron panel layout", () => {
   });
 
   test("active and paused jobs offer pause or resume, and delete asks to confirm", () => {
+    const active = buildCronDetail(job()).components[0]?.toJSON();
+    expect(
+      active?.components.filter((component) => component.type === ComponentType.ActionRow),
+    ).toHaveLength(2);
     expect(buttonLabels(buildCronDetail(job()))).toEqual([
       "編集",
+      "Web 検索をオンにする",
       "今すぐ実行",
       "停止",
       "削除",
@@ -136,6 +150,7 @@ describe("cron panel layout", () => {
     ]);
     expect(buttonLabels(buildCronDetail(job({ status: "paused", nextRunAt: null })))).toEqual([
       "編集",
+      "Web 検索をオンにする",
       "今すぐ実行",
       "再開",
       "削除",
@@ -196,6 +211,7 @@ describe("cron proposal card", () => {
       kind: "interval",
       expr: String(30 * 60_000),
       silent: false,
+      webSearch: false,
       expiresAt: Date.parse("2026-09-30T00:00:00Z"),
       createdAt: 0,
       ...overrides,

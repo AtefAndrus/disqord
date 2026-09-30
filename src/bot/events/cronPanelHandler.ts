@@ -7,6 +7,8 @@ import {
   type StringSelectMenuInteraction,
 } from "discord.js";
 import type { CronJob } from "../../db/repositories/cronRepository";
+import type { WebSearchEngine } from "../../llm/tools/webSearch";
+import { nextThreeRuns } from "../../services/cronSchedule";
 import type { ICronService } from "../../services/cronService";
 import {
   canManageGuildSettings,
@@ -87,6 +89,7 @@ export async function handleCronPanelInteraction(
   interaction: CronInteraction,
   cronService: ICronService,
   settingsService: ISettingsService,
+  webSearchEngine: WebSearchEngine = "perplexity",
 ): Promise<void> {
   const notice = async (message: string): Promise<void> => {
     const payload = toNoticePayload(buildErrorContainer(message, "定期実行"), true);
@@ -102,12 +105,39 @@ export async function handleCronPanelInteraction(
     }
     const actor = settingsActorFromInteraction(interaction);
     const userId = interaction.user.id;
+    const guildWebSearchEnabled = (await settingsService.getGuildSettings(guildId))
+      .webSearchEnabled;
+    const detail = (
+      job: CronJob,
+      options: { confirmDelete?: boolean; confirmSearchOn?: boolean } = {},
+    ): Payload => buildCronDetail(job, { ...options, guildWebSearchEnabled, webSearchEngine });
+    const card = (
+      proposal: Parameters<typeof buildCronProposalCard>[0],
+      options: Parameters<typeof buildCronProposalCard>[1],
+    ): Payload =>
+      buildCronProposalCard(proposal, {
+        ...options,
+        // Only a pending card forecasts runs; a rejected or expired one registers nothing.
+        nextRuns:
+          options.nextRuns ??
+          (options.state === "pending" ? nextThreeRuns(proposal, Date.now()) : undefined),
+        guildWebSearchEnabled,
+        webSearchEngine,
+      });
     if (interaction.isModalSubmit()) {
       if (action.action !== "modal-new" && action.action !== "modal-edit") {
         await notice(CRON_INVALID_MESSAGE);
         return;
       }
-      await submitModal(interaction, action, guildId, actor, cronService);
+      await submitModal(
+        interaction,
+        action,
+        guildId,
+        actor,
+        cronService,
+        webSearchEngine,
+        guildWebSearchEnabled,
+      );
       return;
     }
     const show = async (payload: Payload): Promise<void> => {
@@ -131,17 +161,49 @@ export async function handleCronPanelInteraction(
       }
       if (proposal.expiresAt <= Date.now()) {
         cronService.rejectProposal(proposal.id, guildId, userId);
-        await show(buildCronProposalCard(proposal, { state: "expired" }));
+        await show(card(proposal, { state: "expired" }));
         return;
       }
       if (action.decision === "reject") {
         cronService.rejectProposal(proposal.id, guildId, userId);
-        await show(buildCronProposalCard(proposal, { state: "rejected" }));
+        await show(card(proposal, { state: "rejected" }));
+        return;
+      }
+      const reason = await refusal(settingsService, guildId, actor);
+      if (reason) {
+        await notice(reason);
+        return;
+      }
+      if (action.decision === "search") {
+        const toggled = await cronService.toggleProposalWebSearch(
+          proposal.id,
+          guildId,
+          userId,
+          actor,
+          action.shownWebSearch === true,
+        );
+        const current = toggled.ok
+          ? toggled.value
+          : cronService.getProposal(proposal.id, guildId, userId);
+        if (current) await show(card(current, { state: "pending" }));
+        else await show(buildCronProposalGoneCard());
+        if (!toggled.ok) await notice(toggled.reason);
+        return;
+      }
+      if (action.shownWebSearch === undefined) {
+        await show(card(proposal, { state: "pending" }));
+        await notice("確認カードを更新しました。内容を確かめて登録を押し直してください。");
         return;
       }
       // Approval re-reads the destination and the proposer over REST first.
       await interaction.deferUpdate();
-      const approved = await cronService.approveProposal(proposal.id, guildId, userId, actor);
+      const approved = await cronService.approveProposal(
+        proposal.id,
+        guildId,
+        userId,
+        actor,
+        action.shownWebSearch,
+      );
       if (!approved.ok) {
         // The proposal can lapse or be swept while the approval waits on REST; the card then
         // gets the same rewrite a press after expiry gets, so no dead buttons stay behind.
@@ -149,16 +211,19 @@ export async function handleCronPanelInteraction(
         if (!current) await show(buildCronProposalGoneCard());
         else if (current.expiresAt <= Date.now()) {
           cronService.rejectProposal(current.id, guildId, userId);
-          await show(buildCronProposalCard(current, { state: "expired" }));
-        }
+          await show(card(current, { state: "expired" }));
+        } else await show(card(current, { state: "pending" }));
         await notice(approved.reason);
         return;
       }
       await show(
-        buildCronProposalCard(proposal, {
-          state: "approved",
-          nextRuns: approved.value.nextRunAt === null ? [] : [approved.value.nextRunAt],
-        }),
+        card(
+          { ...proposal, webSearch: approved.value.webSearch },
+          {
+            state: "approved",
+            nextRuns: approved.value.nextRunAt === null ? [] : [approved.value.nextRunAt],
+          },
+        ),
       );
       return;
     }
@@ -203,7 +268,7 @@ export async function handleCronPanelInteraction(
         await notice(CRON_INVALID_MESSAGE);
         return;
       }
-      await show(buildCronDetail(job));
+      await show(detail(job));
       return;
     }
     if (!interaction.isButton()) {
@@ -216,20 +281,46 @@ export async function handleCronPanelInteraction(
       return;
     }
     if (action.action === "view") {
-      await show(buildCronDetail(job));
+      await show(detail(job));
       return;
     }
     if (job.version !== action.version) {
-      await show(buildCronDetail(job));
+      await show(detail(job));
       await notice(CRON_STALE_MESSAGE);
       return;
     }
     const redraw = async (reason: string): Promise<void> => {
       const current = await cronService.getJob(action.jobId, guildId, userId, actor);
-      if (current) await show(buildCronDetail(current));
+      if (current) await show(detail(current));
       await notice(reason);
     };
     switch (action.action) {
+      case "search-on": {
+        if (job.status === "done") {
+          await notice(CRON_INVALID_MESSAGE);
+          return;
+        }
+        const reason = await refusal(settingsService, guildId, actor);
+        if (reason) {
+          await notice(reason);
+          return;
+        }
+        await show(detail(job, { confirmSearchOn: true }));
+        return;
+      }
+      case "confirm-search-on":
+      case "search-off": {
+        const result = await cronService.setJobWebSearch(
+          job.id,
+          guildId,
+          actor,
+          job.version,
+          action.action === "confirm-search-on",
+        );
+        if (result.ok) await show(detail(result.value));
+        else await redraw(result.reason);
+        return;
+      }
       case "edit": {
         if (job.status === "done") {
           await notice(CRON_INVALID_MESSAGE);
@@ -257,18 +348,18 @@ export async function handleCronPanelInteraction(
           const current = await cronService.getJob(job.id, guildId, userId, actor);
           if (!current) await notice(CRON_INVALID_MESSAGE);
           else if (current.version !== job.version) {
-            await show(buildCronDetail(current));
+            await show(detail(current));
             await notice(CRON_STALE_MESSAGE);
           } else await notice(`実行できませんでした: ${result.reason}`);
           return;
         }
         const current = await cronService.getJob(job.id, guildId, userId, actor);
-        if (current) await show(buildCronDetail(current));
+        if (current) await show(detail(current));
         return;
       }
       case "pause": {
         const result = await cronService.pauseJob(job.id, guildId, userId, actor, job.version);
-        if (result.ok) await show(buildCronDetail(result.value));
+        if (result.ok) await show(detail(result.value));
         else await redraw(result.reason);
         return;
       }
@@ -279,12 +370,12 @@ export async function handleCronPanelInteraction(
           return;
         }
         const result = await cronService.resumeJob(job.id, guildId, actor, job.version);
-        if (result.ok) await show(buildCronDetail(result.value));
+        if (result.ok) await show(detail(result.value));
         else await redraw(result.reason);
         return;
       }
       case "delete":
-        await show(buildCronDetail(job, { confirmDelete: true }));
+        await show(detail(job, { confirmDelete: true }));
         return;
       case "confirm-delete": {
         if (await cronService.deleteJob(job.id, guildId, userId, actor, job.version)) {
@@ -293,7 +384,7 @@ export async function handleCronPanelInteraction(
         }
         const current = await cronService.getJob(job.id, guildId, userId, actor);
         if (current) {
-          await show(buildCronDetail(current));
+          await show(detail(current));
           await notice(CRON_STALE_MESSAGE);
         } else await notice(CRON_INVALID_MESSAGE);
         return;
@@ -315,6 +406,8 @@ async function submitModal(
   guildId: string,
   actor: SettingsActor,
   cronService: ICronService,
+  webSearchEngine: WebSearchEngine,
+  guildWebSearchEnabled: boolean,
 ): Promise<void> {
   const userId = interaction.user.id;
   /**
@@ -337,7 +430,9 @@ async function submitModal(
     );
     // A modal opened from the detail panel can redraw that panel in place.
     if (changed && interaction.isFromMessage()) {
-      await interaction.update(buildCronDetail(changed));
+      await interaction.update(
+        buildCronDetail(changed, { webSearchEngine, guildWebSearchEnabled }),
+      );
       await interaction.followUp(payload);
     } else await interaction.reply(payload);
     return;
@@ -382,6 +477,8 @@ async function submitModal(
     buildCronProposalCard(created.value.proposal, {
       state: "pending",
       nextRuns: created.value.nextRuns,
+      guildWebSearchEnabled,
+      webSearchEngine,
     }),
   );
 }

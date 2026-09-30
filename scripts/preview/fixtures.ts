@@ -156,6 +156,7 @@ export function buildFixtures(): IFixture[] {
       kind: "cron",
       expr: "0 9 * * 1-5",
       silent: false,
+      webSearch: false,
       status: "active",
       nextRunAt: now + 3 * 3_600_000,
       lastRunAt: now - 21 * 3_600_000,
@@ -175,6 +176,7 @@ export function buildFixtures(): IFixture[] {
       kind: "cron",
       expr: "0 17 * * 5",
       silent: true,
+      webSearch: false,
       status: "paused",
       nextRunAt: null,
       lastRunAt: now - 6 * 86_400_000,
@@ -194,6 +196,7 @@ export function buildFixtures(): IFixture[] {
       kind: "once",
       expr: new Date(now - 86_400_000).toISOString(),
       silent: false,
+      webSearch: false,
       status: "done",
       nextRunAt: null,
       lastRunAt: now - 86_400_000,
@@ -230,6 +233,7 @@ export function buildFixtures(): IFixture[] {
     kind: "cron",
     expr: "0 9 * * 1-5",
     silent: false,
+    webSearch: false,
     expiresAt: now + 86_400_000,
     createdAt: now,
   };
@@ -253,6 +257,52 @@ export function buildFixtures(): IFixture[] {
         state: "approved",
         nextRuns: nextThreeRuns(proposal, now).slice(0, 1),
       }).components,
+    ),
+  });
+  fixtures.push({
+    id: "cron-proposal-search-on",
+    title: "定期実行: 確認カード（Web 検索オン）",
+    note: "検索の課金説明を表示する",
+    messages: packContainers(
+      buildCronProposalCard(
+        { ...proposal, webSearch: true },
+        {
+          state: "pending",
+          nextRuns: nextThreeRuns(proposal, now),
+          guildWebSearchEnabled: true,
+        },
+      ).components,
+    ),
+  });
+  fixtures.push({
+    id: "cron-proposal-search-guild-off",
+    title: "定期実行: 確認カード（ギルドの Web 検索オフ）",
+    note: "検索が使われないことを表示する",
+    messages: packContainers(
+      buildCronProposalCard(
+        { ...proposal, webSearch: true },
+        {
+          state: "pending",
+          nextRuns: nextThreeRuns(proposal, now),
+          guildWebSearchEnabled: false,
+        },
+      ).components,
+    ),
+  });
+  const previewCronJob = cronJobs[0];
+  if (!previewCronJob) throw new Error("cron preview job is missing");
+  fixtures.push({
+    id: "cron-detail-search-confirm",
+    title: "/cron · 詳細（Web 検索オンの確認）",
+    note: "検索の課金説明と確定ボタンを表示する",
+    messages: packContainers(
+      buildCronDetail(
+        { ...previewCronJob, webSearch: false },
+        {
+          confirmSearchOn: true,
+          guildWebSearchEnabled: true,
+        },
+      ).components,
     ),
   });
   fixtures.push({

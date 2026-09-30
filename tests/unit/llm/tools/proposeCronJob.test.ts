@@ -45,7 +45,13 @@ describe("propose_cron_job tool", () => {
   test("validates arguments", () => {
     expect(tool.validate({ name: "n", schedule: "30m", prompt: "p" })).toEqual({
       ok: true,
-      value: { name: "n", schedule: "30m", prompt: "p", postOnlyWhenNotable: false },
+      value: {
+        name: "n",
+        schedule: "30m",
+        prompt: "p",
+        postOnlyWhenNotable: false,
+        webSearch: false,
+      },
     });
     expect(tool.validate({ name: "", schedule: "30m", prompt: "p" }).ok).toBe(false);
     expect(tool.validate({ name: "x".repeat(51), schedule: "30m", prompt: "p" }).ok).toBe(false);
@@ -125,6 +131,30 @@ describe("cron tool session", () => {
     });
     expect(proposals()).toBe(1);
     expect(reply).toHaveBeenCalledTimes(1);
+  });
+  test("tool web_search true reaches the saved proposal", async () => {
+    const tool = createProposeCronJobTool();
+    const parsed = tool.validate({
+      name: "news",
+      schedule: "30m",
+      prompt: "news",
+      web_search: true,
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const session = new CronToolSession(trigger, cron, settings);
+    expect(JSON.parse(await session.propose(parsed.value, new AbortController().signal)).ok).toBe(
+      true,
+    );
+    const stored = db
+      .query<{ web_search: number }, []>("SELECT web_search FROM cron_proposals")
+      .get();
+    expect(stored?.web_search).toBe(1);
+    // The guild has web search off: the first card says the search will not run yet, and
+    // still shows what it would cost, since the guild can turn search on without a new card.
+    const card = JSON.stringify(reply.mock.calls[0]?.[0]);
+    expect(card).toContain("ギルドの設定が無効のため使われない");
+    expect(card).toContain("ギルドの設定で Web 検索が有効になると: 検索の費用");
   });
 
   test("refused calls do not count, so the model can call again", async () => {

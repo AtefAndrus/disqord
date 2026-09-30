@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PermissionFlagsBits } from "discord.js";
-import { cronPreconditions, type ScenarioEnv } from "../../../scripts/e2e/cron";
+import { cronPreconditions, isProposalCard, type ScenarioEnv } from "../../../scripts/e2e/cron";
 import {
   costOf,
   type DiscordMessage,
@@ -70,6 +70,12 @@ function streamingPage(id: string, body: string): DiscordMessage {
 }
 
 const env: ScenarioEnv = { databasePath: ":memory:", testerBotId: "tester" };
+
+test("cron e2e recognises approval cards with the shown search value", () => {
+  expect(isProposalCard({ components: [{ custom_id: "cron:proposal:approve:17:1" }] })).toBe(true);
+  expect(isProposalCard({ components: [{ custom_id: "cron:proposal:approve:17:0" }] })).toBe(true);
+  expect(isProposalCard({ components: [{ custom_id: "cron:proposal:approve:17" }] })).toBe(false);
+});
 
 function check(name: string, messages: DiscordMessage[]): string[] {
   const scenario = SCENARIOS.find((s) => s.name === name);
