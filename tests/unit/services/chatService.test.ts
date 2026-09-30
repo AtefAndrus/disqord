@@ -146,9 +146,11 @@ test("scheduled search failure retries without tool and with no-search date mess
 });
 
 test("scheduled search generation and schedule conversion never call a paid default model in a free-only guild", async () => {
+  // Search on for both the guild and the job, so the check is shown to come before the search branch.
   const { chatService, llmClient } = createFixture({
     freeModelsOnly: true,
     defaultModel: "model-2",
+    webSearchEnabled: true,
   });
   const job: CronJob = {
     id: 1,

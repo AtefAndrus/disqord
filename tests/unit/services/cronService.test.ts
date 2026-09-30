@@ -16,6 +16,10 @@ import {
 } from "../../../src/services/cronService";
 import { ModelService } from "../../../src/services/modelService";
 import { SettingsService } from "../../../src/services/settingsService";
+import {
+  MAX_TOTAL_BYTES_PER_MESSAGE,
+  MAX_TOTAL_CHARS_PER_MESSAGE,
+} from "../../../src/utils/chatContainerBuilder";
 import { createMockLLMClient, createMockTweetService } from "../../helpers/mockFactories";
 
 const START = Date.parse("2026-09-29T00:00:00Z");
@@ -135,6 +139,31 @@ describe("cron service", () => {
     expect(first).toContain("定期実行「news」\\n検索なしで回答しました");
     expect(last).toContain("-# 検索結果");
     expect(last).toContain("https://example.com");
+  });
+  test("links that do not fit the last page split the body again within the page limits", () => {
+    const texts = (node: unknown): string[] => {
+      if (Array.isArray(node)) return node.flatMap(texts);
+      if (typeof node !== "object" || node === null) return [];
+      const record = node as Record<string, unknown>;
+      return [
+        ...(typeof record.content === "string" ? [record.content] : []),
+        ...Object.values(record).flatMap(texts),
+      ];
+    };
+    const links = `-# 検索結果\n${Array.from({ length: 5 }, (_, i) => `- [${"t".repeat(80)} (example.com)](<https://example.com/${"p".repeat(250)}${i}>)`).join("\n")}`;
+    const metadata = { showDetails: false };
+    // Two pages without links, the second nearly full, so the links cannot join it.
+    const body = "漢".repeat(5_500);
+    expect(buildScheduledPages("news", body, "free/model", metadata)).toHaveLength(2);
+    const pages = buildScheduledPages("news", body, "free/model", metadata, { links });
+    for (const page of pages) {
+      const content = texts(page.toJSON()).join("");
+      expect(content.length).toBeLessThanOrEqual(MAX_TOTAL_CHARS_PER_MESSAGE);
+      expect(new TextEncoder().encode(content).length).toBeLessThanOrEqual(
+        MAX_TOTAL_BYTES_PER_MESSAGE,
+      );
+    }
+    expect(JSON.stringify(pages.at(-1)?.toJSON())).toContain("https://example.com/");
   });
   test("body fitting in five pages without search still fits with short links", () => {
     const metadata = { showDetails: false };

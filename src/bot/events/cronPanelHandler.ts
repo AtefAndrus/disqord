@@ -117,7 +117,10 @@ export async function handleCronPanelInteraction(
     ): Payload =>
       buildCronProposalCard(proposal, {
         ...options,
-        nextRuns: options.nextRuns ?? nextThreeRuns(proposal, Date.now()),
+        // Only a pending card forecasts runs; a rejected or expired one registers nothing.
+        nextRuns:
+          options.nextRuns ??
+          (options.state === "pending" ? nextThreeRuns(proposal, Date.now()) : undefined),
         guildWebSearchEnabled,
         webSearchEngine,
       });
@@ -474,6 +477,7 @@ async function submitModal(
     buildCronProposalCard(created.value.proposal, {
       state: "pending",
       nextRuns: created.value.nextRuns,
+      guildWebSearchEnabled,
       webSearchEngine,
     }),
   );

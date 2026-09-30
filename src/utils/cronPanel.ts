@@ -413,7 +413,8 @@ export function buildCronProposalCard(
     `**投稿の条件:** ${deliveryLabel(proposal.silent)}`,
     `**Web 検索:** ${proposal.webSearch ? `使う${options.guildWebSearchEnabled === false ? "（ギルドの設定が無効のため使われない）" : ""}` : "使わない"}`,
     // On its own line: the billing text carries its own parentheses.
-    ...(proposal.webSearch
+    // Billing is left out while the guild has search off: nothing would be billed.
+    ...(proposal.webSearch && options.guildWebSearchEnabled !== false
       ? [`-# ${describeSearchBilling(options.webSearchEngine ?? "perplexity")}`]
       : []),
     `**提案者:** <@${proposal.userId}>`,

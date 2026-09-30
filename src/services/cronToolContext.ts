@@ -92,6 +92,7 @@ export class CronToolSession implements CronToolContext {
           ...buildCronProposalCard(proposal, {
             state: "pending",
             nextRuns,
+            guildWebSearchEnabled: settings.webSearchEnabled,
             webSearchEngine: this.webSearchEngine,
           }),
           allowedMentions: { parse: [], repliedUser: false },

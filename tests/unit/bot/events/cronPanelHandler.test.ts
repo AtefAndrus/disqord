@@ -472,6 +472,7 @@ describe("cron panel interactions", () => {
     );
     const card = text(fixture.update.mock.calls[0]?.[0]);
     expect(card).toContain("取り消しました");
+    expect(card).not.toContain("次回");
     expect(card).not.toContain("cron:proposal:");
     expect(repo.getProposal(id)).toBeNull();
   });

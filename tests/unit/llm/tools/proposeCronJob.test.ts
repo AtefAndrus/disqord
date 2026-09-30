@@ -150,6 +150,10 @@ describe("cron tool session", () => {
       .query<{ web_search: number }, []>("SELECT web_search FROM cron_proposals")
       .get();
     expect(stored?.web_search).toBe(1);
+    // The guild has web search off, so the first card already says the search will not run.
+    const card = JSON.stringify(reply.mock.calls[0]?.[0]);
+    expect(card).toContain("ギルドの設定が無効のため使われない");
+    expect(card).not.toContain("検索の費用");
   });
 
   test("refused calls do not count, so the model can call again", async () => {
