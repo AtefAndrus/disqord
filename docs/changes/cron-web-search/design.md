@@ -98,4 +98,5 @@ summary: "定期実行のジョブごとに Web 検索を使うかを選べる�
 ## Open Questions / Risks
 
 - **非ストリームでの検索の失敗（未検証）**: ストリームでは、検索の失敗を `Server tool "openrouter:web_search" failed` で始まるエラーのイベントから `WebSearchFailedError` にしている（`openrouter.ts` の `throwForStreamErrorPayload`）。非ストリームで同じ失敗が HTTP 200 の `status: "failed"` と HTTP のエラーのどちらで返るかは確かめていない。実装では両方の経路で同じ文面を見て `WebSearchFailedError` にし、どちらかが違う形なら、検索なしの呼び直しが働かずにその実行が失敗として数えられる。
+- **検索なしで答え直すときの失敗**: `google/gemini-3.8-flash` は、「Web 検索で調べて」と明示したプロンプトを tool なしで送ると、HTTP 200 の `status: "failed"`（`server_error`）を返した（2026-09-30 に同じリクエストを 2 回送って再現）。検索に失敗して検索なしで答え直す経路や、ギルドの設定が無効なときの実行では、この種のプロンプトのジョブが失敗として数えられうる。モデル側の振る舞いなので、bot 側では対策しない。
 - **native 検索の費用**: エンジンが `native` か `auto` のとき、Anthropic 以外のモデルでは `max_uses` が効かず、1 回の実行の検索の費用に上限が無い。確認カードでそのことを示すが、無人で繰り返す実行の費用を bot 側では止められない。
