@@ -265,7 +265,7 @@ export function buildCronDetail(
     `**投稿の条件:** ${deliveryLabel(job.silent)}`,
     `**Web 検索:** ${job.webSearch ? (options.guildWebSearchEnabled === false ? "オン（ギルドの設定が無効のため使われない）" : "オン") : "オフ"}`,
     ...(options.confirmSearchOn
-      ? [describeSearchBilling(options.webSearchEngine ?? "perplexity")]
+      ? [searchBillingLine(options.webSearchEngine, options.guildWebSearchEnabled)]
       : []),
     `**登録者:** <@${job.userId}>`,
     ...(job.lastError ? [`**直近のエラー:** ${job.lastError}`] : []),
@@ -313,6 +313,19 @@ export function buildCronDetail(
       new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(5)),
     );
   return payload(container);
+}
+
+/**
+ * The billing text shown before search is turned on, on the proposal card and the detail
+ * screen alike. While the guild has search off it is prefixed rather than dropped: turning
+ * the guild setting on later starts billing with no further confirmation.
+ */
+function searchBillingLine(
+  engine: WebSearchEngine | undefined,
+  guildWebSearchEnabled: boolean | undefined,
+): string {
+  const prefix = guildWebSearchEnabled === false ? "ギルドの設定で Web 検索が有効になると: " : "";
+  return `${prefix}${describeSearchBilling(engine ?? "perplexity")}`;
 }
 
 export function buildCronModal(job?: CronJob, defaultChannelId?: string): ModalBuilder {
@@ -412,13 +425,9 @@ export function buildCronProposalCard(
     `**配信先:** <#${proposal.channelId}>`,
     `**投稿の条件:** ${deliveryLabel(proposal.silent)}`,
     `**Web 検索:** ${proposal.webSearch ? `使う${options.guildWebSearchEnabled === false ? "（ギルドの設定が無効のため使われない）" : ""}` : "使わない"}`,
-    // On its own line: the billing text carries its own parentheses. It stays while the guild
-    // has search off, because approving here is the only time the job's cost is accepted and
-    // turning the guild setting on later starts billing without another card.
+    // On its own line: the billing text carries its own parentheses.
     ...(proposal.webSearch
-      ? [
-          `-# ${options.guildWebSearchEnabled === false ? "ギルドの設定で Web 検索が有効になると: " : ""}${describeSearchBilling(options.webSearchEngine ?? "perplexity")}`,
-        ]
+      ? [`-# ${searchBillingLine(options.webSearchEngine, options.guildWebSearchEnabled)}`]
       : []),
     `**提案者:** <@${proposal.userId}>`,
   ];

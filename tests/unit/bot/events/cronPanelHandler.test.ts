@@ -393,6 +393,10 @@ describe("cron panel interactions", () => {
     const first = await press(`cron:search-on:${job.id}:${job.version}`);
     expect(repo.getJob(job.id)?.webSearch).toBe(false);
     expect(text(first.update.mock.calls[0]?.[0])).toContain("Web 検索をオンにする（確定）");
+    // The guild has search off here, so the cost is stated as conditional, as on the card.
+    expect(text(first.update.mock.calls[0]?.[0])).toContain(
+      "ギルドの設定で Web 検索が有効になると: 検索の費用",
+    );
     const second = await press(`cron:confirm-search-on:${job.id}:${job.version}`);
     expect(repo.getJob(job.id)).toMatchObject({ webSearch: true, version: job.version + 1 });
     expect(text(second.update.mock.calls[0]?.[0])).toContain("Web 検索:** オン");
