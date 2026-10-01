@@ -17,7 +17,7 @@ summary: "ピン留め一覧、チャンネル情報、サーバーのイベン�
 
 - 前提（実装済み）: [discord-tool](https://github.com/AtefAndrus/disqord/blob/860bd5bdbc5aa78f2259aa35dec0f49f1d06af37/docs/changes/discord-tool/design.md) — 副作用のある Discord 操作の認可（`discordActionService` の共通の確認）、1 応答あたりの上限、「Discord 操作」の設定。イベントの作成はこの仕組みに載せる
 - 前提（実装済み）: [conversation-context](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/conversation-context/design.md) — 会話の窓、`read_earlier_messages` と `view_attachment`、窓の参照（`m7`）、応答ごとの REST の上限
-- 関連: [poll-results](../poll-results/design.md) — 投票の結果は tool にせず窓で扱う
+- 関連: [poll-results](https://github.com/AtefAndrus/disqord/blob/8e4ed35d5312b771bd26dfac45f5efb1c0193ca7/docs/changes/poll-results/design.md) — 投票の結果は tool にせず窓で扱う
 
 ## Goals / Non-Goals
 

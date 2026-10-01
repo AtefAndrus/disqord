@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.11.0] - 2026-10-01
+
+
+### Added
+
+- 会話の中の投票と締め切りの結果をモデルに渡す (#193)
+- 定期実行のジョブで Web 検索を使えるようにする (#195)
+
+
+### Documentation
+
+- 定期実行での Web 検索の design を追加する (#194)
+
+
 ## [1.10.0] - 2026-09-29
 
 
@@ -523,6 +537,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.11.0]: https://github.com/AtefAndrus/disqord/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/AtefAndrus/disqord/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/AtefAndrus/disqord/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/AtefAndrus/disqord/compare/v1.7.0...v1.8.0
