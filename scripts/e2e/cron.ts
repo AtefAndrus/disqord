@@ -116,6 +116,25 @@ export async function cronSearchPreconditions(
   return problems;
 }
 
+/**
+ * The error the bot saved for the inserted job once its run failed. Without it a failed run
+ * only shows as the scenario deadline passing, which hides why the post never came.
+ */
+function runFailure(env: ScenarioEnv, jobId: number | bigint): string | undefined {
+  const db = new Database(env.databasePath, { readonly: true });
+  try {
+    return (
+      db
+        .query<{ lastError: string | null }, [number | bigint]>(
+          "SELECT last_error AS lastError FROM cron_jobs WHERE id=?",
+        )
+        .get(jobId)?.lastError ?? undefined
+    );
+  } finally {
+    db.close();
+  }
+}
+
 export async function verifyCronSearch(
   triggerId: string,
   channelId: string,
@@ -129,6 +148,7 @@ export async function verifyCronSearch(
   const now = Date.now();
   const runAt = now + 60_000;
   const db = new Database(env.databasePath);
+  let jobId: number | bigint;
   try {
     const inserted = db
       .query(`INSERT INTO cron_jobs (guild_id,channel_id,user_id,name,prompt,kind,expr,silent,web_search,status,next_run_at,created_at,updated_at)
@@ -148,6 +168,7 @@ export async function verifyCronSearch(
       db.query("DELETE FROM cron_jobs WHERE id=?").run(inserted.lastInsertRowid);
       return ["interrupted after the job was inserted; the job was deleted"];
     }
+    jobId = inserted.lastInsertRowid;
   } finally {
     db.close();
   }
@@ -188,6 +209,8 @@ export async function verifyCronSearch(
       return [];
     if (headingSeenAt !== undefined && Date.now() - headingSeenAt > 30_000)
       return ["scheduled post has no search result links"];
+    const failure = runFailure(env, jobId);
+    if (failure && headingSeenAt === undefined) return [`the scheduled run failed: ${failure}`];
     await Bun.sleep(DELIVERY_POLL_MS);
   }
 }
@@ -222,6 +245,7 @@ export async function verifyCron(
   const now = Date.now();
   const runAt = now + 60_000;
   const db = new Database(env.databasePath);
+  let jobId: number | bigint;
   try {
     const inserted = db
       .query(`INSERT INTO cron_jobs
@@ -242,6 +266,7 @@ export async function verifyCron(
       db.query("DELETE FROM cron_jobs WHERE id=?").run(inserted.lastInsertRowid);
       return [...problems, "interrupted after the job was inserted; the job was deleted"];
     }
+    jobId = inserted.lastInsertRowid;
   } finally {
     db.close();
   }
@@ -256,6 +281,8 @@ export async function verifyCron(
         message.author?.id === botId && JSON.stringify(message.components ?? []).includes(heading),
     );
     if (delivered) return problems;
+    const failure = runFailure(env, jobId);
+    if (failure) return [...problems, `the scheduled run failed: ${failure}`];
     await Bun.sleep(DELIVERY_POLL_MS);
   }
 }

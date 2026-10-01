@@ -1373,9 +1373,12 @@ export class OpenRouterClient implements ILLMClient {
    */
   private throwForStreamErrorPayload(
     payload: NonNullable<OpenRouterErrorResponse["error"]>,
+    // A `status:"failed"` result (the non-stream `chat()` or a stream's `response.failed`)
+    // passes its own label, so a scheduled job's failure is not read as a stream error event.
+    logEvent = "OpenRouter stream error event",
   ): never {
     const { code, message, metadata } = payload;
-    logger.error("OpenRouter stream error event", {
+    logger.error(logEvent, {
       code,
       message,
       ...(metadata && { metadata }),
@@ -1414,7 +1417,10 @@ export class OpenRouterClient implements ILLMClient {
         `Failed response carries a malformed error: ${JSON.stringify(error)}`,
       );
     }
-    this.throwForStreamErrorPayload(error as NonNullable<OpenRouterErrorResponse["error"]>);
+    this.throwForStreamErrorPayload(
+      error as NonNullable<OpenRouterErrorResponse["error"]>,
+      "OpenRouter response failed",
+    );
   }
 
   /** Maps an OpenRouter error code + message to the corresponding AppError subclass. */
