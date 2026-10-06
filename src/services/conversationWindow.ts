@@ -9,6 +9,7 @@ import {
   formatMessageForTool,
   normalizeBotPoll,
   normalizeBotReply,
+  normalizeExternalBotMessage,
   normalizeHumanMessage,
   normalizePollResultNotice,
 } from "../utils/discordMessageNormalizer";
@@ -122,6 +123,7 @@ interface ResponseState {
 export interface ConversationWindowContext {
   messages: NormalizedMessage[];
   replyTarget?: NormalizedMessage;
+  replyTargetRef?: string;
   sessionId: string;
   windowStartMessageId: string;
   toolContext: ConversationToolContext;
@@ -486,17 +488,20 @@ export class ConversationWindowService {
         result.replyTarget && !externalDeletions.has(result.replyTarget.exchangeId)
           ? result.replyTarget
           : undefined;
-      const hasReplyTarget = replyTargetResult
-        ? messages.some((message) => message.id === replyTargetResult.id)
-        : false;
+      const windowReplyTarget = replyTargetResult
+        ? messages.find((message) => message.id === replyTargetResult.id)
+        : undefined;
       const replyTarget =
-        replyTargetResult && !hasReplyTarget
+        replyTargetResult && !windowReplyTarget
           ? this.addShown(responseState, replyTargetResult)
           : undefined;
       responseState.replyTarget = replyTarget;
       return {
         messages,
         ...(replyTarget && { replyTarget }),
+        ...((windowReplyTarget ?? replyTarget)?.ref && {
+          replyTargetRef: (windowReplyTarget ?? replyTarget)?.ref,
+        }),
         sessionId: result.sessionId,
         windowStartMessageId: result.startMessageId,
         toolContext: {
@@ -598,6 +603,7 @@ export class ConversationWindowService {
         externalDeletions,
         signal,
         fetchedMessages,
+        now - WINDOW_SHRUNK_AGE_MS,
       );
       if (signal.aborted) return null;
       if (reachesShrunkBoundary(eligible, now) || budget.used >= budget.limit) break;
@@ -614,6 +620,7 @@ export class ConversationWindowService {
       externalDeletions,
       signal,
       fetchedMessages,
+      now - WINDOW_SHRUNK_AGE_MS,
     );
     if (signal.aborted) return null;
     const replyTarget = await this.findReplyTarget(
@@ -743,12 +750,15 @@ export class ConversationWindowService {
     externalDeletions: MessageEligibilityExternalDeletionSet,
     signal?: AbortSignal,
     fetchedMessages: MessageEligibilityFetchedMessages = new Map(),
+    minTimestampMs?: number,
   ): Promise<NormalizedMessage[]> {
     const sorted = sortedMessages(rawMessages);
     const known = new Map(sorted.map((message) => [message.id, message]));
     const entries: NormalizedMessage[] = [];
     const seenReplies = new Set<string>();
     for (const message of sorted) {
+      // 窓外の返答検証で期限を消費しないが、古い trigger/pages は known に残して検証に使う。
+      if (minTimestampMs !== undefined && messageTime(message) < minTimestampMs) continue;
       const result = await this.eligibility.evaluate(
         message,
         {
@@ -829,6 +839,16 @@ export class ConversationWindowService {
       return undefined;
     }
     if (target.status !== "found") return undefined;
+    const referenced = target.message;
+    if (
+      referenced.author.id !== input.botUserId &&
+      (referenced.author.bot === true || referenced.webhook_id !== undefined) &&
+      (referenced.type === undefined || referenced.type === 0 || referenced.type === 19)
+    ) {
+      return externalDeletions.has(referenced.id)
+        ? undefined
+        : normalizeExternalBotMessage(referenced, this.now());
+    }
     const knownMessages = new Map(rawMessages.map((message) => [message.id, message]));
     knownMessages.set(target.message.id, target.message);
     const result = await this.eligibility.evaluate(

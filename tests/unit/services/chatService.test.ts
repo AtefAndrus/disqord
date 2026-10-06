@@ -329,6 +329,229 @@ describe("ChatService", () => {
     setSystemTime();
   });
 
+  test.each([false, true])(
+    "explicit reply ref and tweet expansion include only the target (inside window %s)",
+    async (inside) => {
+      const fixture = createFixture({ historyEnabled: true });
+      const conversation = conversationContext();
+      const prior = conversation.messages[0];
+      if (!prior) throw new Error("prior fixture missing");
+      const target = {
+        ...prior,
+        id: "target",
+        ref: "m3",
+        text: "https://fixupx.com/example/status/21",
+      };
+      prior.text = "https://x.com/example/status/99";
+      if (inside) conversation.messages.push(target);
+      else conversation.replyTarget = target;
+      conversation.replyTargetRef = "m3";
+      fixture.tweetService.extractTweetIds = mock((text: string) =>
+        text.includes("status/21") ? ["21"] : [],
+      );
+      fixture.tweetService.expandTweets = mock(async () => ({
+        status: "expanded" as const,
+        parts: [{ type: "text" as const, text: "expanded target" }],
+        textParts: [{ type: "text" as const, text: "expanded target" }],
+        imageParts: [],
+      }));
+      const text = "https://twitter.com/example/status/20 explain";
+      await fixture.chatService.generateChatResponse(
+        "guild",
+        { text, conversation, authorLabel: "Current" },
+        "reply-x",
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      expect(fixture.tweetService.extractTweetIds).toHaveBeenCalledWith(`${text}\n${target.text}`);
+      expect(fixture.tweetService.expandTweets).toHaveBeenCalledTimes(1);
+      expect(fixture.tweetService.expandTweets.mock.calls[0]?.[0]).toBe(`${text}\n${target.text}`);
+      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+      expect(
+        request.messages.filter(
+          (entry) => typeof entry.content === "string" && entry.content.includes(target.text),
+        ),
+      ).toHaveLength(1);
+      expect(request.messages.at(-1)?.content).toEqual([
+        { type: "text", text: `[current] Current (reply to [m3]): ${text}` },
+        { type: "text", text: "expanded target" },
+      ]);
+      expect(
+        request.messages.some(
+          (entry) => entry.role === "system" && String(entry.content).includes("非信頼データ"),
+        ),
+      ).toBe(true);
+      expect(
+        request.messages.find(
+          (entry) => typeof entry.content === "string" && entry.content.includes(target.text),
+        )?.role,
+      ).toBe("user");
+    },
+  );
+
+  test.each(["no-conversation", "history-off", "twitter-off", "unrelated-history"])(
+    "does not expand a reply URL for %s",
+    async (reason) => {
+      const fixture = createFixture({
+        historyEnabled: reason !== "history-off",
+        twitterExpandEnabled: reason !== "twitter-off",
+      });
+      const conversation = conversationContext();
+      const prior = conversation.messages[0];
+      if (!prior) throw new Error("prior fixture missing");
+      const target = {
+        ...prior,
+        text: "https://x.com/example/status/21",
+        ref: "m3",
+      };
+      if (reason === "unrelated-history") conversation.messages[0] = target;
+      else {
+        conversation.replyTarget = target;
+        conversation.replyTargetRef = "m3";
+      }
+      fixture.tweetService.extractTweetIds = mock((text: string) =>
+        text.includes("status/") ? ["21"] : [],
+      );
+      await fixture.chatService.generateChatResponse(
+        "guild",
+        { text: "explain", ...(reason !== "no-conversation" && { conversation }) },
+        "reply-off",
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      expect(fixture.tweetService.expandTweets).not.toHaveBeenCalled();
+      if (reason === "twitter-off")
+        expect(fixture.tweetService.extractTweetIds).not.toHaveBeenCalled();
+      else expect(fixture.tweetService.extractTweetIds).toHaveBeenCalledWith("explain");
+    },
+  );
+
+  test("text-only current message identifies a reply target without repeating it", async () => {
+    const fixture = createFixture({ historyEnabled: true });
+    const conversation = conversationContext();
+    conversation.replyTargetRef = "m1";
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      { text: "explain", conversation },
+      "reply-text",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+    expect(request.messages.at(-1)?.content).toBe("[current] user (reply to [m1]): explain");
+    expect(
+      request.messages.filter((entry) => String(entry.content).includes("Prior: before")),
+    ).toHaveLength(1);
+  });
+
+  test("only the reply target has a tweet URL and expansion can be cancelled", async () => {
+    const fixture = createFixture({ historyEnabled: true });
+    const conversation = conversationContext();
+    const prior = conversation.messages[0];
+    if (!prior) throw new Error("prior fixture missing");
+    prior.text = "https://fxtwitter.com/example/status/21";
+    conversation.replyTargetRef = "m1";
+    fixture.tweetService.extractTweetIds = mock((text: string) =>
+      text.includes("status/21") ? ["21"] : [],
+    );
+    fixture.tweetService.expandTweets = mock(() => new Promise<never>(() => {}));
+    const pending = fixture.chatService.generateChatResponse(
+      "guild",
+      { text: "explain", conversation },
+      "reply-cancel",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    for (
+      let attempt = 0;
+      attempt < 10 && fixture.tweetService.expandTweets.mock.calls.length === 0;
+      attempt++
+    )
+      await Promise.resolve();
+    expect(fixture.tweetService.expandTweets.mock.calls[0]?.[0]).toBe(`explain\n${prior.text}`);
+    expect(fixture.chatService.cancelRequest("reply-cancel")).toBe(true);
+    expect((await pending).status).toBe("cancelled");
+    expect(fixture.llmClient.chatStream).not.toHaveBeenCalled();
+  });
+
+  test("combined current and reply URLs share the real TweetService post and image limits", async () => {
+    const fixture = createFixture({ historyEnabled: true });
+    const conversation = conversationContext();
+    const prior = conversation.messages[0];
+    if (!prior) throw new Error("prior fixture missing");
+    conversation.replyTarget = {
+      ...prior,
+      id: "target",
+      ref: "m3",
+      text: "https://fixupx.com/a/status/20 https://twitter.com/a/status/22 https://fxtwitter.com/a/status/23",
+    };
+    conversation.replyTargetRef = "m3";
+    const originalFetch = globalThis.fetch;
+    const fetchedIds: string[] = [];
+    globalThis.fetch = mock(async (url: string | URL | Request) => {
+      const id = String(url).split("/").at(-1) ?? "";
+      fetchedIds.push(id);
+      return new Response(
+        JSON.stringify({
+          code: 200,
+          status: {
+            type: "status",
+            text: `post-${id}`,
+            created_timestamp: 0,
+            likes: 0,
+            reposts: 0,
+            replies: 0,
+            author: { name: "Author", screen_name: "a" },
+            media: {
+              photos: [1, 2, 3].map((number) => ({
+                url: `https://pbs.twimg.com/${id}-${number}.jpg`,
+              })),
+              videos: [],
+            },
+          },
+        }),
+      );
+    }) as unknown as typeof fetch;
+    fixture.llmClient.listModelsWithPricing = mock(async () => [
+      {
+        id: "test-model:fixture",
+        name: "Fixture",
+        created: 0,
+        contextLength: 4096,
+        pricing: { prompt: "0", completion: "0" },
+        inputModalities: ["text", "image"],
+        outputModalities: ["text"],
+      },
+    ]);
+    const service = new ChatService(
+      fixture.llmClient,
+      fixture.settingsService,
+      new ToolRegistry(),
+      "perplexity",
+      new TweetService("https://api.fxtwitter.test", "1.11.0"),
+      new ModelService(fixture.llmClient),
+    );
+    try {
+      await service.generateChatResponse(
+        "guild",
+        { text: "https://x.com/a/status/20 https://x.com/a/status/21", conversation },
+        "reply-limits",
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      expect(fetchedIds).toEqual(["20", "21", "22"]);
+      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
+      const parts = request.messages.at(-1)?.content;
+      expect(
+        Array.isArray(parts) && parts.filter((part) => part.type === "image_url"),
+      ).toHaveLength(4);
+      expect(JSON.stringify(parts)).toContain("post-22");
+      expect(JSON.stringify(parts)).not.toContain("post-23");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("offers Discord tools when history is off and the model supports tools", async () => {
     const fixture = createFixture({ historyEnabled: false, discordToolsEnabled: true });
     fixture.toolRegistry.register(createAddReactionTool());

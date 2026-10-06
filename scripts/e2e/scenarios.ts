@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { WINDOW_RAW_MESSAGE_LIMIT } from "../../src/services/conversationWindow";
 import { EmbedColors } from "../../src/types/embed";
 import { REASONING_COMPONENT_ID } from "../../src/utils/chatContainerBuilder";
@@ -15,13 +16,14 @@ import {
   verifyCronSearch,
 } from "./cron";
 import { buildDigitsPng, buildPdfData, PDF_DATA } from "./fixtures";
+import type { InputExpectation } from "./input";
 
 export interface DiscordMessage {
   id: string;
   content: string;
   flags?: number;
   edited_timestamp?: string | null;
-  author: { id: string; username: string };
+  author: { id: string; username: string; bot?: boolean };
   components?: unknown[];
 }
 
@@ -40,21 +42,28 @@ export interface Reply {
   isError: boolean;
 }
 
-export interface Scenario {
+export interface ScenarioPost {
+  prompt: string;
+  mention?: boolean;
+  files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
+  embeds?: { title?: string; description?: string; fields?: { name: string; value: string }[] }[];
+  components?: unknown[];
+  flags?: number;
+}
+
+export interface Scenario extends ScenarioPost {
   name: string;
   /** Run only when named on the command line. */
   manual?: boolean;
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
-  prompt: string;
-  setup?: {
-    prompt: string;
-    mention?: boolean;
-    files?: Scenario["files"];
+  setup?: ScenarioPost & {
     fillerCount?: number;
+    /** Reply to this fixture after any unrelated Bot messages. */
+    reply?: boolean;
+    after?: ScenarioPost[];
   };
-  mention?: boolean;
-  files?: { name: string; type: string; data: Uint8Array<ArrayBuffer> }[];
+  input?: InputExpectation;
   toolName?: "read_earlier_messages" | "view_attachment" | "propose_cron_job";
   timeoutMs?: number;
   /** Bot messages that are not part of the reply, such as a separate card; the reply is read without them. */
@@ -336,6 +345,68 @@ export const LONG_NUMBER_COUNT = 1200;
 /** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
 export const LONG_NUMBERS_PER_LINE = 20;
 
+/** Read the settings the running bot reads; never silently skip a disabled path. */
+export async function inputPreconditions(
+  channelId: string,
+  request: (path: string, init?: RequestInit) => Promise<Response>,
+  env: ScenarioEnv,
+  requirements: { history?: boolean; tweet?: boolean },
+): Promise<string[]> {
+  const channel = await request(`/channels/${channelId}`);
+  if (!channel.ok)
+    return [`cannot read the channel for input preconditions: HTTP ${channel.status}`];
+  const { guild_id: guildId } = (await channel.json()) as { guild_id?: string };
+  if (!guildId) return ["E2E_CHANNEL_ID is not a guild channel"];
+  const db = new Database(env.databasePath, { readonly: true });
+  let settings: { history: number; tweet: number; details: number } | null;
+  try {
+    settings = db
+      .query<{ history: number; tweet: number; details: number }, [string]>(
+        "SELECT history_enabled AS history, twitter_expand_enabled AS tweet, show_llm_details AS details FROM guild_settings WHERE guild_id=?",
+      )
+      .get(guildId);
+  } finally {
+    db.close();
+  }
+  return [
+    ...(requirements.history && !settings?.history
+      ? [
+          `会話履歴 is off for guild ${guildId} in ${env.databasePath}: enable /config → 機能 → 会話履歴`,
+        ]
+      : []),
+    ...(requirements.tweet && settings?.tweet === 0
+      ? [
+          `ツイート展開 is off for guild ${guildId} in ${env.databasePath}: enable /config → 応答 → ツイート展開`,
+        ]
+      : []),
+    ...(settings?.details === 0
+      ? [
+          `LLM 詳細表示 is off for guild ${guildId} in ${env.databasePath}: enable /config → 応答 → LLM 詳細表示`,
+        ]
+      : []),
+  ];
+}
+
+const BOT_TEXT_TOKEN = `bot-text-${crypto.randomUUID()}`;
+const BOT_EMBED_TITLE_TOKEN = `bot-embed-title-${crypto.randomUUID()}`;
+const BOT_EMBED_BODY_TOKEN = `bot-embed-body-${crypto.randomUUID()}`;
+const BOT_EMBED_FIELD_TOKEN = `bot-embed-field-${crypto.randomUUID()}`;
+const BOT_V2_TOKEN = `bot-v2-${crypto.randomUUID()}`;
+const BOT_TWEET_TOKEN = `bot-tweet-${crypto.randomUUID()}`;
+const BOT_DECOY_TOKEN = `bot-decoy-${crypto.randomUUID()}`;
+const BOT_DECOY_V2_TOKEN = `bot-decoy-v2-${crypto.randomUUID()}`;
+const BOT_DECOYS: ScenarioPost[] = [
+  { prompt: BOT_DECOY_TOKEN, mention: false },
+  {
+    prompt: "",
+    mention: false,
+    flags: 1 << 15,
+    components: [{ type: 10, content: BOT_DECOY_V2_TOKEN }],
+  },
+];
+const BOT_EXCLUDED = [BOT_DECOY_TOKEN, BOT_DECOY_V2_TOKEN];
+const FIRST_TWEET = { id: "20", text: "just setting up my twttr" };
+
 export const SCENARIOS: Scenario[] = [
   {
     name: "cron-search",
@@ -525,9 +596,92 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "tweet",
     prompt: "[e2e] https://x.com/jack/status/20 の本文を答えて。",
+    input: { tweet: FIRST_TWEET },
+    before: (channelId, request, env) =>
+      inputPreconditions(channelId, request, env, { tweet: true }),
     check: (reply) => [
       ...(reply.isError ? ["the tweet reply ended in an error"] : []),
       ...(reply.body.includes("twttr") ? [] : ["the reply does not contain twttr"]),
+    ],
+  },
+  {
+    name: "bot-reply-embed",
+    manual: true,
+    setup: {
+      prompt: BOT_TEXT_TOKEN,
+      mention: false,
+      embeds: [
+        {
+          title: BOT_EMBED_TITLE_TOKEN,
+          description: BOT_EMBED_BODY_TOKEN,
+          fields: [{ name: "fixture", value: BOT_EMBED_FIELD_TOKEN }],
+        },
+      ],
+      reply: true,
+      after: BOT_DECOYS,
+    },
+    prompt: "[e2e] 返信先の本文、Embedのタイトル、説明、フィールドの値をそのまま答えて。",
+    input: {
+      quote: {
+        tokens: [
+          BOT_TEXT_TOKEN,
+          BOT_EMBED_TITLE_TOKEN,
+          BOT_EMBED_BODY_TOKEN,
+          BOT_EMBED_FIELD_TOKEN,
+        ],
+        excludedTokens: BOT_EXCLUDED,
+      },
+    },
+    before: (channelId, request, env) =>
+      inputPreconditions(channelId, request, env, { history: true }),
+    check: (reply) => [
+      ...hasUsageFooter(reply),
+      ...[BOT_TEXT_TOKEN, BOT_EMBED_TITLE_TOKEN, BOT_EMBED_BODY_TOKEN, BOT_EMBED_FIELD_TOKEN]
+        .filter((token) => !reply.body.includes(token))
+        .map(() => "the answer lacks a reply-target text/Embed token"),
+    ],
+  },
+  {
+    name: "bot-reply-v2",
+    manual: true,
+    setup: {
+      prompt: "",
+      mention: false,
+      flags: 1 << 15,
+      components: [{ type: 17, components: [{ type: 10, content: BOT_V2_TOKEN }] }],
+      reply: true,
+      after: BOT_DECOYS,
+    },
+    prompt: "[e2e] 返信先のTextDisplayに書かれた文字列をそのまま答えて。",
+    input: { quote: { tokens: [BOT_V2_TOKEN], excludedTokens: BOT_EXCLUDED } },
+    before: (channelId, request, env) =>
+      inputPreconditions(channelId, request, env, { history: true }),
+    check: (reply) => [
+      ...hasUsageFooter(reply),
+      ...(reply.body.includes(BOT_V2_TOKEN)
+        ? []
+        : ["the answer lacks the reply-target V2 TextDisplay token"]),
+    ],
+  },
+  {
+    name: "bot-reply-tweet",
+    manual: true,
+    setup: {
+      prompt: `${BOT_TWEET_TOKEN}\nhttps://fixupx.com/jack/status/20`,
+      mention: false,
+      reply: true,
+      after: BOT_DECOYS,
+    },
+    prompt: "[e2e] 返信先にあるXリンクの投稿本文を答えて。",
+    input: {
+      quote: { tokens: [BOT_TWEET_TOKEN], excludedTokens: BOT_EXCLUDED },
+      tweet: FIRST_TWEET,
+    },
+    before: (channelId, request, env) =>
+      inputPreconditions(channelId, request, env, { history: true, tweet: true }),
+    check: (reply) => [
+      ...hasUsageFooter(reply),
+      ...(reply.body.includes("twttr") ? [] : ["the answer lacks the fetched post text"]),
     ],
   },
   {

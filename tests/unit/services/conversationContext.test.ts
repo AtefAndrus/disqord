@@ -113,6 +113,440 @@ function input(current: RawDiscordMessage): BuildConversationWindowInput {
   };
 }
 
+test.each([0, 19])(
+  "explicit replies quote another bot (type %s) without including it in history",
+  async (type) => {
+    const reader = new FakeReader();
+    const target = message("900", undefined, {
+      type,
+      author: { id: "other-bot", username: "Other Bot", bot: true },
+      content: "bot text",
+      embeds: [
+        {
+          title: "embed title",
+          description: "embed description",
+          url: "https://x.com/example/status/20",
+          fields: [{ name: "field name", value: "field value" }],
+        },
+      ],
+      components: [
+        {
+          type: 17,
+          components: [
+            { type: 10, content: "**Model:** other model" },
+            { type: 9, components: [{ type: 10, content: "section text" }] },
+            { type: 14, divider: false },
+            { type: 10, content: "other footer" },
+          ],
+        },
+      ],
+    });
+    reader.listResponses.push({ status: "ok", messages: [target, message("950")] });
+    const service = new ConversationWindowService(reader, records(), () => NOW);
+    const context = await service.build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: target.id },
+        }),
+      ),
+    );
+    expect(context?.messages.map((entry) => entry.id)).toEqual(["950"]);
+    expect(context?.replyTarget).toMatchObject({ kind: "user", author: "Other Bot" });
+    for (const text of [
+      "bot text",
+      "embed title",
+      "embed description",
+      "https://x.com/example/status/20",
+      "field name",
+      "field value",
+      "**Model:** other model",
+      "section text",
+      "other footer",
+    ]) {
+      expect(context?.replyTarget?.text).toContain(text);
+    }
+    expect(context).toHaveProperty("replyTargetRef", context?.replyTarget?.ref);
+    expect(reader.fetchQueries).toEqual([]);
+    reader.listResponses.push({ status: "ok", messages: [target, message("800")] });
+    const earlier = await context?.toolContext.readEarlierMessages(5, new AbortController().signal);
+    expect(String(earlier)).not.toContain("bot text");
+  },
+);
+
+test.each([false, true])(
+  "a human reply target has a reference whether inside the window (%s) or outside",
+  async (inside) => {
+    const reader = new FakeReader();
+    const target = message("900");
+    reader.listResponses.push({ status: "ok", messages: inside ? [target] : [message("950")] });
+    if (!inside) reader.fetchResponses.push({ status: "found", message: target });
+    const context = await new ConversationWindowService(reader, records(), () => NOW).build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: target.id },
+        }),
+      ),
+    );
+    const shown = inside ? context?.messages[0] : context?.replyTarget;
+    expect(shown?.id).toBe("900");
+    expect(context).toHaveProperty("replyTargetRef", shown?.ref);
+    if (inside) expect(context?.replyTarget).toBeUndefined();
+  },
+);
+
+test("explicit replies quote webhooks outside the window", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  reader.fetchResponses.push({
+    status: "found",
+    message: message("900", undefined, {
+      webhook_id: "hook",
+      content: "webhook quote",
+      author: { id: "hook", username: "Webhook", bot: true },
+    }),
+  });
+  const context = await new ConversationWindowService(reader, records(), () => NOW).build(
+    input(
+      message("1000", new Date(NOW).toISOString(), {
+        message_reference: { channel_id: "channel", message_id: "900" },
+      }),
+    ),
+  );
+  expect(context?.replyTarget).toMatchObject({ kind: "user", text: "webhook quote" });
+  expect(reader.fetchQueries).toEqual(["900"]);
+});
+
+test.each(["inside", "outside", "deleted-page", "deleted-trigger"])(
+  "replying to a second DisQord page resolves its verified full reply (%s)",
+  async (location) => {
+    const reader = new FakeReader();
+    const record: ReplyRecord = {
+      triggerMsgId: "800",
+      channelId: "channel",
+      guildId: "guild",
+      status: "completed",
+      pageCount: 2,
+      createdAt: NOW - 3000,
+      finalizedAt: NOW - 1000,
+    };
+    const repository = records();
+    repository.findByTrigger = mock((id: string) => (id === "800" ? record : null));
+    repository.findByPage = mock((id: string) => (["900", "901"].includes(id) ? record : null));
+    repository.listPages = mock(() =>
+      [0, 1].map((seq) => ({ triggerMsgId: "800", pageMsgId: String(900 + seq), seq })),
+    );
+    const pages = ["first answer", "second answer"].map((content, index) =>
+      message(String(900 + index), undefined, {
+        content: "",
+        author: { id: "bot", username: "bot", bot: true },
+        components: [{ type: 17, components: [{ type: 10, content }] }],
+      }),
+    );
+    const [firstPage, secondPage] = pages;
+    if (!firstPage || !secondPage) throw new Error("reply page fixtures missing");
+    reader.listResponses.push({
+      status: "ok",
+      messages: location === "inside" ? [message("800"), ...pages] : [],
+    });
+    if (location !== "inside") {
+      reader.fetchResponses.push({ status: "found", message: secondPage });
+      reader.fetchResponses.push(
+        location === "deleted-trigger"
+          ? { status: "not-found" }
+          : { status: "found", message: message("800") },
+      );
+      reader.fetchResponses.push(
+        location === "deleted-page"
+          ? { status: "not-found" }
+          : { status: "found", message: firstPage },
+      );
+    }
+    const context = await new ConversationWindowService(reader, repository, () => NOW).build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: "901" },
+        }),
+      ),
+    );
+    if (location.startsWith("deleted")) {
+      expect(context?.replyTargetRef).toBeUndefined();
+      expect(context?.replyTarget).toBeUndefined();
+      return;
+    }
+    const quote =
+      location === "inside"
+        ? context?.messages.find((entry) => entry.kind === "assistant")
+        : context?.replyTarget;
+    expect(quote).toMatchObject({
+      id: "900",
+      text: "first answer\nsecond answer",
+      pageIds: ["900", "901"],
+    });
+    expect(context?.replyTargetRef).toBe(quote?.ref);
+    expect(context?.toolContext.resolveMessageRef(context?.replyTargetRef ?? "")).toBe("900");
+    if (location === "inside") expect(context?.replyTarget).toBeUndefined();
+  },
+);
+
+test.each([
+  "history-off",
+  "denied",
+  "cross-channel",
+  "404",
+  "system",
+  "own-unrecorded",
+  "list-failed",
+])("reply target is unavailable for %s", async (reason) => {
+  const reader = new FakeReader();
+  reader.listResponses.push(
+    reason === "list-failed"
+      ? { status: "forbidden", messages: [] }
+      : { status: "ok", messages: [] },
+  );
+  if (reason !== "404")
+    reader.fetchResponses.push({
+      status: "found",
+      message: message("900", undefined, {
+        type: reason === "system" ? 7 : 0,
+        author: {
+          id: reason === "own-unrecorded" ? "bot" : "other-bot",
+          username: "Bot",
+          bot: true,
+        },
+      }),
+    });
+  const context = await new ConversationWindowService(reader, records(), () => NOW).build({
+    ...input(
+      message("1000", new Date(NOW).toISOString(), {
+        message_reference: {
+          channel_id: reason === "cross-channel" ? "elsewhere" : "channel",
+          message_id: "900",
+        },
+      }),
+    ),
+    historyEnabled: reason !== "history-off",
+    authorize: async () => reason !== "denied",
+  });
+  expect(context?.replyTarget).toBeUndefined();
+  if (["history-off", "denied", "cross-channel", "list-failed"].includes(reason))
+    expect(reader.fetchQueries).toEqual([]);
+  if (["history-off", "denied"].includes(reason)) expect(reader.listQueries).toEqual([]);
+});
+
+test.each(["slow", "failed"])(
+  "rebuild skips an old record with a %s page fetch and resolves the recent reply target",
+  async (failure) => {
+    const reader = new FakeReader();
+    const oldTime = new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const record: ReplyRecord = {
+      triggerMsgId: "100",
+      channelId: "channel",
+      guildId: "guild",
+      status: "completed",
+      pageCount: 1,
+      createdAt: Date.parse(oldTime),
+      finalizedAt: Date.parse(oldTime) + 1000,
+    };
+    const repository = records();
+    repository.findByTrigger = mock((id: string) => (id === "100" ? record : null));
+    repository.listPages = mock(() => [{ triggerMsgId: "100", pageMsgId: "200", seq: 0 }]);
+    const target = message("950", undefined, {
+      author: { id: "other-bot", username: "Other Bot", bot: true },
+      content: "recent quote",
+    });
+    reader.listResponses.push({
+      status: "ok",
+      messages: [
+        ...Array.from({ length: 99 }, (_, index) => message(String(100 + index), oldTime)),
+        target,
+      ],
+    });
+    reader.fetch = mock(
+      async (
+        _channelId: string,
+        id: string,
+        budget: DiscordRestBudget,
+        signal?: AbortSignal,
+      ): Promise<DiscordMessageFetchResult> => {
+        budget.consume();
+        reader.fetchQueries.push(id);
+        if (failure === "slow") {
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(), { once: true }),
+          );
+        }
+        return { status: "failed", error: new Error("old page unavailable") };
+      },
+    );
+    const service = new ConversationWindowService(
+      reader,
+      repository,
+      () => NOW,
+      async () => true,
+      20,
+    );
+    const context = await service.build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: target.id },
+        }),
+      ),
+    );
+
+    expect(context).not.toBeNull();
+    expect(context?.replyTarget).toMatchObject({ id: target.id, text: "recent quote" });
+    expect(context?.replyTargetRef).toBe(context?.replyTarget?.ref);
+    expect(reader.fetchQueries).toEqual([]);
+    expect(reader.listQueries).toEqual([{ before: "1000", limit: 100 }]);
+  },
+);
+
+test.each(["known", "fetched", "deleted-trigger", "deleted-page"])(
+  "rebuild still verifies an explicit old split reply target (%s)",
+  async (location) => {
+    const reader = new FakeReader();
+    const oldTime = new Date(NOW - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const trigger = message("100", oldTime);
+    const pages = ["old first", "old second"].map((content, index) =>
+      message(String(200 + index), oldTime, {
+        author: { id: "bot", username: "bot", bot: true },
+        content: "",
+        components: [{ type: 17, components: [{ type: 10, content }] }],
+      }),
+    );
+    const record: ReplyRecord = {
+      triggerMsgId: trigger.id,
+      channelId: "channel",
+      guildId: "guild",
+      status: "completed",
+      pageCount: 2,
+      createdAt: Date.parse(oldTime),
+      finalizedAt: Date.parse(oldTime) + 1000,
+    };
+    const repository = records();
+    repository.findByTrigger = mock((id: string) => (id === trigger.id ? record : null));
+    repository.findByPage = mock((id: string) =>
+      pages.some((page) => page.id === id) ? record : null,
+    );
+    repository.listPages = mock(() =>
+      pages.map((page, seq) => ({ triggerMsgId: trigger.id, pageMsgId: page.id, seq })),
+    );
+    const first = pages[0];
+    const second = pages[1];
+    if (!first || !second) throw new Error("reply page fixtures missing");
+    reader.listResponses.push({
+      status: "ok",
+      messages: location === "known" ? [trigger, ...pages, message("950")] : [message("950")],
+    });
+    if (location !== "known") {
+      reader.fetchResponses.push({ status: "found", message: second });
+      reader.fetchResponses.push(
+        location === "deleted-trigger"
+          ? { status: "not-found" }
+          : { status: "found", message: trigger },
+      );
+      if (location !== "deleted-trigger")
+        reader.fetchResponses.push(
+          location === "deleted-page"
+            ? { status: "not-found" }
+            : { status: "found", message: first },
+        );
+    }
+    const context = await new ConversationWindowService(reader, repository, () => NOW).build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: second.id },
+        }),
+      ),
+    );
+
+    expect(context?.messages.map((entry) => entry.id)).toEqual(["950"]);
+    if (location.startsWith("deleted")) {
+      expect(context?.replyTarget).toBeUndefined();
+      expect(context?.replyTargetRef).toBeUndefined();
+    } else {
+      expect(context?.replyTarget).toMatchObject({
+        id: first.id,
+        text: "old first\nold second",
+        pageIds: [first.id, second.id],
+      });
+      expect(context?.replyTargetRef).toBe(context?.replyTarget?.ref);
+    }
+    expect(reader.fetchQueries).toEqual(
+      location === "known"
+        ? []
+        : location === "deleted-trigger"
+          ? ["201", "100"]
+          : ["201", "100", "200"],
+    );
+  },
+);
+
+test.each([false, true])(
+  "rebuild retains old raw trigger and pages for a recent exchange (old first page: %s)",
+  async (oldFirstPage) => {
+    const reader = new FakeReader();
+    const oldTime = new Date(NOW - WINDOW_SHRUNK_AGE_MS - 1).toISOString();
+    const record: ReplyRecord = {
+      triggerMsgId: "100",
+      channelId: "channel",
+      guildId: "guild",
+      status: "completed",
+      pageCount: 2,
+      createdAt: Date.parse(oldTime),
+      finalizedAt: NOW - 500,
+    };
+    const repository = records();
+    repository.findByTrigger = mock((id: string) => (id === "100" ? record : null));
+    repository.findByPage = mock((id: string) => (["200", "900"].includes(id) ? record : null));
+    repository.listPages = mock(() =>
+      ["200", "900"].map((pageMsgId, seq) => ({ triggerMsgId: "100", pageMsgId, seq })),
+    );
+    const pages = ["200", "900"].map((id, index) =>
+      message(id, index === 0 && oldFirstPage ? oldTime : undefined, {
+        author: { id: "bot", username: "bot", bot: true },
+        content: "",
+        components: [{ type: 17, components: [{ type: 10, content: `page-${index}` }] }],
+      }),
+    );
+    reader.listResponses.push({
+      status: "ok",
+      messages: [message("100", oldTime), ...pages, message("950")],
+    });
+    const context = await new ConversationWindowService(reader, repository, () => NOW).build(
+      input(
+        message("1000", new Date(NOW).toISOString(), {
+          message_reference: { channel_id: "channel", message_id: "900" },
+        }),
+      ),
+    );
+
+    expect(reader.fetchQueries).toEqual([]);
+    expect(context?.messages.map((entry) => entry.id)).toEqual(
+      oldFirstPage ? ["950"] : ["200", "950"],
+    );
+    const reply = oldFirstPage ? context?.replyTarget : context?.messages[0];
+    expect(reply).toMatchObject({ text: "page-0\npage-1", pageIds: ["200", "900"] });
+    expect(context?.replyTargetRef).toBe(reply?.ref);
+  },
+);
+
+test.each([-1, 0, 1])(
+  "rebuild includes the 30-minute age boundary with offset %s ms",
+  async (offset) => {
+    const reader = new FakeReader();
+    const boundary = message("900", new Date(NOW - WINDOW_SHRUNK_AGE_MS + offset).toISOString());
+    reader.listResponses.push({ status: "ok", messages: [boundary, message("950")] });
+    const context = await new ConversationWindowService(reader, records(), () => NOW).build(
+      input(message("1000", new Date(NOW).toISOString())),
+    );
+
+    expect(context?.messages.map((entry) => entry.id)).toEqual(
+      offset < 0 ? ["950"] : ["900", "950"],
+    );
+  },
+);
+
 test("resolves only shown message references, including pages shown by read_earlier_messages", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({

@@ -6,6 +6,7 @@ import {
   formatMessageForModel,
   formatMessageForTool,
   normalizeBotReply,
+  normalizeExternalBotMessage,
   normalizeHumanMessage,
 } from "../../../src/utils/discordMessageNormalizer";
 
@@ -31,6 +32,40 @@ function botPage(id: string, body: string, footer: string): RawDiscordMessage {
 }
 
 describe("Discord message normalization", () => {
+  test("external bot quotes retain all TextDisplays, embed text, and attachments as user data", () => {
+    const page = botPage("1", "body", "external footer");
+    page.content = "plain text";
+    page.embeds = [
+      {
+        title: "title",
+        description: "description",
+        url: "https://example.com",
+        author: { name: "embed author", url: "https://example.com/author" },
+        footer: { text: "embed footer" },
+        fields: [{ name: "field", value: "value" }],
+      },
+    ];
+    page.components?.push({
+      type: 10,
+      id: REASONING_COMPONENT_ID,
+      content: "external text with matching id",
+    });
+    page.attachments = [
+      {
+        id: "attachment",
+        filename: "quote.pdf",
+        url: "https://cdn.example.com/quote.pdf",
+        content_type: "application/pdf",
+        size: 100,
+      },
+    ];
+    expect(normalizeExternalBotMessage(page)).toMatchObject({
+      kind: "user",
+      text: "plain text\ntitle\ndescription\nhttps://example.com\nembed author\nhttps://example.com/author\nfield\nvalue\nembed footer\n**Model:** test-model\nbody\nexternal footer\nexternal text with matching id",
+      attachments: [{ index: 1, kind: "pdf", filename: "quote.pdf" }],
+    });
+  });
+
   test("reassembles bot pages, strips the page-0 badge and footer, and preserves page order", () => {
     const first = botPage("1", "first", "Tokens: 1+1=2 | ページ 1/2");
     const second = botPage("2", "second", "Tokens: 2+2=4 | ページ 2/2");

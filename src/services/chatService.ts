@@ -171,13 +171,16 @@ function buildHistoryMessages(
     : [];
   const currentParts = [...(input.parts ?? []), ...tweetParts];
   const currentLabel = input.authorLabel ?? "user";
+  const replyReference = conversation.replyTargetRef
+    ? ` (reply to [${conversation.replyTargetRef}])`
+    : "";
   const currentContent =
     currentParts.length === 0
-      ? `[current] ${currentLabel}: ${input.text}`
+      ? `[current] ${currentLabel}${replyReference}: ${input.text}`
       : [
           {
             type: "text" as const,
-            text: `[current] ${currentLabel}: ${input.text.length > 0 ? input.text : pickDefaultPrompt(currentParts)}`,
+            text: `[current] ${currentLabel}${replyReference}: ${input.text.length > 0 ? input.text : pickDefaultPrompt(currentParts)}`,
           },
           ...currentParts,
         ];
@@ -345,15 +348,22 @@ export class ChatService implements IChatService {
       );
       if (!settingsResult.ok) return { status: "cancelled", history: initialMessages };
       const settings = settingsResult.value;
+      const conversation = settings.historyEnabled ? input.conversation : undefined;
+      const replyTarget =
+        conversation?.replyTarget ??
+        (conversation?.replyTargetRef
+          ? conversation.messages.find((message) => message.ref === conversation.replyTargetRef)
+          : undefined);
+      const tweetInput = replyTarget ? `${input.text}\n${replyTarget.text}` : input.text;
 
       let expansion: TweetExpansionResult | undefined;
       if (
         settings.twitterExpandEnabled &&
-        this.tweetService.extractTweetIds(input.text).length > 0
+        this.tweetService.extractTweetIds(tweetInput).length > 0
       ) {
         try {
           const expansionResult = await raceWithAbort(
-            this.tweetService.expandTweets(input.text, controller.signal, (signal) =>
+            this.tweetService.expandTweets(tweetInput, controller.signal, (signal) =>
               raceWithAbort(
                 this.modelService.isMultimodalCapable(settings.defaultModel, "image"),
                 signal,
@@ -389,7 +399,6 @@ export class ChatService implements IChatService {
           ...buildChatMessages(input, tweetParts),
         ]);
 
-      const conversation = settings.historyEnabled ? input.conversation : undefined;
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
       const cron = settings.cronEnabled ? input.cron : undefined;
       let supportsTools = false;

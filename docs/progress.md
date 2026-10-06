@@ -19,6 +19,7 @@
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
 | [数式を画像で表示する](changes/math-rendering/design.md) | 中 | investigating | 返答の別行立ての数式を PNG にして本文の該当位置に差し込み、文中の数式はコードの表記にする |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
+| [別Botの返信先引用とX投稿の展開](changes/reply-context-bots/design.md) | 中 | implemented | 別Botへの明示的な返信先を引用し、呼びかけ本文と返信先のX投稿リンクを展開する |
 | [自動応答で返答するかを判断する](changes/reply-gate/design.md) | 中 | planned | 自動応答チャンネルの発言ごとに、判定専用のモデルで返答すべきかを先に判定し、口を挟む場面でなければ何も送らない |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
