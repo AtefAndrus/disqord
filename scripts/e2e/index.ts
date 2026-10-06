@@ -31,6 +31,14 @@ import {
   type UsageState,
 } from "./cost";
 import { cleanupLateCronProposals, type ScenarioEnv } from "./cron";
+import {
+  BOT_CONTEXT_PREFIX,
+  checkInput,
+  type InputEvidence,
+  type InputObservation,
+  parseInputLine,
+  selectInput,
+} from "./input";
 import { createStopper, DeadlineError, waitForReply } from "./runner";
 import {
   costOf,
@@ -39,8 +47,10 @@ import {
   type Reply,
   SCENARIOS,
   type Scenario,
+  type ScenarioPost,
   toReply,
 } from "./scenarios";
+import { messagePayload, sendScenario } from "./send";
 
 const API = "https://discord.com/api/v10";
 const FAILURE_DIR = ".e2e-failures";
@@ -54,6 +64,28 @@ async function saveFailedReply(name: string, reply: Reply): Promise<string> {
   const path = `${FAILURE_DIR}/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   try {
     await Bun.write(path, `${JSON.stringify(reply.messages, null, 2)}\n`);
+    return path;
+  } catch (error) {
+    return `not saved (${error instanceof Error ? error.message : error})`;
+  }
+}
+
+async function saveFailedInput(name: string, evidence: InputEvidence): Promise<string> {
+  const path = `${FAILURE_DIR}/${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.input.json`;
+  try {
+    await Bun.write(
+      path,
+      `${JSON.stringify(
+        {
+          marker: evidence.marker,
+          testerHistoryExemptionDisabled: evidence.botContextMarkers?.has(evidence.marker) ?? false,
+          initialRequest: selectInput(evidence) ?? null,
+          observations: evidence.observations ?? null,
+        },
+        null,
+        2,
+      )}\n`,
+    );
     return path;
   } catch (error) {
     return `not saved (${error instanceof Error ? error.message : error})`;
@@ -153,19 +185,14 @@ async function discord(path: string, deadline: number, init: RequestInit = {}): 
 }
 
 async function post(
-  prompt: string,
-  mention: boolean,
-  files: Scenario["files"],
+  message: ScenarioPost,
   deadline: number,
-): Promise<string> {
-  const payload = {
-    content: mention ? `<@${botId}> ${prompt}` : prompt,
-    ...(mention && { allowed_mentions: { users: [botId] } }),
-    attachments: (files ?? []).map((file, id) => ({ id, filename: file.name })),
-  };
+  replyTo?: string,
+): Promise<DiscordMessage> {
+  const payload = messagePayload(message, botId, replyTo);
   const form = new FormData();
   form.set("payload_json", JSON.stringify(payload));
-  for (const [index, file] of (files ?? []).entries()) {
+  for (const [index, file] of (message.files ?? []).entries()) {
     form.set(`files[${index}]`, new Blob([file.data], { type: file.type }), file.name);
   }
   const response = await discord(`/channels/${channelId}/messages`, deadline, {
@@ -175,23 +202,7 @@ async function post(
   if (!response.ok) {
     throw new Error(`send failed: HTTP ${response.status} ${await response.text()}`);
   }
-  return ((await response.json()) as DiscordMessage).id;
-}
-
-async function send(scenario: Scenario, deadline: number): Promise<string> {
-  if (scenario.setup) {
-    await post(
-      scenario.setup.prompt,
-      scenario.setup.mention ?? true,
-      scenario.setup.files,
-      deadline,
-    );
-    for (let index = 0; index < (scenario.setup.fillerCount ?? 0); index++) {
-      await post(`[e2e] window filler ${index + 1}`, false, undefined, deadline);
-    }
-    await Bun.sleep(250);
-  }
-  return post(scenario.prompt, scenario.mention ?? true, scenario.files, deadline);
+  return (await response.json()) as DiscordMessage;
 }
 
 async function repliesAfter(
@@ -214,10 +225,15 @@ async function repliesAfter(
 interface RunningBot {
   stop: () => Promise<void>;
   toolCalls: Set<string>;
+  inputs: InputObservation[];
+  botContextMarkers: Set<string>;
 }
 
 async function startBot(): Promise<RunningBot> {
-  const child = Bun.spawn(["bun", "run", "src/index.ts"], { stdout: "pipe", stderr: "inherit" });
+  const child = Bun.spawn(["bun", "--preload", "./scripts/e2e/preload.ts", "./src/index.ts"], {
+    stdout: "pipe",
+    stderr: "inherit",
+  });
   const stop = createStopper(child, BOT_EXIT_TIMEOUT_MS, (ms) => Bun.sleep(ms));
   // Set before waiting for readiness: an interrupt during startup
   // must not leave a bot connected to Discord for the next run to collide with.
@@ -226,12 +242,18 @@ async function startBot(): Promise<RunningBot> {
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
   const toolCalls = new Set<string>();
+  const inputs: InputObservation[] = [];
+  const botContextMarkers = new Set<string>();
   let pending = "";
   let output = "";
   const inspect = (chunk: string): void => {
     const lines = (pending + chunk).split("\n");
     pending = lines.pop() ?? "";
     for (const line of lines) {
+      const input = parseInputLine(line);
+      if (input) inputs.push(input);
+      if (line.startsWith(BOT_CONTEXT_PREFIX))
+        botContextMarkers.add(line.slice(BOT_CONTEXT_PREFIX.length));
       for (const match of line.matchAll(/client tool invoked.*?name["']?[:=]\s*["']?([\w-]+)/g)) {
         const name = match[1];
         if (name) toolCalls.add(name);
@@ -267,7 +289,7 @@ async function startBot(): Promise<RunningBot> {
       inspect(decoder.decode(value, { stream: true }));
     }
   });
-  return { stop, toolCalls };
+  return { stop, toolCalls, inputs, botContextMarkers };
 }
 
 async function main(): Promise<number> {
@@ -293,9 +315,24 @@ async function main(): Promise<number> {
   try {
     for (const [index, scenario] of selected.entries()) {
       bot?.toolCalls.clear();
+      if (bot) bot.inputs.length = 0;
+      bot?.botContextMarkers.clear();
+      const evidence: InputEvidence = {
+        marker: "",
+        observations: bot?.inputs,
+        botContextMarkers: bot?.botContextMarkers,
+      };
       const startedAt = Date.now();
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
+        if (scenario.input && !bot) {
+          failures++;
+          costs.push({ name: scenario.name, cost: undefined });
+          console.log(
+            `FAIL ${scenario.name}: cannot verify LLM input under --no-spawn; run with the E2E child preload`,
+          );
+          continue;
+        }
         if (scenario.before && channelId) {
           const blockers = await scenario.before(
             channelId,
@@ -341,7 +378,13 @@ async function main(): Promise<number> {
           try {
             // Inside the cleanup's reach: Discord can accept the post and the
             // bot can answer it even when reading the response fails.
-            const messageId = await send(scenario, deadline);
+            const sent = await sendScenario(
+              scenario,
+              (message, replyTo) => post(message, deadline, replyTo),
+              () => Bun.sleep(250),
+            );
+            const messageId = sent.triggerId;
+            evidence.marker = sent.marker;
             triggerId = messageId;
             if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
             const reply = await waitForReply({
@@ -353,6 +396,7 @@ async function main(): Promise<number> {
               ? spawn && bot?.toolCalls.has(scenario.toolName) === true
               : true;
             const problems = scenario.check(reply);
+            if (scenario.input) problems.push(...checkInput(scenario.input, evidence));
             if (scenario.verify && channelId) {
               problems.push(
                 ...(await scenario.verify(
@@ -392,11 +436,15 @@ async function main(): Promise<number> {
           console.log(`     reply: ${reply.body.replace(/\s+/g, " ").slice(0, 300)}`);
           console.log(`     footers: ${reply.footers.join(" / ").slice(0, 300)}`);
           console.log(`     components: ${await saveFailedReply(scenario.name, reply)}`);
+          if (scenario.input)
+            console.log(`     input: ${await saveFailedInput(scenario.name, evidence)}`);
         }
       } catch (error) {
         failures++;
         costs.push({ name: scenario.name, cost: undefined });
         console.log(`FAIL ${scenario.name}: ${error instanceof Error ? error.message : error}`);
+        if (scenario.input)
+          console.log(`     input: ${await saveFailedInput(scenario.name, evidence)}`);
         // Whatever went wrong, the state of this scenario's reply is unknown
         // (even a failed POST may have been accepted), so nothing after it
         // can be attributed safely.

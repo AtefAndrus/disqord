@@ -29,6 +29,11 @@ export interface RawDiscordPoll {
 
 export interface RawDiscordEmbed {
   type?: string;
+  title?: string;
+  description?: string;
+  url?: string;
+  author?: { name: string; url?: string };
+  footer?: { text: string };
   fields?: Array<{ name: string; value: string }>;
 }
 
@@ -288,6 +293,34 @@ export function normalizeHumanMessage(
     ...(message.poll && { poll: formatPoll(message.poll, nowMs) }),
     attachments: attachmentsOf(message),
     exchangeId: message.id,
+  };
+}
+
+/** Explicit quotes of other bots retain their text without DisQord's page filtering. */
+export function normalizeExternalBotMessage(
+  message: RawDiscordMessage,
+  nowMs = Date.now(),
+): NormalizedMessage {
+  const componentText = (nodes: readonly unknown[]): string[] =>
+    nodes.flatMap((node) => {
+      if (!isComponent(node)) return [];
+      if (node.type === TEXT_DISPLAY && typeof node.content === "string") return [node.content];
+      return componentText(childrenOf(node));
+    });
+  const embedText = (message.embeds ?? []).flatMap((embed) => [
+    embed.title,
+    embed.description,
+    embed.url,
+    embed.author?.name,
+    embed.author?.url,
+    ...(embed.fields ?? []).flatMap((field) => [field.name, field.value]),
+    embed.footer?.text,
+  ]);
+  return {
+    ...normalizeHumanMessage(message, nowMs),
+    text: [message.content, ...embedText, ...componentText(message.components ?? [])]
+      .filter((part) => typeof part === "string" && part.length > 0)
+      .join("\n"),
   };
 }
 
