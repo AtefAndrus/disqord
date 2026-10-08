@@ -102,7 +102,7 @@ interface ResponseState {
   userId: string;
   channel: AuthorizationChannelLike;
   checkAccess: () => Promise<ConversationAccess>;
-  checkAttachmentAccess: () => Promise<ConversationAccess>;
+  checkAttachmentAccess: (signal: AbortSignal) => Promise<ConversationAccess>;
   toolBudget: DiscordRestBudget;
   /** Oldest message ID whose page has been fully checked. Moves only a whole page at a time. */
   cursor: string;
@@ -153,7 +153,7 @@ export interface BuildConversationWindowInput {
   channel: AuthorizationChannelLike;
   authorizationMessage?: AuthorizationMessageLike;
   authorize?: () => Promise<boolean>;
-  reauthorize?: (budget: DiscordRestBudget) => Promise<ConversationAccess>;
+  reauthorize?: (budget: DiscordRestBudget, signal: AbortSignal) => Promise<ConversationAccess>;
   historyEnabled: boolean;
   e2eTesterBotId?: string;
   nodeEnv?: string;
@@ -480,7 +480,9 @@ export class ConversationWindowService {
         userId: input.userId,
         channel: input.channel,
         checkAccess: checkToolAccess,
-        checkAttachmentAccess: reauthorize ? () => reauthorize(toolBudget) : checkToolAccess,
+        checkAttachmentAccess: reauthorize
+          ? (signal) => reauthorize(toolBudget, signal)
+          : checkToolAccess,
         toolBudget,
         cursor: minMessageId(staleCursor ?? result.startMessageId, input.current.id),
         replyTarget: result.replyTarget,
@@ -985,13 +987,9 @@ export class ConversationWindowService {
       for (const { message, pinnedAt } of [...page.items].sort(
         (a, b) => Date.parse(b.pinnedAt) - Date.parse(a.pinnedAt),
       )) {
-        if (fetchSignal.aborted || state.toolBudget.used >= state.toolBudget.limit) {
+        if (fetchSignal.aborted) {
           hasMore = true;
-          stopReason = deadline.signal.aborted
-            ? "fetch_deadline"
-            : signal.aborted
-              ? "fetch_failed"
-              : "rest_budget_exhausted";
+          stopReason = deadline.signal.aborted ? "fetch_deadline" : "fetch_failed";
           break;
         }
         const judged = await untilAborted(
@@ -1444,7 +1442,7 @@ export class ConversationWindowService {
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
     if (signal.aborted) return '{"error":"attachment_unavailable"}';
-    const access = await untilAborted(state.checkAttachmentAccess(), signal);
+    const access = await untilAborted(state.checkAttachmentAccess(signal), signal);
     if (access === undefined || signal.aborted) return '{"error":"attachment_unavailable"}';
     if (access === "denied") return '{"error":"no_permission"}';
     if (access === "rest_budget_exhausted") return '{"error":"rest_budget_exhausted"}';

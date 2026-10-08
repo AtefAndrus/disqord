@@ -1,4 +1,4 @@
-import { ChannelType, PermissionFlagsBits } from "discord.js";
+import { ChannelType, type Message, PermissionFlagsBits } from "discord.js";
 import type { DiscordRestBudget } from "./discordMessageReader";
 
 export interface PermissionLike {
@@ -43,9 +43,11 @@ async function privateThreadAccess(
   userId: string,
   userPermissions: PermissionLike | null,
   budget: DiscordRestBudget,
+  signal?: AbortSignal,
 ): Promise<ConversationAccess> {
   if (userPermissions?.has(PermissionFlagsBits.ManageThreads)) return "allowed";
   if (!channel.members?.fetch) return "denied";
+  if (signal?.aborted) return "failed";
   if (!budget.consume()) return "rest_budget_exhausted";
   try {
     await channel.members.fetch({ member: userId, force: true });
@@ -65,14 +67,59 @@ export async function checkConversationAccess(
   message: AuthorizationMessageLike,
   botUser: unknown,
   budget: DiscordRestBudget,
+  signal?: AbortSignal,
 ): Promise<ConversationAccess> {
+  if (signal?.aborted) return "failed";
   const userSubject = message.member ?? message.author;
   if (!hasReadPermissions(message.channel, botUser)) return "denied";
   if (!hasReadPermissions(message.channel, userSubject)) return "denied";
 
   if (message.channel.type !== ChannelType.PrivateThread) return "allowed";
   const userPermissions = message.channel.permissionsFor?.(userSubject) ?? null;
-  return privateThreadAccess(message.channel, message.author.id, userPermissions, budget);
+  return privateThreadAccess(message.channel, message.author.id, userPermissions, budget, signal);
+}
+
+export async function reauthorizeConversationAccess(
+  trigger: Message<true>,
+  budget: DiscordRestBudget,
+  signal: AbortSignal,
+): Promise<ConversationAccess> {
+  try {
+    if (signal.aborted) return "failed";
+    if (!budget.consume()) return "rest_budget_exhausted";
+    const user = await trigger.guild.members.fetch({
+      user: trigger.author.id,
+      force: true,
+      cache: false,
+    });
+    if (signal.aborted) return "failed";
+    if (!budget.consume()) return "rest_budget_exhausted";
+    const channel = await trigger.guild.channels.fetch(trigger.channelId, { force: true });
+    if (!channel) return "failed";
+    // Thread permissions use the parent, so refresh it without restricting its type.
+    if (channel.isThread()) {
+      if (!channel.parentId) return "failed";
+      if (signal.aborted) return "failed";
+      if (!budget.consume()) return "rest_budget_exhausted";
+      if (!(await trigger.guild.channels.fetch(channel.parentId, { force: true }))) return "failed";
+    }
+    if (signal.aborted) return "failed";
+    if (!budget.consume()) return "rest_budget_exhausted";
+    const bot = await trigger.guild.members.fetch({ user: trigger.client.user.id, force: true });
+    return checkConversationAccess(
+      {
+        channel: channel as unknown as AuthorizationChannelLike,
+        author: trigger.author,
+        member: user,
+        client: { user: trigger.client.user },
+      },
+      bot,
+      budget,
+      signal,
+    );
+  } catch {
+    return "failed";
+  }
 }
 
 /** Confirms both the bot and the invoking user can read the channel history. */

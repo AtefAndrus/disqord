@@ -16,6 +16,7 @@ import type {
   DiscordRestBudget,
   IDiscordMessageReader,
 } from "../../../src/services/discordMessageReader";
+import { reauthorizeConversationAccess } from "../../../src/services/messageAuthorization";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 
 const NOW = Date.parse("2026-10-09T00:00:00Z");
@@ -197,10 +198,7 @@ async function fixture(
     channel: {},
     historyEnabled: true,
     authorize: async () => true,
-    reauthorize: async (budget) => {
-      const auth = await authorizeDiscordRead(trigger, budget);
-      return mapDiscordReadAuthorization(auth);
-    },
+    reauthorize: (budget, signal) => reauthorizeConversationAccess(trigger, budget, signal),
   });
   if (!context) throw new Error("no context");
   const budget = context.toolRestBudget;
@@ -293,6 +291,21 @@ test("REST cap after authorization returns a stopped read", async () => {
     stop_reason: "rest_budget_exhausted",
   });
   expect(f.channel.messages.fetchPins).not.toHaveBeenCalled();
+});
+
+test("pins needing no REST are returned when authorization and fetchPins exhaust the cap", async () => {
+  const f = await fixture();
+  f.setPins([raw("100"), raw("101")]);
+  while (f.budget.used < f.budget.limit - 4) f.budget.consume();
+  const result = JSON.parse(await f.service.listPins(undefined, signal));
+  expect(f.budget.used).toBe(f.budget.limit);
+  expect(f.budget.refused).toBe(false);
+  expect(result.pins.map((pin: { ref: string }) => pin.ref)).toEqual(["m1", "m2"]);
+  expect(result.has_more).toBe(false);
+  expect(result.stop_reason).toBeNull();
+  expect(f.context.toolContext.resolveMessageRef("m1")).toBe("100");
+  expect(f.context.toolContext.resolveMessageRef("m2")).toBe("101");
+  expect(f.reader.fetch).not.toHaveBeenCalled();
 });
 
 test("view_attachment rechecks permissions and spends the same cap before attachment REST", async () => {

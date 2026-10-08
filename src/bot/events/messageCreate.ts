@@ -15,15 +15,12 @@ import type {
 } from "../../services/conversationWindow";
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
-import {
-  authorizeDiscordRead,
-  DiscordActionService,
-  mapDiscordReadAuthorization,
-} from "../../services/discordActionService";
+import { DiscordActionService } from "../../services/discordActionService";
 import { DiscordInfoService } from "../../services/discordInfoService";
-import type {
-  AuthorizationChannelLike,
-  AuthorizationMessageLike,
+import {
+  type AuthorizationChannelLike,
+  type AuthorizationMessageLike,
+  reauthorizeConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
@@ -395,10 +392,8 @@ export function createMessageCreateHandler(
           botUser: message.client.user,
           channel: message.channel as unknown as AuthorizationChannelLike,
           authorizationMessage,
-          reauthorize: async (budget) => {
-            const auth = await authorizeDiscordRead(message as Message<true>, budget);
-            return mapDiscordReadAuthorization(auth);
-          },
+          reauthorize: (budget, signal) =>
+            reauthorizeConversationAccess(message as Message<true>, budget, signal),
           historyEnabled: true,
           e2eTesterBotId: options.e2eTesterBotId,
           nodeEnv: process.env.NODE_ENV,
