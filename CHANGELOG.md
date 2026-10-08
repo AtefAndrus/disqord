@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.11.1] - 2026-10-08
+
+
+### Fixed
+
+- 失敗した OpenRouter の応答をログで区別し、定期実行の e2e で失敗理由を返す (#196)
+- 返信先の別Bot引用とX展開を修正しE2Eで入力を検証 (#198)
+
+
+### Documentation
+
+- AGENTS.mdのE2E説明を英語に統一する (#199)
+- E2Eの実行案内と検査仕様の参照を整理する (#200)
+
+
+### Dependencies
+
+- Update all non-major dependencies
+- Update jdx/mise-action action to v5
+
+
 ## [1.11.0] - 2026-10-01
 
 
@@ -537,6 +558,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.11.1]: https://github.com/AtefAndrus/disqord/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/AtefAndrus/disqord/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/AtefAndrus/disqord/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/AtefAndrus/disqord/compare/v1.8.0...v1.9.0
