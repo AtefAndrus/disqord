@@ -529,6 +529,26 @@ export function buildFixtures(): IFixture[] {
     ),
   });
 
+  const restartStoppedText =
+    "ここまで受信したところで bot が再起動しました。部分テキストはそのまま残ります。";
+  fixtures.push({
+    id: "chat-stopped-restart",
+    title: "チャット返信: 再起動による停止",
+    note: "buildStoppedContainer: 再起動による停止のフッター",
+    messages: packContainers([
+      buildStoppedContainer({
+        text: restartStoppedText,
+        modelName: DEMO_MODEL,
+        color: DEMO_COLOR,
+        isFirst: true,
+        isLast: true,
+        elapsedSeconds: stoppedElapsedSeconds,
+        receivedChars: restartStoppedText.length,
+        reason: "shutdown",
+      }),
+    ]),
+  });
+
   // 13. チャット返信・エラー（accent RED + 見出し付き TextDisplay）
   fixtures.push({
     id: "chat-error",

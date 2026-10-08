@@ -36,6 +36,7 @@ import {
   measureTextBudget,
   reasoningReserve,
   remainingPageBudget,
+  type StopReason,
   splitTextIntoMessages,
   toComponentsV2EditPayload,
   toComponentsV2Payload,
@@ -401,6 +402,10 @@ export function createMessageCreateHandler(
       }
     }
 
+    // 終了処理が始まっていたら初期メッセージを送らない: 送った直後に停止表示へ書き換えるだけで、
+    // 限られた待機時間の中で書き換えが間に合わなければ「生成中...」が残る。pending の記録は次の起動で failed になる。
+    if (chatService.isClosing) return;
+
     // Keep all reply-page writes behind this callback so sends from the initial,
     // streaming, final, stopped, and fatal-cleanup paths have identical ordering.
     const deleteMessage = createDeleteOwnMessage(
@@ -470,6 +475,7 @@ export function createMessageCreateHandler(
       );
 
       if (result.status === "cancelled") {
+        const reason = chatService.isClosing ? "shutdown" : "user";
         // 最終描画の直前に必ず finalize する: 放棄された（timeout/cancel で await が打ち切られた）
         // updater 呼び出しがこの後に遅れて解決しても、停止表示を stale な内容で上書きさせない。
         updater.markFinalized();
@@ -485,6 +491,7 @@ export function createMessageCreateHandler(
           color,
           elapsedSeconds,
           receivedChars,
+          reason,
           message,
           botMessageCreated,
           deleteMessage,
@@ -764,11 +771,12 @@ async function updateStoppedMessages(
   color: number,
   elapsedSeconds: number,
   receivedChars: number,
+  reason: StopReason,
   originalMessage: Message,
   botMessageCreated: (message: Message) => Promise<void>,
   deleteMessage: DeleteOwnMessage,
 ): Promise<number> {
-  const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars);
+  const footerText = buildStoppedFooterText(elapsedSeconds, receivedChars, reason);
   const chunks = splitTextIntoMessages(
     fullText,
     measureTextBudget(badgeText(modelName)),
@@ -786,6 +794,7 @@ async function updateStoppedMessages(
       isLast,
       elapsedSeconds,
       receivedChars,
+      reason,
     });
 
     if (i < botMessages.length) {

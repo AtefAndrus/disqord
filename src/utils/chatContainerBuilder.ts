@@ -427,13 +427,20 @@ export function buildFinalFooterText(
   return parts.length > 0 ? parts.join(" | ") : undefined;
 }
 
+export type StopReason = "user" | "shutdown";
+
 /**
  * 停止時の footer 文字列（"🛑 Stopped | xx.xs | NNN字"）。
  * usage は取得できないため Tokens は含めず、代わりに受信済み文字数を確定情報として表示する。
  * receivedChars が 0 の場合は文字数部を省略する。
  */
-export function buildStoppedFooterText(elapsedSeconds: number, receivedChars: number): string {
-  const base = `🛑 Stopped | ${elapsedSeconds.toFixed(1)}s`;
+export function buildStoppedFooterText(
+  elapsedSeconds: number,
+  receivedChars: number,
+  reason: StopReason = "user",
+): string {
+  const label = reason === "shutdown" ? "Stopped by restart" : "Stopped";
+  const base = `🛑 ${label} | ${elapsedSeconds.toFixed(1)}s`;
   return receivedChars > 0 ? `${base} | ${receivedChars}字` : base;
 }
 
@@ -707,6 +714,7 @@ export function fitReasoning(reasoning: string, remaining: TextBudget): FittedRe
 }
 
 export interface StoppedContainerParams extends ChatContainerBaseParams {
+  reason?: StopReason;
   elapsedSeconds: number;
   /** 受信済み文字数（Abort 時点までに届いた実テキスト長）。0 なら footer に含めない */
   receivedChars: number;
@@ -726,7 +734,9 @@ export function buildStoppedContainer(params: StoppedContainerParams): Container
       sep.setDivider(false).setSpacing(SeparatorSpacingSize.Small),
     );
     container.addTextDisplayComponents((td) =>
-      td.setContent(buildStoppedFooterText(params.elapsedSeconds, params.receivedChars)),
+      td.setContent(
+        buildStoppedFooterText(params.elapsedSeconds, params.receivedChars, params.reason),
+      ),
     );
   }
 

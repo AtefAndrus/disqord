@@ -120,6 +120,8 @@ describe("message create reply-record funnel", () => {
     } as unknown as IModelService;
     const renderedText = "x".repeat(9_000);
     const chatService = {
+      cancelAll: mock(() => {}),
+      isClosing: false,
       generateChatResponse: mock(
         async (
           _guildId: string,
@@ -214,6 +216,8 @@ describe("message create reply-record funnel", () => {
       } as unknown as ISettingsService;
       const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
       const chatService = {
+        cancelAll: mock(() => {}),
+        isClosing: false,
         generateChatResponse: mock(
           async (
             _guildId: string,

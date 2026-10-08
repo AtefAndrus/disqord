@@ -444,6 +444,13 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildStoppedFooterText", () => {
+    test("shutdown footer identifies restart with and without received characters", () => {
+      expect(buildStoppedFooterText(4.9, 360, "shutdown")).toBe(
+        "🛑 Stopped by restart | 4.9s | 360字",
+      );
+      expect(buildStoppedFooterText(4.9, 0, "shutdown")).toBe("🛑 Stopped by restart | 4.9s");
+      expect(buildStoppedFooterText(4.9, 360, "user")).toBe("🛑 Stopped | 4.9s | 360字");
+    });
     test("受信文字数0のときはTokensを含まず経過秒数のみ表示する", () => {
       expect(buildStoppedFooterText(12.34, 0)).toBe("🛑 Stopped | 12.3s");
       expect(buildStoppedFooterText(12.34, 0)).not.toContain("Tokens");
@@ -854,6 +861,21 @@ describe("chatContainerBuilder", () => {
   });
 
   describe("buildStoppedContainer", () => {
+    test("passes the shutdown reason to the footer", () => {
+      const json = toJSON(
+        buildStoppedContainer({
+          text: "partial",
+          modelName: "model",
+          color: 0,
+          isFirst: true,
+          isLast: true,
+          elapsedSeconds: 4.9,
+          receivedChars: 360,
+          reason: "shutdown",
+        }),
+      );
+      expect(textContents(json).at(-1)).toBe("🛑 Stopped by restart | 4.9s | 360字");
+    });
     test("isLastのときSectionを使わず `🛑 Stopped | xx.xs` のfooterを表示する（受信文字数0）", () => {
       const json = toJSON(
         buildStoppedContainer({

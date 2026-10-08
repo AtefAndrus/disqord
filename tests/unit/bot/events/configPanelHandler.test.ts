@@ -87,7 +87,7 @@ describe("config panel interactions", () => {
       service,
       model,
       llm,
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -171,7 +171,7 @@ describe("config panel interactions", () => {
       service,
       model,
       llm,
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "native",
       {} as ICronService,
     );

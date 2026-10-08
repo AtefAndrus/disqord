@@ -1,6 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
-import { createStopper, DeadlineError, waitForReply } from "../../../scripts/e2e/runner";
+import {
+  createStopper,
+  DeadlineError,
+  waitForReply,
+  waitForStreaming,
+} from "../../../scripts/e2e/runner";
 import { type DiscordMessage, type Reply, toReply } from "../../../scripts/e2e/scenarios";
+import { buildStreamingContainer } from "../../../src/utils/chatContainerBuilder";
 
 const USAGE = "Tokens: 1+2=3 | Model: m | Provider: P";
 
@@ -82,6 +88,44 @@ describe("waitForReply", () => {
     const never = waitForReply(scripted([toReply([]), toReply([])]));
     await expect(never).rejects.toBeInstanceOf(DeadlineError);
     await expect(waitForReply(scripted([toReply([])]))).rejects.toThrow("never replied");
+  });
+});
+
+describe("waitForStreaming", () => {
+  function streaming(text: string): Reply {
+    const message = page("1", "");
+    message.components = [
+      buildStreamingContainer({
+        text,
+        modelName: "model",
+        color: 0,
+        isFirst: true,
+        isLast: true,
+        triggerMessageId: "trigger",
+      }).toJSON(),
+    ];
+    return toReply([message]);
+  }
+
+  test("waits beyond the initial placeholder before allowing shutdown", async () => {
+    const io = scripted([toReply([]), streaming("生成中..."), streaming("川の話")]);
+    await waitForStreaming(io);
+    expect(io.polls()).toBe(3);
+  });
+
+  test("fails when the model has already finished instead of testing an idle shutdown", async () => {
+    await expect(waitForStreaming(scripted([toReply([page("1", "done", USAGE)])]))).rejects.toThrow(
+      "finished before streaming",
+    );
+  });
+
+  test("retries read failures and respects the scenario deadline", async () => {
+    const io = scripted([new Error("HTTP 500"), streaming("川の話")]);
+    await waitForStreaming(io);
+    expect(io.polls()).toBe(2);
+    await expect(waitForStreaming(scripted([streaming("生成中...")]))).rejects.toBeInstanceOf(
+      DeadlineError,
+    );
   });
 });
 
