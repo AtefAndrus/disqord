@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.12.0] - 2026-10-08
+
+
+### Added
+
+- 終了時に生成途中の返信を停止表示にしてから落とす (#202)
+
+
+### Documentation
+
+- 終了時の進行中返信の後始末の方針を確定する (#201)
+
+
 ## [1.11.1] - 2026-10-08
 
 
@@ -558,6 +571,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.12.0]: https://github.com/AtefAndrus/disqord/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/AtefAndrus/disqord/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/AtefAndrus/disqord/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/AtefAndrus/disqord/compare/v1.9.0...v1.10.0
