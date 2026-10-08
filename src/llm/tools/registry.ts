@@ -19,6 +19,16 @@ export interface ConversationToolContext {
   ): Promise<ToolLlmResult>;
 }
 
+export type CreateEventArgs = {
+  name: string;
+  start: string;
+  end?: string;
+  description?: string;
+} & (
+  | { kind: "external"; location: string; end: string; channel_name?: never }
+  | { kind: "voice"; channel_name: string; location?: never }
+);
+
 export interface DiscordToolContext {
   channelType: number;
   addReaction(emoji: string, messageRef: string | undefined, signal: AbortSignal): Promise<string>;
@@ -31,6 +41,7 @@ export interface DiscordToolContext {
   ): Promise<string>;
   createThread(name: string, messageRef: string | undefined, signal: AbortSignal): Promise<string>;
   pinMessage(messageRef: string | undefined, signal: AbortSignal): Promise<string>;
+  createEvent(args: CreateEventArgs, signal: AbortSignal): Promise<string>;
 }
 
 export interface DiscordInfoContext {

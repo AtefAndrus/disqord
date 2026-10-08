@@ -87,19 +87,103 @@ function check(name: string, messages: DiscordMessage[]): string[] {
   return scenario.check(toReply(messages));
 }
 
-test("discord-tools cleanup removes the thread and pin after a failed verification", async () => {
+test("discord-tools cleanup removes its event with the bot token and removes thread and pin after a failed verification", async () => {
   const scenario = SCENARIOS.find((item) => item.name === "discord-tools");
   if (!scenario?.cleanup) throw new Error("discord-tools cleanup missing");
+  const eventName = /名前『([^』]+)』/u.exec(scenario.prompt)?.[1];
+  expect(eventName).toBeDefined();
   const request = mock(async (path: string, init?: RequestInit) => {
+    if (path === "/channels/channel") return Response.json({ guild_id: "guild" });
+    if (path === "/guilds/guild/scheduled-events")
+      return Response.json([
+        { id: "event", name: eventName },
+        { id: "other", name: "Unrelated" },
+      ]);
     if (!init) return Response.json({ thread: { id: "thread" }, pinned: true });
     if (path === "/channels/thread") return new Response(null, { status: 403 });
     return new Response(null, { status: 204 });
   });
-  expect(await scenario.cleanup("trigger", "channel", request, env, 0)).toEqual([
-    "cannot delete thread: HTTP 403",
-  ]);
+  expect(
+    await scenario.cleanup("trigger", "channel", request, { ...env, botToken: "bot-token" }, 0),
+  ).toEqual(["cannot delete thread: HTTP 403"]);
   expect(request).toHaveBeenCalledWith("/channels/thread", { method: "DELETE" });
   expect(request).toHaveBeenCalledWith("/channels/channel/pins/trigger", { method: "DELETE" });
+  expect(request).toHaveBeenCalledWith("/guilds/guild/scheduled-events", {
+    headers: { Authorization: "Bot bot-token" },
+  });
+  expect(request).toHaveBeenCalledWith("/guilds/guild/scheduled-events/event", {
+    method: "DELETE",
+    headers: { Authorization: "Bot bot-token" },
+  });
+  expect(request.mock.calls.some(([path]) => path.endsWith("/other"))).toBe(false);
+});
+
+test("discord-tools verifies the external event through REST", async () => {
+  const scenario = SCENARIOS.find((item) => item.name === "discord-tools");
+  if (!scenario?.verify) throw new Error("discord-tools verification missing");
+  const event = {
+    id: "event",
+    name: /名前『([^』]+)』/u.exec(scenario.prompt)?.[1],
+    creator_id: "bot",
+    entity_type: 3,
+    privacy_level: 2,
+    entity_metadata: { location: "e2e location" },
+    scheduled_start_time: /開始 ([^、]+)、/u.exec(scenario.prompt)?.[1],
+    scheduled_end_time: /終了 ([^、]+)、/u.exec(scenario.prompt)?.[1],
+  };
+  let events = [event];
+  const request = mock(async (path: string) => {
+    if (path === "/channels/channel/messages/trigger")
+      return Response.json({ reactions: [{ emoji: { name: "👍" } }], thread: { id: "thread" } });
+    if (path === "/channels/channel/pins") return Response.json([{ id: "trigger" }]);
+    if (path === "/channels/channel/messages?limit=50")
+      return Response.json([
+        {
+          author: { id: "bot" },
+          message_reference: { message_id: "trigger" },
+          poll: {
+            question: { text: "賛成ですか？" },
+            answers: [{ poll_media: { text: "はい" } }, { poll_media: { text: "いいえ" } }],
+          },
+        },
+      ]);
+    if (path === "/channels/channel") return Response.json({ guild_id: "guild" });
+    if (path === "/guilds/guild/scheduled-events") return Response.json(events);
+    return Response.json({});
+  });
+  expect(await scenario.verify("trigger", "channel", request, "bot", env)).toEqual([]);
+  expect(request).toHaveBeenCalledWith("/guilds/guild/scheduled-events");
+  events = [];
+  expect(await scenario.verify("trigger", "channel", request, "bot", env)).toContain(
+    "exactly one external event was not found",
+  );
+  events = [event, event];
+  expect(await scenario.verify("trigger", "channel", request, "bot", env)).toContain(
+    "exactly one external event was not found",
+  );
+  events = [{ ...event, entity_type: 2 }];
+  expect(await scenario.verify("trigger", "channel", request, "bot", env)).toContain(
+    "the scheduled event does not match the requested external event",
+  );
+});
+
+test("discord-tools cleanup deletes an event even without a trigger", async () => {
+  const scenario = SCENARIOS.find((item) => item.name === "discord-tools");
+  if (!scenario?.cleanup) throw new Error("discord-tools cleanup missing");
+  const eventName = /名前『([^』]+)』/u.exec(scenario.prompt)?.[1];
+  const request = mock(async (path: string) => {
+    if (path === "/channels/channel") return Response.json({ guild_id: "guild" });
+    if (path === "/guilds/guild/scheduled-events")
+      return Response.json([{ id: "event", name: eventName }]);
+    return new Response(null, { status: 204 });
+  });
+  expect(
+    await scenario.cleanup(undefined, "channel", request, { ...env, botToken: "bot-token" }, 0),
+  ).toEqual([]);
+  expect(request).toHaveBeenCalledWith("/guilds/guild/scheduled-events/event", {
+    method: "DELETE",
+    headers: { Authorization: "Bot bot-token" },
+  });
 });
 
 describe("cron scenario preconditions", () => {

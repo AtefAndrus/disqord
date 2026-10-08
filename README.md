@@ -15,7 +15,7 @@ Discord上でOpenRouter経由のLLMと対話するBot。メンションで呼び
 ### Discord への招待
 
 Developer Portal の Bot ページで Message Content Intent を有効にする。
-招待 URL は OAuth2 → URL Generator で、Scopes に `bot` を選び、Bot Permissions に次を選んで作る（`permissions=2815059004869696`）。
+招待 URL は OAuth2 → URL Generator で、Scopes に `bot` を選び、Bot Permissions に次を選んで作る（`permissions=2832651191962688`）。
 
 - View Channels
 - Send Messages
@@ -23,7 +23,7 @@ Developer Portal の Bot ページで Message Content Intent を有効にする�
 - Read Message History
 - Embed Links
 - Attach Files
-- Add Reactions、Create Polls、Create Public Threads、Pin Messages（`/config` の 機能 → Discord 操作 が使う）
+- Add Reactions、Create Polls、Create Public Threads、Pin Messages、Create Events、Connect（`/config` の 機能 → Discord 操作 が使う。Connect はボイスチャンネルのイベントを作るときに要る）
 
 既にサーバーにいる bot も、権限を足した URL で認可し直すと、bot のロールの権限が更新される。
 Discord 操作は bot と依頼したメンバーの双方がその権限を持つときだけ実行するので、足りなければ実行せずにその旨をモデルが伝える。

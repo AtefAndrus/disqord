@@ -108,6 +108,7 @@ const botId = config.applicationId;
 const interruption = new AbortController();
 const env: ScenarioEnv = {
   databasePath: config.databasePath,
+  botToken: config.discordToken,
   testerBotId: config.e2eTesterBotId ?? "",
   interrupted: interruption.signal,
 };

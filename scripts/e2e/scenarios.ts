@@ -352,6 +352,9 @@ const DISCORD_INFO_SECRET = crypto.randomUUID();
 let discordInfoFixtureId: string | undefined;
 let discordInfoPinNoticeId: string | undefined;
 let discordInfoChannelName = "";
+const DISCORD_EVENT_NAME = `e2e-${crypto.randomUUID()}`;
+const DISCORD_EVENT_START = new Date(Date.now() + 86_400_000).toISOString();
+const DISCORD_EVENT_END = new Date(Date.now() + 90_000_000).toISOString();
 /** Enough numbers to fill a page (3800 characters) and part of a second. */
 export const LONG_NUMBER_COUNT = 1200;
 /** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
@@ -536,8 +539,9 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "discord-tools",
     manual: true,
-    prompt:
-      "[e2e] このメッセージに 👍 を付け、『賛成ですか？』を選択肢『はい』『いいえ』で投票にし、このメッセージから『e2e thread』という公開スレッドを作り、このメッセージをピン留めして。4 つの Discord 操作ツールを必ず使って。",
+    prompt: `[e2e] このメッセージに 👍 を付け、『賛成ですか？』を選択肢『はい』『いいえ』で投票にし、このメッセージから『e2e thread』という公開スレッドを作り、このメッセージをピン留めして。さらに名前『${DISCORD_EVENT_NAME}』、開始 ${DISCORD_EVENT_START}、終了 ${DISCORD_EVENT_END}、場所『e2e location』の外部イベントを作って。create_event を含む 5 つの Discord 操作ツールを必ず使って。`,
+    before: async (_channelId, _request, env) =>
+      env.botToken ? [] : ["the bot token is required to clean up scheduled events"],
     check: (reply) => hasUsageFooter(reply),
     verify: async (triggerId, channelId, request, botId) => {
       const problems: string[] = [];
@@ -585,13 +589,73 @@ export const SCENARIOS: Scenario[] = [
         const thread = await request(`/channels/${threadId}`);
         if (!thread.ok) problems.push(`cannot read thread: HTTP ${thread.status}`);
       }
+      const channel = await request(`/channels/${channelId}`);
+      if (!channel.ok) problems.push(`cannot read event guild: HTTP ${channel.status}`);
+      else {
+        const { guild_id: guildId } = (await channel.json()) as { guild_id: string };
+        const response = await request(`/guilds/${guildId}/scheduled-events`);
+        if (!response.ok) problems.push(`cannot read events: HTTP ${response.status}`);
+        else {
+          const events = (await response.json()) as {
+            name: string;
+            creator_id: string;
+            entity_type: number;
+            privacy_level: number;
+            entity_metadata?: { location?: string };
+            scheduled_start_time: string;
+            scheduled_end_time: string | null;
+          }[];
+          const matches = events.filter(
+            (event) => event.name === DISCORD_EVENT_NAME && event.creator_id === botId,
+          );
+          if (matches.length !== 1) problems.push("exactly one external event was not found");
+          else {
+            const event = matches[0];
+            if (
+              event?.entity_type !== 3 ||
+              event.privacy_level !== 2 ||
+              event.entity_metadata?.location !== "e2e location" ||
+              Date.parse(event.scheduled_start_time) !== Date.parse(DISCORD_EVENT_START) ||
+              Date.parse(event.scheduled_end_time ?? "") !== Date.parse(DISCORD_EVENT_END)
+            )
+              problems.push("the scheduled event does not match the requested external event");
+          }
+        }
+      }
       return problems;
     },
-    cleanup: async (triggerId, channelId, request) => {
-      if (triggerId === undefined) return [];
+    cleanup: async (triggerId, channelId, request, env) => {
       const problems: string[] = [];
+      try {
+        if (!env.botToken) problems.push("cannot clean up events without the bot token");
+        else {
+          const channel = await request(`/channels/${channelId}`);
+          if (!channel.ok)
+            problems.push(`cannot read event guild for cleanup: HTTP ${channel.status}`);
+          else {
+            const { guild_id: guildId } = (await channel.json()) as { guild_id: string };
+            const headers = { Authorization: `Bot ${env.botToken}` };
+            const events = await request(`/guilds/${guildId}/scheduled-events`, { headers });
+            if (!events.ok) problems.push(`cannot read events for cleanup: HTTP ${events.status}`);
+            else {
+              for (const event of (await events.json()) as { id: string; name: string }[]) {
+                if (event.name !== DISCORD_EVENT_NAME) continue;
+                const deleted = await request(`/guilds/${guildId}/scheduled-events/${event.id}`, {
+                  method: "DELETE",
+                  headers,
+                });
+                if (!deleted.ok) problems.push(`cannot delete event: HTTP ${deleted.status}`);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        problems.push(`cannot clean up events: ${error instanceof Error ? error.message : error}`);
+      }
+      if (triggerId === undefined) return problems;
       const response = await request(`/channels/${channelId}/messages/${triggerId}`);
-      if (!response.ok) return [`cannot read trigger for cleanup: HTTP ${response.status}`];
+      if (!response.ok)
+        return [...problems, `cannot read trigger for cleanup: HTTP ${response.status}`];
       const message = (await response.json()) as { thread?: { id: string }; pinned?: boolean };
       if (message.thread?.id) {
         try {

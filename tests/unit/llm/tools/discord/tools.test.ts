@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { ChannelType } from "discord.js";
 import { createAddReactionTool } from "../../../../../src/llm/tools/discord/addReaction";
+import { createCreateEventTool } from "../../../../../src/llm/tools/discord/createEvent";
 import { createCreatePollTool } from "../../../../../src/llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "../../../../../src/llm/tools/discord/createThread";
 import { createPinMessageTool } from "../../../../../src/llm/tools/discord/pinMessage";
@@ -10,12 +11,15 @@ import type {
   IToolContext,
   IToolInvocationMeta,
 } from "../../../../../src/llm/tools/registry";
+import { ToolRegistry } from "../../../../../src/llm/tools/registry";
+import { ToolDispatcher } from "../../../../../src/llm/tools/toolHandler";
 
 const tools = [
   createAddReactionTool(),
   createCreatePollTool(),
   createCreateThreadTool(),
   createPinMessageTool(),
+  createCreateEventTool(),
 ];
 const discord: DiscordToolContext = {
   channelType: ChannelType.GuildText,
@@ -23,6 +27,7 @@ const discord: DiscordToolContext = {
   createPoll: mock(async () => '{"ok":true}'),
   createThread: mock(async () => '{"ok":true}'),
   pinMessage: mock(async () => '{"ok":true}'),
+  createEvent: mock(async () => '{"ok":true,"url":"https://discord.com/events/guild/event"}'),
 };
 const context = (overrides: Partial<IToolContext> = {}): IToolContext => ({
   guildId: "guild",
@@ -92,5 +97,123 @@ describe("Discord client tools", () => {
       const result = await tool.handler(args, context(), new AbortController().signal, meta);
       expect(result).toEqual({ llmResult: '{"ok":true}', terminal: true });
     }
+  });
+
+  test("create_event validates kind-specific arguments, lengths and offset timestamps", () => {
+    const tool = createCreateEventTool();
+    const external = {
+      kind: "external" as const,
+      name: "Meet",
+      start: "2099-01-01T20:00:00+09:00",
+      end: "2099-01-01T21:00:00+09:00",
+      location: "Park",
+    };
+    const voice = {
+      kind: "voice",
+      name: "Meet",
+      start: "2099-01-01T11:00:00Z",
+      channel_name: "Meeting",
+    };
+    for (const valid of [
+      external,
+      voice,
+      { ...voice, end: external.end },
+      {
+        ...external,
+        name: "x".repeat(100),
+        location: "x".repeat(100),
+        description: "x".repeat(1000),
+      },
+      { ...voice, start: "2000-01-01T00:00:00Z" },
+      { ...external, end: external.start },
+    ])
+      expect(tool.validate(valid).ok).toBe(true);
+    const emptyDescription = tool.validate({ ...external, description: "" });
+    expect(emptyDescription).toEqual({ ok: true, value: external });
+    for (const invalid of [
+      null,
+      [],
+      "event",
+      {},
+      { ...external, kind: "stage" },
+      { ...external, kind: undefined },
+      { ...external, name: undefined },
+      { ...external, name: "" },
+      { ...external, name: "x".repeat(101) },
+      { ...external, start: undefined },
+      { ...external, start: "2099-01-01T20:00:00" },
+      { ...external, start: "2099-02-30T20:00:00Z" },
+      { ...external, start: "2099-01-01T25:00:00Z" },
+      { ...external, start: "2099-01-01T20:00:00+09:60" },
+      { ...external, start: 42 },
+      { ...external, end: undefined },
+      { ...external, end: "tomorrow" },
+      { ...external, end: "2099-01-01T21:00:00" },
+      { ...voice, end: null },
+      { ...external, location: undefined },
+      { ...external, location: "" },
+      { ...external, location: "x".repeat(101) },
+      { ...external, location: 42 },
+      { ...external, channel_name: "Meeting" },
+      { ...voice, channel_name: undefined },
+      { ...voice, channel_name: "" },
+      { ...voice, channel_name: 42 },
+      { ...voice, location: "Park" },
+      { ...external, description: "x".repeat(1001) },
+      { ...external, description: null },
+      { ...voice, unexpected: true },
+    ])
+      expect(tool.validate(invalid).ok).toBe(false);
+  });
+
+  test("create_event returns exactly URL JSON as a terminal result and forwards validated arguments", async () => {
+    const tool = createCreateEventTool();
+    const args = {
+      kind: "external" as const,
+      name: "Meet",
+      start: "2099-01-01T20:00:00+09:00",
+      end: "2099-01-01T21:00:00+09:00",
+      location: "Park",
+    };
+    const signal = new AbortController().signal;
+    const meta = { requestId: "r", toolCallId: "t", invocationId: "i" };
+    expect(await tool.handler(args, context({ resultBudgetTokens: 0 }), signal, meta)).toEqual({
+      llmResult: '{"ok":true,"url":"https://discord.com/events/guild/event"}',
+      terminal: true,
+    });
+    expect(discord.createEvent).toHaveBeenCalledWith(args, signal);
+    expect(await tool.handler(args, context({ discord: undefined }), signal, meta)).toEqual({
+      llmResult: '{"ok":false,"reason":"unavailable"}',
+      terminal: true,
+    });
+  });
+
+  test("create_event URL fits the fixed result allowance with an exhausted budget", async () => {
+    const registry = new ToolRegistry();
+    registry.register(createCreateEventTool());
+    const urlResult =
+      '{"ok":true,"url":"https://discord.com/events/18446744073709551615/18446744073709551615"}';
+    const ctx = context({
+      resultBudgetTokens: 0,
+      discord: { ...discord, createEvent: mock(async () => urlResult) },
+    });
+    const outcome = await new ToolDispatcher(registry).dispatch(
+      {
+        index: 0,
+        id: "call",
+        name: "create_event",
+        rawArguments: JSON.stringify({
+          kind: "voice",
+          name: "Meet",
+          start: "2099-01-01T00:00:00Z",
+          channel_name: "Meeting",
+        }),
+      },
+      { ctx, frozenToolNames: new Set(["create_event"]), requestId: "request" },
+    );
+    expect(outcome.status).toBe("ok");
+    expect(outcome.toolMessage.content).toBe(urlResult);
+    expect(outcome.resultTooLarge).toBeUndefined();
+    expect(registry.buildTools(context({ discord: undefined }))).toEqual([]);
   });
 });

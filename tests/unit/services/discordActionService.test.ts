@@ -1,6 +1,13 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { Message } from "discord.js";
-import { ChannelType, PermissionFlagsBits } from "discord.js";
+import {
+  ChannelType,
+  Collection,
+  GuildScheduledEventEntityType,
+  GuildScheduledEventPrivacyLevel,
+  PermissionFlagsBits,
+} from "discord.js";
+import type { CreateEventArgs } from "../../../src/llm/tools/registry";
 import { DiscordActionService } from "../../../src/services/discordActionService";
 
 const READ = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory];
@@ -29,15 +36,32 @@ function fixture(
     pinAllowed?: boolean;
     systemMessage?: boolean;
     emojiRoles?: string[];
+    userEventPermissions?: bigint[];
+    botEventPermissions?: bigint[];
+    voiceChannels?: {
+      id: string;
+      name: string;
+      type?: ChannelType;
+      userPermissions?: bigint[];
+      botPermissions?: bigint[];
+    }[];
   } = {},
 ) {
   const user = {
     id: "user",
+    permissions: {
+      has: (bit: bigint) =>
+        (options.userEventPermissions ?? [PermissionFlagsBits.CreateEvents]).includes(bit),
+    },
     communicationDisabledUntilTimestamp: options.timedOut ? Date.now() + 60_000 : null,
     roles: { cache: { has: (id: string) => id === "user-role" } },
   };
   const bot = {
     id: "bot",
+    permissions: {
+      has: (bit: bigint) =>
+        (options.botEventPermissions ?? [PermissionFlagsBits.CreateEvents]).includes(bit),
+    },
     roles: { cache: { has: (id: string) => id === "bot-role" } },
   };
   const actions = {
@@ -45,6 +69,7 @@ function fixture(
     pin: mock(async () => {}),
     startThread: mock(async () => {}),
     send: mock(async () => {}),
+    createEvent: mock(async () => ({ id: "event" })),
   };
   const message = {
     pinnable: options.pinAllowed ?? true,
@@ -80,6 +105,7 @@ function fixture(
     send: actions.send,
   };
   const guild = {
+    id: "guild",
     ownerId: options.owner ? "user" : "owner",
     members: {
       fetch: mock(async ({ user: id }: { user: string }) => {
@@ -88,10 +114,36 @@ function fixture(
       }),
     },
     channels: {
-      fetch: mock(async (id: string) =>
-        id === "parent" ? { type: options.parentType ?? ChannelType.GuildText } : channel,
+      fetch: mock(async (id?: string) =>
+        id === undefined
+          ? new Collection(
+              (options.voiceChannels ?? [{ id: "voice", name: "Meeting" }]).map((voice) => [
+                voice.id,
+                {
+                  id: voice.id,
+                  name: voice.name,
+                  type: voice.type ?? ChannelType.GuildVoice,
+                  permissionsFor: (member: { id: string }) => ({
+                    has: (bit: bigint) =>
+                      (member.id === "bot"
+                        ? voice.botPermissions
+                        : voice.userPermissions
+                      )?.includes(bit) ??
+                      [
+                        PermissionFlagsBits.CreateEvents,
+                        PermissionFlagsBits.ViewChannel,
+                        PermissionFlagsBits.Connect,
+                      ].includes(bit),
+                  }),
+                },
+              ]),
+            )
+          : id === "parent"
+            ? { type: options.parentType ?? ChannelType.GuildText }
+            : channel,
       ),
     },
+    scheduledEvents: { create: actions.createEvent },
     emojis: {
       fetch: mock(async () => ({
         find: (predicate: (emoji: unknown) => boolean) => {
@@ -120,6 +172,305 @@ function fixture(
 const signal = new AbortController().signal;
 const parsed = async (promise: Promise<string>): Promise<Record<string, unknown>> =>
   JSON.parse(await promise);
+
+const EVENT_START = new Date(Date.now() + 3_600_000).toISOString();
+const EVENT_END = new Date(Date.now() + 7_200_000).toISOString();
+const EXTERNAL: CreateEventArgs = {
+  kind: "external",
+  name: "Meet",
+  start: EVENT_START,
+  end: EVENT_END,
+  location: "Park",
+};
+const VOICE: CreateEventArgs = {
+  kind: "voice",
+  name: "Meet",
+  start: EVENT_START,
+  channel_name: "Meeting",
+};
+const VOICE_PERMISSIONS = [
+  PermissionFlagsBits.CreateEvents,
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.Connect,
+];
+
+describe("DiscordActionService create_event", () => {
+  test.each([EXTERNAL, VOICE])(
+    "creates a guild-only $kind event when both actors have permissions",
+    async (args) => {
+      const { service, guild, actions, channel } = fixture();
+      expect(await service.createEvent(args, signal)).toBe(
+        '{"ok":true,"url":"https://discord.com/events/guild/event"}',
+      );
+      expect(actions.createEvent).toHaveBeenCalledWith({
+        name: args.name,
+        scheduledStartTime: Date.parse(args.start),
+        ...(args.end && { scheduledEndTime: Date.parse(args.end) }),
+        privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+        ...(args.kind === "external"
+          ? {
+              entityType: GuildScheduledEventEntityType.External,
+              entityMetadata: { location: "Park" },
+            }
+          : {
+              entityType: GuildScheduledEventEntityType.Voice,
+              channel: expect.objectContaining({ id: "voice" }),
+            }),
+      });
+      expect(guild.channels.fetch).toHaveBeenCalledWith("channel", { force: true });
+      if (args.kind === "voice") expect(guild.channels.fetch).toHaveBeenCalledWith();
+      expect(channel.messages.fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["bot", "user"] as const)(
+    "external rejects when only %s has CreateEvents",
+    async (holder) => {
+      const { service, actions } = fixture({
+        [holder === "bot" ? "userEventPermissions" : "botEventPermissions"]: [],
+      });
+      expect(await parsed(service.createEvent(EXTERNAL, signal))).toEqual({
+        ok: false,
+        reason: "missing_permission",
+        who: holder === "bot" ? "user" : "bot",
+        permissions: ["CreateEvents"],
+      });
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["bot", "user"] as const)(
+    "voice rejects when only %s has CreateEvents and Connect",
+    async (holder) => {
+      const { service, actions } = fixture({
+        voiceChannels: [
+          {
+            id: "voice",
+            name: "Meeting",
+            [holder === "bot" ? "userPermissions" : "botPermissions"]: [
+              PermissionFlagsBits.ViewChannel,
+            ],
+          },
+        ],
+      });
+      expect(await parsed(service.createEvent(VOICE, signal))).toEqual({
+        ok: false,
+        reason: "missing_permission",
+        who: holder === "bot" ? "user" : "bot",
+        permissions: ["CreateEvents", "Connect"],
+      });
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["bot", "user"] as const)(
+    "voice requires Connect for %s even with guild CreateEvents",
+    async (who) => {
+      const { service, actions } = fixture({
+        voiceChannels: [
+          {
+            id: "voice",
+            name: "Meeting",
+            [who === "bot" ? "botPermissions" : "userPermissions"]: VOICE_PERMISSIONS.filter(
+              (bit) => bit !== PermissionFlagsBits.Connect,
+            ),
+          },
+        ],
+      });
+      expect(await parsed(service.createEvent(VOICE, signal))).toEqual({
+        ok: false,
+        reason: "missing_permission",
+        who,
+        permissions: ["Connect"],
+      });
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["bot", "user"] as const)(
+    "excludes same-name voice channels invisible to %s",
+    async (who) => {
+      const { service, actions } = fixture({
+        voiceChannels: [
+          {
+            id: "hidden",
+            name: "Meeting",
+            [who === "bot" ? "botPermissions" : "userPermissions"]: VOICE_PERMISSIONS.filter(
+              (bit) => bit !== PermissionFlagsBits.ViewChannel,
+            ),
+          },
+          { id: "visible", name: "Meeting" },
+        ],
+      });
+      expect((await parsed(service.createEvent(VOICE, signal))).ok).toBe(true);
+      expect(actions.createEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: expect.objectContaining({ id: "visible" }) }),
+      );
+    },
+  );
+
+  test.each(
+    [
+      [],
+      [{ id: "hidden", name: "Meeting", userPermissions: [] }],
+      [{ id: "hidden", name: "Meeting", botPermissions: [] }],
+      [{ id: "text", name: "Meeting", type: ChannelType.GuildText }],
+      [{ id: "stage", name: "Meeting", type: ChannelType.GuildStageVoice }],
+      [{ id: "other", name: "Other" }],
+    ].map((channels) => [channels] as const),
+  )(
+    "returns channel_not_found for missing or invisible voice candidates %p",
+    async (voiceChannels) => {
+      const { service, actions } = fixture({ voiceChannels });
+      expect(await parsed(service.createEvent(VOICE, signal))).toEqual({
+        ok: false,
+        reason: "channel_not_found",
+      });
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  test("returns channel_ambiguous without candidate names", async () => {
+    const { service, actions } = fixture({
+      voiceChannels: [
+        { id: "one", name: "Meeting" },
+        { id: "two", name: "Meeting" },
+      ],
+    });
+    expect(await service.createEvent(VOICE, signal)).toBe(
+      '{"ok":false,"reason":"channel_ambiguous"}',
+    );
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { ...EXTERNAL, start: new Date(Date.now() - 1000).toISOString() },
+    { ...VOICE, start: new Date(Date.now() - 1000).toISOString() },
+    { ...EXTERNAL, end: EVENT_START },
+    { ...VOICE, end: new Date(Date.parse(EVENT_START) - 1000).toISOString() },
+  ])("rejects invalid time ordering at execution for %p", async (args) => {
+    const { service, actions } = fixture();
+    expect((await parsed(service.createEvent(args, signal))).reason).toBe(
+      Date.parse(args.start) <= Date.now() ? "invalid_start" : "invalid_end",
+    );
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+
+  test.each([EXTERNAL, VOICE])("50013 reports $kind event permission names", async (args) => {
+    const { service, actions } = fixture();
+    actions.createEvent.mockImplementationOnce(async () => {
+      throw { code: 50013 };
+    });
+    expect(await parsed(service.createEvent(args, signal))).toEqual({
+      ok: false,
+      reason: "missing_permission",
+      who: "bot",
+      permissions:
+        args.kind === "external" ? ["CreateEvents"] : ["CreateEvents", "ViewChannel", "Connect"],
+    });
+  });
+
+  test("checks start against the execution time after authorization", async () => {
+    const { service, actions, guild, channel } = fixture();
+    const start = Date.now() + 1000;
+    const clock = spyOn(Date, "now");
+    guild.channels.fetch.mockImplementationOnce(async () => {
+      clock.mockReturnValue(start + 1);
+      return channel;
+    });
+    try {
+      expect(
+        await parsed(
+          service.createEvent({ ...EXTERNAL, start: new Date(start).toISOString() }, signal),
+        ),
+      ).toEqual({ ok: false, reason: "invalid_start" });
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("counts an aborted create_event call toward the per-response limit", async () => {
+    const { service, actions } = fixture();
+    const controller = new AbortController();
+    actions.createEvent.mockImplementationOnce(async () => {
+      controller.abort();
+      throw new Error("interrupted");
+    });
+    expect((await parsed(service.createEvent(EXTERNAL, controller.signal))).reason).toBe(
+      "discord_failed",
+    );
+    expect(await parsed(service.createEvent(EXTERNAL, signal))).toEqual({
+      ok: false,
+      reason: "limit_reached",
+    });
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test("a call cancelled before the create request leaves the limit for the next call", async () => {
+    const early = fixture();
+    const cancelled = AbortSignal.abort();
+    expect((await parsed(early.service.createEvent(EXTERNAL, cancelled))).reason).toBe("cancelled");
+    expect((await parsed(early.service.createEvent(EXTERNAL, signal))).ok).toBe(true);
+    expect(early.actions.createEvent).toHaveBeenCalledTimes(1);
+    const later = fixture();
+    const controller = new AbortController();
+    const fetchChannels = later.guild.channels.fetch.getMockImplementation();
+    later.guild.channels.fetch.mockImplementation(async (id) => {
+      const channels = await fetchChannels?.(id);
+      if (id === undefined && !controller.signal.aborted) controller.abort();
+      return channels as Awaited<ReturnType<NonNullable<typeof fetchChannels>>>;
+    });
+    expect((await parsed(later.service.createEvent(VOICE, controller.signal))).reason).toBe(
+      "cancelled",
+    );
+    expect(later.actions.createEvent).not.toHaveBeenCalled();
+    expect((await parsed(later.service.createEvent(VOICE, signal))).ok).toBe(true);
+  });
+
+  test("a call refused by a check leaves the limit for the corrected call", async () => {
+    const { service, actions } = fixture();
+    expect(
+      (await parsed(service.createEvent({ ...VOICE, channel_name: "no-such-channel" }, signal)))
+        .reason,
+    ).toBe("channel_not_found");
+    expect((await parsed(service.createEvent(VOICE, signal))).ok).toBe(true);
+    expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe("limit_reached");
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test("requires common current-channel authorization before creating events", async () => {
+    for (const [options, reason] of [
+      [{ timedOut: true }, "requester_timed_out"],
+      [{ memberFetchFails: true }, "requester_unavailable"],
+      [
+        { type: ChannelType.PublicThread, locked: true, userPermissions: READ },
+        "missing_permission",
+      ],
+      [{ botPermissions: [] as bigint[] }, "missing_permission"],
+    ] as const) {
+      const { service, actions } = fixture(options);
+      expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe(reason);
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    }
+  });
+
+  test("passes description and optional voice end without message mutation limits interfering", async () => {
+    const { service, actions } = fixture();
+    await service.createPoll("Q", ["A", "B"], 24, false, signal);
+    expect(
+      (
+        await parsed(
+          service.createEvent({ ...VOICE, end: EVENT_END, description: "Details" }, signal),
+        )
+      ).ok,
+    ).toBe(true);
+    expect(actions.createEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ scheduledEndTime: Date.parse(EVENT_END), description: "Details" }),
+    );
+    expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe("limit_reached");
+  });
+});
 
 describe("DiscordActionService", () => {
   test("runs all four operations and resolves a shown reference", async () => {

@@ -562,6 +562,10 @@ export class ChatService implements IChatService {
                 clientToolInvoked = true;
                 return discord.pinMessage(...args);
               },
+              createEvent: (...args) => {
+                clientToolInvoked = true;
+                return discord.createEvent(...args);
+              },
             }
           : undefined;
         const cronContext: CronToolContext | undefined = cron

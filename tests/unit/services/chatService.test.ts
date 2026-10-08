@@ -4,6 +4,7 @@ import type { CronJob } from "../../../src/db/repositories/cronRepository";
 import { AppError, BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
+import { createCreateEventTool } from "../../../src/llm/tools/discord/createEvent";
 import { createProposeCronJobTool } from "../../../src/llm/tools/proposeCronJob";
 import type { CronToolContext, DiscordToolContext } from "../../../src/llm/tools/registry";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
@@ -555,6 +556,7 @@ describe("ChatService", () => {
   test("offers Discord tools when history is off and the model supports tools", async () => {
     const fixture = createFixture({ historyEnabled: false, discordToolsEnabled: true });
     fixture.toolRegistry.register(createAddReactionTool());
+    fixture.toolRegistry.register(createCreateEventTool());
     fixture.llmClient.listModelsWithPricing = mock(async () => [
       {
         id: "test-model:fixture",
@@ -573,6 +575,7 @@ describe("ChatService", () => {
       createPoll: async () => '{"ok":true}',
       createThread: async () => '{"ok":true}',
       pinMessage: async () => '{"ok":true}',
+      createEvent: async () => '{"ok":true}',
     };
     await fixture.chatService.generateChatResponse(
       "guild",
@@ -583,6 +586,7 @@ describe("ChatService", () => {
     );
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
     expect(JSON.stringify(request.tools)).toContain('"name":"add_reaction"');
+    expect(JSON.stringify(request.tools)).toContain('"name":"create_event"');
     expect(request.messages.at(-1)?.content).toBe("react");
   });
 

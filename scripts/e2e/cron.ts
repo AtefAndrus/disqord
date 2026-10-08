@@ -8,6 +8,8 @@ type Request = (path: string, init?: RequestInit) => Promise<Response>;
 export interface ScenarioEnv {
   databasePath: string;
   testerBotId: string;
+  /** Bot under test's token, used to remove its own scheduled events. */
+  botToken?: string;
   /** Aborted on SIGINT or SIGTERM, whose cleanup can run before the scenario writes its rows. */
   interrupted?: AbortSignal;
 }
