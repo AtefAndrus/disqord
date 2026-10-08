@@ -1,13 +1,13 @@
 import { expect, mock, test } from "bun:test";
 import type { Message } from "discord.js";
 import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
-import { mapDiscordReadAuthorization } from "../../../src/bot/events/messageCreate";
 import type { IReplyRecordRepository } from "../../../src/db/repositories/replyRecord";
 import { estimateToolResultTokens } from "../../../src/llm/contextBudget";
 import { ConversationWindowService } from "../../../src/services/conversationWindow";
 import {
   authorizeDiscordRead,
   DiscordActionService,
+  mapDiscordReadAuthorization,
 } from "../../../src/services/discordActionService";
 import { DiscordInfoService } from "../../../src/services/discordInfoService";
 import type {
@@ -491,7 +491,7 @@ test("pin budget estimate reserves the final skipped count at the token boundary
   while (estimateToolResultTokens(sized(0)) === estimateToolResultTokens(sized(48))) {
     entry.text += "x";
   }
-  const budgetTokens = estimateToolResultTokens(sized(0));
+  const budgetTokens = estimateToolResultTokens(sized(48));
   const f = await fixture();
   f.setPins([
     raw("100", { content: entry.text }),
@@ -504,8 +504,75 @@ test("pin budget estimate reserves the final skipped count at the token boundary
   ]);
   const result = await f.service.listPins(undefined, signal, budgetTokens);
   expect(estimateToolResultTokens(result)).toBeLessThanOrEqual(budgetTokens);
-  expect(JSON.parse(result).pins).toHaveLength(1);
+  const parsed = JSON.parse(result);
+  expect(parsed.pins).toHaveLength(1);
+  expect(parsed.skipped_count).toBe(48);
+  expect(parsed.stop_reason).toBe("result_budget_exhausted");
+  expect(Date.parse(parsed.next_before)).toBe(NOW - 48 * 1000);
+  expect(Date.parse(parsed.next_before)).toBeGreaterThan(NOW - 49 * 1000);
 });
+
+test("pin budget paging returns the dropped pin on the follow-up call", async () => {
+  const f = await fixture();
+  const items = [raw("100"), raw("200", { content: "x".repeat(5000) })].map((message, i) => ({
+    message: message as unknown as Message,
+    pinnedAt: new Date(NOW - i * 1000),
+  }));
+  f.channel.messages.fetchPins.mockImplementation(async (options: unknown) => {
+    const { before } = options as { before?: string };
+    return {
+      items: items.filter((pin) => !before || pin.pinnedAt.getTime() < Date.parse(before)),
+      hasMore: false,
+    };
+  });
+  const first = JSON.parse(await f.service.listPins(undefined, signal, 200));
+  expect(first.pins).toHaveLength(1);
+  expect(first.has_more).toBe(true);
+  const next = JSON.parse(await f.service.listPins(first.next_before, signal));
+  expect(next.pins).toHaveLength(1);
+  expect(next.pins[0].text).toBe("x".repeat(5000));
+  expect(next.has_more).toBe(false);
+  expect(f.context.toolContext.resolveMessageRef(next.pins[0].ref)).toBe("200");
+  expect(first.next_before).toBe(items[0]?.pinnedAt.toISOString());
+});
+
+test.each([false, true])(
+  "pin budget without room for a truncated pin preserves the preceding cursor (skipped=%s)",
+  async (skipFirst) => {
+    const f = await fixture();
+    f.setPins([
+      ...(skipFirst ? [raw("100", { author: { id: "other", username: "other", bot: true } })] : []),
+      raw("200"),
+    ]);
+    const result = JSON.parse(await f.service.listPins(undefined, signal, 0));
+    expect(result).toMatchObject({
+      pins: [],
+      skipped_count: skipFirst ? 1 : 0,
+      has_more: true,
+      stop_reason: "result_budget_exhausted",
+    });
+    if (skipFirst) expect(result.next_before).toBe(new Date(NOW).toISOString());
+    else expect(result).not.toHaveProperty("next_before");
+  },
+);
+
+test.each(["no events", "no matching events"])(
+  "empty event lists remain complete even with zero result budget (%s)",
+  async (source) => {
+    const f = await fixture();
+    if (source === "no matching events") {
+      f.setEvents([event("finished", 3), event("past", 1, NOW - 1000)]);
+    }
+    const result = JSON.parse(
+      await f.service.listEvents(new Date(NOW).toISOString(), undefined, signal, 0),
+    );
+    expect(result).toEqual({
+      active: { events: [], has_more: false },
+      scheduled: { events: [], has_more: false },
+      stop_reason: null,
+    });
+  },
+);
 
 test("event budget preserves active events before scheduled events on a tie", async () => {
   const f = await fixture();

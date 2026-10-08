@@ -15,10 +15,13 @@ import {
   LONG_NUMBERS_PER_LINE,
   modelOf,
   SCENARIOS,
+  type ScenarioPost,
   snapshotKey,
   toReply,
 } from "../../../scripts/e2e/scenarios";
+import { sendScenario } from "../../../scripts/e2e/send";
 import { applyMigrations } from "../../../src/db/schema";
+import { WINDOW_RAW_MESSAGE_LIMIT } from "../../../src/services/conversationWindow";
 import { EmbedColors } from "../../../src/types/embed";
 import {
   buildErrorContainer,
@@ -589,6 +592,23 @@ test("discord-info is named-only, checks history, pins its fixture and cleans up
     const secret = fixtureContent.split("合言葉: ")[1];
     expect(secret).toBeDefined();
     expect(scenario.prompt).not.toContain(secret as string);
+    const posts: ScenarioPost[] = [];
+    await sendScenario(
+      scenario,
+      async (message): Promise<DiscordMessage> => {
+        posts.push(message);
+        return {
+          id: String(posts.length),
+          content: message.prompt,
+          author: { id: "tester", username: "tester", bot: true },
+        };
+      },
+      async () => {},
+    );
+    expect(posts.slice(0, -1).length).toBeGreaterThanOrEqual(WINDOW_RAW_MESSAGE_LIMIT);
+    expect(posts.slice(0, -1).every((post) => post.mention === false)).toBe(true);
+    expect(posts.every((post) => !post.prompt.includes(secret as string))).toBe(true);
+    expect(posts.at(-1)?.prompt).toBe(scenario.prompt);
     expect(
       scenario.check(toReply([page("reply", [scenario.prompt, "channel-name"], USAGE)])),
     ).toContain("the reply does not contain the pinned secret");

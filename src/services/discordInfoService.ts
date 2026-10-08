@@ -211,6 +211,9 @@ export class DiscordInfoService implements DiscordInfoContext {
         scheduled: { events: scheduled.slice(0, 20).map(format), has_more: scheduled.length > 20 },
         stop_reason: null as string | null,
       };
+      if (result.active.events.length === 0 && result.scheduled.events.length === 0) {
+        return JSON.stringify(result);
+      }
       while (estimateToolResultTokens(JSON.stringify(result)) > budgetTokens) {
         const group = result.scheduled.events.length > 0 ? result.scheduled : result.active;
         if (group.events.length === 0) return empty("result_budget_exhausted");

@@ -455,6 +455,11 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "discord-info",
     manual: true,
+    setup: {
+      prompt: "[e2e] ピン留めを会話窓の外から確認する。",
+      mention: false,
+      fillerCount: WINDOW_RAW_MESSAGE_LIMIT,
+    },
     prompt: `[e2e] get_channel_info と list_pins を必ず使い、このチャンネルの名前と、${DISCORD_INFO_TOKEN} を含むピン留めメッセージに書かれた合言葉を教えて。`,
     toolName: "list_pins",
     before: async (channelId, request, env) => {

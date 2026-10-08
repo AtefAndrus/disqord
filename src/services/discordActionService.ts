@@ -2,7 +2,11 @@ import type { GuildMember, Message, TextChannel, ThreadChannel } from "discord.j
 import { ChannelType, PermissionFlagsBits, parseEmoji } from "discord.js";
 import type { DiscordToolContext } from "../llm/tools/registry";
 import { DiscordRestBudget } from "./discordMessageReader";
-import { type AuthorizationChannelLike, checkConversationAccess } from "./messageAuthorization";
+import {
+  type AuthorizationChannelLike,
+  type ConversationAccess,
+  checkConversationAccess,
+} from "./messageAuthorization";
 
 type ActionChannel = TextChannel | ThreadChannel;
 type ActionName = "reaction" | "poll" | "thread" | "pin";
@@ -145,6 +149,18 @@ export async function authorizeDiscordRead(
     return failure("cannot_read_conversation");
   }
   return { channel, user, bot, ...(parent && { parent }) };
+}
+
+export function mapDiscordReadAuthorization(
+  auth: Awaited<ReturnType<typeof authorizeDiscordRead>>,
+): ConversationAccess {
+  if (!("ok" in auth)) return "allowed";
+  if (auth.reason === "rest_budget_exhausted") return "rest_budget_exhausted";
+  return ["missing_permission", "cannot_read_conversation", "unsupported_channel"].includes(
+    auth.reason,
+  )
+    ? "denied"
+    : "failed";
 }
 
 export class DiscordActionService implements DiscordToolContext {

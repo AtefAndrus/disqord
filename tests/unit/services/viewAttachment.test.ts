@@ -6,6 +6,7 @@ import type {
   DiscordMessageListResult,
   IDiscordMessageReader,
 } from "../../../src/services/discordMessageReader";
+import type { ConversationAccess } from "../../../src/services/messageAuthorization";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 
 const originalFetch = globalThis.fetch;
@@ -60,6 +61,47 @@ afterEach(() => {
 });
 
 describe("view_attachment", () => {
+  test.each(["response stopped", "tool timeout"])(
+    "stops waiting for hanging reauthorization when aborted (%s)",
+    async (cause) => {
+      const original = humanWithAttachments();
+      const reader: IDiscordMessageReader = {
+        list: mock(
+          async (): Promise<DiscordMessageListResult> => ({ status: "ok", messages: [original] }),
+        ),
+        fetch: mock(
+          async (): Promise<DiscordMessageFetchResult> => ({ status: "found", message: original }),
+        ),
+      };
+      const reauthorize = mock(async (): Promise<ConversationAccess> => new Promise(() => {}));
+      const service = new ConversationWindowService(reader, records(), () => now);
+      const context = await service.build({
+        current: {
+          ...original,
+          id: "101",
+          content: "question",
+          timestamp: new Date(now + 1000).toISOString(),
+        },
+        guildId: "guild",
+        userId: "user",
+        botUserId: "bot",
+        botUser: {},
+        channel: {},
+        historyEnabled: true,
+        authorize: async () => true,
+        reauthorize,
+      });
+      if (!context) throw new Error("missing context");
+      const controller = new AbortController();
+      const signal = cause === "tool timeout" ? AbortSignal.timeout(10) : controller.signal;
+      const pending = context.toolContext.viewAttachment("m1", 1, "model", signal);
+      expect(reauthorize).toHaveBeenCalledTimes(1);
+      if (cause === "response stopped") controller.abort();
+      expect(await pending).toBe('{"error":"attachment_unavailable"}');
+      expect(reader.fetch).not.toHaveBeenCalled();
+    },
+  );
+
   test("pins the attachment ID when a fresh message reorders attachments", async () => {
     const original = humanWithAttachments();
     const reordered = {

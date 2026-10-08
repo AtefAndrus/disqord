@@ -1022,9 +1022,9 @@ export class ConversationWindowService {
               : "fetch_failed";
           break;
         }
-        nextBefore = pinnedAt;
         if (!judged.eligible || judged.reason === "unconfirmable") {
           skipped += 1;
+          nextBefore = pinnedAt;
           continue;
         }
         let normalized =
@@ -1034,6 +1034,7 @@ export class ConversationWindowService {
           const page = judged.reply.pages.find((candidate) => candidate.id === message.id);
           if (!page) {
             skipped += 1;
+            nextBefore = pinnedAt;
             continue;
           }
           normalized = {
@@ -1073,6 +1074,7 @@ export class ConversationWindowService {
             });
             if (truncated) {
               pins.push({ ...formatMessageForTool({ ...truncated, ref }), pinned_at: pinnedAt });
+              nextBefore = pinnedAt;
               if (!state.shown.has(message.id) && !state.pinShown.has(message.id)) {
                 state.refCounter += 1;
                 state.pinShown.set(message.id, { ...truncated, ref });
@@ -1082,6 +1084,7 @@ export class ConversationWindowService {
           }
           break;
         }
+        nextBefore = pinnedAt;
         // A pinned page does not mean the merged reply has been read.
         if (judged.reply && !judged.isHuman && judged.reply.pages.length > 1) {
           if (!state.shown.has(message.id) && !state.pinShown.has(message.id)) {
@@ -1440,7 +1443,9 @@ export class ConversationWindowService {
     budgetTokens: number,
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
-    const access = await state.checkAttachmentAccess();
+    if (signal.aborted) return '{"error":"attachment_unavailable"}';
+    const access = await untilAborted(state.checkAttachmentAccess(), signal);
+    if (access === undefined || signal.aborted) return '{"error":"attachment_unavailable"}';
     if (access === "denied") return '{"error":"no_permission"}';
     if (access === "rest_budget_exhausted") return '{"error":"rest_budget_exhausted"}';
     if (access === "failed") return '{"error":"attachment_unavailable"}';

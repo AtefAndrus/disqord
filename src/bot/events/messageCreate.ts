@@ -15,12 +15,15 @@ import type {
 } from "../../services/conversationWindow";
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
-import { authorizeDiscordRead, DiscordActionService } from "../../services/discordActionService";
+import {
+  authorizeDiscordRead,
+  DiscordActionService,
+  mapDiscordReadAuthorization,
+} from "../../services/discordActionService";
 import { DiscordInfoService } from "../../services/discordInfoService";
 import type {
   AuthorizationChannelLike,
   AuthorizationMessageLike,
-  ConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
@@ -54,18 +57,6 @@ import {
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
-
-export function mapDiscordReadAuthorization(
-  auth: Awaited<ReturnType<typeof authorizeDiscordRead>>,
-): ConversationAccess {
-  if (!("ok" in auth)) return "allowed";
-  if (auth.reason === "rest_budget_exhausted") return "rest_budget_exhausted";
-  return ["missing_permission", "cannot_read_conversation", "unsupported_channel"].includes(
-    auth.reason,
-  )
-    ? "denied"
-    : "failed";
-}
 
 function operationError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
