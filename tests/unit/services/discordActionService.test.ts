@@ -428,6 +428,33 @@ describe("DiscordActionService create_event", () => {
     expect((await parsed(later.service.createEvent(VOICE, signal))).ok).toBe(true);
   });
 
+  test("a permission refusal does not spend the limit", async () => {
+    const { service, actions } = fixture({ userEventPermissions: [] });
+    for (let i = 0; i < 2; i++) {
+      expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe(
+        "missing_permission",
+      );
+    }
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+
+  test("a create request Discord refuses still spends the limit", async () => {
+    // The REST client may have resent the request before the refusal, so it may exist.
+    const { service, actions } = fixture();
+    actions.createEvent.mockImplementationOnce(async () => {
+      throw { code: 50013 };
+    });
+    expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe("missing_permission");
+    expect((await parsed(service.createEvent(EXTERNAL, signal))).reason).toBe("limit_reached");
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test("an external event never lists the guild's channels", async () => {
+    const { service, guild } = fixture();
+    expect((await parsed(service.createEvent(EXTERNAL, signal))).ok).toBe(true);
+    expect(guild.channels.fetch.mock.calls.some((call) => call.length === 0)).toBe(false);
+  });
+
   test("a call refused by a check leaves the limit for the corrected call", async () => {
     const { service, actions } = fixture();
     expect(

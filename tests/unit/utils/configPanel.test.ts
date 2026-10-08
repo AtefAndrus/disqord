@@ -105,6 +105,11 @@ describe("config pages", () => {
     ]);
   });
 
+  test("the Discord 操作 switch names every action it enables, event creation included", () => {
+    const json = JSON.stringify(buildConfigPanel("features", createMockGuildSettings()));
+    expect(json).toContain("リアクション、投票、スレッド作成、ピン留め、イベント作成");
+  });
+
   test("an untouched guild does not claim a last change", () => {
     const settings = createMockGuildSettings({ updatedBy: null, settingsVersion: 0 });
     expect(JSON.stringify(buildConfigPanel("response", settings))).not.toContain("最終変更");

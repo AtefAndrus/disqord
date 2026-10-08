@@ -353,8 +353,10 @@ let discordInfoFixtureId: string | undefined;
 let discordInfoPinNoticeId: string | undefined;
 let discordInfoChannelName = "";
 const DISCORD_EVENT_NAME = `e2e-${crypto.randomUUID()}`;
-const DISCORD_EVENT_START = new Date(Date.now() + 86_400_000).toISOString();
-const DISCORD_EVENT_END = new Date(Date.now() + 90_000_000).toISOString();
+// Whole minutes: a model rewriting the time in JST tends to drop seconds and milliseconds.
+const DISCORD_EVENT_BASE = Math.ceil((Date.now() + 86_400_000) / 60_000) * 60_000;
+const DISCORD_EVENT_START = new Date(DISCORD_EVENT_BASE).toISOString();
+const DISCORD_EVENT_END = new Date(DISCORD_EVENT_BASE + 3_600_000).toISOString();
 /** Enough numbers to fill a page (3800 characters) and part of a second. */
 export const LONG_NUMBER_COUNT = 1200;
 /** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
