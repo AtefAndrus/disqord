@@ -106,10 +106,10 @@ export class DiscordInfoService implements DiscordInfoContext {
             this.trigger.guild.channels.fetch(categoryId, { force: true }),
             signal,
           );
-          if (!category || signal.aborted) return '{"error":"discord_failed"}';
-          value.category_name = category.name;
+          // The bot may see the channel but not its category; keep what was read.
+          if (category && !signal.aborted) value.category_name = category.name;
         } catch {
-          return '{"error":"discord_failed"}';
+          // category_name stays null
         }
       }
     }

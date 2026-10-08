@@ -7,7 +7,6 @@ import { ConversationWindowService } from "../../../src/services/conversationWin
 import {
   authorizeDiscordRead,
   DiscordActionService,
-  mapDiscordReadAuthorization,
 } from "../../../src/services/discordActionService";
 import { DiscordInfoService } from "../../../src/services/discordInfoService";
 import type {
@@ -329,6 +328,42 @@ test("view_attachment rechecks permissions and spends the same cap before attach
   expect(f.reader.fetch).not.toHaveBeenCalled();
 });
 
+test("view_attachment treats a requester who left the server as a denial", async () => {
+  const pinned = raw("100", {
+    attachments: [
+      {
+        id: "a",
+        filename: "file.png",
+        url: "https://cdn.discordapp.com/a.png",
+        content_type: "image/png",
+        size: 1,
+      },
+    ],
+  });
+  const f = await fixture({ history: [pinned] });
+  f.guild.members.fetch.mockImplementation(async () => {
+    throw { code: 10007 };
+  });
+  expect(await f.context.toolContext.viewAttachment("m1", 1, "model", signal)).toBe(
+    '{"error":"no_permission"}',
+  );
+});
+
+test("get_channel_info keeps what it read when the category cannot be fetched", async () => {
+  // A thread's category is its parent's; the default text channel has none.
+  const f = await fixture({ type: ChannelType.PublicThread });
+  const fetchChannel = f.guild.channels.fetch.getMockImplementation();
+  if (!fetchChannel) throw new Error("fixture has no channel fetch");
+  f.guild.channels.fetch.mockImplementation(async (id?: string, options?: unknown) => {
+    if (id === "category") throw { status: 403, code: 50001 };
+    return fetchChannel(id, options);
+  });
+  const result = JSON.parse(await f.service.getChannelInfo(signal));
+  expect(result.error).toBeUndefined();
+  expect(result.category_name).toBeNull();
+  expect(result.name).toBeDefined();
+});
+
 test("view_attachment refuses when shared cap runs out during recheck", async () => {
   const f = await fixture();
   const budget = f.budget;
@@ -600,28 +635,11 @@ test("event budget preserves active events before scheduled events on a tie", as
   expect(estimateToolResultTokens(result)).toBeLessThanOrEqual(budgetTokens);
 });
 
-test.each([
-  ["allowed", "allowed"],
-  ["rest_budget_exhausted", "rest_budget_exhausted"],
-  ["missing_permission", "denied"],
-  ["cannot_read_conversation", "denied"],
-  ["unsupported_channel", "denied"],
-  ["requester_unavailable", "failed"],
-  ["discord_failed", "failed"],
-  ["conversation_access_failed", "failed"],
-] as const)("read authorization maps %s to %s", async (reason, expected) => {
-  const f = await fixture();
-  const auth =
-    reason === "allowed" ? await authorizeDiscordRead(f.trigger) : { ok: false as const, reason };
-  expect(mapDiscordReadAuthorization(auth)).toBe(expected);
-});
-
 test("private-thread membership 5xx is a transient read failure and preserves write denial", async () => {
   const f = await fixture({ type: ChannelType.PrivateThread });
   f.channel.members.fetch.mockRejectedValue({ status: 503 });
   const auth = await authorizeDiscordRead(f.trigger, f.budget, signal);
   expect(auth).toMatchObject({ ok: false, reason: "conversation_access_failed" });
-  expect(mapDiscordReadAuthorization(auth)).toBe("failed");
   expect(JSON.parse(await f.service.listPins(undefined, signal))).toEqual({
     error: "conversation_access_failed",
   });

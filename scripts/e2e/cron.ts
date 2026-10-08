@@ -300,7 +300,8 @@ export async function cleanupCron(
   startedAt: number,
 ): Promise<string[]> {
   startedRuns.push({ channelId, startedAt });
-  const db = new Database(env.databasePath);
+  // Cleanup also runs when the preconditions failed, possibly on a wrong path; never create a file there.
+  const db = new Database(env.databasePath, { readwrite: true, create: false });
   try {
     for (const table of ["cron_jobs", "cron_proposals"]) {
       db.query(`DELETE FROM ${table} WHERE user_id=? AND channel_id=? AND created_at>=?`).run(
@@ -329,7 +330,7 @@ const startedRuns: { channelId: string; startedAt: number }[] = [];
 export function cleanupLateCronProposals(env: ScenarioEnv): string[] {
   if (startedRuns.length === 0) return [];
   try {
-    const db = new Database(env.databasePath);
+    const db = new Database(env.databasePath, { readwrite: true, create: false });
     try {
       for (const { channelId, startedAt } of startedRuns) {
         db.query(

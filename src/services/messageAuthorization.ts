@@ -1,4 +1,10 @@
-import { ChannelType, type Message, PermissionFlagsBits } from "discord.js";
+import {
+  ChannelType,
+  type GuildMember,
+  type Message,
+  PermissionFlagsBits,
+  RESTJSONErrorCodes,
+} from "discord.js";
 import type { DiscordRestBudget } from "./discordMessageReader";
 
 export interface PermissionLike {
@@ -87,11 +93,19 @@ export async function reauthorizeConversationAccess(
   try {
     if (signal.aborted) return "failed";
     if (!budget.consume()) return "rest_budget_exhausted";
-    const user = await trigger.guild.members.fetch({
-      user: trigger.author.id,
-      force: true,
-      cache: false,
-    });
+    let user: GuildMember;
+    try {
+      user = await trigger.guild.members.fetch({
+        user: trigger.author.id,
+        force: true,
+        cache: false,
+      });
+    } catch (error) {
+      // A requester who left the server is a denial, not a transient failure worth retrying.
+      return (error as { code?: unknown })?.code === RESTJSONErrorCodes.UnknownMember
+        ? "denied"
+        : "failed";
+    }
     if (signal.aborted) return "failed";
     if (!budget.consume()) return "rest_budget_exhausted";
     const channel = await trigger.guild.channels.fetch(trigger.channelId, { force: true });
