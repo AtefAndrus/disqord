@@ -261,6 +261,7 @@ test.each([ChannelType.PublicThread, ChannelType.PrivateThread])(
     const result = JSON.parse(await f.service.getChannelInfo(signal));
     expect(result.parent).toEqual({ name: "fresh-parent", topic: "fresh-topic" });
     expect(result.category_name).toBe("fresh-category");
+    expect(result.category_unavailable).toBeUndefined();
     expect(f.guild.channels.fetch).toHaveBeenCalledWith("parent", { force: true });
     expect(f.guild.channels.fetch).toHaveBeenCalledWith("category", { force: true });
     expect(f.context.toolRestBudget?.used).toBe(type === ChannelType.PrivateThread ? 6 : 5);
@@ -361,6 +362,7 @@ test("get_channel_info keeps what it read when the category cannot be fetched", 
   const result = JSON.parse(await f.service.getChannelInfo(signal));
   expect(result.error).toBeUndefined();
   expect(result.category_name).toBeNull();
+  expect(result.category_unavailable).toBe(true);
   expect(result.name).toBeDefined();
 });
 

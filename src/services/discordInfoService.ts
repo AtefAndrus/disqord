@@ -106,10 +106,12 @@ export class DiscordInfoService implements DiscordInfoContext {
             this.trigger.guild.channels.fetch(categoryId, { force: true }),
             signal,
           );
-          // The bot may see the channel but not its category; keep what was read.
+          // The bot may see the channel but not its category; keep what was read, and
+          // flag it so a null name is not read as "no category".
           if (category && !signal.aborted) value.category_name = category.name;
+          else value.category_unavailable = true;
         } catch {
-          // category_name stays null
+          value.category_unavailable = true;
         }
       }
     }
