@@ -80,7 +80,7 @@ jobs:
             echo "::error::biome schema drift (expected=$expected)"; exit 1
           }
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: "2026.10.3" # mise 本体を固定（既定 latest=可変）。Renovate が jdx/mise として更新する
           install_args: bun # bun のみ。git-cliff は CI に入れない
@@ -117,7 +117,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0 # base の bun.lock を git show で読むため
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
         with:
           version: "2026.10.3"
           install_args: bun
