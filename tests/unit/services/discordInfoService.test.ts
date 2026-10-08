@@ -366,6 +366,28 @@ test("get_channel_info keeps what it read when the category cannot be fetched", 
   expect(result.name).toBeDefined();
 });
 
+test("get_channel_info flags the category when Discord returns no category", async () => {
+  const f = await fixture({ type: ChannelType.PublicThread });
+  const fetchChannel = f.guild.channels.fetch.getMockImplementation();
+  if (!fetchChannel) throw new Error("fixture has no channel fetch");
+  f.guild.channels.fetch.mockImplementation(async (id?: string, options?: unknown) =>
+    id === "category" ? (null as never) : fetchChannel(id, options),
+  );
+  const result = JSON.parse(await f.service.getChannelInfo(signal));
+  expect(result.category_name).toBeNull();
+  expect(result.category_unavailable).toBe(true);
+});
+
+test("get_channel_info flags the category when the cap stops its fetch", async () => {
+  const f = await fixture({ type: ChannelType.PublicThread });
+  // Authorizing a public thread spends 4 calls (see "locked thread and timed-out member can
+  // read"), so leaving exactly 4 makes the category fetch the first one refused.
+  while (f.budget.used < f.budget.limit - 4) f.budget.consume();
+  const result = JSON.parse(await f.service.getChannelInfo(signal));
+  expect(result.stop_reason).toBe("rest_budget_exhausted");
+  expect(result.category_unavailable).toBe(true);
+});
+
 test("view_attachment refuses when shared cap runs out during recheck", async () => {
   const f = await fixture();
   const budget = f.budget;

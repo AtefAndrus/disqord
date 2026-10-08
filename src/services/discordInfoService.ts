@@ -99,8 +99,10 @@ export class DiscordInfoService implements DiscordInfoContext {
       value.parent = { name: auth.parent?.name, topic: auth.parent?.topic };
     }
     if (categoryId) {
-      if (!budget.consume()) stopped = true;
-      else {
+      if (!budget.consume()) {
+        stopped = true;
+        value.category_unavailable = true;
+      } else {
         try {
           const category = await untilAborted(
             this.trigger.guild.channels.fetch(categoryId, { force: true }),
