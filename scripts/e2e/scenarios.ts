@@ -347,6 +347,9 @@ function randomSixDigits(): string {
 /** Exported so that the unit tests can build a reply that reads the image correctly. */
 export const IMAGE_TOKEN = randomSixDigits();
 const VIEW_IMAGE_TOKEN = randomSixDigits();
+const DISCORD_INFO_TOKEN = `PIN-${crypto.randomUUID()}`;
+let discordInfoFixtureId: string | undefined;
+let discordInfoChannelName = "";
 /** Enough numbers to fill a page (3800 characters) and part of a second. */
 export const LONG_NUMBER_COUNT = 1200;
 /** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
@@ -446,6 +449,63 @@ export const SCENARIOS: Scenario[] = [
     verify: verifyCron,
     cleanup: (_triggerId, channelId, _request, env, startedAt) =>
       cleanupCron(channelId, env, startedAt),
+  },
+  {
+    name: "discord-info",
+    manual: true,
+    prompt: `[e2e] get_channel_info と list_pins を必ず使い、このチャンネルの名前と、${DISCORD_INFO_TOKEN} を含むピン留めメッセージの本文を教えて。`,
+    before: async (channelId, request, env) => {
+      const problems = await inputPreconditions(channelId, request, env, { history: true });
+      if (problems.length) return problems;
+      const channel = await request(`/channels/${channelId}`);
+      if (!channel.ok) return [`cannot read channel: HTTP ${channel.status}`];
+      discordInfoChannelName = ((await channel.json()) as { name: string }).name;
+      const fixture = await request(`/channels/${channelId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `Pinned fixture ${DISCORD_INFO_TOKEN}`,
+          allowed_mentions: { parse: [] },
+        }),
+      });
+      if (!fixture.ok) return [`cannot post pin fixture: HTTP ${fixture.status}`];
+      discordInfoFixtureId = ((await fixture.json()) as { id: string }).id;
+      const pin = await request(`/channels/${channelId}/pins/${discordInfoFixtureId}`, {
+        method: "PUT",
+      });
+      return pin.ok ? [] : [`cannot pin fixture: HTTP ${pin.status}`];
+    },
+    check: (reply) => [
+      ...hasUsageFooter(reply),
+      ...(reply.isError ? ["the reply ended in an error"] : []),
+      ...(!reply.body.includes(DISCORD_INFO_TOKEN)
+        ? ["the reply does not contain the pinned token"]
+        : []),
+      ...(!discordInfoChannelName || !reply.body.includes(discordInfoChannelName)
+        ? ["the reply does not contain the channel name"]
+        : []),
+    ],
+    cleanup: async (_triggerId, channelId, request) => {
+      if (!discordInfoFixtureId) return [];
+      const problems: string[] = [];
+      const fixtureId = discordInfoFixtureId;
+      discordInfoFixtureId = undefined;
+      for (const path of [
+        `/channels/${channelId}/pins/${fixtureId}`,
+        `/channels/${channelId}/messages/${fixtureId}`,
+      ]) {
+        try {
+          const response = await request(path, { method: "DELETE" });
+          if (!response.ok && response.status !== 404)
+            problems.push(`cannot clean up ${path}: HTTP ${response.status}`);
+        } catch (error) {
+          problems.push(
+            `cannot clean up ${path}: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+      return problems;
+    },
   },
   {
     name: "discord-tools",

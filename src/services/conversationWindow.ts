@@ -6,6 +6,7 @@ import type { NormalizedMessage, RawDiscordMessage } from "../utils/discordMessa
 import {
   buildConversationUntrustedDataSystemMessage,
   estimateNormalizedMessageTokens,
+  extractComponentsV2ReplyBody,
   formatMessageForTool,
   normalizeBotPoll,
   normalizeBotReply,
@@ -101,6 +102,7 @@ interface ResponseState {
   userId: string;
   channel: AuthorizationChannelLike;
   checkAccess: () => Promise<ConversationAccess>;
+  checkAttachmentAccess: () => Promise<ConversationAccess>;
   toolBudget: DiscordRestBudget;
   /** Oldest message ID whose page has been fully checked. Moves only a whole page at a time. */
   cursor: string;
@@ -127,6 +129,18 @@ export interface ConversationWindowContext {
   sessionId: string;
   windowStartMessageId: string;
   toolContext: ConversationToolContext;
+  toolRestBudget?: DiscordRestBudget;
+  readPins?: (
+    fetch: (signal: AbortSignal) => Promise<IPinsPage>,
+    signal: AbortSignal,
+    budgetTokens?: number,
+  ) => Promise<string>;
+}
+
+export interface IPinsPage {
+  items: { message: RawDiscordMessage; pinnedAt: string }[];
+  hasMore: boolean;
+  error?: string;
 }
 
 export interface BuildConversationWindowInput {
@@ -138,6 +152,7 @@ export interface BuildConversationWindowInput {
   channel: AuthorizationChannelLike;
   authorizationMessage?: AuthorizationMessageLike;
   authorize?: () => Promise<boolean>;
+  reauthorize?: (budget: DiscordRestBudget) => Promise<ConversationAccess>;
   historyEnabled: boolean;
   e2eTesterBotId?: string;
   nodeEnv?: string;
@@ -322,7 +337,7 @@ function asToolResult(
 }
 
 /** Resolves with `undefined` once `signal` aborts, leaving `promise` to settle on its own. */
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+export function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
   if (signal.aborted) {
     promise.catch(() => {});
     return Promise.resolve(undefined);
@@ -398,6 +413,7 @@ export class ConversationWindowService {
             )
         : async (): Promise<ConversationAccess> => "denied";
     const generation = this.nextGeneration();
+    const reauthorize = input.reauthorize;
     let staleCursor: string | undefined;
 
     try {
@@ -463,6 +479,7 @@ export class ConversationWindowService {
         userId: input.userId,
         channel: input.channel,
         checkAccess: checkToolAccess,
+        checkAttachmentAccess: reauthorize ? () => reauthorize(toolBudget) : checkToolAccess,
         toolBudget,
         cursor: minMessageId(staleCursor ?? result.startMessageId, input.current.id),
         replyTarget: result.replyTarget,
@@ -504,6 +521,9 @@ export class ConversationWindowService {
         }),
         sessionId: result.sessionId,
         windowStartMessageId: result.startMessageId,
+        toolRestBudget: toolBudget,
+        readPins: (fetch, signal, budgetTokens) =>
+          this.readPins(responseState, fetch, signal, budgetTokens ?? Number.POSITIVE_INFINITY),
         toolContext: {
           resolveMessageRef: (ref) =>
             [...responseState.shown.values()].find((message) => message.ref === ref)?.id,
@@ -921,6 +941,126 @@ export class ConversationWindowService {
     return withRef;
   }
 
+  private async readPins(
+    state: ResponseState,
+    fetch: (signal: AbortSignal) => Promise<IPinsPage>,
+    signal: AbortSignal,
+    budgetTokens: number,
+  ): Promise<string> {
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.readEarlierDeadlineMs);
+    const fetchSignal = AbortSignal.any([signal, deadline.signal]);
+    const pins: Array<ReturnType<typeof formatMessageForTool> & { pinned_at: string }> = [];
+    let skipped = 0;
+    let hasMore = false;
+    let stopReason: ConversationStopReason = null;
+    const serialize = (): string =>
+      JSON.stringify({
+        pins,
+        skipped_count: skipped,
+        has_more: hasMore,
+        stop_reason: stopReason,
+      });
+    try {
+      const page = await untilAborted(fetch(fetchSignal), fetchSignal);
+      if (!page) {
+        hasMore = true;
+        stopReason = deadline.signal.aborted ? "fetch_deadline" : "fetch_failed";
+        return serialize();
+      }
+      if (page.error) return JSON.stringify({ error: page.error });
+      hasMore = page.hasMore;
+      const known = new Map(state.knownMessages);
+      for (const item of page.items) known.set(item.message.id, item.message);
+      for (const { message, pinnedAt } of [...page.items].sort(
+        (a, b) => Date.parse(b.pinnedAt) - Date.parse(a.pinnedAt),
+      )) {
+        if (fetchSignal.aborted || state.toolBudget.used >= state.toolBudget.limit) {
+          hasMore = true;
+          stopReason = deadline.signal.aborted
+            ? "fetch_deadline"
+            : signal.aborted
+              ? "fetch_failed"
+              : "rest_budget_exhausted";
+          break;
+        }
+        const judged = await untilAborted(
+          this.eligibility.evaluate(
+            message,
+            {
+              currentTimestampMs: messageTime(state.current),
+              botUserId: state.botUserId,
+              e2eTesterBotId: state.e2eTesterBotId,
+              nodeEnv: state.nodeEnv,
+              channelId: state.current.channel_id,
+            },
+            state.toolBudget,
+            known,
+            state.verificationCache,
+            state.externalDeletions,
+            fetchSignal,
+            state.fetchedMessages,
+          ),
+          fetchSignal,
+        );
+        if (!judged || fetchSignal.aborted || state.toolBudget.refused) {
+          hasMore = true;
+          stopReason = state.toolBudget.refused
+            ? "rest_budget_exhausted"
+            : deadline.signal.aborted
+              ? "fetch_deadline"
+              : "fetch_failed";
+          break;
+        }
+        if (!judged.eligible || judged.reason === "unconfirmable") {
+          skipped += 1;
+          continue;
+        }
+        let normalized =
+          this.normalizePollEntry(message, judged, state.botUserId) ??
+          normalizeHumanMessage(message, this.now());
+        if (!judged.isHuman && judged.reply) {
+          const page = judged.reply.pages.find((candidate) => candidate.id === message.id);
+          if (!page) {
+            skipped += 1;
+            continue;
+          }
+          normalized = {
+            ...normalizeBotReply(judged.reply.record.triggerMsgId, [page]),
+            text: extractComponentsV2ReplyBody(page, page.page.seq === 0),
+          };
+        }
+        if (judged.isHuman && judged.reply)
+          normalized.exchangeId = judged.reply.record.triggerMsgId;
+        const ref = state.shown.get(message.id)?.ref ?? `m${state.refCounter + 1}`;
+        const entry = { ...formatMessageForTool({ ...normalized, ref }), pinned_at: pinnedAt };
+        pins.push(entry);
+        // Size with the longest reason and paging fields before committing the ref.
+        const sized = JSON.stringify({
+          pins,
+          skipped_count: skipped,
+          has_more: true,
+          stop_reason: LONGEST_STOP_REASON,
+        });
+        if (estimateToolResultTokens(sized) > budgetTokens) {
+          pins.pop();
+          hasMore = true;
+          stopReason = "result_budget_exhausted";
+          break;
+        }
+        this.addShown(state, normalized);
+        state.knownMessages.set(message.id, message);
+      }
+      return serialize();
+    } catch {
+      hasMore = true;
+      stopReason = state.toolBudget.refused ? "rest_budget_exhausted" : "fetch_failed";
+      return serialize();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async readEarlier(
     state: ResponseState,
     requestedCount: number,
@@ -1250,7 +1390,7 @@ export class ConversationWindowService {
     budgetTokens: number,
     signal: AbortSignal,
   ): Promise<ToolLlmResult> {
-    const access = await state.checkAccess();
+    const access = await state.checkAttachmentAccess();
     if (access === "denied") return '{"error":"no_permission"}';
     if (access === "rest_budget_exhausted") return '{"error":"rest_budget_exhausted"}';
     if (access === "failed") return '{"error":"attachment_unavailable"}';
@@ -1302,6 +1442,7 @@ export class ConversationWindowService {
       signal,
     );
     if (fetched.status !== "found") {
+      if (state.toolBudget.refused) return '{"error":"rest_budget_exhausted"}';
       const result = '{"error":"attachment_unavailable"}';
       state.attachmentResults.set(cacheKey, result);
       return result;

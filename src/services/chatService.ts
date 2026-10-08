@@ -4,7 +4,12 @@ import { computeMaxOutputTokens } from "../llm/contextBudget";
 import type { ILLMClient } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
-import type { CronToolContext, DiscordToolContext, ToolRegistry } from "../llm/tools/registry";
+import type {
+  CronToolContext,
+  DiscordInfoContext,
+  DiscordToolContext,
+  ToolRegistry,
+} from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
   buildWebSearchStaticSystemMessage,
@@ -37,6 +42,7 @@ export interface ChatUserInput {
   authorLabel?: string;
   conversation?: ConversationWindowContext;
   discord?: DiscordToolContext;
+  discordInfo?: DiscordInfoContext;
   cron?: CronToolContext;
 }
 
@@ -519,6 +525,24 @@ export class ChatService implements IChatService {
               },
             }
           : undefined;
+        const discordInfo = conversation ? input.discordInfo : undefined;
+        const discordInfoContext: DiscordInfoContext | undefined = discordInfo
+          ? {
+              channelType: discordInfo.channelType,
+              listPins: (...args) => {
+                clientToolInvoked = true;
+                return discordInfo.listPins(...args);
+              },
+              getChannelInfo: (...args) => {
+                clientToolInvoked = true;
+                return discordInfo.getChannelInfo(...args);
+              },
+              listEvents: (...args) => {
+                clientToolInvoked = true;
+                return discordInfo.listEvents(...args);
+              },
+            }
+          : undefined;
         const discordContext: DiscordToolContext | undefined = discord
           ? {
               channelType: discord.channelType,
@@ -561,6 +585,7 @@ export class ChatService implements IChatService {
           conversation?.sessionId,
           toolContext,
           discordContext,
+          discordInfoContext,
           cronContext,
           settings.defaultModel,
           supportsTools,
@@ -610,6 +635,7 @@ export class ChatService implements IChatService {
     sessionId: string | undefined,
     conversation: ConversationWindowContext["toolContext"] | undefined,
     discord: DiscordToolContext | undefined,
+    discordInfo: DiscordInfoContext | undefined,
     cron: CronToolContext | undefined,
     model: string,
     toolsAllowed: boolean,
@@ -641,6 +667,7 @@ export class ChatService implements IChatService {
         toolsAllowed,
         ...(conversation && { conversation }),
         ...(discord && { discord }),
+        ...(discordInfo && { discordInfo }),
         ...(cron && { cron }),
       },
       updater,

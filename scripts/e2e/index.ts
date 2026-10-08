@@ -351,21 +351,6 @@ async function main(): Promise<number> {
           );
           continue;
         }
-        if (scenario.before && channelId) {
-          const blockers = await scenario.before(
-            channelId,
-            (path, init) => discord(path, deadline, init),
-            env,
-          );
-          if (blockers.length > 0) {
-            // Nothing was posted, so the scenarios after this one stay attributable.
-            failures++;
-            costs.push({ name: scenario.name, cost: undefined });
-            console.log(`FAIL ${scenario.name}: not run`);
-            for (const blocker of blockers) console.log(`     - ${blocker}`);
-            continue;
-          }
-        }
         let triggerId: string | undefined;
         // Run by both an interrupt and the normal path, not once for both: the
         // scenario can still write rows after an interrupt's cleanup started.
@@ -391,6 +376,27 @@ async function main(): Promise<number> {
             return found;
           })();
         interrupt.cleanup = cleanup;
+        if (scenario.before && channelId) {
+          let blockers: string[];
+          try {
+            blockers = await scenario.before(
+              channelId,
+              (path, init) => discord(path, deadline, init),
+              env,
+            );
+          } catch (error) {
+            await cleanup();
+            throw error;
+          }
+          if (blockers.length > 0) {
+            await cleanup();
+            failures++;
+            costs.push({ name: scenario.name, cost: undefined });
+            console.log(`FAIL ${scenario.name}: not run`);
+            for (const blocker of blockers) console.log(`     - ${blocker}`);
+            continue;
+          }
+        }
         const cleanupProblems: string[] = [];
         const { reply, problems, toolWasInvoked } = await (async () => {
           try {

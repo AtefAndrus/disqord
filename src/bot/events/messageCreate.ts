@@ -15,7 +15,8 @@ import type {
 } from "../../services/conversationWindow";
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
-import { DiscordActionService } from "../../services/discordActionService";
+import { authorizeDiscordRead, DiscordActionService } from "../../services/discordActionService";
+import { DiscordInfoService } from "../../services/discordInfoService";
 import type {
   AuthorizationChannelLike,
   AuthorizationMessageLike,
@@ -390,6 +391,18 @@ export function createMessageCreateHandler(
           botUser: message.client.user,
           channel: message.channel as unknown as AuthorizationChannelLike,
           authorizationMessage,
+          reauthorize: async (budget) => {
+            const auth = await authorizeDiscordRead(message as Message<true>, budget);
+            if (!("ok" in auth)) return "allowed";
+            if (auth.reason === "rest_budget_exhausted") return "rest_budget_exhausted";
+            return [
+              "missing_permission",
+              "cannot_read_conversation",
+              "unsupported_channel",
+            ].includes(auth.reason)
+              ? "denied"
+              : "failed";
+          },
           historyEnabled: true,
           e2eTesterBotId: options.e2eTesterBotId,
           nodeEnv: process.env.NODE_ENV,
@@ -454,6 +467,13 @@ export function createMessageCreateHandler(
             message.author.id,
           ),
           ...(conversation && { conversation }),
+          ...(conversation && {
+            discordInfo: new DiscordInfoService(
+              message as Message<true>,
+              conversation,
+              toRawDiscordMessage,
+            ),
+          }),
           ...(settings.discordToolsEnabled && {
             discord: new DiscordActionService(message as Message<true>, (ref) =>
               conversation?.toolContext.resolveMessageRef(ref),

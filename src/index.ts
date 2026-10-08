@@ -18,6 +18,9 @@ import { OpenRouterClient } from "./llm/openrouter";
 import { createAddReactionTool } from "./llm/tools/discord/addReaction";
 import { createCreatePollTool } from "./llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "./llm/tools/discord/createThread";
+import { createGetChannelInfoTool } from "./llm/tools/discord/getChannelInfo";
+import { createListEventsTool } from "./llm/tools/discord/listEvents";
+import { createListPinsTool } from "./llm/tools/discord/listPins";
 import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
 import { createProposeCronJobTool } from "./llm/tools/proposeCronJob";
 import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
@@ -81,6 +84,9 @@ async function bootstrap(): Promise<void> {
   toolRegistry.register(createCreatePollTool());
   toolRegistry.register(createCreateThreadTool());
   toolRegistry.register(createPinMessageTool());
+  toolRegistry.register(createListPinsTool());
+  toolRegistry.register(createGetChannelInfoTool());
+  toolRegistry.register(createListEventsTool());
   toolRegistry.register(createProposeCronJobTool());
   const chatService = new ChatService(
     llmClient,
