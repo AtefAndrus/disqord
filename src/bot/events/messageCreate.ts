@@ -20,6 +20,7 @@ import { DiscordInfoService } from "../../services/discordInfoService";
 import type {
   AuthorizationChannelLike,
   AuthorizationMessageLike,
+  ConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
@@ -53,6 +54,18 @@ import {
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
+
+export function mapDiscordReadAuthorization(
+  auth: Awaited<ReturnType<typeof authorizeDiscordRead>>,
+): ConversationAccess {
+  if (!("ok" in auth)) return "allowed";
+  if (auth.reason === "rest_budget_exhausted") return "rest_budget_exhausted";
+  return ["missing_permission", "cannot_read_conversation", "unsupported_channel"].includes(
+    auth.reason,
+  )
+    ? "denied"
+    : "failed";
+}
 
 function operationError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
@@ -393,15 +406,7 @@ export function createMessageCreateHandler(
           authorizationMessage,
           reauthorize: async (budget) => {
             const auth = await authorizeDiscordRead(message as Message<true>, budget);
-            if (!("ok" in auth)) return "allowed";
-            if (auth.reason === "rest_budget_exhausted") return "rest_budget_exhausted";
-            return [
-              "missing_permission",
-              "cannot_read_conversation",
-              "unsupported_channel",
-            ].includes(auth.reason)
-              ? "denied"
-              : "failed";
+            return mapDiscordReadAuthorization(auth);
           },
           historyEnabled: true,
           e2eTesterBotId: options.e2eTesterBotId,

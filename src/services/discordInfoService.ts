@@ -11,6 +11,7 @@ import type { RawDiscordMessage } from "../utils/discordMessageNormalizer";
 import type { ConversationWindowContext } from "./conversationWindow";
 import { untilAborted } from "./conversationWindow";
 import { authorizeDiscordRead } from "./discordActionService";
+import type { DiscordRestBudget } from "./discordMessageReader";
 
 /** One response shares the window's REST budget, references and eligibility checks. */
 export class DiscordInfoService implements DiscordInfoContext {
@@ -27,17 +28,22 @@ export class DiscordInfoService implements DiscordInfoContext {
         : trigger.channel.type;
   }
 
-  private async authorize(
-    signal: AbortSignal,
-  ): Promise<Awaited<ReturnType<typeof authorizeDiscordRead>> | { ok: false; reason: string }> {
+  private async authorize(signal: AbortSignal): Promise<
+    | (Exclude<Awaited<ReturnType<typeof authorizeDiscordRead>>, { ok: false }> & {
+        budget: DiscordRestBudget;
+      })
+    | { ok: false; reason: string }
+  > {
     const budget = this.conversation.toolRestBudget;
     if (!budget) return { ok: false, reason: "history_unavailable" };
-    return (
-      (await untilAborted(authorizeDiscordRead(this.trigger, budget, signal), signal)) ?? {
-        ok: false,
-        reason: "cancelled",
-      }
-    );
+    const auth = (await untilAborted(
+      authorizeDiscordRead(this.trigger, budget, signal),
+      signal,
+    )) ?? {
+      ok: false,
+      reason: "cancelled",
+    };
+    return "ok" in auth ? auth : { ...auth, budget };
   }
 
   async listPins(
@@ -76,8 +82,7 @@ export class DiscordInfoService implements DiscordInfoContext {
   ): Promise<string> {
     const auth = await this.authorize(signal);
     if ("ok" in auth) return JSON.stringify({ error: auth.reason });
-    const budget = this.conversation.toolRestBudget;
-    if (!budget) return '{"error":"history_unavailable"}';
+    const budget = auth.budget;
     const channel = auth.channel;
     const value: Record<string, unknown> = {
       name: channel.name,
@@ -144,8 +149,7 @@ export class DiscordInfoService implements DiscordInfoContext {
   ): Promise<string> {
     const auth = await this.authorize(signal);
     if ("ok" in auth) return JSON.stringify({ error: auth.reason });
-    const budget = this.conversation.toolRestBudget;
-    if (!budget) return '{"error":"history_unavailable"}';
+    const budget = auth.budget;
     const empty = (reason: string): string =>
       JSON.stringify({
         active: { events: [], has_more: true },
@@ -208,10 +212,7 @@ export class DiscordInfoService implements DiscordInfoContext {
         stop_reason: null as string | null,
       };
       while (estimateToolResultTokens(JSON.stringify(result)) > budgetTokens) {
-        const group =
-          result.scheduled.events.length > result.active.events.length
-            ? result.scheduled
-            : result.active;
+        const group = result.scheduled.events.length > 0 ? result.scheduled : result.active;
         if (group.events.length === 0) return empty("result_budget_exhausted");
         group.events.pop();
         group.has_more = true;

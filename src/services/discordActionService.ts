@@ -2,7 +2,7 @@ import type { GuildMember, Message, TextChannel, ThreadChannel } from "discord.j
 import { ChannelType, PermissionFlagsBits, parseEmoji } from "discord.js";
 import type { DiscordToolContext } from "../llm/tools/registry";
 import { DiscordRestBudget } from "./discordMessageReader";
-import { type AuthorizationChannelLike, canReadConversation } from "./messageAuthorization";
+import { type AuthorizationChannelLike, checkConversationAccess } from "./messageAuthorization";
 
 type ActionChannel = TextChannel | ThreadChannel;
 type ActionName = "reaction" | "poll" | "thread" | "pin";
@@ -116,7 +116,7 @@ export async function authorizeDiscordRead(
     return failure("discord_failed");
   }
   if (signal?.aborted) return failure("cancelled");
-  const readable = await canReadConversation(
+  const readable = await checkConversationAccess(
     {
       channel: channel as unknown as AuthorizationChannelLike,
       author: trigger.author,
@@ -128,7 +128,8 @@ export async function authorizeDiscordRead(
   );
   if (signal?.aborted) return failure("cancelled");
   if (budget?.refused) return failure("rest_budget_exhausted");
-  if (!readable) {
+  if (readable === "failed") return failure("conversation_access_failed");
+  if (readable !== "allowed") {
     for (const [who, member] of [
       ["bot", bot],
       ["user", user],
@@ -162,6 +163,8 @@ export class DiscordActionService implements DiscordToolContext {
 
   private async authorize(action: ActionName): Promise<Authorization> {
     const auth = await authorizeDiscordRead(this.trigger);
+    if (isFailure(auth) && auth.reason === "conversation_access_failed")
+      return failure("cannot_read_conversation");
     if (isFailure(auth)) return auth;
     const { channel, user, bot } = auth;
     const guild = this.trigger.guild;

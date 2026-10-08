@@ -1,6 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import type { Message } from "discord.js";
 import { ChannelType, Collection, PermissionFlagsBits } from "discord.js";
+import { mapDiscordReadAuthorization } from "../../../src/bot/events/messageCreate";
 import type { IReplyRecordRepository } from "../../../src/db/repositories/replyRecord";
 import { estimateToolResultTokens } from "../../../src/llm/contextBudget";
 import { ConversationWindowService } from "../../../src/services/conversationWindow";
@@ -198,11 +199,7 @@ async function fixture(
     authorize: async () => true,
     reauthorize: async (budget) => {
       const auth = await authorizeDiscordRead(trigger, budget);
-      return !("ok" in auth)
-        ? "allowed"
-        : auth.reason === "rest_budget_exhausted"
-          ? "rest_budget_exhausted"
-          : "denied";
+      return mapDiscordReadAuthorization(auth);
     },
   });
   if (!context) throw new Error("no context");
@@ -448,15 +445,111 @@ test("pins honor Discord has_more and before paging, skip bots and assign usable
   expect(f.context.toolContext.resolveMessageRef("m1")).toBe("100");
 });
 
-test("pins trimmed by result budget are omitted without committing refs", async () => {
+test("newest oversized pin is truncated to fit and keeps a usable ref", async () => {
   const f = await fixture();
   f.setPins([raw("100", { content: "a".repeat(5000) })]);
-  expect(JSON.parse(await f.service.listPins(undefined, signal, 150))).toMatchObject({
-    pins: [],
+  const serialized = await f.service.listPins(undefined, signal, 150);
+  const result = JSON.parse(serialized);
+  expect(result).toMatchObject({
+    pins: [{ truncated: true, ref: "m1" }],
     has_more: true,
     stop_reason: "result_budget_exhausted",
+    next_before: new Date(NOW).toISOString(),
   });
-  expect(f.context.toolContext.resolveMessageRef("m1")).toBeUndefined();
+  expect(result.pins[0].text.length).toBeGreaterThan(0);
+  expect(result.pins[0].text.length).toBeLessThan(5000);
+  expect(estimateToolResultTokens(serialized)).toBeLessThanOrEqual(150);
+  expect(f.context.toolContext.resolveMessageRef("m1")).toBe("100");
+});
+
+test("zero eligible pins still provide the oldest judged paging cursor", async () => {
+  const f = await fixture();
+  f.setPins(
+    ["100", "101"].map((id) => raw(id, { author: { id: "other", username: "other", bot: true } })),
+    true,
+  );
+  expect(JSON.parse(await f.service.listPins(undefined, signal))).toMatchObject({
+    pins: [],
+    skipped_count: 2,
+    has_more: true,
+    next_before: new Date(NOW - 1000).toISOString(),
+  });
+});
+
+test("pin budget estimate reserves the final skipped count at the token boundary", async () => {
+  const probe = await fixture();
+  probe.setPins([raw("100")]);
+  const entry = JSON.parse(await probe.service.listPins(undefined, signal)).pins[0];
+  const sized = (skipped: number): string =>
+    JSON.stringify({
+      pins: [entry],
+      skipped_count: skipped,
+      has_more: true,
+      next_before: new Date(NOW).toISOString(),
+      stop_reason: "result_budget_exhausted",
+    });
+  while (estimateToolResultTokens(sized(0)) === estimateToolResultTokens(sized(48))) {
+    entry.text += "x";
+  }
+  const budgetTokens = estimateToolResultTokens(sized(0));
+  const f = await fixture();
+  f.setPins([
+    raw("100", { content: entry.text }),
+    ...Array.from({ length: 48 }, (_, i) =>
+      raw(String(101 + i), {
+        author: { id: "other", username: "other", bot: true },
+      }),
+    ),
+    raw("200", { content: "x".repeat(5000) }),
+  ]);
+  const result = await f.service.listPins(undefined, signal, budgetTokens);
+  expect(estimateToolResultTokens(result)).toBeLessThanOrEqual(budgetTokens);
+  expect(JSON.parse(result).pins).toHaveLength(1);
+});
+
+test("event budget preserves active events before scheduled events on a tie", async () => {
+  const f = await fixture();
+  f.setEvents([event("active", 2), event("scheduled")]);
+  const from = new Date(NOW).toISOString();
+  const expected = JSON.parse(await f.service.listEvents(from, undefined, signal));
+  expected.scheduled = { events: [], has_more: true };
+  expected.stop_reason = "result_budget_exhausted";
+  const budgetTokens = estimateToolResultTokens(JSON.stringify(expected));
+  const result = await f.service.listEvents(from, undefined, signal, budgetTokens);
+  expect(JSON.parse(result)).toEqual(expected);
+  expect(estimateToolResultTokens(result)).toBeLessThanOrEqual(budgetTokens);
+});
+
+test.each([
+  ["allowed", "allowed"],
+  ["rest_budget_exhausted", "rest_budget_exhausted"],
+  ["missing_permission", "denied"],
+  ["cannot_read_conversation", "denied"],
+  ["unsupported_channel", "denied"],
+  ["requester_unavailable", "failed"],
+  ["discord_failed", "failed"],
+  ["conversation_access_failed", "failed"],
+] as const)("read authorization maps %s to %s", async (reason, expected) => {
+  const f = await fixture();
+  const auth =
+    reason === "allowed" ? await authorizeDiscordRead(f.trigger) : { ok: false as const, reason };
+  expect(mapDiscordReadAuthorization(auth)).toBe(expected);
+});
+
+test("private-thread membership 5xx is a transient read failure and preserves write denial", async () => {
+  const f = await fixture({ type: ChannelType.PrivateThread });
+  f.channel.members.fetch.mockRejectedValue({ status: 503 });
+  const auth = await authorizeDiscordRead(f.trigger, f.budget, signal);
+  expect(auth).toMatchObject({ ok: false, reason: "conversation_access_failed" });
+  expect(mapDiscordReadAuthorization(auth)).toBe("failed");
+  expect(JSON.parse(await f.service.listPins(undefined, signal))).toEqual({
+    error: "conversation_access_failed",
+  });
+  const action = new DiscordActionService(f.trigger, () => "100");
+  expect(JSON.parse(await action.addReaction("👍", "m1", signal))).toEqual({
+    ok: false,
+    reason: "cannot_read_conversation",
+  });
 });
 
 function replyRepository(): IReplyRecordRepository {
@@ -494,6 +587,29 @@ function replyPage(id: string, body: string, badge = false): RawDiscordMessage {
     ],
   });
 }
+
+test("read_earlier_messages keeps later pages after list_pins reads the first page", async () => {
+  const first = replyPage("101", "first answer", true);
+  const second = replyPage("102", "second answer");
+  const f = await fixture({ repository: replyRepository() });
+  f.remote.set("100", raw("100"));
+  f.remote.set("101", first);
+  f.remote.set("102", second);
+  f.setPins([first]);
+  const pins = JSON.parse(await f.service.listPins(undefined, signal));
+  expect(pins.pins[0].text).toBe("first answer");
+  f.reader.list = mock(async (_channel, _query, budget): Promise<DiscordMessageListResult> => {
+    budget.consume();
+    return { status: "ok", messages: [raw("100"), first, second] };
+  });
+  const earlier = await f.context.toolContext.readEarlierMessages(1, signal);
+  expect(typeof earlier).toBe("string");
+  const messages = JSON.parse(earlier as string).messages;
+  expect(messages).toHaveLength(1);
+  expect(messages[0].text).toContain("second answer");
+  expect(messages[0].ref).toBe(pins.pins[0].ref);
+  expect(f.context.toolContext.resolveMessageRef(messages[0].ref)).toBe("101");
+});
 
 test.each(["first-in-window", "later-in-window", "outside-window"])(
   "multi-page pin returns just its page and the exact action target (%s)",

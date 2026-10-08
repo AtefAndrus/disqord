@@ -17,6 +17,7 @@ import type {
   ChatUserInput,
   IChatService,
 } from "../../../../src/services/chatService";
+import type { ConversationWindowService } from "../../../../src/services/conversationWindow";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
@@ -466,6 +467,27 @@ describe("createMessageCreateHandler", () => {
       ok: false,
       reason: "not_found",
     });
+  });
+
+  test("history off omits discordInfo and does not build a conversation", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue({
+      ...settings,
+      historyEnabled: false,
+    });
+    const build = mock(async () => null);
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationWindow: { build } as unknown as ConversationWindowService },
+    );
+    await handler(mockMessage as never);
+    const input = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[0]?.[1] as ChatUserInput;
+    expect(input.conversation).toBeUndefined();
+    expect(input.discordInfo).toBeUndefined();
+    expect(build).not.toHaveBeenCalled();
   });
 
   test("Botからのメッセージは無視する", async () => {
