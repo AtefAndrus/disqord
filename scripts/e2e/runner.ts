@@ -1,4 +1,4 @@
-import { isFinished, type Reply, snapshotKey } from "./scenarios";
+import { isFinished, isStreaming, type Reply, snapshotKey } from "./scenarios";
 
 export class DeadlineError extends Error {}
 
@@ -15,6 +15,28 @@ export interface WaitDeps {
   /** Sleeps one poll interval. Throws `DeadlineError` once the scenario deadline has passed. */
   pause: () => Promise<void>;
   log?: (line: string) => void;
+}
+
+export async function waitForStreaming(deps: WaitDeps): Promise<void> {
+  while (true) {
+    await deps.pause();
+    let reply: Reply;
+    try {
+      reply = await deps.read();
+    } catch (error) {
+      if (error instanceof DeadlineError) throw error;
+      deps.log?.(`  read failed, retrying: ${error instanceof Error ? error.message : error}`);
+      continue;
+    }
+    // The first line is the model badge; the initial body and streaming section
+    // both say 生成中..., so neither proves that answer text has arrived.
+    const hasText = reply.body
+      .split("\n")
+      .slice(1)
+      .some((line) => line.trim().length > 0 && line !== "生成中...");
+    if (isStreaming(reply) && hasText) return;
+    if (isFinished(reply)) throw new Error("the reply finished before streaming could be stopped");
+  }
 }
 
 export async function waitForReply(deps: WaitDeps): Promise<Reply> {

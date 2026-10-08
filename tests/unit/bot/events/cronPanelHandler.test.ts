@@ -131,7 +131,7 @@ describe("cron panel interactions", () => {
       settings,
       {} as IModelService,
       createMockLLMClient(),
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       cron,
     );

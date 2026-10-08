@@ -30,6 +30,7 @@ import {
 
 const USAGE = "Tokens: 1+2=3 | Cost: $0.000001 | Model: vendor/model-x | Time: 0.0s | Provider: P";
 const STOPPED = "🛑 Stopped | 4.9s | 360字";
+const RESTART_STOPPED = "🛑 Stopped by restart | 4.9s | 360字";
 
 /** A page shaped the way the renderer shapes it: texts, then Separator + footer when there is one. */
 function page(
@@ -443,6 +444,19 @@ describe("e2e scenarios: check", () => {
   test("stop: 本文が停止表示を丸ごと引用していても通らず、footer の component を要求する", () => {
     expect(check("stop", [page("1", [`川の話。${STOPPED}`], USAGE)])).not.toEqual([]);
     expect(check("stop", [page("1", ["ナイル川は"], STOPPED)])).toEqual([]);
+    expect(check("stop", [page("1", ["ナイル川は"], RESTART_STOPPED)])).not.toEqual([]);
+  });
+
+  test("shutdown: restart footer is terminal and required on the last page", () => {
+    const messages = [page("1", ["ナイル川は"], RESTART_STOPPED)];
+    expect(isFinished(toReply(messages))).toBe(true);
+    expect(check("shutdown", messages)).toEqual([]);
+    expect(check("shutdown", [page("1", ["ナイル川は"], STOPPED)])).not.toEqual([]);
+    expect(check("shutdown", [page("1", [RESTART_STOPPED], USAGE)])).not.toEqual([]);
+    expect(isFinished(toReply([page("1", [RESTART_STOPPED])]))).toBe(false);
+    const scenario = SCENARIOS.find((item) => item.name === "shutdown");
+    expect(scenario?.manual).toBe(true);
+    expect(scenario?.stopBotWhileStreaming).toBe(true);
   });
 
   test("long: 最終ページの footer が n/n で、メッセージ数と一致しなければ通らない", () => {

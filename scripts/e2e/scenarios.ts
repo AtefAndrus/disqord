@@ -55,6 +55,7 @@ export interface Scenario extends ScenarioPost {
   name: string;
   /** Run only when named on the command line. */
   manual?: boolean;
+  stopBotWhileStreaming?: boolean;
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
   setup?: ScenarioPost & {
@@ -253,6 +254,7 @@ export function snapshotKey(reply: Reply): string {
 
 const USAGE_FOOTER = /Tokens: \d+\+\d+=\d+/;
 const STOPPED_FOOTER = /^🛑 Stopped \| \d+(\.\d+)?s/u;
+const RESTART_STOPPED_FOOTER = /^🛑 Stopped by restart \| \d+(\.\d+)?s/u;
 
 function lastPageFooter(reply: Reply): string | undefined {
   const lastMessage = reply.messages.at(-1);
@@ -273,7 +275,12 @@ export function isFinished(reply: Reply): boolean {
   if (reply.messages.length === 0 || isStreaming(reply)) return false;
   if (reply.isError) return true;
   const footer = lastPageFooter(reply);
-  return footer !== undefined && (USAGE_FOOTER.test(footer) || STOPPED_FOOTER.test(footer));
+  return (
+    footer !== undefined &&
+    (USAGE_FOOTER.test(footer) ||
+      STOPPED_FOOTER.test(footer) ||
+      RESTART_STOPPED_FOOTER.test(footer))
+  );
 }
 
 /** The model id the bot reports in its usage footer, for the run log. */
@@ -936,5 +943,15 @@ export const SCENARIOS: Scenario[] = [
       STOPPED_FOOTER.test(lastPageFooter(reply) ?? "")
         ? []
         : ["the reply did not end with the stopped footer (nobody pressed 停止 in time)"],
+  },
+  {
+    name: "shutdown",
+    manual: true,
+    stopBotWhileStreaming: true,
+    prompt: "世界の主要な河川20本をそれぞれ500字以上で解説して。",
+    check: (reply) =>
+      RESTART_STOPPED_FOOTER.test(lastPageFooter(reply) ?? "")
+        ? []
+        : ["the reply did not end with the restart-stopped footer"],
   },
 ];

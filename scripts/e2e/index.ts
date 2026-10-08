@@ -39,7 +39,7 @@ import {
   parseInputLine,
   selectInput,
 } from "./input";
-import { createStopper, DeadlineError, waitForReply } from "./runner";
+import { createStopper, DeadlineError, waitForReply, waitForStreaming } from "./runner";
 import {
   costOf,
   type DiscordMessage,
@@ -94,7 +94,9 @@ async function saveFailedInput(name: string, evidence: InputEvidence): Promise<s
 const POLL_INTERVAL_MS = 2_500;
 const REPLY_TIMEOUT_MS = 180_000;
 const BOT_READY_TIMEOUT_MS = 30_000;
-const BOT_EXIT_TIMEOUT_MS = 5_000;
+const BOT_EXIT_TIMEOUT_MS = 15_000;
+/** docker stop's default grace period, which the bot's shutdown wait is sized to fit. */
+const SHUTDOWN_EXIT_LIMIT_S = 10;
 const USAGE_POLL_INTERVAL_MS = 3_000;
 const CLEANUP_TIMEOUT_MS = 30_000;
 const INTERRUPT_CLEANUP_TIMEOUT_MS = 10_000;
@@ -224,6 +226,8 @@ async function repliesAfter(
 
 interface RunningBot {
   stop: () => Promise<void>;
+  /** How the child ended; both null while it is still running. */
+  exitStatus: () => { exitCode: number | null; signalCode: string | null };
   toolCalls: Set<string>;
   inputs: InputObservation[];
   botContextMarkers: Set<string>;
@@ -289,11 +293,16 @@ async function startBot(): Promise<RunningBot> {
       inspect(decoder.decode(value, { stream: true }));
     }
   });
-  return { stop, toolCalls, inputs, botContextMarkers };
+  return {
+    stop,
+    exitStatus: () => ({ exitCode: child.exitCode, signalCode: child.signalCode }),
+    toolCalls,
+    inputs,
+    botContextMarkers,
+  };
 }
 
 async function main(): Promise<number> {
-  requireEnv();
   const args = process.argv.slice(2);
   const spawn = !args.includes("--no-spawn");
   const names = args.filter((arg) => !arg.startsWith("--"));
@@ -302,6 +311,14 @@ async function main(): Promise<number> {
   const selected = SCENARIOS.filter((scenario) =>
     names.length > 0 ? names.includes(scenario.name) : !scenario.manual,
   );
+  const shutdownScenario = selected.find((scenario) => scenario.stopBotWhileStreaming);
+  if (shutdownScenario && (!spawn || selected.length !== 1)) {
+    console.log(
+      `FAIL ${shutdownScenario.name}: requires a spawned bot and must run alone (no --no-spawn or other scenarios)`,
+    );
+    return 1;
+  }
+  requireEnv();
 
   const usageBefore = await readKeyUsage(config.openRouterApiKey).catch((error: unknown) => {
     console.log(
@@ -323,6 +340,7 @@ async function main(): Promise<number> {
         botContextMarkers: bot?.botContextMarkers,
       };
       const startedAt = Date.now();
+      const shutdownProblems: string[] = [];
       const deadline = startedAt + (scenario.timeoutMs ?? REPLY_TIMEOUT_MS);
       try {
         if (scenario.input && !bot) {
@@ -387,6 +405,29 @@ async function main(): Promise<number> {
             evidence.marker = sent.marker;
             triggerId = messageId;
             if (scenario.userAction) console.log(`  ${scenario.name}: ${scenario.userAction}…`);
+            if (scenario.stopBotWhileStreaming) {
+              await waitForStreaming({
+                read: () => repliesAfter(messageId, deadline, scenario.excludeFromReply),
+                pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
+                log: console.log,
+              });
+              const stopStartedAt = Date.now();
+              await bot?.stop();
+              const stopSeconds = (Date.now() - stopStartedAt) / 1000;
+              const status = bot?.exitStatus();
+              // The footer alone would pass a bot that hung after editing the reply
+              // and was SIGKILLed, or one that outlived docker stop's 10s default.
+              if (status?.exitCode !== 0) {
+                shutdownProblems.push(
+                  `the bot did not exit cleanly after SIGTERM (exit code ${status?.exitCode}, signal ${status?.signalCode})`,
+                );
+              }
+              if (stopSeconds > SHUTDOWN_EXIT_LIMIT_S) {
+                shutdownProblems.push(
+                  `the bot took ${stopSeconds.toFixed(1)}s to exit after SIGTERM (limit ${SHUTDOWN_EXIT_LIMIT_S}s)`,
+                );
+              }
+            }
             const reply = await waitForReply({
               read: () => repliesAfter(messageId, deadline, scenario.excludeFromReply),
               pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
@@ -395,7 +436,7 @@ async function main(): Promise<number> {
             const toolWasInvoked = scenario.toolName
               ? spawn && bot?.toolCalls.has(scenario.toolName) === true
               : true;
-            const problems = scenario.check(reply);
+            const problems = [...shutdownProblems, ...scenario.check(reply)];
             if (scenario.input) problems.push(...checkInput(scenario.input, evidence));
             if (scenario.verify && channelId) {
               problems.push(

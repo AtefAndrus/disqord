@@ -81,7 +81,7 @@ function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
     settingsService,
     modelService,
     llmClient,
-    {} as IChatService,
+    { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
     "perplexity",
     { countJobs: mock(() => 2) } as unknown as ICronService,
   );
@@ -163,7 +163,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      { cancelRequest } as unknown as IChatService,
+      { cancelRequest, cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -183,7 +183,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      { cancelRequest } as unknown as IChatService,
+      { cancelRequest, cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -205,7 +205,7 @@ describe("interactionCreate: 停止ボタン", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      { cancelRequest } as unknown as IChatService,
+      { cancelRequest, cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -226,7 +226,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -256,7 +256,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );
@@ -304,7 +304,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       {} as ISettingsService,
       {} as IModelService,
       {} as ILLMClient,
-      {} as IChatService,
+      { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
       "perplexity",
       {} as ICronService,
     );

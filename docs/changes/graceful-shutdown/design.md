@@ -1,6 +1,6 @@
 ---
 title: "終了時の進行中返信の後始末"
-status: planned
+status: in-progress
 priority: medium
 summary: "bot の終了時に、生成途中の返信を停止表示へ書き換えてから落とす"
 ---
@@ -89,7 +89,7 @@ rolling update では、新しいコンテナがヘルスチェックを通っ�
 
 `src/index.ts`:
 
-- `client.on("messageCreate", ...)` を包み、`shuttingDown` が立っていれば handler を呼ばない。呼んだ handler の Promise は `Set` に入れ、終わったら外す。
+- `client.on("messageCreate", ...)` を包み、`shuttingDown` が立っていれば handler を呼ばない。呼んだ handler の Promise は `src/utils/inFlight.ts` の tracker に渡し、終わったら外す。tracker は拒否された Promise も完了として扱うので、handler から漏れた例外は包む側でログに残す。
 - `shutdown()` は、窓の掃除タイマーと HTTP サーバを止めた後、`chatService.cancelAll()` を呼ぶ。そのうえで、handler の Promise 全件の `allSettled` と `cronService.stop()` を並行して待ち、8 秒で打ち切ってから `client.destroy()` と `db.close()` へ進む。
 - 打ち切りの時点で終わっていない handler があれば、件数をログに残す。その返信は現状と同じく「生成中...」のまま残り、記録は次の起動で `failed` になる。
 
@@ -98,6 +98,7 @@ rolling update では、新しいコンテナがヘルスチェックを通っ�
 - 修正: `src/services/chatService.ts` — `cancelAll()`、`isClosing`、終了開始後の即時 `cancelled`
 - 修正: `src/bot/events/messageCreate.ts` — 停止の理由を停止表示に渡す
 - 修正: `src/utils/chatContainerBuilder.ts` — 再起動による停止の footer
+- 新規: `src/utils/inFlight.ts` — 実行中の Promise を数え、期限つきで完了を待つ
 - 修正: `src/index.ts` — handler の実行中の Promise の管理、`shutdown()` での中断と期限つきの待機
 - 修正: `scripts/e2e/` — 下の e2e シナリオ
 
@@ -109,11 +110,11 @@ rolling update では、新しいコンテナがヘルスチェックを通っ�
 
 ## Tasks
 
-- [ ] `ChatService` の `cancelAll()` と終了開始後の即時中断、ユニットテスト
-- [ ] 再起動による停止の footer（`chatContainerBuilder` と `messageCreate`）、ユニットテストと `bun run preview` の fixture
-- [ ] `src/index.ts` の `shutdown()` での中断と 8 秒の待機、終了開始後の発言を無視する処理
-- [ ] `bun run e2e shutdown` シナリオと、AGENTS.md の e2e 節への記載
-- [ ] `bun run e2e`（既定シナリオ）と `bun run e2e shutdown` の結果を PR 本文に載せる
+- [x] `ChatService` の `cancelAll()` と終了開始後の即時中断、ユニットテスト
+- [x] 再起動による停止の footer（`chatContainerBuilder` と `messageCreate`）、ユニットテストと `bun run preview` の fixture
+- [x] `src/index.ts` の `shutdown()` での中断と 8 秒の待機、終了開始後の発言を無視する処理
+- [x] `bun run e2e shutdown` シナリオと、AGENTS.md の e2e 節への記載
+- [x] `bun run e2e`（既定シナリオ）と `bun run e2e shutdown` の結果を PR 本文に載せる
 - [ ] 手動確認: Coolify の disqord のアプリケーション設定で Ports Mappings と consistent container name の有無、Stop grace period の値、デプロイログの `Rolling update started.` の有無を見る
 - [ ] `docs/changes/graceful-shutdown/` 削除（リリース完了時、git 履歴がアーカイブ）
 

@@ -58,6 +58,8 @@ export interface IChatService {
     ctx: ChatRequestContext,
   ): Promise<ToolLoopResult>;
   cancelRequest(requestId: MessageId): boolean;
+  cancelAll(): void;
+  readonly isClosing: boolean;
 }
 
 function pickDefaultPrompt(parts: ChatMessageContent[]): string {
@@ -195,6 +197,17 @@ function buildHistoryMessages(
 
 export class ChatService implements IChatService {
   private readonly activeRequests = new Map<MessageId, AbortController>();
+  private closing = false;
+
+  get isClosing(): boolean {
+    return this.closing;
+  }
+
+  cancelAll(): void {
+    this.closing = true;
+    for (const controller of this.activeRequests.values()) controller.abort();
+    this.activeRequests.clear();
+  }
 
   constructor(
     private readonly llmClient: ILLMClient,
@@ -337,6 +350,7 @@ export class ChatService implements IChatService {
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
   ): Promise<ToolLoopResult> {
+    if (this.closing) return { status: "cancelled", history: buildChatMessages(input) };
     const controller = new AbortController();
     this.activeRequests.set(requestId, controller);
     const initialMessages = buildChatMessages(input);

@@ -18,6 +18,7 @@ import type {
   IChatService,
 } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
+import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 import {
   MAX_TOTAL_BYTES_PER_MESSAGE,
@@ -298,6 +299,8 @@ describe("createMessageCreateHandler", () => {
       generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
       generateChatResponse: mock(createMockChatResponseFn("Mock response")),
       cancelRequest: mock(() => false),
+      cancelAll: mock(() => {}),
+      isClosing: false,
     };
 
     const mockGuildSettings = {
@@ -1273,7 +1276,57 @@ describe("createMessageCreateHandler", () => {
     expect(lastEditArg.flags).toBe(MessageFlags.IsComponentsV2);
     const container = toContainerJSON(lastEditArg);
     expect(hasSection(container)).toBe(false);
-    expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped");
+    expect(extractTextContents(container).join("\n")).toContain("🛑 Stopped |");
+  });
+
+  test("shutdown cancellation renders restart-stopped before finalizing the record as stopped", async () => {
+    // Shutdown begins while the reply is generating, after the initial message was sent.
+    const closingService = { ...mockChatService, isClosing: false };
+    mockChatService = closingService;
+    const cancelled = createCancelledChatResponseFn("partial");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => {
+        closingService.isClosing = true;
+        return cancelled(...args);
+      },
+    );
+    const finalize = mock(async () => {
+      const container = toContainerJSON(
+        lastCallArg(mockBotMessage.edit as ReturnType<typeof mock>),
+      );
+      expect(extractTextContents(container).at(-1)).toMatch(
+        /^🛑 Stopped by restart \| \d+(\.\d+)?s \| 7字$/u,
+      );
+      return true;
+    });
+    const replyRecordService = {
+      createPending: mock(async () => true),
+      appendPage: mock(async () => ({ recorded: true, finalized: false })),
+      finalize,
+      removePage: mock(async () => true),
+      findByTrigger: mock(() => null),
+      findByPage: mock(() => null),
+      listPages: mock(() => []),
+      markPendingFailed: mock(async () => 0),
+      deleteByGuild: mock(async () => 0),
+      deleteByChannel: mock(async () => 0),
+      deleteGuildsNotIn: mock(async () => 0),
+    } satisfies IReplyRecordService;
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyRecordService,
+    })(mockMessage as never);
+    expect(finalize).toHaveBeenCalledWith("msg-123", "stopped", 1);
+  });
+
+  test("does not send the initial message once shutdown has begun", async () => {
+    mockChatService = { ...mockChatService, isClosing: true };
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    )(mockMessage as never);
+    expect(mockMessage.channel.send).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
   test("Web 検索を外して答え直した回答は、footer にその旨を出す", async () => {

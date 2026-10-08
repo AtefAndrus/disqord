@@ -1387,6 +1387,63 @@ describe("ChatService", () => {
     expect(streamSignal?.aborted).toBe(true);
   });
 
+  test("cancelAll aborts every active stream and closes the service", async () => {
+    const fixture = createFixture();
+    const started = Promise.withResolvers<void>();
+    const signals: AbortSignal[] = [];
+    fixture.llmClient.chatStream = mock(async function* (
+      _request: ChatCompletionRequest,
+      signal?: AbortSignal,
+    ) {
+      if (!signal) throw new Error("missing signal");
+      signals.push(signal);
+      if (signals.length === 2) started.resolve();
+      yield { content: "partial", done: false as const };
+      await new Promise<never>((_resolve, reject) => {
+        const onAbort = (): void => reject(new Error("aborted"));
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      });
+    });
+    expect(fixture.chatService.isClosing).toBe(false);
+    const replies = ["first", "second"].map((requestId) =>
+      fixture.chatService.generateChatResponse(
+        "guild-123",
+        { text: "Hi" },
+        requestId,
+        createUpdater(),
+        { channelId: "channel-1", userId: "user-1" },
+      ),
+    );
+    await started.promise;
+    fixture.chatService.cancelAll();
+    expect(fixture.chatService.isClosing).toBe(true);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+    expect((await Promise.all(replies)).map((reply) => reply.status)).toEqual([
+      "cancelled",
+      "cancelled",
+    ]);
+    expect(fixture.chatService.cancelRequest("first")).toBe(false);
+    expect(fixture.chatService.cancelRequest("second")).toBe(false);
+  });
+
+  test("requests after cancelAll return cancelled without fetching settings or calling the LLM", async () => {
+    const fixture = createFixture();
+    fixture.chatService.cancelAll();
+    const reply = await fixture.chatService.generateChatResponse(
+      "guild-123",
+      { text: "Hi" },
+      "late",
+      createUpdater(),
+      { channelId: "channel-1", userId: "user-1" },
+    );
+    expect(reply).toEqual({ status: "cancelled", history: [{ role: "user", content: "Hi" }] });
+    expect(fixture.settingsService.getGuildSettings).not.toHaveBeenCalled();
+    expect(fixture.llmClient.chatStream).not.toHaveBeenCalled();
+    expect(fixture.llmClient.chat).not.toHaveBeenCalled();
+    expect(fixture.chatService.cancelRequest("late")).toBe(false);
+  });
+
   test("cancelRequest は未知の requestId には false を返す", () => {
     const fixture = createFixture();
 

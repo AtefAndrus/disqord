@@ -37,9 +37,13 @@ import { loadReleaseNotes } from "./services/releaseNotes";
 import { ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
+import { createInFlightTracker } from "./utils/inFlight";
 import { createLogFileWriter } from "./utils/logFile";
 import { logger, setLogFileWriter } from "./utils/logger";
 import { metrics } from "./utils/metrics";
+
+// Fit below Coolify's default 30s stop grace period and docker stop's default 10s.
+const CHAT_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -180,7 +184,17 @@ async function bootstrap(): Promise<void> {
   client.on(Events.GuildDelete, (guild) => void replyRecordCleanup.guildDelete(guild));
   client.on(Events.ChannelDelete, (channel) => void replyRecordCleanup.channelDelete(channel));
   client.on(Events.ThreadDelete, (thread) => void replyRecordCleanup.threadDelete(thread));
-  client.on("messageCreate", messageCreateHandler);
+  let shuttingDown = false;
+  const tracker = createInFlightTracker();
+  client.on("messageCreate", (message): void => {
+    if (shuttingDown) return;
+    // The tracker settles on rejection too, so log here or the error would vanish.
+    tracker.track(
+      messageCreateHandler(message).catch((error: unknown) => {
+        logger.error("messageCreate handler failed", { error });
+      }),
+    );
+  });
   client.on("interactionCreate", interactionCreateHandler);
 
   metrics.attach({ client });
@@ -203,14 +217,18 @@ async function bootstrap(): Promise<void> {
   );
   windowSweepTimer.unref();
 
-  let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info(`Received ${signal}, shutting down gracefully...`);
     clearInterval(windowSweepTimer);
     httpServer.stop();
-    await cronService.stop();
+    chatService.cancelAll();
+    const [unsettled] = await Promise.all([
+      tracker.drain(CHAT_SHUTDOWN_TIMEOUT_MS),
+      cronService.stop(),
+    ]);
+    if (unsettled > 0) logger.warn("Chat handlers still running at shutdown", { count: unsettled });
     client.destroy();
     db.close();
     logFileWriter.flush();
