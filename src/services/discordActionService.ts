@@ -2,13 +2,15 @@ import type { GuildMember, Message, TextChannel, ThreadChannel } from "discord.j
 import { ChannelType, PermissionFlagsBits, parseEmoji } from "discord.js";
 import type { DiscordToolContext } from "../llm/tools/registry";
 import { DiscordRestBudget } from "./discordMessageReader";
-import { type AuthorizationChannelLike, canReadConversation } from "./messageAuthorization";
+import { type AuthorizationChannelLike, checkConversationAccess } from "./messageAuthorization";
 
 type ActionChannel = TextChannel | ThreadChannel;
 type ActionName = "reaction" | "poll" | "thread" | "pin";
 type Actor = "bot" | "user";
 type Failure = { ok: false; reason: string; who?: Actor; permissions?: string[] };
-type Authorization = { channel: ActionChannel; user: GuildMember; bot: GuildMember } | Failure;
+type Authorization =
+  | { channel: ActionChannel; user: GuildMember; bot: GuildMember; parent?: TextChannel }
+  | Failure;
 
 function result(value: { ok: true } | Failure): string {
   return JSON.stringify(value);
@@ -65,6 +67,86 @@ function requiredPermissions(action: ActionName, channel: ActionChannel): [strin
   ];
 }
 
+export async function authorizeDiscordRead(
+  trigger: Message<true>,
+  budget?: DiscordRestBudget,
+  signal?: AbortSignal,
+): Promise<Authorization> {
+  const guild = trigger.guild;
+  let user: GuildMember;
+  let bot: GuildMember;
+  let channel: ActionChannel;
+  let parent: TextChannel | undefined;
+  try {
+    if (signal?.aborted) return failure("cancelled");
+    if (budget && !budget.consume()) return failure("rest_budget_exhausted");
+    user = await guild.members.fetch({ user: trigger.author.id, force: true, cache: false });
+  } catch {
+    return failure("requester_unavailable");
+  }
+  try {
+    // Keep caching enabled so the REST response patches existing channel objects.
+    if (signal?.aborted) return failure("cancelled");
+    if (budget && !budget.consume()) return failure("rest_budget_exhausted");
+    const fetched = await guild.channels.fetch(trigger.channelId, { force: true });
+    if (
+      !fetched ||
+      ![ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread].includes(
+        fetched.type,
+      )
+    ) {
+      return failure("unsupported_channel");
+    }
+    channel = fetched as ActionChannel;
+    if (channel.isThread()) {
+      if (!channel.parentId) return failure("unsupported_channel");
+      if (signal?.aborted) return failure("cancelled");
+      if (budget && !budget.consume()) return failure("rest_budget_exhausted");
+      const fetchedParent = await guild.channels.fetch(channel.parentId, { force: true });
+      if (fetchedParent?.type !== ChannelType.GuildText) return failure("unsupported_channel");
+      parent = fetchedParent;
+    }
+    if (signal?.aborted) return failure("cancelled");
+    if (budget && !budget.consume()) return failure("rest_budget_exhausted");
+    bot = await guild.members.fetch({
+      user: trigger.client.user.id,
+      force: true,
+    });
+  } catch {
+    return failure("discord_failed");
+  }
+  if (signal?.aborted) return failure("cancelled");
+  const readable = await checkConversationAccess(
+    {
+      channel: channel as unknown as AuthorizationChannelLike,
+      author: trigger.author,
+      member: user,
+      client: { user: trigger.client.user },
+    },
+    bot,
+    budget ?? new DiscordRestBudget(1),
+  );
+  if (signal?.aborted) return failure("cancelled");
+  if (budget?.refused) return failure("rest_budget_exhausted");
+  if (readable === "failed") return failure("conversation_access_failed");
+  if (readable !== "allowed") {
+    for (const [who, member] of [
+      ["bot", bot],
+      ["user", user],
+    ] as const) {
+      const permissions = channel.permissionsFor(member);
+      const missing = [
+        ["ViewChannel", PermissionFlagsBits.ViewChannel],
+        ["ReadMessageHistory", PermissionFlagsBits.ReadMessageHistory],
+      ] as const;
+      const names = missing.filter(([, bit]) => !permissions?.has(bit)).map(([name]) => name);
+      if (names.length > 0) return failure("missing_permission", who, names);
+    }
+    return failure("cannot_read_conversation");
+  }
+  return { channel, user, bot, ...(parent && { parent }) };
+}
+
 export class DiscordActionService implements DiscordToolContext {
   readonly channelType: number;
   private readonly counts: Record<ActionName, number> = { reaction: 0, poll: 0, thread: 0, pin: 0 };
@@ -80,64 +162,12 @@ export class DiscordActionService implements DiscordToolContext {
   }
 
   private async authorize(action: ActionName): Promise<Authorization> {
-    const guild = this.trigger.guild;
-    let user: GuildMember;
-    let bot: GuildMember;
-    let channel: ActionChannel;
-    try {
-      user = await guild.members.fetch({ user: this.trigger.author.id, force: true, cache: false });
-    } catch {
-      return failure("requester_unavailable");
-    }
-    try {
-      // Keep caching enabled so the REST response patches existing channel objects.
-      const fetched = await guild.channels.fetch(this.trigger.channelId, { force: true });
-      if (
-        !fetched ||
-        ![ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread].includes(
-          fetched.type,
-        )
-      ) {
-        return failure("unsupported_channel");
-      }
-      channel = fetched as ActionChannel;
-      if (channel.isThread()) {
-        if (!channel.parentId) return failure("unsupported_channel");
-        const parent = await guild.channels.fetch(channel.parentId, { force: true });
-        if (parent?.type !== ChannelType.GuildText) return failure("unsupported_channel");
-      }
-      bot = await guild.members.fetch({
-        user: this.trigger.client.user.id,
-        force: true,
-      });
-    } catch {
-      return failure("discord_failed");
-    }
-    const readable = await canReadConversation(
-      {
-        channel: channel as unknown as AuthorizationChannelLike,
-        author: this.trigger.author,
-        member: user,
-        client: { user: this.trigger.client.user },
-      },
-      bot,
-      new DiscordRestBudget(1),
-    );
-    if (!readable) {
-      for (const [who, member] of [
-        ["bot", bot],
-        ["user", user],
-      ] as const) {
-        const permissions = channel.permissionsFor(member);
-        const missing = [
-          ["ViewChannel", PermissionFlagsBits.ViewChannel],
-          ["ReadMessageHistory", PermissionFlagsBits.ReadMessageHistory],
-        ] as const;
-        const names = missing.filter(([, bit]) => !permissions?.has(bit)).map(([name]) => name);
-        if (names.length > 0) return failure("missing_permission", who, names);
-      }
+    const auth = await authorizeDiscordRead(this.trigger);
+    if (isFailure(auth) && auth.reason === "conversation_access_failed")
       return failure("cannot_read_conversation");
-    }
+    if (isFailure(auth)) return auth;
+    const { channel, user, bot } = auth;
+    const guild = this.trigger.guild;
     const userPermissions = channel.permissionsFor(user);
     if (
       user.communicationDisabledUntilTimestamp &&

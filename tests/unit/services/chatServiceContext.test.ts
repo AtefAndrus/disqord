@@ -4,6 +4,9 @@ import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
 import { createCreatePollTool } from "../../../src/llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "../../../src/llm/tools/discord/createThread";
+import { createGetChannelInfoTool } from "../../../src/llm/tools/discord/getChannelInfo";
+import { createListEventsTool } from "../../../src/llm/tools/discord/listEvents";
+import { createListPinsTool } from "../../../src/llm/tools/discord/listPins";
 import { createPinMessageTool } from "../../../src/llm/tools/discord/pinMessage";
 import { createReadEarlierMessagesTool } from "../../../src/llm/tools/readEarlierMessages";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
@@ -82,6 +85,8 @@ function createRetryFixture(
   llmClient: ReturnType<typeof createMockLLMClient>;
   requests: ChatCompletionRequest[];
   readEarlier: ReturnType<typeof mock>;
+  registry: ToolRegistry;
+  settingsService: ReturnType<typeof createMockSettingsService>;
 } {
   const llmClient = createMockLLMClient();
   llmClient.listModelsWithPricing = mock(async () => [
@@ -133,7 +138,7 @@ function createRetryFixture(
     tweetService,
     new ModelService(llmClient),
   );
-  return { chatService, llmClient, requests, readEarlier };
+  return { chatService, llmClient, requests, readEarlier, registry, settingsService };
 }
 
 function retryInput(readEarlier: ReturnType<typeof mock>): {
@@ -491,3 +496,99 @@ describe("conversation-context request construction", () => {
     expect(JSON.stringify(fixture.requests[1]?.messages)).not.toContain("image_url");
   });
 });
+
+test.each([
+  ["list_pins", "listPins"],
+  ["get_channel_info", "getChannelInfo"],
+  ["list_events", "listEvents"],
+] as const)("does not retry web search after read tool %s", async (toolName, method) => {
+  const fixture = createRetryFixture(true, false);
+  const registry = fixture.registry;
+  registry.register(createListPinsTool());
+  registry.register(createGetChannelInfoTool());
+  registry.register(createListEventsTool());
+  const info = {
+    channelType: 0,
+    listPins: mock(async () => '{"pins":[]}'),
+    getChannelInfo: mock(async () => '{"name":"channel"}'),
+    listEvents: mock(async () => '{"active":{"events":[]},"scheduled":{"events":[]}}'),
+  };
+  let calls = 0;
+  fixture.llmClient.chatStream = mock((request) => {
+    fixture.requests.push(request);
+    calls += 1;
+    if (calls === 1)
+      return (async function* () {
+        yield {
+          toolCall: { index: 0, id: "call-info", name: toolName, argumentsDelta: "{}" },
+          done: false as const,
+        };
+        yield { done: true as const, fullText: "", finishReason: "tool_calls" as const };
+      })();
+    return webSearchFailedTurn();
+  });
+  const result = await fixture.chatService.generateChatResponse(
+    "guild",
+    { ...retryInput(fixture.readEarlier), discordInfo: info },
+    "info-request",
+    createUpdater(),
+    { channelId: "channel", userId: "user" },
+  );
+  expect(result.status).toBe("error");
+  expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
+  expect(info[method]).toHaveBeenCalledTimes(1);
+});
+
+test.each(["history-off", "tools-unsupported", "voice"])(
+  "chat does not offer read tools for %s",
+  async (kind) => {
+    const fixture = createRetryFixture(false, false);
+    fixture.registry.register(createListPinsTool());
+    fixture.registry.register(createGetChannelInfoTool());
+    fixture.registry.register(createListEventsTool());
+    if (kind === "history-off") {
+      const service = fixture.settingsService;
+      service.getGuildSettings = mock(async (guildId: string) =>
+        createMockGuildSettings({ guildId, historyEnabled: false }),
+      );
+    }
+    if (kind === "tools-unsupported")
+      fixture.llmClient.listModelsWithPricing = mock(async () => [
+        {
+          id: "test-model:fixture",
+          name: "Fixture",
+          created: 0,
+          contextLength: 128_000,
+          pricing: { prompt: "0", completion: "0" },
+          inputModalities: ["text"],
+          outputModalities: ["text"],
+          supportedParameters: [],
+        },
+      ]);
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      return finalTurn("answer");
+    });
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      {
+        ...retryInput(fixture.readEarlier),
+        discordInfo: {
+          channelType: kind === "voice" ? 2 : 0,
+          listPins: async () => '{"pins":[]}',
+          getChannelInfo: async () => '{"name":"channel"}',
+          listEvents: async () => '{"active":{"events":[]},"scheduled":{"events":[]}}',
+        },
+      },
+      "info-off",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    const names =
+      fixture.requests[0]?.tools?.map((tool) =>
+        tool.type === "function" ? (tool as FunctionTool).function.name : tool.type,
+      ) ?? [];
+    for (const name of ["list_pins", "get_channel_info", "list_events"])
+      expect(names).not.toContain(name);
+  },
+);

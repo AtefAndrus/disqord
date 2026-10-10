@@ -15,10 +15,13 @@ import {
   LONG_NUMBERS_PER_LINE,
   modelOf,
   SCENARIOS,
+  type ScenarioPost,
   snapshotKey,
   toReply,
 } from "../../../scripts/e2e/scenarios";
+import { sendScenario } from "../../../scripts/e2e/send";
 import { applyMigrations } from "../../../src/db/schema";
+import { WINDOW_RAW_MESSAGE_LIMIT } from "../../../src/services/conversationWindow";
 import { EmbedColors } from "../../../src/types/embed";
 import {
   buildErrorContainer,
@@ -539,4 +542,95 @@ describe("costOf", () => {
     expect(costOf(toReply([page("1", ["途中"], STOPPED)]))).toBeUndefined();
     expect(costOf(toReply([page("1", ["答え"], "Tokens: 1+2=3 | Provider: P")]))).toBeUndefined();
   });
+});
+
+test("discord-info is named-only, checks history, pins its fixture and cleans up", async () => {
+  const scenario = SCENARIOS.find((item) => item.name === "discord-info");
+  if (!scenario?.before || !scenario.cleanup) throw new Error("missing discord-info scenario");
+  expect(scenario.manual).toBe(true);
+  expect(scenario.toolName).toBe("list_pins");
+  const directory = mkdtempSync(join(tmpdir(), "disqord-info-"));
+  const databasePath = join(directory, "settings.db");
+  const db = new Database(databasePath);
+  db.run(
+    "CREATE TABLE guild_settings (guild_id TEXT, history_enabled INTEGER, twitter_expand_enabled INTEGER, show_llm_details INTEGER)",
+  );
+  db.run("INSERT INTO guild_settings VALUES ('guild', 0, 0, 1)");
+  const requests: Array<{ path: string; method?: string }> = [];
+  let fixtureContent = "";
+  const request = mock(async (path: string, init?: RequestInit): Promise<Response> => {
+    requests.push({ path, method: init?.method });
+    if (init?.method === "POST") {
+      expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+      fixtureContent = (JSON.parse(init.body as string) as { content: string }).content;
+      return Response.json({ id: "fixture" });
+    }
+    if (init?.method === "PUT" || init?.method === "DELETE")
+      return new Response(null, { status: 204 });
+    if (path === "/channels/channel/messages?after=fixture&limit=100")
+      return Response.json([
+        { id: "unrelated-notice", type: 6, message_reference: { message_id: "other" } },
+        { id: "pin-notice", type: 6, message_reference: { message_id: "fixture" } },
+      ]);
+    return Response.json({ guild_id: "guild", name: "channel-name" });
+  });
+  const infoEnv = { databasePath, testerBotId: "tester" };
+  try {
+    expect(await scenario.before("channel", request, infoEnv)).toEqual([
+      expect.stringContaining("会話履歴 is off"),
+    ]);
+    expect(requests.some((call) => call.method === "POST")).toBe(false);
+    db.run("UPDATE guild_settings SET history_enabled=1");
+    expect(await scenario.before("channel", request, infoEnv)).toEqual([]);
+    expect(requests).toContainEqual({ path: "/channels/channel/pins/fixture", method: "PUT" });
+    expect(
+      scenario.check(toReply([page("reply", [fixtureContent, "channel-name"], USAGE)])),
+    ).toEqual([]);
+    expect(scenario.check(toReply([page("reply", ["channel-name"], USAGE)]))).toContain(
+      "the reply does not contain the pinned secret",
+    );
+    const secret = fixtureContent.split("合言葉: ")[1];
+    expect(secret).toBeDefined();
+    expect(scenario.prompt).not.toContain(secret as string);
+    const posts: ScenarioPost[] = [];
+    await sendScenario(
+      scenario,
+      async (message): Promise<DiscordMessage> => {
+        posts.push(message);
+        return {
+          id: String(posts.length),
+          content: message.prompt,
+          author: { id: "tester", username: "tester", bot: true },
+        };
+      },
+      async () => {},
+    );
+    expect(posts.slice(0, -1).length).toBeGreaterThanOrEqual(WINDOW_RAW_MESSAGE_LIMIT);
+    expect(posts.slice(0, -1).every((post) => post.mention === false)).toBe(true);
+    expect(posts.every((post) => !post.prompt.includes(secret as string))).toBe(true);
+    expect(posts.at(-1)?.prompt).toBe(scenario.prompt);
+    expect(
+      scenario.check(toReply([page("reply", [scenario.prompt, "channel-name"], USAGE)])),
+    ).toContain("the reply does not contain the pinned secret");
+    expect(scenario.check(toReply([page("reply", [fixtureContent], USAGE)]))).toContain(
+      "the reply does not contain the channel name",
+    );
+    expect(await scenario.cleanup(undefined, "channel", request, infoEnv, Date.now())).toEqual([]);
+    expect(requests).toContainEqual({ path: "/channels/channel/pins/fixture", method: "DELETE" });
+    expect(requests).toContainEqual({
+      path: "/channels/channel/messages/fixture",
+      method: "DELETE",
+    });
+    expect(requests).toContainEqual({
+      path: "/channels/channel/messages/pin-notice",
+      method: "DELETE",
+    });
+    expect(requests).not.toContainEqual({
+      path: "/channels/channel/messages/unrelated-notice",
+      method: "DELETE",
+    });
+  } finally {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

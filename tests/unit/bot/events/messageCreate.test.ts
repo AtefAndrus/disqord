@@ -10,6 +10,7 @@ import {
 } from "bun:test";
 import { type Attachment, ChannelType, Collection, MessageFlags, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
+import type { IReplyRecordRepository } from "../../../../src/db/repositories/replyRecord";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
 import type {
@@ -17,6 +18,12 @@ import type {
   ChatUserInput,
   IChatService,
 } from "../../../../src/services/chatService";
+import {
+  type BuildConversationWindowInput,
+  type ConversationWindowContext,
+  ConversationWindowService,
+} from "../../../../src/services/conversationWindow";
+import type { IDiscordMessageReader } from "../../../../src/services/discordMessageReader";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
@@ -25,11 +32,21 @@ import {
   MAX_TOTAL_CHARS_PER_MESSAGE,
   REASONING_COMPONENT_ID,
 } from "../../../../src/utils/chatContainerBuilder";
+import type { RawDiscordMessage } from "../../../../src/utils/discordMessageNormalizer";
 
 interface MockBotMessage {
   id: string;
   edit: ReturnType<typeof mock>;
   delete: ReturnType<typeof mock>;
+}
+
+interface IAttachmentConversationFixture {
+  context: ConversationWindowContext;
+  members: ReturnType<typeof mock<(options: { user: string }) => Promise<{ id?: string }>>>;
+  channels: ReturnType<typeof mock<(id: string) => Promise<unknown>>>;
+  reader: IDiscordMessageReader;
+  requester: { id: string };
+  deny: () => void;
 }
 
 interface ContainerComponentJSON {
@@ -416,6 +433,154 @@ describe("createMessageCreateHandler", () => {
     setSystemTime();
   });
 
+  async function attachmentConversation(
+    type: ChannelType,
+  ): Promise<IAttachmentConversationFixture> {
+    let allowed = true;
+    const requester = { id: mockMessage.author.id };
+    const bot = { id: mockMessage.client.user?.id };
+    const channel = {
+      ...mockMessage.channel,
+      type,
+      parentId:
+        type === ChannelType.PublicThread
+          ? "forum"
+          : type === ChannelType.AnnouncementThread
+            ? "announcement"
+            : null,
+      parent: {
+        type:
+          type === ChannelType.PublicThread
+            ? ChannelType.GuildForum
+            : ChannelType.GuildAnnouncement,
+      },
+      isThread: (): boolean =>
+        [ChannelType.PublicThread, ChannelType.AnnouncementThread].includes(type),
+      permissionsFor: (member: { id?: string }) => ({
+        has: (): boolean => member.id !== requester.id || allowed,
+      }),
+    };
+    const members = mock(async ({ user }: { user: string }) =>
+      user === requester.id ? requester : bot,
+    );
+    const channels = mock(async (id: string) =>
+      id === "forum" || id === "announcement" ? channel.parent : channel,
+    );
+    Object.assign(mockMessage, {
+      channel,
+      channelId: channel.id,
+      guild: { id: "guild-123", members: { fetch: members }, channels: { fetch: channels } },
+    });
+    const build = mock(async (_input: BuildConversationWindowInput) => null);
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      conversationWindow: { build } as unknown as ConversationWindowService,
+    })(mockMessage as never);
+    const input = build.mock.calls[0]?.[0];
+    if (!input) throw new Error("missing conversation input");
+    const attachment: RawDiscordMessage = {
+      id: "100",
+      channel_id: channel.id,
+      guild_id: "guild-123",
+      timestamp: new Date(Date.now() - 1000).toISOString(),
+      author: { id: requester.id, username: "user" },
+      content: "image",
+      attachments: [
+        {
+          id: "image",
+          filename: "image.png",
+          content_type: "image/png",
+          size: 3,
+          url: "https://cdn.discordapp.com/attachments/1/image.png",
+        },
+      ],
+    };
+    const reader: IDiscordMessageReader = {
+      list: mock(async () => ({ status: "ok" as const, messages: [attachment] })),
+      fetch: mock(async () => ({ status: "found" as const, message: attachment })),
+    };
+    const repository: IReplyRecordRepository = {
+      createPending: () => true,
+      appendPage: () => true,
+      removePage: () => true,
+      finalize: () => true,
+      findByTrigger: () => null,
+      findByPage: () => null,
+      listPages: () => [],
+      markPendingFailed: () => 0,
+      deleteByGuild: () => 0,
+      deleteByChannel: () => 0,
+      deleteGuildsNotIn: () => 0,
+    };
+    const context = await new ConversationWindowService(
+      reader,
+      repository,
+      () => Date.now(),
+      async () => true,
+    ).build({ ...input, current: { ...input.current, id: "101" } });
+    if (!context?.toolRestBudget) throw new Error("missing attachment context");
+    mockFetch.mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    return {
+      context,
+      members,
+      channels,
+      reader,
+      requester,
+      deny: (): void => {
+        allowed = false;
+      },
+    };
+  }
+
+  test.each([
+    ["forum post thread", ChannelType.PublicThread],
+    ["announcement channel", ChannelType.GuildAnnouncement],
+    ["announcement thread", ChannelType.AnnouncementThread],
+    ["voice text chat", ChannelType.GuildVoice],
+    ["stage text chat", ChannelType.GuildStageVoice],
+  ] as const)("view_attachment succeeds in a %s", async (_name, type) => {
+    const f = await attachmentConversation(type);
+    expect(
+      await f.context.toolContext.viewAttachment("m1", 1, "model", new AbortController().signal),
+    ).toEqual([{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,AQID" }]);
+    expect(f.members).toHaveBeenCalledWith({ user: f.requester.id, force: true, cache: false });
+    expect(f.channels).toHaveBeenCalledWith("channel-123", { force: true });
+    if (type === ChannelType.PublicThread) {
+      expect(f.channels).toHaveBeenCalledWith("forum", { force: true });
+    }
+  });
+
+  test("view_attachment refuses a requester who lost announcement channel access", async () => {
+    const f = await attachmentConversation(ChannelType.GuildAnnouncement);
+    f.deny();
+    expect(
+      await f.context.toolContext.viewAttachment("m1", 1, "model", new AbortController().signal),
+    ).toBe('{"error":"no_permission"}');
+    expect(f.context.toolRestBudget?.used).toBe(3);
+    expect(f.reader.fetch).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  test("aborted view_attachment consumes no further REST budget after pending requester fetch resolves", async () => {
+    const f = await attachmentConversation(ChannelType.GuildText);
+    const deferred = Promise.withResolvers<typeof f.requester>();
+    f.members.mockImplementation(() => deferred.promise);
+    const controller = new AbortController();
+    const pending = f.context.toolContext.viewAttachment("m1", 1, "model", controller.signal);
+    expect(f.context.toolRestBudget?.used).toBe(1);
+    controller.abort();
+    expect(await pending).toBe('{"error":"attachment_unavailable"}');
+    deferred.resolve(f.requester);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.context.toolRestBudget?.used).toBe(1);
+    expect(f.channels).not.toHaveBeenCalled();
+    expect(f.members).toHaveBeenCalledTimes(1);
+    expect(f.reader.fetch).not.toHaveBeenCalled();
+  });
+
   test("ニックネームが無ければ表示名を発話者ラベルにする", async () => {
     mockMessage.author.username = "account123";
     mockMessage.author.globalName = "田中";
@@ -466,6 +631,27 @@ describe("createMessageCreateHandler", () => {
       ok: false,
       reason: "not_found",
     });
+  });
+
+  test("history off omits discordInfo and does not build a conversation", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    (mockSettingsService.getGuildSettings as ReturnType<typeof mock>).mockResolvedValue({
+      ...settings,
+      historyEnabled: false,
+    });
+    const build = mock(async () => null);
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { conversationWindow: { build } as unknown as ConversationWindowService },
+    );
+    await handler(mockMessage as never);
+    const input = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[0]?.[1] as ChatUserInput;
+    expect(input.conversation).toBeUndefined();
+    expect(input.discordInfo).toBeUndefined();
+    expect(build).not.toHaveBeenCalled();
   });
 
   test("Botからのメッセージは無視する", async () => {

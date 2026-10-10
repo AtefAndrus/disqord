@@ -65,7 +65,7 @@ export interface Scenario extends ScenarioPost {
     after?: ScenarioPost[];
   };
   input?: InputExpectation;
-  toolName?: "read_earlier_messages" | "view_attachment" | "propose_cron_job";
+  toolName?: "read_earlier_messages" | "view_attachment" | "propose_cron_job" | "list_pins";
   timeoutMs?: number;
   /** Bot messages that are not part of the reply, such as a separate card; the reply is read without them. */
   excludeFromReply?: (message: DiscordMessage) => boolean;
@@ -347,6 +347,11 @@ function randomSixDigits(): string {
 /** Exported so that the unit tests can build a reply that reads the image correctly. */
 export const IMAGE_TOKEN = randomSixDigits();
 const VIEW_IMAGE_TOKEN = randomSixDigits();
+const DISCORD_INFO_TOKEN = `PIN-${crypto.randomUUID()}`;
+const DISCORD_INFO_SECRET = crypto.randomUUID();
+let discordInfoFixtureId: string | undefined;
+let discordInfoPinNoticeId: string | undefined;
+let discordInfoChannelName = "";
 /** Enough numbers to fill a page (3800 characters) and part of a second. */
 export const LONG_NUMBER_COUNT = 1200;
 /** Several numbers per line so that the reply is not 1200 lines tall in the channel. */
@@ -446,6 +451,87 @@ export const SCENARIOS: Scenario[] = [
     verify: verifyCron,
     cleanup: (_triggerId, channelId, _request, env, startedAt) =>
       cleanupCron(channelId, env, startedAt),
+  },
+  {
+    name: "discord-info",
+    manual: true,
+    setup: {
+      prompt: "[e2e] ピン留めを会話窓の外から確認する。",
+      mention: false,
+      fillerCount: WINDOW_RAW_MESSAGE_LIMIT,
+    },
+    prompt: `[e2e] get_channel_info と list_pins を必ず使い、このチャンネルの名前と、${DISCORD_INFO_TOKEN} を含むピン留めメッセージに書かれた合言葉を教えて。`,
+    toolName: "list_pins",
+    before: async (channelId, request, env) => {
+      const problems = await inputPreconditions(channelId, request, env, { history: true });
+      if (problems.length) return problems;
+      const channel = await request(`/channels/${channelId}`);
+      if (!channel.ok) return [`cannot read channel: HTTP ${channel.status}`];
+      discordInfoChannelName = ((await channel.json()) as { name: string }).name;
+      const fixture = await request(`/channels/${channelId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: `Pinned fixture ${DISCORD_INFO_TOKEN}\n合言葉: ${DISCORD_INFO_SECRET}`,
+          allowed_mentions: { parse: [] },
+        }),
+      });
+      if (!fixture.ok) return [`cannot post pin fixture: HTTP ${fixture.status}`];
+      discordInfoFixtureId = ((await fixture.json()) as { id: string }).id;
+      const pin = await request(`/channels/${channelId}/pins/${discordInfoFixtureId}`, {
+        method: "PUT",
+      });
+      if (!pin.ok) return [`cannot pin fixture: HTTP ${pin.status}`];
+      const notices = await request(
+        `/channels/${channelId}/messages?after=${discordInfoFixtureId}&limit=100`,
+      );
+      if (!notices.ok) return [`cannot read pin notice: HTTP ${notices.status}`];
+      discordInfoPinNoticeId = (
+        (await notices.json()) as {
+          id: string;
+          type: number;
+          message_reference?: { message_id?: string };
+        }[]
+      ).find(
+        (message) =>
+          message.type === 6 && message.message_reference?.message_id === discordInfoFixtureId,
+      )?.id;
+      return discordInfoPinNoticeId ? [] : ["cannot find pin notice"];
+    },
+    check: (reply) => [
+      ...hasUsageFooter(reply),
+      ...(reply.isError ? ["the reply ended in an error"] : []),
+      ...(!reply.body.includes(DISCORD_INFO_SECRET)
+        ? ["the reply does not contain the pinned secret"]
+        : []),
+      ...(!discordInfoChannelName || !reply.body.includes(discordInfoChannelName)
+        ? ["the reply does not contain the channel name"]
+        : []),
+    ],
+    cleanup: async (_triggerId, channelId, request) => {
+      if (!discordInfoFixtureId) return [];
+      const problems: string[] = [];
+      const fixtureId = discordInfoFixtureId;
+      discordInfoFixtureId = undefined;
+      const noticeId = discordInfoPinNoticeId;
+      discordInfoPinNoticeId = undefined;
+      for (const path of [
+        `/channels/${channelId}/pins/${fixtureId}`,
+        `/channels/${channelId}/messages/${fixtureId}`,
+        ...(noticeId ? [`/channels/${channelId}/messages/${noticeId}`] : []),
+      ]) {
+        try {
+          const response = await request(path, { method: "DELETE" });
+          if (!response.ok && response.status !== 404)
+            problems.push(`cannot clean up ${path}: HTTP ${response.status}`);
+        } catch (error) {
+          problems.push(
+            `cannot clean up ${path}: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+      return problems;
+    },
   },
   {
     name: "discord-tools",

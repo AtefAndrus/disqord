@@ -16,9 +16,11 @@ import type {
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
 import { DiscordActionService } from "../../services/discordActionService";
-import type {
-  AuthorizationChannelLike,
-  AuthorizationMessageLike,
+import { DiscordInfoService } from "../../services/discordInfoService";
+import {
+  type AuthorizationChannelLike,
+  type AuthorizationMessageLike,
+  reauthorizeConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
@@ -390,6 +392,8 @@ export function createMessageCreateHandler(
           botUser: message.client.user,
           channel: message.channel as unknown as AuthorizationChannelLike,
           authorizationMessage,
+          reauthorize: (budget, signal) =>
+            reauthorizeConversationAccess(message as Message<true>, budget, signal),
           historyEnabled: true,
           e2eTesterBotId: options.e2eTesterBotId,
           nodeEnv: process.env.NODE_ENV,
@@ -454,6 +458,13 @@ export function createMessageCreateHandler(
             message.author.id,
           ),
           ...(conversation && { conversation }),
+          ...(conversation && {
+            discordInfo: new DiscordInfoService(
+              message as Message<true>,
+              conversation,
+              toRawDiscordMessage,
+            ),
+          }),
           ...(settings.discordToolsEnabled && {
             discord: new DiscordActionService(message as Message<true>, (ref) =>
               conversation?.toolContext.resolveMessageRef(ref),

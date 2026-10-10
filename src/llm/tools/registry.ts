@@ -33,6 +33,18 @@ export interface DiscordToolContext {
   pinMessage(messageRef: string | undefined, signal: AbortSignal): Promise<string>;
 }
 
+export interface DiscordInfoContext {
+  channelType: number;
+  listPins(before: string | undefined, signal: AbortSignal, budgetTokens?: number): Promise<string>;
+  getChannelInfo(signal: AbortSignal, budgetTokens?: number): Promise<string>;
+  listEvents(
+    from: string | undefined,
+    until: string | undefined,
+    signal: AbortSignal,
+    budgetTokens?: number,
+  ): Promise<string>;
+}
+
 export interface CronProposalArgs {
   name: string;
   schedule: string;
@@ -62,6 +74,7 @@ export interface IToolContext {
   toolsAllowed?: boolean;
   conversation?: ConversationToolContext;
   discord?: DiscordToolContext;
+  discordInfo?: DiscordInfoContext;
   cron?: CronToolContext;
   /**
    * Tokens this call's result may add to the request, as estimated by
