@@ -96,6 +96,16 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 - `[feat]` → Added, `[fix]` → Fixed, `[docs]` → Documentation, `[refactor]` → Refactoring, `[test]` → Testing, `[perf]` → Performance. `[chore]` and `[release]` are skipped, and Renovate's `build(deps...)` goes to Dependencies. `cliff.toml` is the source of truth.
 - Direct commits to `main` are blocked by lefthook (`00_guard-branch`). Work on a branch and open a PR.
 
+## Bot invitations
+
+When a change needs a bot re-authorized, hand the user the full invite URLs rather than the steps. The template and the permission values are in README's Discord への招待 section; the client IDs are public identifiers of this deployment's applications:
+
+- development bot: `1452697731406630995` (`DISCORD_APPLICATION_ID` in `.env`)
+- production bot: `1448932877038260254`
+- e2e tester bot: `875079314163499040` (`E2E_TESTER_BOT_ID` in `.env`); it holds Manage Server, so its URL uses `permissions=2832668371831904`
+
+When a permission is added, update the values in README and recompute them from the permission bits rather than by hand.
+
 ## Release
 
 Run the `/release` skill with the target version, for example `/release 1.5.0`.

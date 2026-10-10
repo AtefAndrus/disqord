@@ -25,6 +25,12 @@ Developer Portal の Bot ページで Message Content Intent を有効にする�
 - Attach Files
 - Add Reactions、Create Polls、Create Public Threads、Pin Messages、Create Events、Connect（`/config` の 機能 → Discord 操作 が使う。Connect はボイスチャンネルのイベントを作るときに要る）
 
+URL Generator を使わずに作るときは、次のひな型の `<CLIENT_ID>` に Developer Portal の Application ID を入れる。
+
+```text
+https://discord.com/oauth2/authorize?client_id=<CLIENT_ID>&permissions=2832651191962688&integration_type=0&scope=bot
+```
+
 既にサーバーにいる bot も、権限を足した URL で認可し直すと、bot のロールの権限が更新される。
 Discord 操作は bot と依頼したメンバーの双方がその権限を持つときだけ実行するので、足りなければ実行せずにその旨をモデルが伝える。
 
@@ -33,6 +39,8 @@ Discord 操作は bot と依頼したメンバーの双方がその権限を持�
 
 - Manage Threads（`discord-tools` シナリオが作ったスレッドを片付けるため）
 - `/config` で設定した管理者ロール（`cron` と `cron-search` シナリオが定期実行を提案するため。Manage Server でも足りるが、サーバーの設定をすべて変えられる権限なので管理者ロールを勧める）
+
+テスト bot の招待 URL の `permissions` は、管理者ロールを付けるなら `2832668371831872`、代わりに Manage Server を付けるなら `2832668371831904` にする（どちらも Connect を含む）。
 
 ### ローカル開発
 
