@@ -30,14 +30,14 @@ describe("loadConfig: E2E_TESTER_BOT_ID", () => {
 
   test("development では設定値をそのまま返す", () => {
     process.env.NODE_ENV = "development";
-    process.env.E2E_TESTER_BOT_ID = "875079314163499040";
+    process.env.E2E_TESTER_BOT_ID = "500000000000000000";
 
-    expect(loadConfig().e2eTesterBotId).toBe("875079314163499040");
+    expect(loadConfig().e2eTesterBotId).toBe("500000000000000000");
   });
 
   test("production では設定されていても無視する（本番 bot を他の bot から駆動させない）", () => {
     process.env.NODE_ENV = "production";
-    process.env.E2E_TESTER_BOT_ID = "875079314163499040";
+    process.env.E2E_TESTER_BOT_ID = "500000000000000000";
 
     expect(loadConfig().e2eTesterBotId).toBeUndefined();
   });
