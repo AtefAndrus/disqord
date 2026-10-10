@@ -21,8 +21,7 @@ body = """
 - {{ commit.message | split(pat="\n") | first | trim \
   | replace_regex(from="^\\[(?:feat|fix|docs|refactor|test|perf)\\]\\s*", to="") \
   | replace_regex(from="^(?:feat|fix|docs|refactor|test|perf)(?:\\(.*?\\))?:\\s*", to="") \
-  | replace_regex(from="^build\\(deps(?:-dev)?\\):\\s*", to="") \
-  | upper_first }}
+  | replace_regex(from="^build\\(deps(?:-dev)?\\):\\s*", to="") }}
 {% endfor %}
 {%- endfor %}
 """
