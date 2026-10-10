@@ -21,6 +21,7 @@ export class DiscordInfoService implements DiscordInfoContext {
     private readonly trigger: Message<true>,
     private readonly conversation: ConversationWindowContext,
     private readonly rawMessage: (message: Message) => RawDiscordMessage,
+    private readonly now: () => number = Date.now,
   ) {
     this.channelType =
       trigger.channel.isThread() && trigger.channel.parent?.type !== ChannelType.GuildText
@@ -189,7 +190,7 @@ export class DiscordInfoService implements DiscordInfoContext {
           );
         })
         .sort((a, b) => (a.scheduledStartTimestamp ?? 0) - (b.scheduledStartTimestamp ?? 0));
-      const start = from ? Date.parse(from) : Date.now();
+      const start = from ? Date.parse(from) : this.now();
       const end = until ? Date.parse(until) : Number.POSITIVE_INFINITY;
       const format = (event: (typeof visible)[number]): Record<string, unknown> => ({
         name: event.name,

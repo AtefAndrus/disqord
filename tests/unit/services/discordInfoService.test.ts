@@ -202,10 +202,12 @@ async function fixture(
   if (!context) throw new Error("no context");
   const budget = context.toolRestBudget;
   if (!budget) throw new Error("missing tool budget");
+  // The fixture's events are dated from NOW, so the service must read the same clock.
   const service = new DiscordInfoService(
     trigger,
     context,
     (message) => message as unknown as RawDiscordMessage,
+    () => NOW,
   );
   const setPins = (messages: RawDiscordMessage[], hasMore = false): void => {
     channel.messages.fetchPins.mockImplementation(async () => ({
@@ -455,8 +457,7 @@ test("events filter scheduled period, default from now, and retain active regard
     "start",
     "middle",
   ]);
-  const now = Date.now();
-  f.setEvents([event("yesterday", 1, now - 86_400_000), event("tomorrow", 1, now + 86_400_000)]);
+  f.setEvents([event("yesterday", 1, NOW - 86_400_000), event("tomorrow", 1, NOW + 86_400_000)]);
   expect(
     JSON.parse(await f.service.listEvents(undefined, undefined, signal)).scheduled.events.map(
       (item: { name: string }) => item.name,
