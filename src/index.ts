@@ -16,6 +16,7 @@ import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
 import { OpenRouterClient } from "./llm/openrouter";
 import { createAddReactionTool } from "./llm/tools/discord/addReaction";
+import { createCreateEventTool } from "./llm/tools/discord/createEvent";
 import { createCreatePollTool } from "./llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "./llm/tools/discord/createThread";
 import { createGetChannelInfoTool } from "./llm/tools/discord/getChannelInfo";
@@ -82,6 +83,7 @@ async function bootstrap(): Promise<void> {
   toolRegistry.register(createViewAttachmentTool());
   toolRegistry.register(createAddReactionTool());
   toolRegistry.register(createCreatePollTool());
+  toolRegistry.register(createCreateEventTool());
   toolRegistry.register(createCreateThreadTool());
   toolRegistry.register(createPinMessageTool());
   toolRegistry.register(createListPinsTool());

@@ -1,18 +1,25 @@
-import type { GuildMember, Message, TextChannel, ThreadChannel } from "discord.js";
-import { ChannelType, PermissionFlagsBits, parseEmoji } from "discord.js";
-import type { DiscordToolContext } from "../llm/tools/registry";
+import type { GuildMember, Message, TextChannel, ThreadChannel, VoiceChannel } from "discord.js";
+import {
+  ChannelType,
+  GuildScheduledEventEntityType,
+  GuildScheduledEventPrivacyLevel,
+  PermissionFlagsBits,
+  parseEmoji,
+} from "discord.js";
+import type { CreateEventArgs, DiscordToolContext } from "../llm/tools/registry";
 import { DiscordRestBudget } from "./discordMessageReader";
 import { type AuthorizationChannelLike, checkConversationAccess } from "./messageAuthorization";
 
 type ActionChannel = TextChannel | ThreadChannel;
 type ActionName = "reaction" | "poll" | "thread" | "pin";
+const ACTION_LIMITS = { reaction: 3, poll: 1, thread: 1, pin: 1, event: 1 };
 type Actor = "bot" | "user";
 type Failure = { ok: false; reason: string; who?: Actor; permissions?: string[] };
 type Authorization =
   | { channel: ActionChannel; user: GuildMember; bot: GuildMember; parent?: TextChannel }
   | Failure;
 
-function result(value: { ok: true } | Failure): string {
+function result(value: { ok: true; url?: string } | Failure): string {
   return JSON.stringify(value);
 }
 
@@ -149,7 +156,7 @@ export async function authorizeDiscordRead(
 
 export class DiscordActionService implements DiscordToolContext {
   readonly channelType: number;
-  private readonly counts: Record<ActionName, number> = { reaction: 0, poll: 0, thread: 0, pin: 0 };
+  private readonly counts = { reaction: 0, poll: 0, thread: 0, pin: 0, event: 0 };
 
   constructor(
     private readonly trigger: Message<true>,
@@ -161,7 +168,7 @@ export class DiscordActionService implements DiscordToolContext {
         : trigger.channel.type;
   }
 
-  private async authorize(action: ActionName): Promise<Authorization> {
+  private async authorize(action?: ActionName): Promise<Authorization> {
     const auth = await authorizeDiscordRead(this.trigger);
     if (isFailure(auth) && auth.reason === "conversation_access_failed")
       return failure("cannot_read_conversation");
@@ -187,7 +194,7 @@ export class DiscordActionService implements DiscordToolContext {
         }
       }
     }
-    const required = requiredPermissions(action, channel);
+    const required = action ? requiredPermissions(action, channel) : [];
     for (const [who, member] of [
       ["bot", bot],
       ["user", user],
@@ -197,6 +204,11 @@ export class DiscordActionService implements DiscordToolContext {
       if (missing.length > 0) return failure("missing_permission", who, missing);
     }
     return { channel, user, bot };
+  }
+
+  private consume(action: keyof typeof ACTION_LIMITS): void {
+    if (this.counts[action] >= ACTION_LIMITS[action]) throw failure("limit_reached");
+    this.counts[action] += 1;
   }
 
   private async execute(
@@ -209,8 +221,7 @@ export class DiscordActionService implements DiscordToolContext {
       consume: () => void,
     ) => Promise<void>,
   ): Promise<string> {
-    const limits: Record<ActionName, number> = { reaction: 3, poll: 1, thread: 1, pin: 1 };
-    if (this.counts[action] >= limits[action]) return result(failure("limit_reached"));
+    if (this.counts[action] >= ACTION_LIMITS[action]) return result(failure("limit_reached"));
     if (signal.aborted) return result(failure("cancelled"));
     const targetId = ref === undefined ? this.trigger.id : this.resolveMessageRef(ref);
     if (!targetId) return result(failure("not_found"));
@@ -220,12 +231,105 @@ export class DiscordActionService implements DiscordToolContext {
       if (signal.aborted) return result(failure("cancelled"));
       await perform(auth, targetId, () => {
         if (signal.aborted) throw failure("cancelled");
-        if (this.counts[action] >= limits[action]) throw failure("limit_reached");
-        this.counts[action] += 1;
+        this.consume(action);
       });
       return result({ ok: true });
     } catch (error) {
       return result(classifyError(error, action, this.trigger.channel as ActionChannel));
+    }
+  }
+
+  async createEvent(args: CreateEventArgs, signal: AbortSignal): Promise<string> {
+    const required: [string, bigint][] = [
+      ["CreateEvents", PermissionFlagsBits.CreateEvents],
+      ...(args.kind === "voice"
+        ? ([
+            ["ViewChannel", PermissionFlagsBits.ViewChannel],
+            ["Connect", PermissionFlagsBits.Connect],
+          ] satisfies [string, bigint][])
+        : []),
+    ];
+    try {
+      // Refuse early once the limit is spent, but count only right before the create request
+      // below: a call refused by a check (wrong channel name, past start) must leave room for
+      // the corrected call, while one aborted after the request was sent must not.
+      if (this.counts.event >= ACTION_LIMITS.event) throw failure("limit_reached");
+      if (signal.aborted) return result(failure("cancelled"));
+      const auth = await this.authorize();
+      if (isFailure(auth)) return result(auth);
+      if (signal.aborted) return result(failure("cancelled"));
+      let voice: VoiceChannel | undefined;
+      if (args.kind === "voice") {
+        const channels = await this.trigger.guild.channels.fetch();
+        if (signal.aborted) return result(failure("cancelled"));
+        const candidates = channels.filter(
+          (channel): channel is VoiceChannel =>
+            channel?.type === ChannelType.GuildVoice &&
+            !!channel.permissionsFor(auth.bot)?.has(PermissionFlagsBits.ViewChannel) &&
+            !!channel.permissionsFor(auth.user)?.has(PermissionFlagsBits.ViewChannel) &&
+            channel.name === args.channel_name,
+        );
+        if (candidates.size === 0) return result(failure("channel_not_found"));
+        if (candidates.size > 1) return result(failure("channel_ambiguous"));
+        voice = candidates.first();
+      }
+      for (const [who, member] of [
+        ["bot", auth.bot],
+        ["user", auth.user],
+      ] as const) {
+        const permissions = voice ? voice.permissionsFor(member) : member.permissions;
+        const missing = required.filter(([, bit]) => !permissions?.has(bit)).map(([name]) => name);
+        if (missing.length > 0) return result(failure("missing_permission", who, missing));
+      }
+      const start = Date.parse(args.start);
+      const end = args.end === undefined ? undefined : Date.parse(args.end);
+      if (!Number.isFinite(start) || start <= Date.now()) return result(failure("invalid_start"));
+      if (
+        (args.kind === "external" && end === undefined) ||
+        (end !== undefined && (!Number.isFinite(end) || end <= start))
+      )
+        return result(failure("invalid_end"));
+      if (signal.aborted) return result(failure("cancelled"));
+      this.consume("event");
+      const event = await this.trigger.guild.scheduledEvents.create({
+        name: args.name,
+        scheduledStartTime: start,
+        ...(end !== undefined && { scheduledEndTime: end }),
+        ...(args.description && { description: args.description }),
+        privacyLevel: GuildScheduledEventPrivacyLevel.GuildOnly,
+        ...(args.kind === "external"
+          ? {
+              entityType: GuildScheduledEventEntityType.External,
+              entityMetadata: { location: args.location },
+            }
+          : { entityType: GuildScheduledEventEntityType.Voice, channel: voice }),
+      });
+      return result({
+        ok: true,
+        url: `https://discord.com/events/${this.trigger.guild.id}/${event.id}`,
+      });
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "ok" in error &&
+        (error as Failure).ok === false
+      )
+        return result(error as Failure);
+      const value = error as { code?: number | string; status?: number };
+      const code = Number(value?.code);
+      if (code === 50013)
+        return result(
+          failure(
+            "missing_permission",
+            "bot",
+            required.map(([name]) => name),
+          ),
+        );
+      if (code === 50001) return result(failure("missing_access", "bot"));
+      if (value?.status === 403) return result(failure("discord_forbidden"));
+      if (code === 10003 || value?.status === 404) return result(failure("not_found"));
+      return result(failure("discord_failed"));
     }
   }
 

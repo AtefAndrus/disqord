@@ -59,7 +59,7 @@ export const CONFIG_SWITCHES = {
     page: "features",
     field: "discordToolsEnabled",
     label: "Discord 操作",
-    description: "リアクション、投票、スレッド作成、ピン留めをモデルに許可します。",
+    description: "リアクション、投票、スレッド作成、ピン留め、イベント作成をモデルに許可します。",
   },
   cron: {
     page: "features",

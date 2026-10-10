@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { BadRequestError, WebSearchFailedError } from "../../../src/errors";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
+import { createCreateEventTool } from "../../../src/llm/tools/discord/createEvent";
 import { createCreatePollTool } from "../../../src/llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "../../../src/llm/tools/discord/createThread";
 import { createGetChannelInfoTool } from "../../../src/llm/tools/discord/getChannelInfo";
@@ -127,6 +128,7 @@ function createRetryFixture(
   registry.register(createReadEarlierMessagesTool());
   registry.register(createAddReactionTool());
   registry.register(createCreatePollTool());
+  registry.register(createCreateEventTool());
   registry.register(createCreateThreadTool());
   registry.register(createPinMessageTool());
   const requests: ChatCompletionRequest[] = [];
@@ -186,6 +188,7 @@ describe("conversation-context request construction", () => {
           createPoll: async () => '{"ok":true}',
           createThread: async () => '{"ok":true}',
           pinMessage: async () => '{"ok":true}',
+          createEvent: async () => '{"ok":true}',
         },
       },
       "request",
@@ -195,7 +198,8 @@ describe("conversation-context request construction", () => {
     expect(
       fixture.requests[0]?.tools?.some(
         (tool) =>
-          tool.type === "function" && (tool as FunctionTool).function.name === "add_reaction",
+          tool.type === "function" &&
+          ["add_reaction", "create_event"].includes((tool as FunctionTool).function.name),
       ) ?? false,
     ).toBe(false);
   });
@@ -430,6 +434,11 @@ describe("conversation-context request construction", () => {
     ["create_poll", "createPoll", '{"question":"q","answers":["a","b"]}'],
     ["create_thread", "createThread", '{"name":"t"}'],
     ["pin_message", "pinMessage", "{}"],
+    [
+      "create_event",
+      "createEvent",
+      '{"kind":"external","name":"Meet","start":"2099-01-01T20:00:00+09:00","end":"2099-01-01T21:00:00+09:00","location":"Park"}',
+    ],
   ] as const)("does not retry web search after %s", async (toolName, method, argumentsDelta) => {
     const fixture = createRetryFixture(true, true);
     const actions = {
@@ -437,6 +446,7 @@ describe("conversation-context request construction", () => {
       createPoll: mock(async () => '{"ok":true}'),
       createThread: mock(async () => '{"ok":true}'),
       pinMessage: mock(async () => '{"ok":true}'),
+      createEvent: mock(async () => '{"ok":true,"url":"https://discord.com/events/guild/event"}'),
     };
     let calls = 0;
     fixture.llmClient.chatStream = mock((request) => {
