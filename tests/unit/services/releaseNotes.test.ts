@@ -147,7 +147,7 @@ describe("parseChangelog", () => {
     const versions = notes.versions();
     expect(versions.length).toBeGreaterThanOrEqual(15);
     expect(formatVersion(versions.at(-1) ?? v("0.0.0"))).toBe("1.0.0");
-    // Released sections do not change after the release, so these pin both ends.
+    // Released sections change only when cliff.toml's template does, so these pin both ends.
     expect(okBody(notes.section(v("1.7.0")))).toContain(
       "- Web 検索の有無にかかわらず現在日時をモデルに渡す (#157)",
     );
@@ -155,7 +155,7 @@ describe("parseChangelog", () => {
       okBody(notes.section(v("1.0.0")))
         .split("\n")
         .at(-1),
-    ).toBe("- Bump @biomejs/biome from 2.3.8 to 2.3.9");
+    ).toBe("- bump @biomejs/biome from 2.3.8 to 2.3.9");
     for (const version of versions) {
       const body = okBody(notes.section(version));
       expect(body).not.toBe("");
