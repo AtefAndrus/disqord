@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.13.0] - 2026-10-10
+
+
+### Added
+
+- ピン留め、チャンネル情報、イベントを読む tool を足す (#203)
+- Discord のイベントを作る create_event を足す (#204)
+
+
+### Documentation
+
+- ストリーミング中の分割表示の方針を確定する (#205)
+- E2e の既定モデルを Claude Haiku 5.5 にする (#206)
+- Claude Haiku 5.5 で通る e2e シナリオを記録する (#207)
+
+
 ## [1.12.0] - 2026-10-08
 
 
@@ -571,6 +587,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump zod from 4.1.13 to 4.2.0
 - Bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.13.0]: https://github.com/AtefAndrus/disqord/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/AtefAndrus/disqord/compare/v1.11.1...v1.12.0
 [1.11.1]: https://github.com/AtefAndrus/disqord/compare/v1.11.0...v1.11.1
 [1.11.0]: https://github.com/AtefAndrus/disqord/compare/v1.10.0...v1.11.0
