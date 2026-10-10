@@ -50,6 +50,7 @@ Deleting an AUTO marker breaks every commit in the repository: the generator thr
 
 - `bun:test`, with tests under `tests/`.
 - Replace `fetch` globally with `mock()`, open SQLite as `:memory:`, implement repository and service interfaces with `mock()`, and assert console output with `spyOn()`.
+- A service that reads the current time takes it as a `now: () => number` constructor argument defaulting to `Date.now`, as `ConversationWindowService` and `DiscordInfoService` do, and a test that dates its fixtures from a fixed time passes that time in. A service that reads `Date.now()` directly makes such a test start failing once the fixed date has passed.
 - `src/config/index.ts` loads `.env` when it is imported, so locally every test runs with your `.env` while CI has none, and `bun test` sets `NODE_ENV=test`, which the config schema rejects. A test that calls `loadConfig()` sets every variable it depends on, `NODE_ENV` included. Move `.env` aside and run `bun run test` to reproduce CI.
 
 ### End-to-end (`bun run e2e`)
