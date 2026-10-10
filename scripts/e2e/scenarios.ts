@@ -901,6 +901,8 @@ export const SCENARIOS: Scenario[] = [
     // 2026-09-24: z-ai/glm-5.3-flash returned reasoning text on every reply,
     // while google/gemini-3.8-flash and openai/gpt-6-luna often returned only
     // encrypted reasoning, which fails the check without a code fault.
+    // Observed 2026-10-10: z-ai/glm-5.3-flash passed again, while
+    // anthropic/claude-haiku-5.5 and google/gemini-3.8-flash showed no reasoning.
     name: "reasoning",
     manual: true,
     toolName: "read_earlier_messages",
