@@ -28,7 +28,11 @@ Developer Portal の Bot ページで Message Content Intent を有効にする�
 既にサーバーにいる bot も、権限を足した URL で認可し直すと、bot のロールの権限が更新される。
 Discord 操作は bot と依頼したメンバーの双方がその権限を持つときだけ実行するので、足りなければ実行せずにその旨をモデルが伝える。
 
-`bun run e2e` のテスト bot には、上の権限に加えて Manage Threads を付ける（`discord-tools` シナリオが作ったスレッドを片付けるため）。
+`bun run e2e` のテスト bot には、上の権限に加えて次を付ける。
+テスト bot は Discord 操作の依頼者になるので、bot と同じ操作の権限が要る。e2e で作るイベントは外部イベントだけなので、Connect は外してもよい。
+
+- Manage Threads（`discord-tools` シナリオが作ったスレッドを片付けるため）
+- `/config` で設定した管理者ロール（`cron` と `cron-search` シナリオが定期実行を提案するため。Manage Server でも足りるが、サーバーの設定をすべて変えられる権限なので管理者ロールを勧める）
 
 ### ローカル開発
 
