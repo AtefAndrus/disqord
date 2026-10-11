@@ -1,0 +1,112 @@
+---
+title: "LLM 入力の表示（コンテキストメニュー）"
+status: planned
+priority: medium
+summary: "bot の返答を右クリックして「アプリ → LLM 入力を見る」を選ぶと、その返答を生成したときに OpenRouter へ送った入力と生成のメタデータを、実行した本人にだけ見える返信で返す"
+---
+
+# LLM 入力の表示（コンテキストメニュー）
+
+## Why
+
+bot の返答が期待と違ったとき、モデルに何が渡っていたか（システムプロンプト、会話履歴として入ったメッセージ、tool の結果）を確かめる手段が今は無い。
+返答を右クリックするだけで、その返答を生成したときの入力を確認できるようにする。
+
+## 依存 / 関連 change
+
+- 連携: [メッセージの解説（コンテキストメニュー）](../message-explain/design.md) — 同じ message command の種類を使う。`interactionCreate.ts` の message command 分岐と、`generate-readme.ts` が chat input 以外をコマンド表から除く変更は、先に実装する側が入れ、後の側はそれを使う。
+- 関連: [OAuth BYOK](../oauth-byok/design.md) — 利用者のキーで生成した返答の入力を読めるかは、その利用者の OpenRouter 側の設定とキーに依存する。扱いは Open Questions / Risks の「BYOK で生成した返答」に書いた。
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- bot の返答メッセージの右クリックメニューに「LLM 入力を見る」を追加する。
+- 返答を生成した各 generation について、OpenRouter に送った入力（messages 配列）、出力、モデル、プロバイダ、token 数、コストを返す。
+- tool loop の複数 turn、Web 検索失敗後の再生成、ツイート画像の再試行など、1 件の返答が複数の generation から成る場合も、すべてを生成順に返す。
+- 停止された返答とエラーで終わった返答も、それまでに始まった generation を返す。
+
+**Non-Goals:**
+
+- 入力本文を bot の DB に保存すること。保存は OpenRouter の入出力ログに任せ、bot は generation ID だけを持つ。理由は Decisions の「入力の取得元」に書いた。
+- 定期実行の投稿、メッセージの解説（ephemeral 返信）など、メンションへの返答以外の生成。返答の記録（`reply_records`）に載らないため、右クリックされたメッセージから generation を引けない。
+- Discord 側の材料（会話の窓にどのメッセージが入ったか、添付の元 URL）の表示。OpenRouter に渡した形で足りると判断した。
+
+## Decisions
+
+| 判断事項 | 選択 | 理由 |
+| -------- | ---- | ---- |
+| 入力の取得元 | OpenRouter の `GET /api/v1/generation/content?id=` と `GET /api/v1/generation?id=` | 前者は送った messages 配列と出力を、後者はモデル、token 数、コストを返す。bot の DB に入力本文を持たないので、画像や PDF を含む入力で DB が肥大化せず、保存期間の管理も要らない。2026-10-11 に bot の通常の API キーで両方を呼び、system と user のメッセージが送った形のまま返ることを確認した（management key は不要だった） |
+| bot が保存するもの | 返答ごとの generation ID の列 | OpenRouter から入力を引くための鍵である。右クリックされたメッセージから返答を特定するには、既存の `reply_pages`（ページのメッセージ ID → トリガー）を使う |
+| generation ID の取り方 | ストリームの `response.created` イベントの `response.id` | 最初のイベントで取れるので、停止やエラーで `response.completed` に届かなかった turn も記録できる。今のストリーム処理はこのイベントを heartbeat として読み捨てている |
+| 返答の記録を作る条件 | 会話履歴の設定に関係なく、メンションへの返答では常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:384`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
+| 利用できる人 | 「サーバーの管理」権限か `/config` の管理者ロールを持つ人。判定は既存の `canManageGuildSettings()` | 入力には、投稿者が後から削除したメッセージや、窓の外から tool で読んだ古いメッセージがそのまま残る。誰でも見られると、削除した発言をこのコマンドで掘り起こせてしまう。管理者に限れば、bot の挙動を調べる用途は満たせる |
+| `default_member_permissions` | `ManageGuild` を設定し、加えて実行時にも上の判定を行う | 前者で一般の利用者のメニューに出なくなる。管理者ロールの持ち主には前者だけでは出ないので、サーバー側の連携サービス設定で許可してもらう。前者はサーバー管理者が上書きできるため、実行時の判定を省けない |
+| 返信の公開範囲 | ephemeral | 入力の中身をチャンネルに出さない |
+| 表示形式 | 本文に generation ごとの要約（モデル、プロバイダ、token 数、コスト、turn の種類）を出し、全体は JSON ファイルを添付する | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える |
+| JSON に入れる内容 | generation ごとに `/generation/content` の `input` と `output` と `error`、`/generation` のメタデータ | turn が進むと後の入力は前の入力を含むので重複するが、各 generation で実際に送った内容をそのまま示すことを優先する。重複を除く加工をすると、送った内容との照合ができなくなる |
+| 画像と PDF のデータ | data URL と base64 の値を `[base64 省略: N バイト, MIME]` に置き換える | 添付ファイルの上限（bot は 10 MiB）を超えやすく、人が読む用途では中身が要らない |
+| コマンド名 | `LLM 入力を見る`（ローカライズなし） | bot の UI は日本語だけで提供している |
+
+## Design
+
+### 変更対象ファイル
+
+- 新規: `src/bot/commands/inspectInput.ts` — `ContextMenuCommandBuilder` による定義。
+- 新規: `src/bot/events/inspectInputCommand.ts` — 認可、generation ID の引き当て、OpenRouter からの取得、要約と JSON の組み立て、ephemeral 返信。
+- 修正: `src/bot/commands/index.ts` — `commandDefinitions` に加える。
+- 修正: `src/bot/events/interactionCreate.ts` — `isMessageContextMenuCommand()` の分岐を、`isChatInputCommand()` の判定より前に置く。
+- 修正: `src/llm/openrouter.ts` — ストリームの `response.created` から ID を読み、呼び出し側へ渡す。`/generation` と `/generation/content` を呼ぶメソッドを `ILLMClient` に足す。
+- 修正: `src/llm/toolLoop.ts`、`src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて集め、`generateChatResponse()` の結果で返す。
+- 修正: `src/db/schema.ts`、`src/db/repositories/replyRecord.ts`、`src/services/replyRecordService.ts` — generation ID の表と、その追加と一覧の操作。
+- 修正: `src/bot/events/messageCreate.ts` — 履歴設定に関係なく返答の記録を作り、返答の確定時に generation ID を保存する。
+- 修正: `scripts/generate-readme.ts` — chat input 以外をコマンド表から除く（message-explain が先に入れていれば不要）。
+- 修正: `src/bot/commands/handlers.ts` — `/help` の手書きのコマンド一覧に 1 行足す。
+- 修正: `README.md` — コマンド一覧の AUTO ブロックの外に 1 行足す。
+
+### DBスキーマ変更
+
+```sql
+CREATE TABLE IF NOT EXISTS reply_generations (
+  trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
+  seq             INTEGER NOT NULL,       -- 生成を始めた順
+  generation_id   TEXT NOT NULL,          -- OpenRouter の gen-...
+  PRIMARY KEY (trigger_msg_id, seq)
+);
+```
+
+`reply_records` の削除（ギルド退出、チャンネル削除）に連動して消える。
+既存の DB には `CREATE TABLE IF NOT EXISTS` で追加され、既存の返答には generation ID が無いので「記録がありません」と返す。
+
+### 実装内容
+
+1. interaction を受けたら 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。
+2. DM などギルドの外での実行、管理者でない実行者は、理由を返して終える。
+3. 対象メッセージの ID で `findByPage()` を引き、返答の記録を特定する。記録が無ければ「この bot の返答ではないか、記録がありません」を返す。
+4. 記録の generation ID を順に、`/generation/content` と `/generation` で取得する。404 は「OpenRouter に入力が保存されていない」として、その generation だけ欠けた旨を要約に書き、残りを続ける。生成直後は OpenRouter 側の反映が遅れて 404 になることがあるので、全件が 404 のときは「少し待ってから再実行してください」を添える。
+5. base64 を置き換えた JSON を `llm-input-<トリガーの message ID>.json` として添付し、要約を本文にして `editReply()` で返す。
+
+### 設計メモ
+
+generation ID の収集は、tool loop の結果ではなく chat service の 1 回の呼び出しの単位で行う。
+Web 検索の失敗後の再生成とツイート画像の再試行は、tool loop を最初からやり直すので、loop の結果だけを見ると先に失敗した loop の generation が落ちるためである。
+
+## Tasks
+
+- [ ] message command の分岐とコマンド表からの除外（message-explain が未実装なら）
+- [ ] `response.created` からの generation ID の取得と、chat service での収集
+- [ ] `reply_generations` 表と repository、service の操作
+- [ ] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
+- [ ] `/generation` と `/generation/content` の client メソッド
+- [ ] コマンドの実装（認可、取得、base64 の置き換え、要約、添付）
+- [ ] unit テスト（ID の収集、認可、404 の扱い、base64 の置き換え）
+- [ ] `/help` と README の追記
+- [ ] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確かめる
+- [ ] `docs/changes/llm-input-inspect/` 削除（リリース完了時、git 履歴がアーカイブ）
+
+## Open Questions / Risks
+
+- **OpenRouter の保存期間**: 入出力ログが何日残るかは確認していない。期限を過ぎた返答は 404 になり、手順 4 の扱いで「保存されていない」と返す。
+- **BYOK で生成した返答**: oauth-byok が実装されると、利用者のキーで生成した返答の入力は、その利用者の OpenRouter アカウントの入出力ログ設定に従って保存される（推測）。bot のキーでは他アカウントの generation を読めない可能性が高く、その場合はこのコマンドで見られない。未確認であり、oauth-byok の実装時に確かめる。
+- **画像の表現**: 画像を含む入力で `/generation/content` が base64 をどの形で返すか（data URL か、別のフィールドか、そもそも省かれるか）は確認していない。実装時に画像付きの返答で確かめ、置き換えの対象を決める。
+- **e2e テスト**: bot は message command を実行できないので、e2e のシナリオにはできない。ID の収集と保存は unit テストで、コマンドの表示は手動確認で見る。
