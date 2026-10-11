@@ -40,7 +40,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 | 入力の取得元 | OpenRouter の `GET /api/v1/generation/content?id=` と `GET /api/v1/generation?id=` | 前者は保存された入力と出力を、後者はモデル、token 数、コストを返す。bot の DB に入力本文を持たないので、画像や PDF を含む入力で DB が肥大化せず、保存期間の管理も要らない。2026-10-11 に bot の通常の API キーで両方を呼び、system と user のメッセージが返ることを確認した（management key は不要だった） |
 | 返す入力の形 | OpenRouter が保存した形のまま返し、bot が送った形への変換はしない | bot は Responses API（`POST /responses`）の `input` 配列を送るが（`src/llm/openrouter.ts:574`、`src/llm/openrouter.ts:726`）、上の確認では `/generation/content` は `input.messages` の形で返した。保存時に OpenRouter が形を変えているので、tool の結果（`function_call_output`）や reasoning の項目が送ったとおりに残るかは確認できていない（Open Questions / Risks の「tool と reasoning の保存形」）。bot 側で送った形へ戻す変換は、保存されていない情報を補えないので行わない |
 | bot が保存するもの | 返答ごとの generation ID の列 | OpenRouter から入力を引くための鍵である |
-| generation ID の取り方 | ストリームの `response.created` イベントの `response.id` | 最初のイベントで取れるので、停止やエラーで `response.completed` に届かなかった turn も記録できる。今のストリーム処理はこのイベントを heartbeat として読み捨てている（`src/llm/openrouter.ts:1264`） |
+| generation ID の取り方 | HTTP 応答を受け取った時点で、状態コードの判定と本文の読み取りより前に `X-Generation-Id` 応答ヘッダーから取る。ヘッダーが無いときはストリームの `response.created` イベントの `response.id`、非ストリームでは応答本文の `id` で補い、同じ ID は 1 件にまとめる | ヘッダーは本文より先に届くので、`response.created` を受け取る前の停止や切断でも ID が残る。エラー応答もストリームを読まずに例外になるため（`src/llm/openrouter.ts:769`）、ヘッダーで取らないと再試行前の generation が落ちる。2026-10-11 に、ストリーミングの成功応答（200）と存在しないモデルを指定したエラー応答（400）の両方で `x-generation-id` が付くことを確認した。応答ヘッダー自体を受け取れなかった試行（接続の失敗）は ID が無いので記録の対象外である |
 | 返答の記録を作る条件 | 会話履歴の設定に関係なく、`messageCreate.ts` が返答するときは常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず（`src/bot/events/messageCreate.ts:368`）、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:384`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
 | 右クリックされたメッセージから返答を引く方法 | まず `findByPage()` でページとして引き、無ければ、bot 自身のメッセージで返信先（`message.reference.messageId`）があるときに限り `findByTrigger()` でトリガーとして引く | エラーで終わった返答では、本文の無いページは削除され（`src/bot/events/messageCreate.ts:719`）、エラー表示は記録の確定後に `message.reply()` で別に送られ、ページとして登録されない（`src/bot/events/messageCreate.ts:661-674`）。エラー表示をページとして登録する方法は、`appendPage()` が確定前の記録にしか書けず（`src/db/repositories/replyRecord.ts:111-114`）、記録はエラー表示を送る前に `failed` で確定しているので採らない。返信先のトリガーから引けば、記録の意味を変えずにエラー表示から generation に届く |
 | 利用できる人 | 「サーバーの管理」権限か `/config` の管理者ロールを持ち（既存の `canManageGuildSettings()`）、かつ返答のあるチャンネルの履歴を今読める人（既存の `checkConversationAccess()`。`ViewChannel` と `ReadMessageHistory`、非公開スレッドではスレッドへの参加を見る。ボイスチャンネルとステージチャンネルでは、このコマンドの側で `Connect` も確認する） | 入力には、投稿者が後から削除したメッセージや、窓の外から tool で読んだ古いメッセージがそのまま残る。誰でも見られると、削除した発言をこのコマンドで掘り起こせてしまう。管理者に限れば、bot の挙動を調べる用途は満たせる。設定の管理権限は履歴の閲覧権限を含まないので（`src/services/settingsAuthorization.ts:14` は `ManageGuild` とロールしか見ない）、`ReadMessageHistory` を持たない管理者が入力経由で古いメッセージを読めないよう、履歴の認可も別に掛ける。Discord はボイスチャンネルのメッセージ取得に `Connect` も要求するが、`checkConversationAccess()` はこれを見ないので（`src/services/messageAuthorization.ts:31`）、その分をコマンド側で足す。共有関数のほうを直すと会話履歴の認可も変わるため、それは Open Questions / Risks の「ボイスチャンネルの履歴認可」に残す |
@@ -61,7 +61,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 - 新規: `src/bot/events/inspectInputCommand.ts` — 認可、返答の引き当て、OpenRouter からの取得、要約と JSON の組み立て、ephemeral 返信。
 - 修正: `src/bot/commands/index.ts` — `commandDefinitions` に加える。
 - 修正: `src/bot/events/interactionCreate.ts` — `isMessageContextMenuCommand()` の分岐を、`isChatInputCommand()` の判定より前に置く。
-- 修正: `src/llm/openrouter.ts` — ストリームの `response.created` から ID を読み、呼び出し側へ渡す。`/generation` と `/generation/content` を呼ぶメソッドを `ILLMClient` に足す。
+- 修正: `src/llm/openrouter.ts` — 応答ヘッダーの `X-Generation-Id`（無ければ `response.created` か応答本文の `id`）から ID を読み、エラー応答を例外にする前に呼び出し側へ渡す。`/generation` と `/generation/content` を呼ぶメソッドを `ILLMClient` に足す。
 - 修正: `src/llm/toolLoop.ts`、`src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて集め、`generateChatResponse()` の結果で返す。
 - 修正: `src/db/schema.ts`、`src/db/repositories/replyRecord.ts`、`src/services/replyRecordService.ts` — generation ID の表と、その追加と一覧の操作。
 - 修正: `src/bot/events/messageCreate.ts` — 履歴設定に関係なく返答の記録を作り、返答の確定時（完了、停止、エラーのいずれも）に generation ID を保存する。
@@ -99,7 +99,7 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 ## Tasks
 
 - [ ] message command の分岐とコマンド表からの除外（message-explain が未実装なら）
-- [ ] `response.created` からの generation ID の取得と、chat service での収集
+- [ ] 応答ヘッダーからの generation ID の取得と、chat service での収集
 - [ ] `reply_generations` 表と repository、service の操作
 - [ ] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
 - [ ] `/generation` と `/generation/content` の client メソッド
