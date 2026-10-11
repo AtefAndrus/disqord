@@ -43,10 +43,10 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 | generation ID の取り方 | ストリームの `response.created` イベントの `response.id` | 最初のイベントで取れるので、停止やエラーで `response.completed` に届かなかった turn も記録できる。今のストリーム処理はこのイベントを heartbeat として読み捨てている（`src/llm/openrouter.ts:1264`） |
 | 返答の記録を作る条件 | 会話履歴の設定に関係なく、`messageCreate.ts` が返答するときは常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず（`src/bot/events/messageCreate.ts:368`）、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:384`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
 | 右クリックされたメッセージから返答を引く方法 | まず `findByPage()` でページとして引き、無ければ、bot 自身のメッセージで返信先（`message.reference.messageId`）があるときに限り `findByTrigger()` でトリガーとして引く | エラーで終わった返答では、本文の無いページは削除され（`src/bot/events/messageCreate.ts:719`）、エラー表示は記録の確定後に `message.reply()` で別に送られ、ページとして登録されない（`src/bot/events/messageCreate.ts:661-674`）。エラー表示をページとして登録すると会話の窓にエラー文が入るうえ、`appendPage()` は確定前の記録にしか書けない（`src/db/repositories/replyRecord.ts:111-114`）。返信先のトリガーから引けば、記録の意味を変えずにエラー表示から generation に届く |
-| 利用できる人 | 「サーバーの管理」権限か `/config` の管理者ロールを持つ人。判定は既存の `canManageGuildSettings()` | 入力には、投稿者が後から削除したメッセージや、窓の外から tool で読んだ古いメッセージがそのまま残る。誰でも見られると、削除した発言をこのコマンドで掘り起こせてしまう。管理者に限れば、bot の挙動を調べる用途は満たせる |
+| 利用できる人 | 「サーバーの管理」権限か `/config` の管理者ロールを持ち（既存の `canManageGuildSettings()`）、かつ返答のあるチャンネルの履歴を今読める人（既存の `checkConversationAccess()`。`ViewChannel` と `ReadMessageHistory`、非公開スレッドではスレッドへの参加を見る） | 入力には、投稿者が後から削除したメッセージや、窓の外から tool で読んだ古いメッセージがそのまま残る。誰でも見られると、削除した発言をこのコマンドで掘り起こせてしまう。管理者に限れば、bot の挙動を調べる用途は満たせる。設定の管理権限は履歴の閲覧権限を含まないので（`src/services/settingsAuthorization.ts:14` は `ManageGuild` とロールしか見ない）、`ReadMessageHistory` を持たない管理者が入力経由で古いメッセージを読めないよう、履歴の認可も別に掛ける |
 | `default_member_permissions` | `ManageGuild` を設定し、加えて実行時にも上の判定を行う | 前者で一般の利用者のメニューに出なくなる。管理者ロールの持ち主には前者だけでは出ないので、サーバー側の連携サービス設定で許可してもらう。前者はサーバー管理者が上書きできるため、実行時の判定を省けない |
 | 返信の公開範囲 | ephemeral | 入力の中身をチャンネルに出さない |
-| 表示形式 | Components V2 の TextDisplay に generation ごとの要約を 1 行ずつ出し、全体は JSON ファイルを添付する | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える |
+| 表示形式 | Components V2 の TextDisplay に generation ごとの要約を 1 行ずつ出し、全体は JSON ファイルを添付して、添付ごとに File コンポーネント（`attachment://<ファイル名>`）を置く。`followUp()` で続けて送る添付も同じ | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える。Components V2 のメッセージでは、コンポーネントから参照されない添付は表示されない。`reasoning.md` の添付も同じ形で File コンポーネントを置いている（`src/utils/chatContainerBuilder.ts:553`） |
 | JSON に入れる内容 | generation ごとに `/generation/content` の `input` と `output` と `error`、`/generation` のメタデータ、取得に失敗した endpoint とその理由 | turn が進むと後の入力は前の入力を含むので重複するが、各 generation で OpenRouter が保存した内容をそのまま示すことを優先する。重複を除く加工をすると、保存された内容との照合ができなくなる |
 | 画像と PDF のデータ | data URL と base64 の値を `[base64 省略: N バイト, MIME]` に置き換える | 添付ファイルの上限を超えやすく、人が読む用途では中身が要らない |
 | 大きすぎるときの扱い | JSON 全体が interaction の `attachment_size_limit` を超えたら generation ごとのファイルに分け、1 件でも上限を超える generation はファイルを付けずに、要約にそのサイズと省略した旨を書く。添付が 10 件を超える分は `followUp()` の ephemeral メッセージで続けて送る。要約は 4000 文字に収まらない分を「他 N 件は JSON を参照」にまとめる | 上限を超えたものを切り詰めると、どこが欠けたか分からない JSON になり、保存された内容との照合という目的に反する。Discord の 1 メッセージの添付は 10 件までで、TextDisplay の合計は 4000 文字までである |
@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS reply_generations (
 ### 実装内容
 
 1. interaction を受けたら 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。
-2. DM などギルドの外での実行、管理者でない実行者は、理由を返して終える。
+2. DM などギルドの外での実行、管理者でない実行者、返答のあるチャンネルの履歴を読めない実行者は、理由を返して終える。
 3. Decisions の「右クリックされたメッセージから返答を引く方法」で返答の記録を引く。記録が無いか、記録に generation ID が無ければ「この bot の返答ではないか、記録がありません」を返す。
 4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。`/generation/content` が全件 404 のときは、OpenRouter 側の反映が遅れている場合があるので「少し待ってから再実行してください」を添える。
 5. base64 を置き換えた JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<seq>.json`）として添付し、要約と合わせて `editReply()` で返す。
@@ -104,7 +104,7 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 - [ ] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
 - [ ] `/generation` と `/generation/content` の client メソッド
 - [ ] コマンドの実装（認可、返答の引き当て、取得、base64 の置き換え、サイズ超過時の分割、要約、添付）
-- [ ] unit テスト（ID の収集、エラー表示からの引き当て、認可、endpoint ごとの失敗、締め切り、base64 の置き換え、サイズ超過時の分割）
+- [ ] unit テスト（ID の収集、エラー表示からの引き当て、管理権限と履歴の認可、endpoint ごとの失敗、締め切り、base64 の置き換え、サイズ超過時の分割）
 - [ ] `/help` と README の追記
 - [ ] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確かめる
 - [ ] `docs/changes/llm-input-inspect/` 削除（リリース完了時、git 履歴がアーカイブ）
