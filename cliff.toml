@@ -50,17 +50,17 @@ commit_parsers = [
   { message = "^Merge", skip = true },
   { message = '^\[release\]', skip = true },
   { message = '^\[chore\]', skip = true },
+  # The CHANGELOG is the release notes users read; changes they cannot see stay in git history
+  { message = '^\[docs\]', skip = true },
+  { message = '^\[refactor\]', skip = true },
+  { message = '^\[test\]', skip = true },
   # Bracket prefix format
   { message = '^\[feat\]', group = "<!-- 0 -->Added" },
   { message = '^\[fix\]', group = "<!-- 1 -->Fixed" },
-  { message = '^\[docs\]', group = "<!-- 4 -->Documentation" },
-  { message = '^\[refactor\]', group = "<!-- 3 -->Refactoring" },
-  { message = '^\[test\]', group = "<!-- 5 -->Testing" },
   { message = '^\[perf\]', group = "<!-- 2 -->Performance" },
   # Bot-generated dependency updates (Renovate; Dependabot in older history)
-  { message = '^build\(deps', group = "<!-- 6 -->Dependencies" },
+  { message = '^build\(deps', group = "<!-- 3 -->Dependencies" },
   # Fallback (lowercase conventional-style from older commits)
   { message = '^feat', group = "<!-- 0 -->Added" },
   { message = '^fix', group = "<!-- 1 -->Fixed" },
-  { message = '^docs', group = "<!-- 4 -->Documentation" },
 ]
