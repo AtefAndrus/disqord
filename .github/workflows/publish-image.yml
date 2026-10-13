@@ -56,9 +56,11 @@ jobs:
           # Release のタグ名は v<major>.<minor>.<patch> に限る。metadata-action が Docker のタグに使えない文字を
           # - に置き換えて別の Release のタグと重なることを防ぎ、デプロイ側が semver で版を選ぶときに
           # v1.0.0-b のような prerelease 風のタグが選ばれる余地も残さない
-          if [ -n "$RELEASE_TAG" ] && ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [ -n "$RELEASE_TAG" ] && ! [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::release tag $RELEASE_TAG is not v<major>.<minor>.<patch>"; exit 1
           fi
+          # shell を指定しない run は pipefail を有効にしないので、token 取得の curl の失敗を落とすために明示する
+          set -o pipefail
           repo=${IMAGE#ghcr.io/}
           # package がまだ無いときも pull の token は発行され、manifest は 404 を返す
           token=$(curl -fsS -u "${GITHUB_ACTOR}:${GITHUB_TOKEN}" \
