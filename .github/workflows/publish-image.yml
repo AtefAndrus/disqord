@@ -2,28 +2,34 @@ name: Publish image to GHCR
 
 on:
   release:
-    types: [published]
+    # published ではなく released にする。published は prerelease の公開でも起動する一方、
+    # prerelease を後から正式版に変えたときには起動しないため、その Release のイメージが公開されない
+    types: [released]
   # Release を作り直さずに、選んだ ref のイメージを完全な SHA のタグだけで公開する
   workflow_dispatch:
 
 permissions: {}
 
-# 既存タグの確認から push までの間に別の実行が同じタグを push しないよう、この workflow の実行を直列にする
+env:
+  IMAGE: ghcr.io/atefandrus/disqord
+
+# 既存タグの確認から push までの間に別の実行が同じタグを push しないよう、同じコミットの実行を直列にする。
+# group を workflow 全体で 1 つにしないのは、待機できる実行が group ごとに 1 つで、後から来た実行が
+# 待機中の実行を取り消すため。別のコミットの Release の公開まで取り消されてしまう。
+# 同じコミットの実行どうしは SHA のタグが重なり、先の実行が push に成功すれば後の実行はどのみち失敗する。
+# 待機を増やす queue: max は、ci.yml が使う actionlint 1.7.12 が未知のキーとして拒否するので使わない
 concurrency:
-  group: publish-image
+  group: publish-image-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: github.event_name != 'release' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # GHCR へのイメージと attestation の push
-      id-token: write # actions/attest が Sigstore の署名用証明書を得る OIDC token
-      attestations: write # actions/attest が attestation をリポジトリに保存する
-    env:
-      IMAGE: ghcr.io/atefandrus/disqord
+      packages: write # GHCR へのイメージの push
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,8 +50,14 @@ jobs:
       - name: Refuse to overwrite an existing tag
         env:
           TAGS: ${{ steps.metadata.outputs.tags }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # metadata-action は Docker のタグに使えない文字を - に置き換えるので、
+          # v1.0.0+build.1 のようなタグ名は別の Release のタグと重なりうる。置き換えが起きたら落とす
+          if [ -n "$RELEASE_TAG" ] && ! grep -Fxq "${IMAGE}:${RELEASE_TAG}" <<< "$TAGS"; then
+            echo "::error::release tag $RELEASE_TAG is not a valid image tag as is"; exit 1
+          fi
           repo=${IMAGE#ghcr.io/}
           # package がまだ無いときも pull の token は発行され、manifest は 404 を返す
           token=$(curl -fsS -u "${GITHUB_ACTOR}:${GITHUB_TOKEN}" \
@@ -79,13 +91,29 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          # 来歴は下の actions/attest が GitHub の署名付きで付ける。BuildKit 既定の来歴を重ねると
+          # 来歴は attest job が GitHub の署名付きで付ける。BuildKit 既定の来歴を重ねると
           # イメージが attestation manifest を含む index になり、platform が unknown の manifest が並ぶ
           provenance: false
+
+  # push と別の job にするのは、attestation だけが失敗したときに「失敗した job の再実行」で
+  # attestation だけをやり直せるようにするため。同じ job だと再実行は既存タグの確認で止まる
+  attest:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write # GHCR への attestation の push
+      id-token: write # Sigstore の署名用証明書を得る OIDC token
+      attestations: write # attestation をリポジトリに保存する
+    steps:
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          subject-digest: ${{ needs.publish.outputs.digest }}
           push-to-registry: true
           # storage record は organization 所有のリポジトリでしか作れず、artifact-metadata: write も要る
           create-storage-record: false

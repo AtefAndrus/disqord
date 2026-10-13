@@ -65,13 +65,14 @@ docker run -d \
 
 ### コンテナイメージ (GHCR)
 
-GitHub Release を公開すると（prerelease を除く）、`.github/workflows/publish-image.yml` がイメージをビルドして `ghcr.io/atefandrus/disqord` へ push する。
-同じ Release で `.github/workflows/deploy.yml` も動き、Coolify へのデプロイはこれまでどおり行われる。
+GitHub Release を正式版として公開すると（prerelease を正式版に変えたときを含む）、`.github/workflows/publish-image.yml` がイメージをビルドして `ghcr.io/atefandrus/disqord` へ push する。
+Coolify へのデプロイは `.github/workflows/deploy.yml` がこれまでどおり Release の公開で行う。
 
 - タグは Release のタグ名（`v1.10.0` など）とコミットの完全な SHA の 2 つで、`latest` は付けない。workflow を手動実行したときは完全な SHA だけを付ける。
+- Release のタグ名に Docker のタグに使えない文字（`+` など）があると、push せずに失敗する。
 - 付けるタグが 1 つでも既にレジストリにあれば、push せずに失敗する。GHCR はタグの書き換えを禁止できないので、イメージを取得する側は digest で固定する。
 - 同じコミットのイメージを既に公開していると SHA のタグが重なるため、そのコミットを指す Release の公開や手動実行は失敗する。
-- push した digest には build provenance の attestation が付き、`gh attestation verify oci://ghcr.io/atefandrus/disqord@sha256:<digest> --repo AtefAndrus/disqord` で検証できる。
+- push した digest には別の job で build provenance の attestation が付き、`gh attestation verify oci://ghcr.io/atefandrus/disqord@sha256:<digest> --repo AtefAndrus/disqord` で検証できる。その job だけが失敗したときは、実行画面の「Re-run failed jobs」で attestation だけをやり直せる。
 
 初回の公開で作られる package は private なので、公開後に package の設定画面で公開範囲を public に切り替える。
 
