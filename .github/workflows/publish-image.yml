@@ -53,10 +53,11 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # metadata-action は Docker のタグに使えない文字を - に置き換えるので、
-          # v1.0.0+build.1 のようなタグ名は別の Release のタグと重なりうる。置き換えが起きたら落とす
-          if [ -n "$RELEASE_TAG" ] && ! grep -Fxq "${IMAGE}:${RELEASE_TAG}" <<< "$TAGS"; then
-            echo "::error::release tag $RELEASE_TAG is not a valid image tag as is"; exit 1
+          # Release のタグ名は v<major>.<minor>.<patch> に限る。metadata-action が Docker のタグに使えない文字を
+          # - に置き換えて別の Release のタグと重なることを防ぎ、デプロイ側が semver で版を選ぶときに
+          # v1.0.0-b のような prerelease 風のタグが選ばれる余地も残さない
+          if [ -n "$RELEASE_TAG" ] && ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release tag $RELEASE_TAG is not v<major>.<minor>.<patch>"; exit 1
           fi
           repo=${IMAGE#ghcr.io/}
           # package がまだ無いときも pull の token は発行され、manifest は 404 を返す
