@@ -1,0 +1,26 @@
+name: tmp ghcr probe
+on:
+  push:
+    branches: [ghcr-publish]
+permissions: {}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          repo=atefandrus/disqord
+          for scope in pull pull,push; do
+            echo "== scope $scope"
+            body=$(curl -sS -u "${GITHUB_ACTOR}:${GITHUB_TOKEN}" -w ' HTTP %{http_code}' "https://ghcr.io/token?service=ghcr.io&scope=repository:${repo}:${scope}")
+            echo "${body##* HTTP } $(echo "${body% HTTP *}" | jq -c 'if .token then {token: "present"} else . end' 2>&1)"
+            token=$(echo "${body% HTTP *}" | jq -r '.token // empty')
+            [ -n "$token" ] || continue
+            echo "::add-mask::$token"
+            curl -sS -o /dev/null --head -w 'HEAD manifests/v0.0.0 %{http_code}\n' -H "Authorization: Bearer $token" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+              "https://ghcr.io/v2/${repo}/manifests/v0.0.0"
+          done
