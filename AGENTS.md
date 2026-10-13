@@ -107,7 +107,7 @@ When a permission is added, update the values in README and recompute them from 
 
 Run the `/release` skill with the target version, for example `/release 1.5.0`.
 It owns the whole procedure, including the one intentional `LEFTHOOK=0` commit on `main`.
-A GitHub Release's notes are that version's CHANGELOG section from git-cliff, so the notes and CHANGELOG.md say the same thing, grouped by the `[type]` prefix. They therefore carry CHANGELOG's filtering: only the types listed under Git appear, and there is no contributor attribution. GitHub's generated notes, as this repository had them (no labels, no `.github/release.yml`), listed every merged PR in merge order with no grouping. The workflow does not curate notes by hand or deliver them to Discord.
+A GitHub Release's notes are that version's CHANGELOG section from git-cliff, so the notes and CHANGELOG.md say the same thing, grouped by the `[type]` prefix. They therefore carry CHANGELOG's filtering: only the types listed under Git appear, and there is no contributor attribution. GitHub's generated notes, as this repository had them (no labels, no `.github/release.yml`), listed every merged PR in merge order with no grouping. The workflow does not curate notes by hand. The bot shows the same sections in Discord itself: `/release-note` reads them from the bundled CHANGELOG.md, and after an upgrade the first startup posts every newer section to each guild's リリース通知先 channel set in the `/config` panel.
 The group order in `cliff.toml` comes from the `<!-- n -->` prefix on each group name, which the template strips.
 
 ## Gotchas
