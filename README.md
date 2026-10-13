@@ -67,8 +67,10 @@ docker run -d \
 
 GitHub Release を正式版として公開すると（prerelease を正式版に変えたときを含む）、`.github/workflows/publish-image.yml` がイメージをビルドして `ghcr.io/atefandrus/disqord` へ push する。
 Coolify へのデプロイは `.github/workflows/deploy.yml` がこれまでどおり Release の公開で行う。
+そのため、prerelease を正式版に変えたときはイメージの公開だけが動く。
 
-- タグは Release のタグ名（`v1.10.0` など）とコミットの完全な SHA の 2 つで、`latest` は付けない。workflow を手動実行したときは完全な SHA だけを付ける。
+- イメージは GitHub-hosted runner の x64 上でビルドするので、`linux/amd64` だけである。
+- タグは Release のタグ名（`v1.10.0` など）とコミットの完全な SHA の 2 つで、`latest` は自動では付けない。workflow を手動実行したときは完全な SHA だけを付ける。
 - Release のタグ名に Docker のタグに使えない文字（`+` など）があると、push せずに失敗する。
 - 付けるタグが 1 つでも既にレジストリにあれば、push せずに失敗する。GHCR はタグの書き換えを禁止できないので、イメージを取得する側は digest で固定する。
 - 同じコミットのイメージを既に公開していると SHA のタグが重なるため、そのコミットを指す Release の公開や手動実行は失敗する。
