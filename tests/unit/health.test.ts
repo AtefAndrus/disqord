@@ -35,6 +35,8 @@ describe("Health Server", () => {
       expect(body.discord.connected).toBe(true);
       expect(body.discord.ping).toBe(42);
       expect(typeof body.uptime).toBe("number");
+      expect(body.version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(Date.parse(body.startedAt)).toBeLessThanOrEqual(Date.parse(body.now));
     });
 
     test("returns 503 Service Unavailable when Discord client is not connected", async () => {
