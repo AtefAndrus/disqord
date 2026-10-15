@@ -138,8 +138,9 @@ LOG_DIR=data/logs
 
 ### 本番
 
-ホスト（Coolify など）の環境変数に `ADMIN_API_SECRET` を設定する。
-`LOG_DIR` は永続ボリュームを指すパスを推奨（コンテナ再起動でログを失わないため）。
+ホスト（Coolify など）の環境変数に `ADMIN_API_SECRET` と `LOG_DIR=/app/data/logs` を設定する。
+コンテナは `bun` ユーザーで動き、書き込めるのは DB と同じ永続ボリュームの `/app/data` の下だけである（Dockerfile）。
+`LOG_DIR` が未設定のときも、書き込めないディレクトリのときも、ログは保存されず `/admin/logs` は空を返す。
 
 既存の公開 HTTPS 経路がある場合、`/admin/*` はその経路を流用できる。
 Cloudflare Tunnel で新しく公開する場合は、次の手順で DisQord の HTTP サーバーへ接続する。
