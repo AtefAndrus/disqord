@@ -131,6 +131,7 @@ Health Check を有効にすると、Coolify は画面に保存した値で判�
 | DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `google/gemma-4-26b-a4b-it:free`） |
 | HEALTH_PORT | No | ヘルスチェック用HTTPポート（デフォルト: `3000`） |
 | ADMIN_API_SECRET | No | 管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503） |
+| ADMIN_API_BASE_URL | No | 調査する bot の管理 API のベース URL（`bun scripts/admin.ts` だけが使う） |
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
 | WEB_SEARCH_ENGINE | No | Web検索のエンジン（perplexity / exa / parallel / native / auto / firecrawl）。料金はエンジンごとに異なる（デフォルト: `perplexity`） |
