@@ -39,6 +39,11 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     description: "管理API HMAC署名検証用シークレット（未設定時は /admin/* が 503）",
   },
   {
+    name: "ADMIN_API_BASE_URL",
+    required: false,
+    description: "調査する bot の管理 API のベース URL（`bun scripts/admin.ts` だけが使う）",
+  },
+  {
     name: "LOG_DIR",
     required: false,
     description: "ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op）",
