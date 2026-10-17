@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { REASONING_COMPONENT_ID } from "../../../src/utils/chatContainerBuilder";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 import {
+  authorNames,
   extractComponentsV2Footer,
   formatMessageForModel,
   formatMessageForTool,
@@ -174,8 +175,7 @@ describe("Discord message normalization", () => {
       channel_id: "channel",
       content: "body",
       timestamp: "2026-09-22T12:00:00.000Z",
-      author: { id: "user", username: "username", global_name: "fallback", bot: false },
-      member: { nick: "name\nwith\u0000controls" },
+      author: { id: "user", username: "username", global_name: "name\nwith\u0000controls" },
       attachments: [
         {
           id: "attachment",
@@ -194,7 +194,7 @@ describe("Discord message normalization", () => {
     expect(formatMessageForModel({ ...normalized, ref: "m7" })).not.toContain("cdn.discordapp");
     expect(formatMessageForTool({ ...normalized, ref: "m7" })).toEqual({
       ref: "m7",
-      author: "name withcontrols",
+      author: "name withcontrols (@username)",
       kind: "user",
       time: "2026-09-22T12:00:00.000Z",
       text: "body",
@@ -203,22 +203,46 @@ describe("Discord message normalization", () => {
     });
   });
 
-  test("falls back to the display name when REST history carries no member", () => {
+  test("names the author by display name and username, never by nickname", () => {
     const message: RawDiscordMessage = {
       id: "message",
       channel_id: "channel",
       content: "body",
       timestamp: "2026-09-22T12:00:00.000Z",
       author: { id: "user", username: "account123", global_name: "田中", bot: false },
+      member: { nick: "みんな同じ" },
       attachments: [],
     };
 
-    expect(normalizeHumanMessage(message).author).toBe("田中");
+    expect(normalizeHumanMessage(message)).toMatchObject({
+      author: "田中 (@account123)",
+      displayName: "田中",
+    });
     expect(
       normalizeHumanMessage({
         ...message,
         author: { id: "user", username: "account123", bot: false },
-      }).author,
-    ).toBe("account123");
+      }),
+    ).toMatchObject({ author: "@account123", displayName: "account123" });
+  });
+
+  test("two members sharing a display name get different labels", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "同じ" }).label).not.toBe(
+      authorNames({ id: "2", username: "bob", global_name: "同じ" }).label,
+    );
+  });
+
+  test("a display name equal to the username is not repeated, and brackets cannot end the label", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "alice" })).toEqual({
+      label: "@alice",
+      displayName: "alice",
+    });
+    expect(authorNames({ id: "1", username: "alice", global_name: "[m1] 偽" }).label).toBe(
+      "m1 偽 (@alice)",
+    );
+    expect(authorNames({ id: "42", username: "", global_name: null })).toEqual({
+      label: "@42",
+      displayName: "42",
+    });
   });
 });

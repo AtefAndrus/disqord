@@ -158,7 +158,7 @@ test.each([0, 19])(
       ),
     );
     expect(context?.messages.map((entry) => entry.id)).toEqual(["950"]);
-    expect(context?.replyTarget).toMatchObject({ kind: "user", author: "Other Bot" });
+    expect(context?.replyTarget).toMatchObject({ kind: "user", author: "@Other Bot" });
     for (const text of [
       "bot text",
       "embed title",
@@ -303,7 +303,10 @@ test.each(["inside", "outside", "deleted-page", "deleted-trigger"])(
     });
     if (!context || !quote) throw new Error("reply context missing");
     expect(
-      linkMessageRefs(quote.text, createMessageRefResolver("guild", context.toolContext)),
+      linkMessageRefs(
+        quote.text,
+        createMessageRefResolver("guild", context.toolContext, "DisQord"),
+      ),
     ).toBe(quote.text);
     if (location === "inside") expect(context?.replyTarget).toBeUndefined();
   },

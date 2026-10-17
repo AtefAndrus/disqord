@@ -1,6 +1,6 @@
 ---
 title: "発言者の区別と名前の見せ方"
-status: planned        # investigating | planned | in-progress | implemented
+status: in-progress    # investigating | planned | in-progress | implemented
 priority: high         # high | medium | low
 summary: "モデルに渡す発言者の名前を表示名とユーザー名の組に揃え、同じ表示名の人を区別できるようにし、発言へのリンクの文字も整える"
 ---
@@ -45,12 +45,14 @@ bot 自身の発言へのリンクは「bot の発言」と表示される。
 
 ### 変更対象ファイル
 
-- 修正: `src/utils/discordMessageNormalizer.ts` — `NormalizedMessage` に表示名とユーザー名を持たせ、モデル向けの名前を組み立てる関数を足す。`formatMessageForModel` と `formatMessageForTool` はその関数を使う
-- 修正: `src/services/chatService.ts` — `formatConversationMessage` と `[current]` の名前を同じ関数で作る。`buildConversationSafetyMessage()` に重複を避ける指示を足す
-- 修正: `src/bot/events/messageCreate.ts` — 今回の発言の名前からニックネームを外し、表示名とユーザー名を渡す。bot の表示名をリンクの置き換えに渡す
+- 修正: `src/utils/discordMessageNormalizer.ts` — 名前を組み立てる `authorNames()` を足す。`NormalizedMessage` の `author` をモデル向けの名前にし、リンク用の `displayName` を持たせる
+- 修正: `src/bot/events/messageCreate.ts` — 今回の発言と返答するかの判定の名前を `authorNames()` で作り、ニックネームを使わない。bot の表示名をリンクの置き換えに渡す
+- 修正: `src/services/conversationWindow.ts` — 発言番号の参照先に `displayName` を渡す
 - 修正: `src/utils/messageRefLinks.ts` — リンクの文字に表示名を使い、bot 自身の発言は bot の表示名にする
-- 修正: `src/services/replyGateService.ts` — 判定に渡す名前も同じ関数で作る。判定と返答で同じ人が同じ名前になるようにする
-- 修正: `scripts/reply-gate-cases.ts`、`scripts/reply-gate-eval.ts` — 判定の評価が本番と同じ名前の形で状態を作るようにする
+- 修正: `src/services/chatService.ts` — `buildConversationSafetyMessage()` に、名前の形の説明と重複を避ける指示を足す
+- 修正: `scripts/reply-gate-eval.ts` — 判定の評価が本番と同じ名前の形で状態を作るようにする。例は表示名だけを持つので、表示名ごとに決まった仮のユーザー名を付ける
+
+`chatService.ts` の履歴と `[current]` の書式、`replyGateService.ts` の書式は `NormalizedMessage.author` と渡された名前をそのまま使うので、変えない。
 
 ### 実装内容
 
@@ -68,10 +70,10 @@ bot 自身の発言は、モデルへは今と同じく `assistant` のロール
 
 ## Tasks
 
-- [ ] `NormalizedMessage` の名前の持ち方と、モデル向けの名前の関数（単体テスト: 表示名あり、表示名なし、表示名とユーザー名が同じ、制御文字や角括弧を含む名前）
-- [ ] 今回の発言、会話履歴、`read_earlier_messages` の結果、返答するかの判定で、同じ人が同じ名前になること（単体テスト）
-- [ ] リンクの文字（単体テスト: 人の発言、bot 自身の発言、Markdown の記号を含む表示名）
-- [ ] `buildConversationSafetyMessage()` の指示
+- [x] `NormalizedMessage` の名前の持ち方と、モデル向けの名前の関数（単体テスト: 表示名あり、表示名なし、表示名とユーザー名が同じ、制御文字や角括弧を含む名前）
+- [x] 今回の発言、会話履歴、`read_earlier_messages` の結果、返答するかの判定で、同じ人が同じ名前になること（単体テスト）
+- [x] リンクの文字（単体テスト: 人の発言、bot 自身の発言、Markdown の記号を含む表示名）
+- [x] `buildConversationSafetyMessage()` の指示
 - [ ] `bun run e2e` の既定シナリオと `message-ref` を通す
 - [ ] 手動確認: ニックネームを全員同じにしたサーバーで、複数人の発言を bot が別人として扱うこと
 - [ ] `docs/changes/author-identity/` 削除（リリース完了時、git 履歴がアーカイブ）

@@ -633,7 +633,7 @@ describe("createMessageCreateHandler", () => {
         bot_name: "DisQord",
         recent_messages: [],
         reply_target: "DisQord: previous answer",
-        new_message: "Taro: hello",
+        new_message: "Taro (@author-123): hello",
       });
       return "silent" as const;
     });
@@ -658,7 +658,7 @@ describe("createMessageCreateHandler", () => {
       expect(input.botName).toBe("DisQord");
       expect(input.state).toEqual({
         bot_name: "DisQord",
-        new_message: "author-123: hello",
+        new_message: "@author-123: hello",
         is_reply_to_bot: true,
       });
       return "silent" as const;
@@ -820,9 +820,12 @@ describe("createMessageCreateHandler", () => {
     expect(f.reader.fetch).not.toHaveBeenCalled();
   });
 
-  test("ニックネームが無ければ表示名を発話者ラベルにする", async () => {
+  test("発話者ラベルはニックネームを使わず、表示名とユーザー名にする", async () => {
     mockMessage.author.username = "account123";
     mockMessage.author.globalName = "田中";
+    (mockMessage as unknown as { member: { nickname: string } }).member = {
+      nickname: "みんな同じ",
+    };
     const handler = createMessageCreateHandler(
       mockChatService,
       mockSettingsService,
@@ -831,10 +834,10 @@ describe("createMessageCreateHandler", () => {
 
     await handler(mockMessage as never);
 
-    // 履歴側の正規化も同じ順で選ぶので、同じ人が両方で同じラベルになる。
+    // 履歴側の正規化も同じ authorNames で作るので、同じ人が両方で同じラベルになる。
     expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
       "guild-123",
-      expect.objectContaining({ authorLabel: "田中" }),
+      expect.objectContaining({ authorLabel: "田中 (@account123)" }),
       "msg-123",
       expect.anything(),
       expect.anything(),
@@ -1129,7 +1132,7 @@ describe("createMessageCreateHandler", () => {
     // generateChatResponseが呼ばれる（parts は空配列）
     expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
       "guild-123",
-      { text: "Hello", parts: [], authorLabel: "author-123" },
+      { text: "Hello", parts: [], authorLabel: "@author-123" },
       "msg-123",
       expect.anything(),
       { channelId: "channel-123", userId: "author-123" },
@@ -1439,7 +1442,7 @@ describe("createMessageCreateHandler", () => {
         {
           text: "Hello",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
-          authorLabel: "author-123",
+          authorLabel: "@author-123",
         },
         "msg-123",
         expect.anything(),
@@ -1532,7 +1535,7 @@ describe("createMessageCreateHandler", () => {
               file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
             },
           ],
-          authorLabel: "author-123",
+          authorLabel: "@author-123",
         },
         "msg-123",
         expect.anything(),
@@ -1675,7 +1678,7 @@ describe("createMessageCreateHandler", () => {
         {
           text: "",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
-          authorLabel: "author-123",
+          authorLabel: "@author-123",
         },
         "msg-123",
         expect.anything(),

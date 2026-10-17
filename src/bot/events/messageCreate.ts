@@ -47,8 +47,8 @@ import {
   ZERO_TEXT_BUDGET,
 } from "../../utils/chatContainerBuilder";
 import {
+  authorNames,
   formatPoll,
-  normalizeAuthorLabel,
   type RawDiscordMessage,
   type RawDiscordPoll,
 } from "../../utils/discordMessageNormalizer";
@@ -431,8 +431,8 @@ export function createMessageCreateHandler(
       }
     }
 
+    const botName = message.guild.members.me?.displayName ?? message.client.user.username;
     if (gated && options.replyGate) {
-      const botName = message.guild.members.me?.displayName ?? message.client.user.username;
       const decision = await options.replyGate.judge({
         guildId,
         channelId: message.channel.id,
@@ -442,12 +442,7 @@ export function createMessageCreateHandler(
           botName,
           botUserId: botId,
           current: {
-            // Without the nickname, as the window labels this author's earlier messages read
-            // over REST; a different name would read as a different speaker to the judgment.
-            author: normalizeAuthorLabel(
-              message.author.globalName ?? message.author.username ?? message.author.id,
-              message.author.id,
-            ),
+            author: authorNames(rawMessage.author).label,
             text: inputText,
             attachments: [...message.attachments.values()].map((attachment) => ({
               kind: attachment.contentType?.startsWith("image/")
@@ -490,7 +485,7 @@ export function createMessageCreateHandler(
     const { attachmentResult, modelName, color } = prepared;
 
     const resolveRef = conversation
-      ? createMessageRefResolver(guildId, conversation.toolContext)
+      ? createMessageRefResolver(guildId, conversation.toolContext, botName)
       : undefined;
     const transformText = resolveRef
       ? (text: string): string => linkMessageRefs(text, resolveRef)
@@ -541,13 +536,7 @@ export function createMessageCreateHandler(
         {
           text: inputText,
           parts: attachmentResult.parts,
-          authorLabel: normalizeAuthorLabel(
-            message.member?.nickname ??
-              message.author.globalName ??
-              message.author.username ??
-              message.author.id,
-            message.author.id,
-          ),
+          authorLabel: authorNames(rawMessage.author).label,
           ...(conversation && { conversation }),
           ...(conversation && {
             discordInfo: new DiscordInfoService(

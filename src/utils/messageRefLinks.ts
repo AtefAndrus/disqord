@@ -126,15 +126,19 @@ export function linkMessageRefs(
   });
 }
 
+/** `botName` labels the bot's own messages, which the window names `assistant`. */
 export function createMessageRefResolver(
   guildId: string,
   context: ConversationToolContext,
+  botName: string,
 ): (ref: string) => { label: string; url: string } | undefined {
   return (ref) => {
     const target = context.describeMessageRef(ref);
     if (!target) return undefined;
-    const author =
-      target.kind === "assistant" ? "bot" : target.author.replace(/[[\]*_`~|\\]/gu, "\\$&");
+    const author = (target.kind === "assistant" ? botName : target.author).replace(
+      /[[\]*_`~|\\]/gu,
+      "\\$&",
+    );
     return {
       label: `${author} の発言`,
       url: `https://discord.com/channels/${guildId}/${target.channelId}/${target.messageId}`,

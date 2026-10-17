@@ -79,7 +79,7 @@ test("resolver reads current targets, uses each message's channel, and escapes a
     readEarlierMessages: async () => "",
     viewAttachment: async () => "",
   };
-  const resolver = createMessageRefResolver("guild", context);
+  const resolver = createMessageRefResolver("guild", context, "Dis*Qord");
   expect(linkMessageRefs("[m12]", resolver)).toBe("[m12]");
   targets.set("m12", {
     messageId: "message",
@@ -98,6 +98,6 @@ test("resolver reads current targets, uses each message's channel, and escapes a
     kind: "assistant",
   });
   expect(linkMessageRefs("[m12]", resolver)).toBe(
-    "[bot の発言](https://discord.com/channels/guild/channel/bot-message)",
+    "[Dis\\*Qord の発言](https://discord.com/channels/guild/channel/bot-message)",
   );
 });

@@ -20,7 +20,7 @@ import {
   REPLY_GATE_MODEL,
   REPLY_GATE_TIMEOUT_MS,
 } from "../src/services/replyGateService";
-import type { NormalizedMessage } from "../src/utils/discordMessageNormalizer";
+import { authorNames, type NormalizedMessage } from "../src/utils/discordMessageNormalizer";
 import { BOT_NAME, type ReplyGateCase, replyGateCases } from "./reply-gate-cases";
 
 interface Judgment {
@@ -41,6 +41,22 @@ function splitLine(line: string): { author: string; text: string } {
 
 const BOT_USER_ID = "1";
 
+const usernames = new Map<string, string>();
+
+/**
+ * Names a case's speaker as production does, `<display name> (@<username>)`.
+ * The cases give display names only, so each distinct one gets a stable
+ * made-up username.
+ */
+function labelFor(displayName: string): string {
+  let username = usernames.get(displayName);
+  if (username === undefined) {
+    username = `user${usernames.size + 2}`;
+    usernames.set(displayName, username);
+  }
+  return authorNames({ id: username, username, global_name: displayName }).label;
+}
+
 /** Shapes a history line the way the conversation window does, where the bot's reply has author "assistant". */
 function toNormalized(line: string, index: number): NormalizedMessage {
   const { author, text } = splitLine(line);
@@ -49,7 +65,7 @@ function toNormalized(line: string, index: number): NormalizedMessage {
     id: String(index + 1),
     channelId: "0",
     kind: isBot ? "assistant" : "user",
-    author: isBot ? "assistant" : author,
+    author: isBot ? "assistant" : labelFor(author),
     time: "",
     timestampMs: index * 60_000,
     text,
@@ -68,7 +84,7 @@ function stateFor(c: ReplyGateCase): Record<string, unknown> {
   return buildReplyGateState({
     botName: BOT_NAME,
     botUserId: BOT_USER_ID,
-    current: { ...current, attachments: c.attachments ?? [] },
+    current: { ...current, author: labelFor(current.author), attachments: c.attachments ?? [] },
     conversation: { messages, ...(replyTarget && { replyTarget }) },
     isReplyToBot: replyTarget?.kind === "assistant",
   });
