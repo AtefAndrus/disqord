@@ -1030,13 +1030,42 @@ export const SCENARIOS: Scenario[] = [
       mention: false,
     },
     prompt: "[e2e] 直前に合言葉を投稿した発言はどれ？その発言を、発言番号で示して 1 行で答えて。",
-    check: (reply) => [
-      ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(reply.body)
+    check: (reply) => {
+      // The badge can hold a model id and the link label the tester's name,
+      // either of which may contain `m<N>` without being a message number.
+      const answer = reply.body
+        .replace(/^\*\*Model:\*\*.*$/gmu, "")
+        .replace(/\[[^\]\n]*\]\([^)\s]*\)/gu, "");
+      return [
+        ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(
+          reply.body,
+        )
+          ? []
+          : ["the reply has no masked link to a message (is /config → 機能 → 会話履歴 enabled?)"]),
+        ...(/\[m\d+\]|\bm\d+\b/u.test(answer) ? ["the reply still shows a message number"] : []),
+        ...hasUsageFooter(reply),
+      ];
+    },
+    // A link of the right shape could be copied from an earlier run's reply in
+    // the window, so the link must point at this run's fixture.
+    verify: async (triggerId, channelId, request, botId) => {
+      const before = await request(`/channels/${channelId}/messages?before=${triggerId}&limit=10`);
+      if (!before.ok) return [`cannot read the fixture: HTTP ${before.status}`];
+      const fixture = ((await before.json()) as DiscordMessage[]).find((item) =>
+        item.content?.includes(MESSAGE_REF_TOKEN),
+      );
+      if (!fixture) return ["the fixture message is not before the trigger"];
+      const after = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!after.ok) return [`cannot read the reply: HTTP ${after.status}`];
+      const replyText = JSON.stringify(
+        ((await after.json()) as DiscordMessage[])
+          .filter((item) => item.author?.id === botId)
+          .map((item) => item.components),
+      );
+      return new RegExp(`/channels/\\d+/${channelId}/${fixture.id}\\)`, "u").test(replyText)
         ? []
-        : ["the reply has no masked link to a message"]),
-      ...(/\[m\d+\]|\bm\d+\b/u.test(reply.body) ? ["the reply still shows a message number"] : []),
-      ...hasUsageFooter(reply),
-    ],
+        : [`the reply does not link to the fixture message ${fixture.id}`];
+    },
   },
   {
     name: "read-earlier",
