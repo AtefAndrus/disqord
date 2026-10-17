@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.15.0] - 2026-10-17
+
+
+### Added
+
+- 自動応答チャンネルで、メンションの無い発言に返答するかを判定する (#225)
+
+
 ## [1.14.0] - 2026-10-17
 
 
@@ -363,6 +371,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump zod from 4.1.13 to 4.2.0
 - bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.15.0]: https://github.com/AtefAndrus/disqord/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/AtefAndrus/disqord/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/AtefAndrus/disqord/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/AtefAndrus/disqord/compare/v1.11.1...v1.12.0
