@@ -26,6 +26,7 @@ export interface CreateReplyRecordInput {
 }
 
 export interface IReplyRecordRepository {
+  deletePendingWithoutPages(triggerMsgId: string): boolean;
   createPending(input: CreateReplyRecordInput): boolean;
   appendPage(triggerMsgId: string, pageMsgId: string): boolean;
   removePage(pageMsgId: string): boolean;
@@ -96,6 +97,16 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
 
   createPending(input: CreateReplyRecordInput): boolean {
     return this.createPendingInTransaction.immediate(input);
+  }
+
+  deletePendingWithoutPages(triggerMsgId: string): boolean {
+    return (
+      this.db
+        .query(`DELETE FROM reply_records
+      WHERE trigger_msg_id = ? AND status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM reply_pages WHERE reply_pages.trigger_msg_id = reply_records.trigger_msg_id)`)
+        .run(triggerMsgId).changes > 0
+    );
   }
 
   appendPage(triggerMsgId: string, pageMsgId: string): boolean {
@@ -186,7 +197,7 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
       .run().changes;
   }
 
-  // 記録は期限では消さない。返答のページやトリガーが消えたと分かったときにも消さない。
+  // 返答を送った記録は期限では消さない。返答のページやトリガーが消えたと分かったときにも消さない。
   // 消すと、そのトリガーが記録の無い人の発言として次の応答で再び読めるようになるからである。
   // 消すのは、その範囲がもう読まれないと分かったとき（guild からの退出、チャンネルの削除）だけである。
   deleteByGuild(guildId: string): number {

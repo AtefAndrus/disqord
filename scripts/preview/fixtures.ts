@@ -67,6 +67,7 @@ const settings: GuildSettings = {
   historyEnabled: false,
   discordToolsEnabled: false,
   cronEnabled: true,
+  replyGateEnabled: false,
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };

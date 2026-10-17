@@ -230,6 +230,9 @@ export async function handleConfigPanelInteraction(
           case "cron":
             await settingsService.setCronEnabled(guildId, enabled, actorId);
             break;
+          case "reply_gate":
+            await settingsService.setReplyGateEnabled(guildId, enabled, actorId);
+            break;
         }
       } else if (action.action === "edit" && interaction.isChannelSelectMenu()) {
         // The select was drawn from one version of the settings; against any other the

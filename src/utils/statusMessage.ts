@@ -31,6 +31,7 @@ function switchRows(settings: GuildSettings, webSearchEngine: string): SwitchRow
   return [
     { key: "free_only", label: "無料モデル限定", enabled: settings.freeModelsOnly },
     { key: "llm_details", label: "LLM詳細表示", enabled: settings.showLlmDetails },
+    { key: "reply_gate", label: "自動応答の取捨選択", enabled: settings.replyGateEnabled },
     {
       key: "web_search",
       label: "Web検索",

@@ -8,6 +8,7 @@ const KEYS = [
   "NODE_ENV",
   "E2E_TESTER_BOT_ID",
   "WEB_SEARCH_ENGINE",
+  "REPLY_GATE_THRESHOLD",
   "FXTWITTER_API_BASE",
 ] as const;
 
@@ -102,6 +103,25 @@ describe("loadConfig: WEB_SEARCH_ENGINE", () => {
     process.env.WEB_SEARCH_ENGINE = "perplexcity";
     expect(() => loadConfig()).toThrow();
   });
+
+  test("reply gate threshold defaults to 0.3 and accepts both boundaries", () => {
+    delete process.env.REPLY_GATE_THRESHOLD;
+    expect(loadConfig().replyGateThreshold).toBe(0.3);
+    process.env.REPLY_GATE_THRESHOLD = "";
+    expect(loadConfig().replyGateThreshold).toBe(0.3);
+    for (const value of ["0", "0.7", "1"]) {
+      process.env.REPLY_GATE_THRESHOLD = value;
+      expect(loadConfig().replyGateThreshold).toBe(Number(value));
+    }
+  });
+
+  test.each(["-0.1", "1.1", "invalid", "Infinity"])(
+    "rejects invalid reply gate threshold %s",
+    (value) => {
+      process.env.REPLY_GATE_THRESHOLD = value;
+      expect(() => loadConfig()).toThrow();
+    },
+  );
 });
 
 describe("loadConfig: FXTWITTER_API_BASE", () => {

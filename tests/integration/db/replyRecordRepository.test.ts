@@ -26,6 +26,22 @@ describe("ReplyRecordRepository", () => {
     database.close();
   });
 
+  test("deletes only pending records without pages", () => {
+    for (const triggerMsgId of ["empty", "paged", "finalized"]) {
+      repository.createPending({ triggerMsgId, channelId: "channel", guildId: "guild" });
+    }
+    repository.appendPage("paged", "page");
+    repository.finalize("finalized", "failed", 0);
+    expect(repository.deletePendingWithoutPages("empty")).toBe(true);
+    expect(repository.findByTrigger("empty")).toBeNull();
+    expect(repository.deletePendingWithoutPages("empty")).toBe(false);
+    expect(repository.deletePendingWithoutPages("paged")).toBe(false);
+    expect(repository.findByTrigger("paged")?.status).toBe("pending");
+    expect(repository.listPages("paged")).toHaveLength(1);
+    expect(repository.deletePendingWithoutPages("finalized")).toBe(false);
+    expect(repository.findByTrigger("finalized")?.status).toBe("failed");
+  });
+
   test("records pages in sequence and finalizes with the surviving page count", () => {
     expect(
       repository.createPending({

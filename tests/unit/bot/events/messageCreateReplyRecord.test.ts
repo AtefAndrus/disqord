@@ -11,6 +11,7 @@ import type { ISettingsService } from "../../../../src/services/settingsService"
 
 function createReplyRecordService(events: string[]): IReplyRecordService {
   return {
+    deletePendingWithoutPages: mock(async () => true),
     createPending: mock(async () => true),
     appendPage: mock(async () => ({ recorded: true, finalized: false })),
     removePage: mock(async () => {

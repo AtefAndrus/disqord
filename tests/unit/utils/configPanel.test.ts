@@ -87,6 +87,12 @@ describe("config custom IDs", () => {
 });
 
 describe("config pages", () => {
+  test("response page shows reply gate and explains the free-only bypass", () => {
+    const json = JSON.stringify(buildConfigPanel("response", createMockGuildSettings()));
+    expect(json).toContain("自動応答の取捨選択");
+    expect(json).toContain("cfg:response:set:reply_gate:on");
+    expect(json).toContain("無料モデル限定が有効なときは判定せず、すべてに返答します。");
+  });
   test("a switch that is on offers a green 無効にする, one that is off a grey 有効にする", () => {
     const json = JSON.stringify(
       buildConfigPanel(

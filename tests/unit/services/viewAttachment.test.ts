@@ -42,6 +42,7 @@ function humanWithAttachments(): RawDiscordMessage {
 
 function records(): IReplyRecordRepository {
   return {
+    deletePendingWithoutPages: mock(() => true),
     createPending: () => true,
     appendPage: () => true,
     removePage: () => true,

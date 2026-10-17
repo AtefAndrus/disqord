@@ -75,6 +75,7 @@ class FakeReader implements IDiscordMessageReader {
 }
 
 const records = (): IReplyRecordRepository => ({
+  deletePendingWithoutPages: mock(() => true),
   createPending: mock(() => true),
   appendPage: mock(() => true),
   removePage: mock(() => true),

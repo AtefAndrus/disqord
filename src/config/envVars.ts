@@ -62,6 +62,12 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     default: "perplexity",
   },
   {
+    name: "REPLY_GATE_THRESHOLD",
+    required: false,
+    description: "自動応答の取捨選択で返答する確率のしきい値（0〜1）",
+    default: "0.3",
+  },
+  {
     name: "FXTWITTER_API_BASE",
     required: false,
     description: "ツイート展開に使う fxtwitter API のベース URL",

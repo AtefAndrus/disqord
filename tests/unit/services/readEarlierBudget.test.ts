@@ -92,6 +92,7 @@ class ScriptedReader implements IDiscordMessageReader {
 
 function records(overrides: Partial<IReplyRecordRepository> = {}): IReplyRecordRepository {
   return {
+    deletePendingWithoutPages: mock(() => true),
     createPending: () => true,
     appendPage: () => true,
     removePage: () => true,

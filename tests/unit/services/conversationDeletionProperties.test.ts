@@ -172,6 +172,10 @@ function okList(messages: RawDiscordMessage[]): DiscordMessageListResult {
 class ScenarioRecords implements IReplyRecordRepository {
   constructor(readonly state: RecordStateSnapshot) {}
 
+  deletePendingWithoutPages(): boolean {
+    return false;
+  }
+
   createPending(): boolean {
     return true;
   }

@@ -29,6 +29,17 @@ describe("SettingsService", () => {
     db.close();
   });
 
+  test("reply gate defaults off and round-trips with actor attribution", async () => {
+    expect((await service.getGuildSettings(G)).replyGateEnabled).toBe(false);
+    await service.setReplyGateEnabled(G, true, "actor");
+    expect(await repo.findByGuildId(G)).toMatchObject({
+      replyGateEnabled: true,
+      updatedBy: "actor",
+    });
+    await service.setReplyGateEnabled(G, false, "actor");
+    expect((await service.getGuildSettings(G)).replyGateEnabled).toBe(false);
+  });
+
   describe("getGuildSettings", () => {
     test("行が無ければ既定値の行を作り、保存された行を返す", async () => {
       const settings = await service.getGuildSettings(G);
