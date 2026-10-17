@@ -32,6 +32,7 @@ describe("buildReplyGateState", () => {
     const filename = "名".repeat(3200);
     const state = buildReplyGateState({
       botName: "bot",
+      botUserId: "100",
       current: { ...current, attachments: [{ kind: "other", filename }] },
       isReplyToBot: false,
       conversation: { messages: [message(1)], replyTarget: message(0) },
@@ -41,7 +42,9 @@ describe("buildReplyGateState", () => {
     expect(state.new_message).toBe(`new author: new text [ファイル ${filename}]`);
   });
   test("history off includes only the current message and reply flag", () => {
-    expect(buildReplyGateState({ botName: "bot", current, isReplyToBot: true })).toEqual({
+    expect(
+      buildReplyGateState({ botName: "bot", botUserId: "100", current, isReplyToBot: true }),
+    ).toEqual({
       bot_name: "bot",
       new_message: "new author: new text",
       is_reply_to_bot: true,
@@ -52,6 +55,7 @@ describe("buildReplyGateState", () => {
     const messages = Array.from({ length: 25 }, (_, i) => message(i));
     const state = buildReplyGateState({
       botName: "bot",
+      botUserId: "100",
       current,
       isReplyToBot: false,
       conversation: { messages, replyTarget: message(0) },
@@ -81,6 +85,7 @@ describe("buildReplyGateState", () => {
     };
     const state = buildReplyGateState({
       botName: "bot",
+      botUserId: "100",
       current: {
         ...current,
         text: "😀".repeat(401),
@@ -102,6 +107,7 @@ describe("buildReplyGateState", () => {
   test("includes poll text after the message text", () => {
     const state = buildReplyGateState({
       botName: "bot",
+      botUserId: "100",
       current,
       isReplyToBot: false,
       conversation: { messages: [{ ...message(0), poll: "poll choices" }] },
@@ -109,10 +115,29 @@ describe("buildReplyGateState", () => {
     expect(state.recent_messages).toEqual(["author0: text 0\npoll choices"]);
   });
 
+  test("names the bot in its own replies and in mentions of it", () => {
+    const reply: NormalizedMessage = {
+      ...message(1, "answer"),
+      kind: "assistant",
+      author: "assistant",
+    };
+    const state = buildReplyGateState({
+      botName: "bot",
+      botUserId: "100",
+      current: { ...current, text: "<@!100> and <@200>" },
+      isReplyToBot: false,
+      conversation: { messages: [message(0, "<@100> question"), reply], replyTarget: reply },
+    });
+    expect(state.recent_messages).toEqual(["author0: @bot question"]);
+    expect(state.reply_target).toBe("bot: answer");
+    expect(state.new_message).toBe("new author: @bot and <@200>");
+  });
+
   test("drops oldest messages first to fit the budget including target and new message", () => {
     const messages = Array.from({ length: 20 }, (_, i) => message(i, "あ".repeat(400)));
     const state = buildReplyGateState({
       botName: "bot",
+      botUserId: "100",
       current: { ...current, text: "今".repeat(400) },
       isReplyToBot: false,
       conversation: { messages, replyTarget: message(99, "先".repeat(400)) },

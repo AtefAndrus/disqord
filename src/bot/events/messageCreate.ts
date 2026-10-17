@@ -440,6 +440,7 @@ export function createMessageCreateHandler(
         botName,
         state: buildReplyGateState({
           botName,
+          botUserId: botId,
           current: {
             author: normalizeAuthorLabel(
               message.member?.nickname ??
@@ -476,12 +477,15 @@ export function createMessageCreateHandler(
           await options.replyRecordService?.deletePendingWithoutPages(message.id);
         return;
       }
-      prepared = await prepareInput();
-      if (!prepared) {
-        if (replyRecordCreated)
+      // The record exists from here on, unlike on the ungated path where these checks run
+      // before createPending, so a failed or throwing check must not leave it pending.
+      try {
+        prepared = await prepareInput();
+      } finally {
+        if (!prepared && replyRecordCreated)
           await options.replyRecordService?.deletePendingWithoutPages(message.id);
-        return;
       }
+      if (!prepared) return;
     }
     if (!prepared || !("send" in message.channel)) return;
     const { attachmentResult, modelName, color } = prepared;

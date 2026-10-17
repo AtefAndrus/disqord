@@ -18,25 +18,41 @@ export function buildReplyGateQuestion(botName: string): DecisionsNoulQuestion {
 }
 
 interface ReplyGateMessage {
+  kind?: NormalizedMessage["kind"];
   author: string;
   text: string;
   poll?: string;
   attachments: { kind: "image" | "pdf" | "other"; filename: string }[];
 }
 
-function formatMessage(message: ReplyGateMessage): string {
-  const text = Array.from([message.text, message.poll].filter(Boolean).join("\n"));
+/**
+ * The question names the bot, so the bot's own replies (author "assistant"
+ * in the window) and mentions of it (`<@id>` in raw content) are rewritten
+ * to that name; otherwise "a follow-up to the bot's answer" has nothing in
+ * the state to match.
+ */
+function formatMessage(message: ReplyGateMessage, botName: string, botUserId: string): string {
+  const author = message.kind === "assistant" ? botName : message.author;
+  const body = [message.text, message.poll]
+    .filter(Boolean)
+    .join("\n")
+    .replaceAll(`<@${botUserId}>`, `@${botName}`)
+    .replaceAll(`<@!${botUserId}>`, `@${botName}`);
+  const text = Array.from(body);
   const labels = { image: "画像", pdf: "PDF", other: "ファイル" };
-  return `${message.author}: ${text.slice(0, 400).join("")}${text.length > 400 ? "…" : ""}${message.attachments.map((attachment) => ` [${labels[attachment.kind]} ${attachment.filename}]`).join("")}`;
+  return `${author}: ${text.slice(0, 400).join("")}${text.length > 400 ? "…" : ""}${message.attachments.map((attachment) => ` [${labels[attachment.kind]} ${attachment.filename}]`).join("")}`;
 }
 
 export function buildReplyGateState(input: {
   botName: string;
+  botUserId: string;
   current: ReplyGateMessage;
   conversation?: { messages: NormalizedMessage[]; replyTarget?: NormalizedMessage };
   isReplyToBot: boolean;
 }): Record<string, unknown> {
-  const newMessage = formatMessage(input.current);
+  const format = (message: ReplyGateMessage): string =>
+    formatMessage(message, input.botName, input.botUserId);
+  const newMessage = format(input.current);
   if (!input.conversation) {
     return {
       bot_name: input.botName,
@@ -44,10 +60,13 @@ export function buildReplyGateState(input: {
       is_reply_to_bot: input.isReplyToBot,
     };
   }
-  const recent = input.conversation.messages.slice(-20).map(formatMessage);
-  const replyTarget = input.conversation.replyTarget
-    ? formatMessage(input.conversation.replyTarget)
-    : undefined;
+  const target = input.conversation.replyTarget;
+  // The reply target is its own field, so it neither takes one of the 20 places nor counts twice.
+  const recent = input.conversation.messages
+    .filter((message) => message.id !== target?.id)
+    .slice(-20)
+    .map(format);
+  const replyTarget = target ? format(target) : undefined;
   let tokens =
     estimateTextTokens(newMessage) +
     (replyTarget ? estimateTextTokens(replyTarget) : 0) +

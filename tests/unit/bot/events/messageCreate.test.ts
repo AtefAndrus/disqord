@@ -588,7 +588,8 @@ describe("createMessageCreateHandler", () => {
       id: "old",
       channelId: "channel-123",
       kind: "assistant" as const,
-      author: "DisQord",
+      // What normalizeBotReply puts in the window for the bot's own reply.
+      author: "assistant",
       text: "previous answer",
       time: "now",
       timestampMs: 1,
@@ -604,7 +605,7 @@ describe("createMessageCreateHandler", () => {
       expect(build).toHaveBeenCalled();
       expect(input.state).toEqual({
         bot_name: "DisQord",
-        recent_messages: ["DisQord: previous answer"],
+        recent_messages: [],
         reply_target: "DisQord: previous answer",
         new_message: "author-123: hello",
       });

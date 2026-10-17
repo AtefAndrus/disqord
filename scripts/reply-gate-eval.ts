@@ -39,13 +39,17 @@ function splitLine(line: string): { author: string; text: string } {
     : { author: line.slice(0, at), text: line.slice(at + 2) };
 }
 
+const BOT_USER_ID = "1";
+
+/** Shapes a history line the way the conversation window does, where the bot's reply has author "assistant". */
 function toNormalized(line: string, index: number): NormalizedMessage {
   const { author, text } = splitLine(line);
+  const isBot = author === BOT_NAME;
   return {
     id: String(index + 1),
     channelId: "0",
-    kind: author === BOT_NAME ? "assistant" : "user",
-    author,
+    kind: isBot ? "assistant" : "user",
+    author: isBot ? "assistant" : author,
     time: "",
     timestampMs: index * 60_000,
     text,
@@ -61,6 +65,7 @@ function stateFor(c: ReplyGateCase): Record<string, unknown> {
   const current = splitLine(c.current);
   return buildReplyGateState({
     botName: BOT_NAME,
+    botUserId: BOT_USER_ID,
     current: { ...current, attachments: c.attachments ?? [] },
     conversation: { messages, ...(replyTarget && { replyTarget }) },
     isReplyToBot: replyTarget?.kind === "assistant",
@@ -148,6 +153,7 @@ function report(model: string, judgments: Judgment[], threshold: number): void {
     [
       `AUC ${auc(positive, negative).toFixed(3)}`,
       `at threshold ${threshold}: missed ${missed.length}/${positive.length} reply cases, answered ${intruded.length}/${negative.length} silent cases`,
+      `lowest reply case ${Math.min(...positive).toFixed(2)}, highest silent case ${Math.max(...negative).toFixed(2)}`,
       `max spread between runs ${Math.max(...mean.map((m) => m.spread)).toFixed(2)}`,
       `latency median ${Math.round(ms[Math.floor(ms.length / 2)])}ms p90 ${Math.round(ms[Math.floor(ms.length * 0.9)])}ms`,
       `errors ${errors.length}/${judgments.length}`,

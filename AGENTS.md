@@ -18,7 +18,7 @@ bun run lint:md    # markdownlint-cli2
 bun run preview    # render the bot's UI to PNG under .preview/
 bun run e2e        # drive the real bot through Discord with a tester bot (not in CI)
 bun scripts/admin.ts message <link>  # a deployed bot's conversation and logs around a message
-bun scripts/reply-gate-eval.ts [model ...]  # judge the hand-written reply-gate cases with decision models (paid)
+bun scripts/reply-gate-eval.ts [--runs N] [model ...]  # judge the hand-written reply-gate cases with decision models (paid)
 ```
 
 - `bun test` runs bun's built-in runner and skips the typecheck. `bun run test` is the one that does both.
