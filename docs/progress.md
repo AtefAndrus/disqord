@@ -11,7 +11,7 @@
 | ---- | ------ | ---------- | ---- |
 | [発言者の区別と名前の見せ方](changes/author-identity/design.md) | 高 | planned | モデルに渡す発言者の名前を表示名とユーザー名の組に揃え、同じ表示名の人を区別できるようにし、発言へのリンクの文字も整える |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
-| [自動応答の返答判定の見直し](changes/reply-gate-tuning/design.md) | 高 | investigating | 人どうしの会話や bot への制止に返答してしまう判定を、判定の問いの見直しと、bot が自動応答を一時停止できる tool で直す |
+| [自動応答の返答判定の見直し](changes/reply-gate-tuning/design.md) | 高 | investigating | 人どうしの会話や bot への制止に返答してしまう判定を、しきい値、判定の問い、判定を通った返答への指示の組で直す |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [会話の区切り](changes/conversation-boundary/design.md) | 中 | planned | チャンネルに区切りを置き、以後の応答にそれより前の会話を自動では渡さず、モデルには区切りの存在を助言として示して必要なときだけ遡らせる |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
@@ -23,7 +23,7 @@
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
 | [発言に付いたリアクションを読む](changes/message-reactions/design.md) | 中 | planned | 会話履歴の各発言に付いたリアクションの種類と数を、発言の本文の後ろに添えてモデルに渡す |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
-| [client tool の案内と呼び出しの記録](changes/tool-call-guidance/design.md) | 中 | planned | read_earlier_messages が 0 件のときの結果と add_reaction の説明を直し、client tool の呼び出しを admin API で読めるログに残す |
+| [client tool の案内と呼び出しの記録](changes/tool-call-guidance/design.md) | 中 | implemented | read_earlier_messages が 0 件のときの結果と add_reaction の説明を直し、client tool の呼び出しを admin API で読めるログに残す |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | planned | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用量とコストを記録し /stats で表示する |

@@ -4,10 +4,15 @@ import type {
   ReplyPage,
   ReplyRecord,
 } from "../../../src/db/repositories/replyRecord";
-import { estimateToolResultTokens } from "../../../src/llm/contextBudget";
+import {
+  CALL_ID_TOKEN_ALLOWANCE,
+  estimateToolResultTokens,
+  FIXED_RESULT_TOKENS,
+} from "../../../src/llm/contextBudget";
 import {
   type BuildConversationWindowInput,
   ConversationWindowService,
+  NOTHING_OLDER_NOTE,
   truncateTextByBytes,
   WINDOW_RAW_MESSAGE_LIMIT,
   WINDOW_REBUILD_AFTER_MS,
@@ -1334,6 +1339,46 @@ test("the reply target is already counted and does not appear twice while paging
   expect(parsed.messages).toEqual([{ ref: "m1" }]);
   expect(parsed.has_more).toBe(false);
   expect(reader.listQueries[1]).toEqual({ before: "1000", limit: 100 });
+  expect(parsed).not.toHaveProperty("note");
+});
+
+test("an empty result with nothing older says that it is not an error", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [message("999")] });
+  reader.listResponses.push({ status: "ok", messages: [message("999")] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  const result = await context?.toolContext.readEarlierMessages(5, new AbortController().signal);
+  const parsed = JSON.parse(result as string) as Record<string, unknown>;
+
+  expect(parsed).toEqual({
+    messages: [],
+    has_more: false,
+    stop_reason: null,
+    note: NOTHING_OLDER_NOTE,
+  });
+  // The empty report is exempt from the result budget only while it stays fixed-size.
+  expect(estimateToolResultTokens(result as string)).toBeLessThanOrEqual(
+    FIXED_RESULT_TOKENS - CALL_ID_TOKEN_ALLOWANCE,
+  );
+});
+
+test("an empty result without more history but with a stop reason carries no note", async () => {
+  const reader = new FakeReader();
+  reader.listResponses.push({ status: "ok", messages: [] });
+  let allowed = true;
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build({
+    ...input(message("1000", new Date(NOW).toISOString())),
+    authorize: async () => allowed,
+  });
+
+  allowed = false;
+  const result = await context?.toolContext.readEarlierMessages(5, new AbortController().signal);
+  const parsed = JSON.parse(result as string) as Record<string, unknown>;
+
+  expect(parsed).toEqual({ messages: [], has_more: false, stop_reason: "no_permission" });
 });
 
 test("the reply target's reference keeps its place in the chronological order", async () => {

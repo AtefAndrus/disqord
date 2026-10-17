@@ -1,4 +1,5 @@
 import type { ResponsesInputContentPart, ToolChatMessage } from "../../types";
+import { logger } from "../../utils/logger";
 import {
   CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
@@ -183,6 +184,44 @@ function clipToolResultParts(
   return encoded.length <= MAX_TOOL_RESULT_PART_BYTES ? parts : null;
 }
 
+const LOG_TEXT_CHARS = 200;
+
+function clipLogText(text: string): string {
+  const chars = Array.from(text);
+  return chars.length > LOG_TEXT_CHARS ? `${chars.slice(0, LOG_TEXT_CHARS).join("")}…` : text;
+}
+
+/**
+ * The result's shape for the log, not its content: what was read lives in
+ * arrays (counted) and long strings (left out), while has_more, stop_reason,
+ * and error codes are short scalars. An error result is the dispatcher's own
+ * message, so it is logged as text.
+ */
+function summarizeToolResult(outcome: IToolDispatchOutcome): unknown {
+  const content = outcome.toolMessage.content;
+  if (typeof content !== "string") return { parts: content.length };
+  if (outcome.status !== "ok") return clipLogText(content);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { chars: content.length };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { chars: content.length };
+  }
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (Array.isArray(value)) summary[key] = value.length;
+    else if (value === null || typeof value === "boolean" || typeof value === "number") {
+      summary[key] = value;
+    } else if (typeof value === "string" && Array.from(value).length <= LOG_TEXT_CHARS) {
+      summary[key] = value;
+    }
+  }
+  return summary;
+}
+
 export class ToolDispatcher {
   constructor(private readonly registry: ToolRegistry) {}
 
@@ -192,6 +231,27 @@ export class ToolDispatcher {
    * error `role:"tool"` result.
    */
   async dispatch(
+    call: INormalizedToolCall,
+    options: IToolDispatchOptions,
+  ): Promise<IToolDispatchOutcome> {
+    const startedAt = Date.now();
+    const outcome = await this.dispatchGuarded(call, options);
+    try {
+      logger.info("Tool call", {
+        messageId: options.requestId,
+        name: call.name,
+        status: outcome.status,
+        elapsed: Date.now() - startedAt,
+        args: clipLogText(call.rawArguments),
+        result: summarizeToolResult(outcome),
+      });
+    } catch {
+      // A log failure must not replace the outcome of a tool that already ran.
+    }
+    return outcome;
+  }
+
+  private async dispatchGuarded(
     call: INormalizedToolCall,
     options: IToolDispatchOptions,
   ): Promise<IToolDispatchOutcome> {
@@ -313,8 +373,6 @@ export class ToolDispatcher {
       toolCallId: call.id,
       invocationId: crypto.randomUUID(),
     };
-
-    console.info(`[tool] client tool invoked name=${tool.name}`);
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onRequestAbort: (() => void) | undefined;

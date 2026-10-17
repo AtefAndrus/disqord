@@ -259,7 +259,7 @@ async function startBot(): Promise<RunningBot> {
       if (input) inputs.push(input);
       if (line.startsWith(BOT_CONTEXT_PREFIX))
         botContextMarkers.add(line.slice(BOT_CONTEXT_PREFIX.length));
-      for (const match of line.matchAll(/client tool invoked.*?name["']?[:=]\s*["']?([\w-]+)/g)) {
+      for (const match of line.matchAll(/\] Tool call \{"messageId":"\d*","name":"([\w-]+)"/g)) {
         const name = match[1];
         if (name) toolCalls.add(name);
       }

@@ -14,7 +14,7 @@ interface Arguments {
 export class AddReactionTool implements IClientTool<Arguments> {
   readonly name = "add_reaction";
   readonly description =
-    "Add a reaction only when the user asks. Use a Unicode emoji or this guild's custom emoji name, without colons or an ID. message_ref is an m-number from this conversation; omit it for the user's current message.";
+    "Add a reaction when the user asks, or on your own when one fits the conversation; unasked, add at most one per response. Use a Unicode emoji or this guild's custom emoji name, without colons or an ID. message_ref is an m-number from this conversation; omit it for the user's current message.";
   readonly parameters: Record<string, unknown> = {
     type: "object",
     properties: {

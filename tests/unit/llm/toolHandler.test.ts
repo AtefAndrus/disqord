@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
@@ -17,6 +17,7 @@ import {
   MIN_TOOL_TIMEOUT_MS,
   ToolDispatcher,
 } from "../../../src/llm/tools/toolHandler";
+import { logger } from "../../../src/utils/logger";
 
 const ctx: IToolContext = { guildId: "g1", channelId: "c1", userId: "u1" };
 const utf8Encoder = new TextEncoder();
@@ -454,6 +455,117 @@ describe("ToolDispatcher.dispatch", () => {
     expect(outcome.toolMessage.content).toBe(
       "Tool execution failed and the error detail could not be serialized.",
     );
+  });
+});
+
+describe("ToolDispatcher tool-call log", () => {
+  let log: ReturnType<typeof spyOn<typeof logger, "info">>;
+  beforeEach(() => {
+    log = spyOn(logger, "info").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    log.mockRestore();
+  });
+
+  function logged(): Record<string, unknown> {
+    const call = log.mock.calls.find(([message]) => message === "Tool call");
+    return call?.[1] as Record<string, unknown>;
+  }
+
+  test("an ok JSON result is logged by shape: scalars and short strings kept, arrays counted", async () => {
+    const { dispatcher } = setup([
+      makeTool({
+        handler: async () => ({
+          llmResult: JSON.stringify({
+            messages: [{ text: "secret" }, { text: "secret" }],
+            has_more: false,
+            stop_reason: null,
+            note: "short",
+            body: "x".repeat(201),
+            nested: { text: "secret" },
+          }),
+        }),
+      }),
+    ]);
+    await dispatcher.dispatch(makeCall({ rawArguments: '{"count":5}' }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({
+      messageId: "msg-1",
+      name: "echo",
+      status: "ok",
+      args: '{"count":5}',
+      result: { messages: 2, has_more: false, stop_reason: null, note: "short" },
+    });
+    expect(typeof logged().elapsed).toBe("number");
+    expect(JSON.stringify(logged())).not.toContain("secret");
+  });
+
+  test("a result that is not a JSON object is logged by length", async () => {
+    const { dispatcher } = setup([makeTool({ handler: async () => ({ llmResult: "plain" }) })]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().result).toEqual({ chars: 5 });
+  });
+
+  test("an error outcome, including a call never executed, is logged with its message", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ name: "missing" }), {
+      ctx,
+      frozenToolNames: new Set(["missing"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({ name: "missing", status: "error" });
+    expect(logged().result).toContain("Unknown tool");
+  });
+
+  test("a cancelled call is logged as cancelled", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    const controller = new AbortController();
+    controller.abort();
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      requestSignal: controller.signal,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().status).toBe("cancelled");
+  });
+
+  test("long arguments are clipped to 200 characters", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ rawArguments: `{"q":"${"あ".repeat(300)}"}` }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(Array.from(logged().args as string)).toHaveLength(201);
+    expect(logged().args as string).toEndWith("…");
+  });
+
+  test("a failing log does not replace the outcome", async () => {
+    log.mockImplementation(() => {
+      throw new Error("log failed");
+    });
+    const { dispatcher } = setup([makeTool({ handler: async () => ({ llmResult: "ran" }) })]);
+    const outcome = await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(outcome.status).toBe("ok");
+    expect(outcome.toolMessage.content).toBe("ran");
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 title: "client tool の案内と呼び出しの記録"
-status: planned        # investigating | planned | in-progress | implemented
+status: implemented    # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "read_earlier_messages が 0 件のときの結果と add_reaction の説明を直し、client tool の呼び出しを admin API で読めるログに残す"
 ---
@@ -37,8 +37,8 @@ client tool の呼び出しは `console.info` で tool 名だけを出してお�
 | -------- | ---- | ---- |
 | 0 件の伝え方 | 結果に、0 件で `has_more` が false、`stop_reason` が null のときだけ、これより古く読める発言は無く、窓が読める最も古い発言から始まっていることを書いた `note` を足す。tool の説明は変えない | 説明は既に `has_more` の意味を書いているが、モデルは 0 件の結果だけを見て失敗と解釈した。結果の中の文は、モデルが結果を読むその時点で目に入る。説明に足す案は、すべての返答の入力に常に載るうえ、`has_more` の説明と同じく読み飛ばされうる |
 | 自分から付けるリアクション | 説明を「求められたとき、または会話に合うと判断したときに付ける。求められていないときは 1 回の返答で 1 つまでにする」に変える | 1 回の返答で付けられる数は `DiscordActionService` が 3 つに制限しているので（`ACTION_LIMITS`）、説明を緩めても付けすぎは仕組みで止まる。求められていない場合をさらに 1 つに絞るのは説明だけで、仕組みでは制限しない |
-| 記録の形 | tool の実行の終わりに `logger.info("Tool call", …)` を 1 行出し、`console.info` の行はやめる | `logger` の行はログファイルに入り、admin API の `logs` と `message` で読める（`docs/admin-api.md`）。終わりに 1 行にすると、結果と所要時間を同じ行に入れられる |
-| 記録する項目 | `messageId`（返答の元の発言 ID、tool の呼び出しに渡る `requestId`）、`name`、`status`（`ok`、`error`、`timeout`、`cancelled`）、`elapsed`、`args`（JSON を 200 文字までに切る）、`result`（結果が JSON のオブジェクトなら、真偽値、数値、null、200 文字までの文字列の項目と、配列の要素数。それ以外は文字数） | 結果の要約に `has_more`、`stop_reason`、`error` と件数が入り、今回のような食い違いを調べられる。発言の本文は配列の中にあるので要約に入らない。`Reply gate` の行と同じ `messageId` で、判定と返答とを結び付けられる |
+| 記録の形 | `ToolDispatcher.dispatch` の終わりに `logger.info("Tool call", …)` を 1 行出し、`console.info` の行はやめる。引数の誤りや提示していない tool のように実行しなかった呼び出しも記録する。記録の失敗は結果を変えない | `logger` の行はログファイルに入り、admin API の `logs` と `message` で読める（`docs/admin-api.md`）。終わりに 1 行にすると、結果と所要時間を同じ行に入れられる。実行しなかった呼び出しも、モデルが何を試みたかを調べる材料になる |
+| 記録する項目 | `messageId`（返答の元の発言 ID、tool の呼び出しに渡る `requestId`）、`name`、`status`（`ok`、`error`、`timeout`、`cancelled`）、`elapsed`、`args`（JSON を 200 文字までに切る）、`result`（`ok` で結果が JSON のオブジェクトなら、真偽値、数値、null、200 文字までの文字列の項目と、配列の要素数。`ok` でそれ以外の文字列なら文字数。`ok` 以外なら dispatcher が作ったエラーの文を 200 文字まで。画像などの parts なら要素数） | 結果の要約に `has_more`、`stop_reason`、`error` と件数が入り、今回のような食い違いを調べられる。発言の本文は配列の中にあるので要約に入らない。`Reply gate` の行と同じ `messageId` で、判定と返答とを結び付けられる |
 
 ## Design
 
@@ -51,10 +51,10 @@ client tool の呼び出しは `console.info` で tool 名だけを出してお�
 
 ## Tasks
 
-- [ ] `note` の追加（単体テスト: 0 件で古い発言が無い、0 件で `stop_reason` がある、1 件以上）
-- [ ] `add_reaction` の説明
-- [ ] `Tool call` のログ（単体テスト: 各 `status`、結果が JSON のオブジェクト、JSON でない文字列、長い引数の切り詰め）
-- [ ] `bun run e2e` の既定シナリオと、`history-set history-recall read-earlier` を通す
+- [x] `note` の追加（単体テスト: 0 件で古い発言が無い、0 件で `stop_reason` がある、1 件以上）
+- [x] `add_reaction` の説明
+- [x] `Tool call` のログ（単体テスト: 各 `status`、結果が JSON のオブジェクト、JSON でない文字列、長い引数の切り詰め、記録の失敗）。e2e が tool の呼び出しを確かめる行（`scripts/e2e/index.ts`）もこの行に合わせる
+- [x] `bun run e2e` の既定シナリオと、`history-set history-recall read-earlier` を通す
 - [ ] `docs/changes/tool-call-guidance/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
