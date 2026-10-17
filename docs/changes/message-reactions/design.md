@@ -1,0 +1,64 @@
+---
+title: "発言に付いたリアクションを読む"
+status: planned        # investigating | planned | in-progress | implemented
+priority: medium       # high | medium | low
+summary: "会話履歴の各発言に付いたリアクションの種類と数を、発言の本文の後ろに添えてモデルに渡す"
+---
+
+# 発言に付いたリアクションを読む
+
+## Why
+
+bot は `add_reaction` でリアクションを付けられるが、発言に付いたリアクションはモデルに渡していない。
+そのため「この発言にどんな反応があったか」に答えられず、自分の返答に付いたリアクションも分からない。
+
+## 依存 / 関連 change
+
+- 連携: [discord-expressions](../discord-expressions/design.md) — カスタム絵文字を名前で読ませる。本 change のリアクションのカスタム絵文字も同じ `:name:` の形で書くが、どちらも相手の実装を前提にしない
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- 会話履歴と `read_earlier_messages` の結果で、各発言に付いたリアクションの種類と数をモデルに渡す
+- bot の返答に付いたリアクションも渡す
+
+**Non-Goals:**
+
+- 誰がリアクションを付けたかを渡すこと。絵文字ごとに `GET /channels/{channel}/messages/{message}/reactions/{emoji}` の呼び出しが要り、窓を作る REST の予算（`CONVERSATION_REST_LIMIT`）を圧迫する
+- リアクションの追加や削除をきっかけに返答すること
+
+## Decisions
+
+| 判断事項 | 選択 | 理由 |
+| -------- | ---- | ---- |
+| 取得元 | 窓を作るときに読むメッセージの `reactions`（絵文字と数） | 会話の窓は返答のたびに REST でメッセージを読み直す（`ConversationWindowService` の `rebuild` と `extend`）。メッセージには `reactions` が含まれるので、追加の呼び出しなしで返答の時点の数が得られる。gateway のリアクションのイベントを購読する案は、`GuildMessageReactions` の intent と、メッセージごとの数を保持する仕組みが要る |
+| 書式 | 本文と投票の後ろに 1 行で `[リアクション 👍 2、😢 1、:kusa: 1]` と書く。カスタム絵文字は `:name:` にする。リアクションの無い発言には何も書かない | 投票（`formatPoll`）と同じく角括弧の 1 行にすると、本文と区別できる。カスタム絵文字の ID はモデルが読んでも意味が無い |
+| bot が付けたリアクション | 数に含め、区別しない | 利用者が求めたのは種類と数である。bot が付けたかどうかは、`add_reaction` を呼んだ返答の文脈からモデルが分かる |
+| bot の返答のリアクション | 返答の全ページのリアクションを絵文字ごとに合計する | 返答は複数のメッセージに分かれることがあり、利用者はどのページにも付けうる。モデルには返答が 1 件の発言として渡る（`normalizeBotReply`） |
+| 並び順 | Discord が返す順のまま | 並べ替えても、モデルが読み取れる情報は増えない |
+
+## Design
+
+### 変更対象ファイル
+
+- 修正: `src/utils/discordMessageNormalizer.ts` — `RawDiscordMessage` に `reactions` を足し、`NormalizedMessage` にリアクションの行を持たせる。`messageBody` か、モデル向けの書式を作る関数がその行を本文の後ろに付ける。`formatMessageForTool` にも同じ行を入れる
+
+今回の発言は gateway で受け取った直後に処理するので、リアクションはまだ付いていない。
+そのため、discord.js のメッセージから作る `toRawDiscordMessage`（`src/bot/events/messageCreate.ts`）には足さない。
+
+### 設計メモ
+
+リアクションの数が変わると、その発言より後ろのプロンプトのキャッシュが効かなくなる。
+リアクションが付くのは返答の間隔に比べてまれなので、受け入れる。
+
+返答するかの判定（`replyGateService.ts`）には渡さない。
+判定は誰に向けた発言かで決まり、リアクションの数は判断材料にならない。
+
+## Tasks
+
+- [ ] 正規化とモデル向けの書式（単体テスト: Unicode 絵文字、カスタム絵文字、複数種類、リアクションなし、bot の返答の複数ページの合計）
+- [ ] `read_earlier_messages` の結果に入ること（単体テスト）
+- [ ] `bun run e2e` の既定シナリオを通す
+- [ ] 手動確認: 会話履歴を有効にしたチャンネルで、発言にリアクションを付けてから bot にその発言の反応を尋ね、種類と数を答えること
+- [ ] `docs/changes/message-reactions/` 削除（リリース完了時、git 履歴がアーカイブ）
