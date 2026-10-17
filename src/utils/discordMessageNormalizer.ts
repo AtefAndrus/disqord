@@ -267,10 +267,19 @@ export function formatReactions(messages: readonly RawDiscordMessage[]): string 
     for (const reaction of message.reactions as unknown[]) {
       if (typeof reaction !== "object" || reaction === null) continue;
       const { count, emoji } = reaction as Partial<RawDiscordReaction>;
-      if (typeof count !== "number" || count <= 0 || typeof emoji?.name !== "string") continue;
+      if (typeof count !== "number" || count <= 0 || typeof emoji !== "object" || emoji === null) {
+        continue;
+      }
+      const name = typeof emoji.name === "string" ? emoji.name : undefined;
       // A custom emoji's name can repeat across guilds; its ID keeps the counts apart.
-      const key = emoji.id ? `custom:${emoji.id}` : `unicode:${emoji.name}`;
-      const label = oneLine(emoji.id ? `:${emoji.name}:` : emoji.name);
+      const key = emoji.id ? `custom:${emoji.id}` : name ? `unicode:${name}` : undefined;
+      if (key === undefined) continue;
+      // Discord sends a null name for a deleted custom emoji; its count still stands.
+      // Only control characters are replaced: format characters such as the
+      // zero-width joiner hold multi-part emoji like ❤️‍🔥 together.
+      const label = emoji.id
+        ? `:${name ? oneLine(name) : "削除された絵文字"}:`
+        : (name ?? "").replace(/\p{Cc}+/gu, " ").trim();
       if (label.length === 0) continue;
       const entry = counts.get(key) ?? { label, count: 0 };
       entry.count += count;
@@ -439,6 +448,7 @@ export function normalizePollResultNotice(
     time: message.timestamp,
     timestampMs: timestampMs(message),
     text: formatPollResultNotice(message) ?? "",
+    ...reactionsOf([message]),
     attachments: [],
     exchangeId,
   };

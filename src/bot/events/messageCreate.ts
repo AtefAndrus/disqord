@@ -142,7 +142,7 @@ export function toRawDiscordPoll(poll: Poll): RawDiscordPoll {
   };
 }
 
-function toRawDiscordMessage(message: Message): RawDiscordMessage {
+export function toRawDiscordMessage(message: Message): RawDiscordMessage {
   const attachments = [...message.attachments.values()].map((attachment) => ({
     id: attachment.id,
     filename: attachment.name,
@@ -180,6 +180,11 @@ function toRawDiscordMessage(message: Message): RawDiscordMessage {
     attachments,
     message_reference: reference,
     poll: message.poll ? toRawDiscordPoll(message.poll) : null,
+    // A pinned message read through discord.js (list_pins) carries its reactions here.
+    reactions: [...(message.reactions?.cache.values() ?? [])].map((reaction) => ({
+      count: reaction.count,
+      emoji: { id: reaction.emoji.id, name: reaction.emoji.name },
+    })),
   };
 }
 

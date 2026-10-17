@@ -10,6 +10,7 @@ import {
   normalizeBotReply,
   normalizeExternalBotMessage,
   normalizeHumanMessage,
+  normalizePollResultNotice,
 } from "../../../src/utils/discordMessageNormalizer";
 
 function botPage(id: string, body: string, footer: string): RawDiscordMessage {
@@ -339,7 +340,7 @@ describe("reactions", () => {
     ).toBe("[リアクション :ok: 1、:ok: 2]");
   });
 
-  test("malformed entries from REST are skipped", () => {
+  test("malformed entries from REST are skipped, and a deleted custom emoji keeps its count", () => {
     expect(
       formatReactions([
         {
@@ -353,6 +354,22 @@ describe("reactions", () => {
           ] as unknown as RawDiscordMessage["reactions"],
         },
       ]),
-    ).toBe("[リアクション line break 1]");
+    ).toBe("[リアクション :削除された絵文字: 1、line break 1]");
+  });
+
+  test("an emoji joined with zero-width joiners stays one emoji", () => {
+    expect(formatReactions([{ ...base, reactions: [{ count: 1, emoji: { name: "❤️‍🔥" } }] }])).toBe(
+      "[リアクション ❤️‍🔥 1]",
+    );
+  });
+
+  test("a poll-closed notice carries its reactions", () => {
+    const notice = normalizePollResultNotice(
+      { ...base, type: 46, reactions: [{ count: 3, emoji: { name: "🎉" } }] },
+      "poll",
+      false,
+    );
+
+    expect(notice.reactions).toBe("[リアクション 🎉 3]");
   });
 });

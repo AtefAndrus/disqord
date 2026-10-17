@@ -9,7 +9,10 @@ import {
   test,
 } from "bun:test";
 import { type Attachment, ChannelType, Collection, MessageFlags, MessageType } from "discord.js";
-import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
+import {
+  createMessageCreateHandler,
+  toRawDiscordMessage,
+} from "../../../../src/bot/events/messageCreate";
 import type { IReplyRecordRepository } from "../../../../src/db/repositories/replyRecord";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
@@ -2667,5 +2670,35 @@ describe("createMessageCreateHandler", () => {
         "（このメッセージは不要になりました）",
       );
     });
+  });
+});
+
+describe("toRawDiscordMessage", () => {
+  test("carries the reactions discord.js holds, as a pinned message read by list_pins has them", () => {
+    const message = {
+      id: "pinned",
+      channel: { id: "channel" },
+      guild: { id: "guild" },
+      content: "pinned text",
+      createdTimestamp: Date.parse("2026-10-01T00:00:00.000Z"),
+      author: { id: "user", username: "alice", globalName: null, bot: false },
+      webhookId: null,
+      type: MessageType.Default,
+      components: [],
+      attachments: new Collection(),
+      reference: null,
+      poll: null,
+      reactions: {
+        cache: new Collection([
+          ["👍", { count: 2, emoji: { id: null, name: "👍" } }],
+          ["1", { count: 1, emoji: { id: "1", name: "kusa" } }],
+        ]),
+      },
+    };
+
+    expect(toRawDiscordMessage(message as never).reactions).toEqual([
+      { count: 2, emoji: { id: null, name: "👍" } },
+      { count: 1, emoji: { id: "1", name: "kusa" } },
+    ]);
   });
 });
