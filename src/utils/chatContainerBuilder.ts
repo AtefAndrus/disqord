@@ -557,7 +557,7 @@ function addBadgeAndBody(
   }
   // Paging leaves the first page empty when a link at the start of the answer
   // only fits a page without the reasoning; the answer starts on the next page.
-  if (!params.text && reasoning && !params.isLast) return;
+  if (!params.text.trim() && reasoning && !params.isLast) return;
   const segments = splitAtThematicBreaks(params.text || EMPTY_TEXT_PLACEHOLDER);
   segments.forEach((segment, index) => {
     if (index > 0) {

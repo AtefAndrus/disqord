@@ -387,7 +387,9 @@ describe("ChatService", () => {
         request.messages.find(
           (entry) => entry.role === "system" && String(entry.content).includes("非信頼データ"),
         )?.content,
-      ).toContain("会話の発言を指すときは [m12] のように番号を角括弧で書くこと");
+      ).toContain(
+        "会話の発言を指すときは [m12] のように番号を角括弧で書き、複数の発言は [m12][m13] のように 1 つずつ角括弧で書くこと",
+      );
       expect(
         request.messages.find(
           (entry) => typeof entry.content === "string" && entry.content.includes(target.text),

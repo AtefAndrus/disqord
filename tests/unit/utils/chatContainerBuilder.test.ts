@@ -43,19 +43,22 @@ describe("link boundaries", () => {
   const url = "https://discord.com/channels/1/2/3";
   const link = `[Alice の発言](${url})`;
 
-  test.each([link, url, `<${url}>`, String.raw`[A \[name\] の発言](${url})`])(
-    "moves an intact link onto the next page: %s",
-    (unit) => {
-      const text = `${"あ".repeat(20)}${unit} end`;
-      const chunks = splitMarkdownByCharsAndBytes(text, 70, 100);
-      expect(chunks.join("")).toBe(text);
-      expect(chunks.some((chunk) => chunk.includes(unit))).toBe(true);
-      for (const chunk of chunks) {
-        expect(chunk.length).toBeLessThanOrEqual(70);
-        expect(byteLength(chunk)).toBeLessThanOrEqual(100);
-      }
-    },
-  );
+  test.each([
+    link,
+    url,
+    `<${url}>`,
+    String.raw`[A \[name\] の発言](${url})`,
+    `[Title (example.com)](<${url}>)`,
+  ])("moves an intact link onto the next page: %s", (unit) => {
+    const text = `${"あ".repeat(20)}${unit} end`;
+    const chunks = splitMarkdownByCharsAndBytes(text, 70, 100);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.some((chunk) => chunk.includes(unit))).toBe(true);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(70);
+      expect(byteLength(chunk)).toBeLessThanOrEqual(100);
+    }
+  });
 
   test("a newline in a link's label is not used as a page boundary", () => {
     const unit = `[Alice\nの発言](${url})`;
@@ -777,21 +780,25 @@ describe("chatContainerBuilder", () => {
       ]);
     });
 
-    test("本文が次のページから始まる推論だけの 1 ページ目には「応答なし」を出さない", () => {
-      const json = toJSON(
-        buildFinalContainer({
-          text: "",
-          modelName: "m",
-          color: 0x00ff00,
-          isFirst: true,
-          isLast: false,
-          metadata: { showDetails: false },
-          reasoning: { text: `${REASONING_HEADING}\n||考え||`, needsFile: false },
-        }),
-      );
-      expect(JSON.stringify(json)).not.toContain("（応答なし）");
-      expect(JSON.stringify(json)).toContain("考え");
-    });
+    test.each(["", "\n\n"])(
+      "本文が次のページから始まる推論だけの 1 ページ目には本文を出さない: %j",
+      (text) => {
+        const json = toJSON(
+          buildFinalContainer({
+            text,
+            modelName: "m",
+            color: 0x00ff00,
+            isFirst: true,
+            isLast: false,
+            metadata: { showDetails: false },
+            reasoning: { text: `${REASONING_HEADING}\n||考え||`, needsFile: false },
+          }),
+        );
+        expect(JSON.stringify(json)).not.toContain("（応答なし）");
+        expect(JSON.stringify(json)).not.toContain('"---"');
+        expect(JSON.stringify(json)).toContain("考え");
+      },
+    );
 
     test("本文の区切り線は divider 付きの Separator になり、footer の Separator は divider を持たない", () => {
       const json = toJSON(
