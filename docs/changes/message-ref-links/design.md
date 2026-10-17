@@ -1,6 +1,6 @@
 ---
 title: "返答中の発言番号をメッセージリンクにする"
-status: in-progress
+status: implemented
 priority: medium
 summary: "モデルが返答に書いた会話履歴の発言番号（m12 など）を、表示するときにその発言への Discord のメッセージリンクに置き換える"
 ---
@@ -78,7 +78,7 @@ summary: "モデルが返答に書いた会話履歴の発言番号（m12 など
 - [x] `messageCreate.ts` と `streamingUpdater.ts` への組み込み、推論表示への適用と、停止時とエラー時の描画のテスト
 - [x] リンクに置き換えた bot の返答を履歴として読み直したとき、そのリンクが二重に置き換わらないことのテスト
 - [x] 会話履歴の安全指示の追加
-- [x] e2e: 既定シナリオ、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`、推論表示の変更に求める `reasoning`、番号がメッセージリンクとして表示されることを確かめる `message-ref`（新設）
+- [x] e2e: 既定シナリオ、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`、推論表示の変更に求める `reasoning`、検索結果の見せ方の変更に求める `search`、番号がメッセージリンクとして表示されることを確かめる `message-ref`（新設）
 - [ ] `docs/changes/message-ref-links/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

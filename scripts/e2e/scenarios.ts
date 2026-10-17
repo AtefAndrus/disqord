@@ -1029,13 +1029,15 @@ export const SCENARIOS: Scenario[] = [
       prompt: `[e2e] リンク確認用の合言葉は ${MESSAGE_REF_TOKEN} です。`,
       mention: false,
     },
-    prompt: "[e2e] 直前に合言葉を投稿した発言はどれ？その発言を、発言番号で示して 1 行で答えて。",
+    // Earlier runs leave fixtures with other tokens in the channel, so the
+    // prompt names this run's token rather than asking for the latest one.
+    prompt: `[e2e] 合言葉 ${MESSAGE_REF_TOKEN} を投稿した発言を、発言番号で示して 1 行で答えて。`,
     check: (reply) => {
       // The badge can hold a model id and the link label the tester's name,
       // either of which may contain `m<N>` without being a message number.
       const answer = reply.body
         .replace(/^\*\*Model:\*\*.*$/gmu, "")
-        .replace(/\[[^\]\n]*\]\([^)\s]*\)/gu, "");
+        .replace(/\[(?:\\.|[^\]\\\n])*\]\([^)\s]*\)/gu, "");
       return [
         ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(
           reply.body,
@@ -1057,12 +1059,11 @@ export const SCENARIOS: Scenario[] = [
       if (!fixture) return ["the fixture message is not before the trigger"];
       const after = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
       if (!after.ok) return [`cannot read the reply: HTTP ${after.status}`];
-      const replyText = JSON.stringify(
-        ((await after.json()) as DiscordMessage[])
-          .filter((item) => item.author?.id === botId)
-          .map((item) => item.components),
-      );
-      return new RegExp(`/channels/\\d+/${channelId}/${fixture.id}\\)`, "u").test(replyText)
+      // The answer only, as check reads it: a link in the reasoning is not shown as the answer.
+      const answer = toReply(
+        ((await after.json()) as DiscordMessage[]).filter((item) => item.author?.id === botId),
+      ).body;
+      return new RegExp(`/channels/\\d+/${channelId}/${fixture.id}\\)`, "u").test(answer)
         ? []
         : [`the reply does not link to the fixture message ${fixture.id}`];
     },
