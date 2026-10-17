@@ -1,10 +1,15 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import type { Message } from "discord.js";
 import { createDeleteOwnMessage } from "../../../src/bot/events/messageCreate";
-import type { IReplyRecordService } from "../../../src/services/replyRecordService";
+import type { IReplyRecordRepository } from "../../../src/db/repositories/replyRecord";
+import {
+  type IReplyRecordService,
+  ReplyRecordService,
+} from "../../../src/services/replyRecordService";
 
 function service(events: string[]): IReplyRecordService {
   return {
+    deletePendingWithoutPages: mock(async () => true),
     createPending: mock(async () => true),
     appendPage: mock(async () => ({ recorded: true, finalized: false })),
     removePage: mock(async () => {
@@ -23,6 +28,25 @@ function service(events: string[]): IReplyRecordService {
 }
 
 describe("reply-record send/delete funnel", () => {
+  test("pending deletion returns the repository result and swallows write failures", async () => {
+    const deletePendingWithoutPages = mock(() => true);
+    const repository = { deletePendingWithoutPages } as unknown as IReplyRecordRepository;
+    const records = new ReplyRecordService(repository);
+    expect(await records.deletePendingWithoutPages("trigger")).toBe(true);
+    expect(deletePendingWithoutPages).toHaveBeenCalledWith("trigger");
+    deletePendingWithoutPages.mockImplementation(() => false);
+    expect(await records.deletePendingWithoutPages("trigger")).toBe(false);
+    deletePendingWithoutPages.mockImplementation(() => {
+      throw new Error("private text");
+    });
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await records.deletePendingWithoutPages("trigger")).toBe(false);
+      expect(log).toHaveBeenCalledWith("[replyRecord] deletePendingWithoutPages failed", "Error");
+    } finally {
+      log.mockRestore();
+    }
+  });
   test("removes the page row before calling Discord delete", async () => {
     const events: string[] = [];
     const botMessage = {

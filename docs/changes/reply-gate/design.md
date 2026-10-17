@@ -1,6 +1,6 @@
 ---
 title: "自動応答で返答するかを判断する"
-status: planned      # investigating | planned | in-progress | implemented
+status: in-progress      # investigating | planned | in-progress | implemented
 priority: medium       # high | medium | low
 summary: "自動応答チャンネルの発言ごとに、判定専用のモデルで返答すべきかを先に判定し、口を挟む場面でなければ何も送らない"
 ---
@@ -73,6 +73,7 @@ summary: "自動応答チャンネルの発言ごとに、判定専用のモデ�
 
 2026-10-17 時点で、Decisions API で使える判定モデルは 27 個ある（[一覧](https://openrouter.ai/models?output_modalities=decisions)）。
 上の「判定の問い」と `state` の形で、手書きの 77 件（返答すべき 38 件、黙るべき 39 件）を各モデルに 2 回ずつ判定させた。
+例は `scripts/reply-gate-cases.ts` にあり、`bun scripts/reply-gate-eval.ts <model>...` で同じ比較をやり直せる。
 77 件には、話題は bot 向きだが特定の人に宛てた質問、人にしか答えられない「誰か」宛ての質問、bot への礼に続く質問、bot の名前を出すだけの雑談のように、表面の手がかりと正解が逆を指す 30 件を含めた。
 AUC は、返答すべき例が黙るべき例より高い確率を得た組の割合である。
 ずれは、同じ例を 2 回判定したときの確率の差の最大である。
@@ -124,11 +125,11 @@ e2e のテスト bot は、メンションを付けた発言にしか返答さ�
 
 ## Tasks
 
-- [ ] Decisions API の呼び出しと `replyGateService` を実装し、`messageCreate` に組み込む
-- [ ] 判定の対象の発言で、エラー表示を判定より後に回す
-- [ ] ページの無い `pending` の返答記録を消す関数を足す
-- [ ] 設定の列、設定パネルの項目、`/status` の表示を足す
-- [ ] 単体テストを足す
+- [x] Decisions API の呼び出しと `replyGateService` を実装し、`messageCreate` に組み込む
+- [x] 判定の対象の発言で、エラー表示を判定より後に回す
+- [x] ページの無い `pending` の返答記録を消す関数を足す
+- [x] 設定の列、設定パネルの項目、`/status` の表示を足す
+- [x] 単体テストを足す
 - [ ] 手動確認: 自動応答チャンネルで設定を on にし、人どうしの雑談に bot が黙り、bot に向けた質問には返答することを確かめる
 - [ ] `docs/changes/reply-gate/` 削除（リリース完了時、git 履歴がアーカイブ）
 

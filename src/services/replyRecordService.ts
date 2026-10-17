@@ -12,6 +12,7 @@ export interface AppendReplyPageResult {
 }
 
 export interface IReplyRecordService {
+  deletePendingWithoutPages(triggerMsgId: string): Promise<boolean>;
   createPending(input: CreateReplyRecordInput): Promise<boolean>;
   appendPage(triggerMsgId: string, pageMsgId: string): Promise<AppendReplyPageResult>;
   removePage(pageMsgId: string): Promise<boolean>;
@@ -35,6 +36,15 @@ function operationError(error: unknown): string {
 
 export class ReplyRecordService implements IReplyRecordService {
   constructor(private readonly repository: IReplyRecordRepository) {}
+
+  async deletePendingWithoutPages(triggerMsgId: string): Promise<boolean> {
+    try {
+      return this.repository.deletePendingWithoutPages(triggerMsgId);
+    } catch (error) {
+      console.error("[replyRecord] deletePendingWithoutPages failed", operationError(error));
+      return false;
+    }
+  }
 
   async createPending(input: CreateReplyRecordInput): Promise<boolean> {
     try {

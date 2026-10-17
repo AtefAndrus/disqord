@@ -59,6 +59,7 @@ export interface ISettingsService {
     actorId?: string,
   ): Promise<GuildSettings>;
   setCronEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
+  setReplyGateEnabled(guildId: string, enabled: boolean, actorId?: string): Promise<GuildSettings>;
 }
 
 function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | undefined): void {
@@ -77,6 +78,14 @@ function assertCanEnableFreeOnly(current: GuildSettings, check: ModelCheck | und
 
 export class SettingsService implements ISettingsService {
   constructor(private readonly repo: IGuildSettingsRepository) {}
+
+  async setReplyGateEnabled(
+    guildId: string,
+    enabled: boolean,
+    actorId?: string,
+  ): Promise<GuildSettings> {
+    return this.repo.update(guildId, () => ({ replyGateEnabled: enabled }), actorId);
+  }
 
   async setCronEnabled(
     guildId: string,

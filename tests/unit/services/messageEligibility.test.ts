@@ -59,6 +59,7 @@ function setup(
   fetch: (id: string) => Promise<DiscordMessageFetchResult>,
 ): { service: MessageEligibilityService; budget: DiscordRestBudget } {
   const records: IReplyRecordRepository = {
+    deletePendingWithoutPages: mock(() => true),
     createPending: mock(() => true),
     appendPage: mock(() => true),
     removePage: mock(() => true),
@@ -136,6 +137,7 @@ describe("MessageEligibilityService", () => {
     const replyRecord = record();
     let pageListCalls = 0;
     const records: IReplyRecordRepository = {
+      deletePendingWithoutPages: mock(() => true),
       createPending: mock(() => true),
       appendPage: mock(() => true),
       removePage: mock(() => true),
@@ -223,6 +225,7 @@ describe("MessageEligibilityService", () => {
   test("excludes a human message when no record exists at its 404", async () => {
     const trigger = human("trigger");
     const records: IReplyRecordRepository = {
+      deletePendingWithoutPages: mock(() => true),
       createPending: mock(() => true),
       appendPage: mock(() => true),
       removePage: mock(() => true),

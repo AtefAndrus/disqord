@@ -89,6 +89,7 @@ const configSchema = z.object({
   healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
   adminApiSecret: z.string().optional(),
   logDir: z.string().optional(),
+  replyGateThreshold: z.coerce.number().min(0).max(1),
   logMaxBytes: z.coerce.number().int().min(1024).default(10_485_760),
   // The values of OpenRouter's WebSearchEngineEnum. A typo fails at startup
   // instead of as an HTTP 400 on every search-enabled reply.
@@ -122,6 +123,7 @@ export function loadConfig(): AppConfig {
     logDir: process.env.LOG_DIR,
     logMaxBytes: process.env.LOG_MAX_BYTES,
     webSearchEngine: process.env.WEB_SEARCH_ENGINE || envDefault("WEB_SEARCH_ENGINE"),
+    replyGateThreshold: process.env.REPLY_GATE_THRESHOLD || envDefault("REPLY_GATE_THRESHOLD"),
     fxtwitterApiBase: process.env.FXTWITTER_API_BASE || envDefault("FXTWITTER_API_BASE"),
     // Dropped before validation rather than checked by each reader: a
     // production bot must never answer another bot, and a malformed value of

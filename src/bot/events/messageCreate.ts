@@ -23,6 +23,7 @@ import {
   reauthorizeConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
+import { buildReplyGateState, type IReplyGateService } from "../../services/replyGateService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
 import type { ISettingsService } from "../../services/settingsService";
 import {
@@ -244,6 +245,7 @@ export function createMessageCreateHandler(
     conversationWindow?: ConversationWindowService;
     replyRecordService?: IReplyRecordService;
     cronService?: ICronService;
+    replyGate?: IReplyGateService;
   } = {},
 ) {
   return async function onMessageCreate(message: Message): Promise<void> {
@@ -288,6 +290,13 @@ export function createMessageCreateHandler(
       return;
     }
 
+    const gated =
+      !isMention &&
+      settings.replyGateEnabled &&
+      !settings.freeModelsOnly &&
+      options.replyGate !== undefined;
+    if (gated && options.replyGate?.wasSilenced(message.id)) return;
+
     // メンションの場合のみメンション部分を除去
     const content = isMention ? message.content.replace(/<@!?\d+>/g, "").trim() : message.content;
     const pollText = message.poll
@@ -304,60 +313,75 @@ export function createMessageCreateHandler(
       return;
     }
 
-    // 添付ファイルをパース（画像はそのまま、PDF は data URL 化）
-    const attachmentResult = await parseAttachments(message.attachments);
+    if (gated && !inputText && message.attachments.size === 0) return;
 
-    if (attachmentResult.rejected.length > 0) {
-      const rejectionLines = attachmentResult.rejected
-        .map((r) => {
-          switch (r.reason) {
-            case "MISSING_MIME":
-              return `- ${r.filename}: MIME を判定できませんでした`;
-            case "FETCH_FAILED":
-              return `- ${r.filename}: ファイルの取得に失敗しました`;
-            case "FILE_TOO_LARGE":
-              return `- ${r.filename}: PDF のサイズ上限 (1ファイル 20MB / 合計 40MB) を超えています`;
-            default:
-              return `- ${r.filename}: サポート外の形式です`;
-          }
-        })
-        .join("\n");
-      const errorContainer = buildErrorContainer(
-        `添付ファイルを処理できませんでした。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
-        "添付ファイルエラー",
-      );
-      await message.reply(toComponentsV2ReplyPayload(errorContainer));
-      return;
-    }
+    const prepareInput = async (): Promise<
+      | {
+          attachmentResult: Awaited<ReturnType<typeof parseAttachments>>;
+          modelName: string;
+          color: number;
+        }
+      | undefined
+    > => {
+      // 添付ファイルをパース（画像はそのまま、PDF は data URL 化）
+      const attachmentResult = await parseAttachments(message.attachments);
 
-    if (!inputText && attachmentResult.parts.length === 0) {
-      const errorContainer = buildErrorContainer("メッセージを入力してください。", "入力エラー");
-      await message.reply(toComponentsV2ReplyPayload(errorContainer));
-      return;
-    }
-
-    if (!("send" in message.channel)) {
-      return;
-    }
-
-    // 事前にモデル情報を取得
-    const modelName =
-      (await modelService.getModelName(settings.defaultModel)) ?? settings.defaultModel;
-    const color = getColorForModel(settings.defaultModel);
-
-    // 画像添付がある場合、モデルが画像入力に対応するかを事前判定
-    // null（メタ取得不可 / architecture 欠落）は判定不能のため透過し OpenRouter 側に委ねる
-    if (attachmentResult.hasImage) {
-      const capable = await modelService.isMultimodalCapable(settings.defaultModel, "image");
-      if (capable === false) {
+      if (attachmentResult.rejected.length > 0) {
+        const rejectionLines = attachmentResult.rejected
+          .map((r) => {
+            switch (r.reason) {
+              case "MISSING_MIME":
+                return `- ${r.filename}: MIME を判定できませんでした`;
+              case "FETCH_FAILED":
+                return `- ${r.filename}: ファイルの取得に失敗しました`;
+              case "FILE_TOO_LARGE":
+                return `- ${r.filename}: PDF のサイズ上限 (1ファイル 20MB / 合計 40MB) を超えています`;
+              default:
+                return `- ${r.filename}: サポート外の形式です`;
+            }
+          })
+          .join("\n");
         const errorContainer = buildErrorContainer(
-          `現在のモデル \`${settings.defaultModel}\` は画像入力に対応していません。\n\`/disqord model set\` で画像対応モデルに切り替えてください。`,
-          "モデル非対応",
+          `添付ファイルを処理できませんでした。\n対応形式: 画像 (PNG / JPEG / GIF / WebP) と PDF (application/pdf)\n\n${rejectionLines}`,
+          "添付ファイルエラー",
         );
         await message.reply(toComponentsV2ReplyPayload(errorContainer));
         return;
       }
-    }
+
+      if (!inputText && attachmentResult.parts.length === 0) {
+        const errorContainer = buildErrorContainer("メッセージを入力してください。", "入力エラー");
+        await message.reply(toComponentsV2ReplyPayload(errorContainer));
+        return;
+      }
+
+      if (!("send" in message.channel)) {
+        return;
+      }
+
+      // 事前にモデル情報を取得
+      const modelName =
+        (await modelService.getModelName(settings.defaultModel)) ?? settings.defaultModel;
+      const color = getColorForModel(settings.defaultModel);
+
+      // 画像添付がある場合、モデルが画像入力に対応するかを事前判定
+      // null（メタ取得不可 / architecture 欠落）は判定不能のため透過し OpenRouter 側に委ねる
+      if (attachmentResult.hasImage) {
+        const capable = await modelService.isMultimodalCapable(settings.defaultModel, "image");
+        if (capable === false) {
+          const errorContainer = buildErrorContainer(
+            `現在のモデル \`${settings.defaultModel}\` は画像入力に対応していません。\n\`/disqord model set\` で画像対応モデルに切り替えてください。`,
+            "モデル非対応",
+          );
+          await message.reply(toComponentsV2ReplyPayload(errorContainer));
+          return;
+        }
+      }
+      return { attachmentResult, modelName, color };
+    };
+
+    let prepared = gated ? undefined : await prepareInput();
+    if (!gated && !prepared) return;
 
     // 致命的エラー時のクリーンアップで参照するため、外側 catch と共有できるようにホイストする
     // （初期メッセージ送信前に例外が起きた場合は undefined のまま — cleanupBotMessagesOnFatalError は
@@ -406,6 +430,61 @@ export function createMessageCreateHandler(
         });
       }
     }
+
+    if (gated && options.replyGate) {
+      const botName = message.guild.members.me?.displayName ?? message.client.user.username;
+      const decision = await options.replyGate.judge({
+        guildId,
+        channelId: message.channel.id,
+        messageId: message.id,
+        botName,
+        state: buildReplyGateState({
+          botName,
+          current: {
+            author: normalizeAuthorLabel(
+              message.member?.nickname ??
+                message.author.globalName ??
+                message.author.username ??
+                message.author.id,
+              message.author.id,
+            ),
+            text: inputText,
+            attachments: [...message.attachments.values()].map((attachment) => ({
+              kind: attachment.contentType?.startsWith("image/")
+                ? "image"
+                : attachment.contentType === "application/pdf"
+                  ? "pdf"
+                  : "other",
+              filename: attachment.name,
+            })),
+          },
+          ...(conversation && {
+            conversation: {
+              messages: conversation.messages,
+              replyTarget:
+                conversation.replyTarget ??
+                (conversation.replyTargetRef === undefined
+                  ? undefined
+                  : conversation.messages.find((item) => item.ref === conversation.replyTargetRef)),
+            },
+          }),
+          isReplyToBot: message.mentions.repliedUser?.id === botId,
+        }),
+      });
+      if (decision === "silent") {
+        if (replyRecordCreated)
+          await options.replyRecordService?.deletePendingWithoutPages(message.id);
+        return;
+      }
+      prepared = await prepareInput();
+      if (!prepared) {
+        if (replyRecordCreated)
+          await options.replyRecordService?.deletePendingWithoutPages(message.id);
+        return;
+      }
+    }
+    if (!prepared || !("send" in message.channel)) return;
+    const { attachmentResult, modelName, color } = prepared;
 
     const resolveRef = conversation
       ? createMessageRefResolver(guildId, conversation.toolContext)

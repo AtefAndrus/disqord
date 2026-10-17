@@ -43,6 +43,13 @@ export const CONFIG_SWITCHES = {
     label: "ツイート展開",
     description: "ツイートのリンク先を取得してモデルに渡します。",
   },
+  reply_gate: {
+    page: "response",
+    field: "replyGateEnabled",
+    label: "自動応答の取捨選択",
+    description:
+      "自動応答チャンネルで、メンションの無い発言に返答するかを判定してから返答します。無料モデル限定が有効なときは判定せず、すべてに返答します。",
+  },
   web_search: {
     page: "features",
     field: "webSearchEnabled",

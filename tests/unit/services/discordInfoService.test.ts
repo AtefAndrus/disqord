@@ -30,6 +30,7 @@ const raw = (id: string, overrides: Partial<RawDiscordMessage> = {}): RawDiscord
   ...overrides,
 });
 const records = (): IReplyRecordRepository => ({
+  deletePendingWithoutPages: mock(() => true),
   createPending: mock(() => true),
   appendPage: mock(() => true),
   removePage: mock(() => true),

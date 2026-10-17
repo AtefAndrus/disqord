@@ -38,6 +38,7 @@ import {
   resolveMessageChannel,
 } from "./services/releaseAnnouncer";
 import { loadReleaseNotes } from "./services/releaseNotes";
+import { ReplyGateService } from "./services/replyGateService";
 import { ReplyRecordService } from "./services/replyRecordService";
 import { SettingsService } from "./services/settingsService";
 import { TweetService } from "./services/tweetService";
@@ -163,6 +164,7 @@ async function bootstrap(): Promise<void> {
       conversationWindow,
       replyRecordService,
       cronService,
+      replyGate: new ReplyGateService(llmClient, config.replyGateThreshold),
     },
   );
   const interactionCreateHandler = createInteractionCreateHandler(

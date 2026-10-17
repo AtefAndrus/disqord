@@ -64,6 +64,9 @@ export function createMockSettingsService(): ISettingsService {
     createMockGuildSettings({ guildId, ...overrides });
   return {
     getGuildSettings: mock((guildId: string) => Promise.resolve(settings(guildId))),
+    setReplyGateEnabled: mock((guildId: string, replyGateEnabled: boolean) =>
+      Promise.resolve(settings(guildId, { replyGateEnabled })),
+    ),
     setReleaseAnnounceChannelId: mock((guildId: string, releaseAnnounceChannelId: string | null) =>
       Promise.resolve(settings(guildId, { releaseAnnounceChannelId })),
     ),
@@ -130,6 +133,7 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     historyEnabled: false,
     discordToolsEnabled: false,
     cronEnabled: false,
+    replyGateEnabled: false,
     createdAt: "2025-01-01T00:00:00.000Z",
     updatedAt: "2025-01-01T00:00:00.000Z",
     ...overrides,

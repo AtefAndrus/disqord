@@ -45,6 +45,33 @@ const OPENROUTER_APP_URL = "https://github.com/AtefAndrus/disqord";
 const OPENROUTER_APP_TITLE = "DisQord";
 const OPENROUTER_APP_CATEGORIES = "general-chat";
 
+export type DecisionsNoulQuestion = {
+  type: "noul";
+  instructions: string;
+  criteria: { true: string; false: string };
+};
+
+export type DecisionsRequest = {
+  model: string;
+  state: Record<string, unknown>;
+  questions: Record<string, DecisionsNoulQuestion>;
+};
+
+export type DecisionsNoulResult = {
+  noul: number;
+  model?: string;
+  provider?: string;
+  cost?: number;
+};
+
+export interface IDecisionsClient {
+  decideNoul(
+    request: DecisionsRequest,
+    questionKey: string,
+    signal?: AbortSignal,
+  ): Promise<DecisionsNoulResult>;
+}
+
 /**
  * Maximum UTF-8 byte length for a single SSE line (either a completed
  * `data:`/comment/field line, or the unterminated carry buffer held across
@@ -642,10 +669,54 @@ function readMaxCompletionTokens(
   return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : null;
 }
 
-export class OpenRouterClient implements ILLMClient {
+export class OpenRouterClient implements ILLMClient, IDecisionsClient {
   private rateLimitResetAt: number | null = null;
 
   constructor(private readonly apiKey: string) {}
+
+  async decideNoul(
+    request: DecisionsRequest,
+    questionKey: string,
+    signal?: AbortSignal,
+  ): Promise<DecisionsNoulResult> {
+    const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": OPENROUTER_APP_URL,
+        "X-OpenRouter-Title": OPENROUTER_APP_TITLE,
+        "X-OpenRouter-Categories": OPENROUTER_APP_CATEGORIES,
+      },
+      body: JSON.stringify(request),
+      signal,
+    });
+    if (!response.ok) {
+      throw Object.assign(new Error(`Decisions API returned ${response.status}`), {
+        status: response.status,
+      });
+    }
+    const data: unknown = await response.json();
+    const answer =
+      isPlainObject(data) && isPlainObject(data.answers) ? data.answers[questionKey] : undefined;
+    if (
+      !isPlainObject(answer) ||
+      typeof answer.noul !== "number" ||
+      !Number.isFinite(answer.noul) ||
+      answer.noul < 0 ||
+      answer.noul > 1
+    ) {
+      throw new Error("Decisions API returned an invalid noul");
+    }
+    return {
+      noul: answer.noul,
+      ...(isPlainObject(data) && typeof data.model === "string" && { model: data.model }),
+      ...(isPlainObject(data) && typeof data.provider === "string" && { provider: data.provider }),
+      ...(isPlainObject(data) &&
+        isPlainObject(data.usage) &&
+        typeof data.usage.cost === "number" && { cost: data.usage.cost }),
+    };
+  }
 
   static fromConfig(config: AppConfig): OpenRouterClient {
     return new OpenRouterClient(config.openRouterApiKey);

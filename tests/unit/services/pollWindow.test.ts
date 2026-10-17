@@ -130,6 +130,7 @@ function records(replies: StoredReply[] = []): IReplyRecordRepository {
   const byPage = (id: string): StoredReply | undefined =>
     replies.find((reply) => reply.pages.some((page) => page.pageMsgId === id));
   return {
+    deletePendingWithoutPages: mock(() => true),
     createPending: mock(() => true),
     appendPage: mock(() => true),
     removePage: mock(() => true),

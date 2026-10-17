@@ -115,6 +115,15 @@ export function applyMigrations(db: Database): void {
     db.run("ALTER TABLE guild_settings ADD COLUMN cron_enabled INTEGER NOT NULL DEFAULT 0");
   }
 
+  if (
+    !db
+      .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")
+      .all()
+      .some((column) => column.name === "reply_gate_enabled")
+  ) {
+    db.run("ALTER TABLE guild_settings ADD COLUMN reply_gate_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+
   // Migration: Add the optional guild settings administrator role
   const columnsAfterHistory = db
     .query<{ name: string }, []>("PRAGMA table_info(guild_settings)")

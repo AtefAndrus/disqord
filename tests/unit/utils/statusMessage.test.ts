@@ -26,6 +26,12 @@ function statusData(overrides: { freeModelsOnly?: boolean; showLlmDetails?: bool
 }
 
 describe("buildStatusMessage", () => {
+  test("shows whether reply gate is enabled", () => {
+    const data = statusData();
+    expect(statusTextDisplays(buildStatusMessage(data))).toContain("**自動応答の取捨選択**\n無効");
+    data.settings.replyGateEnabled = true;
+    expect(statusTextDisplays(buildStatusMessage(data))).toContain("**自動応答の取捨選択**\n有効");
+  });
   test("リリース通知先と未設定時の状態を表示する", () => {
     const data = statusData();
     expect(statusTextDisplays(buildStatusMessage(data))).toContain(

@@ -20,6 +20,7 @@ export interface GuildSettings {
   historyEnabled: boolean;
   discordToolsEnabled: boolean;
   cronEnabled: boolean;
+  replyGateEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }

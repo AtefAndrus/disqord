@@ -25,6 +25,7 @@ import {
 } from "../../../../src/services/conversationWindow";
 import type { IDiscordMessageReader } from "../../../../src/services/discordMessageReader";
 import type { IModelService } from "../../../../src/services/modelService";
+import { ReplyGateService } from "../../../../src/services/replyGateService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 import {
@@ -118,9 +119,9 @@ interface MockMessage {
   id: string;
   type: MessageType;
   author: { bot: boolean; id: string; username?: string; globalName?: string | null };
-  guild: { id: string } | null;
-  client: { user: { id: string } | null };
-  mentions: { has: ReturnType<typeof mock> };
+  guild: { id: string; members?: { me: { displayName: string } | null } } | null;
+  client: { user: { id: string; username?: string } | null };
+  mentions: { has: ReturnType<typeof mock>; repliedUser?: { id: string } };
   content: string;
   attachments: Collection<string, Attachment>;
   channel: {
@@ -337,6 +338,7 @@ describe("createMessageCreateHandler", () => {
       historyEnabled: true,
       discordToolsEnabled: false,
       cronEnabled: false,
+      replyGateEnabled: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -359,6 +361,7 @@ describe("createMessageCreateHandler", () => {
       setHistoryEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setDiscordToolsEnabled: mock(() => Promise.resolve(mockGuildSettings)),
       setCronEnabled: mock(() => Promise.resolve(mockGuildSettings)),
+      setReplyGateEnabled: mock(() => Promise.resolve(mockGuildSettings)),
     };
 
     mockModelService = {
@@ -398,8 +401,8 @@ describe("createMessageCreateHandler", () => {
       id: "msg-123",
       type: MessageType.Default,
       author: { bot: false, id: "author-123" },
-      guild: { id: "guild-123" },
-      client: { user: { id: "123456789" } },
+      guild: { id: "guild-123", members: { me: { displayName: "DisQord" } } },
+      client: { user: { id: "123456789", username: "DisQord" } },
       mentions: { has: mock(() => true) },
       content: "<@123456789> Hello",
       attachments: makeAttachments([]),
@@ -431,6 +434,214 @@ describe("createMessageCreateHandler", () => {
     globalThis.fetch = originalFetch;
     // setSystemTime を使うテストが時計を書き換えたままにしないよう、実時間に戻す
     setSystemTime();
+  });
+
+  function gateRecords(): IReplyRecordService {
+    return {
+      createPending: mock(async () => true),
+      deletePendingWithoutPages: mock(async () => true),
+      appendPage: mock(async () => ({ recorded: true, finalized: false })),
+      removePage: mock(async () => true),
+      finalize: mock(async () => true),
+      findByTrigger: mock(() => null),
+      findByPage: mock(() => null),
+      listPages: mock(() => []),
+      markPendingFailed: mock(async () => 0),
+      deleteByGuild: mock(async () => 0),
+      deleteByChannel: mock(async () => 0),
+      deleteGuildsNotIn: mock(async () => 0),
+    };
+  }
+
+  async function enableGate(): Promise<void> {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.replyGateEnabled = true;
+    settings.autoReplyChannels = [mockMessage.channel.id];
+    mockMessage.mentions.has = mock(() => false);
+    mockMessage.content = "hello";
+  }
+
+  test.each(["mention", "free-only", "off", "outside-auto"])(
+    "reply gate bypass: %s",
+    async (kind) => {
+      await enableGate();
+      const settings = await mockSettingsService.getGuildSettings("guild-123");
+      if (kind === "mention") mockMessage.mentions.has = mock(() => true);
+      if (kind === "free-only") settings.freeModelsOnly = true;
+      if (kind === "off") settings.replyGateEnabled = false;
+      if (kind === "outside-auto") settings.autoReplyChannels = [];
+      const replyGate = {
+        judge: mock(async () => "silent" as const),
+        wasSilenced: mock(() => false),
+      };
+      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+        replyGate,
+      })(mockMessage as never);
+      expect(replyGate.judge).not.toHaveBeenCalled();
+      expect(replyGate.wasSilenced).not.toHaveBeenCalled();
+      if (kind !== "outside-auto") expect(mockSend).toHaveBeenCalled();
+      else expect(mockSend).not.toHaveBeenCalled();
+    },
+  );
+
+  test("silent judgment sends nothing, deletes the empty pending record and skips duplicate delivery", async () => {
+    await enableGate();
+    const decideNoul = mock(async () => ({ noul: 0 }));
+    const gate = new ReplyGateService({ decideNoul }, 0.3);
+    const replyGate = {
+      judge: mock(gate.judge.bind(gate)),
+      wasSilenced: gate.wasSilenced.bind(gate),
+    };
+    const replyRecordService = gateRecords();
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      { replyGate, replyRecordService },
+    );
+    await handler(mockMessage as never);
+    await handler(mockMessage as never);
+    expect(replyGate.judge).toHaveBeenCalledTimes(1);
+    expect(replyRecordService.createPending).toHaveBeenCalledTimes(1);
+    expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith(mockMessage.id);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockReply).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+  });
+
+  test("silent judgment suppresses attachment rejection without fetching the attachment", async () => {
+    await enableGate();
+    mockMessage.attachments = makeAttachments([
+      { id: "bad", name: "bad.txt", url: "unused", contentType: "text/plain" },
+    ]);
+    const replyGate = {
+      judge: mock(async () => "silent" as const),
+      wasSilenced: mock(() => false),
+    };
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyGate,
+    })(mockMessage as never);
+    expect(replyGate.judge).toHaveBeenCalledTimes(1);
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockReply).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  test("sticker-only messages skip judging and pending records", async () => {
+    await enableGate();
+    mockMessage.content = "";
+    const replyGate = { judge: mock(async () => "reply" as const), wasSilenced: mock(() => false) };
+    const replyRecordService = gateRecords();
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyGate,
+      replyRecordService,
+    })(mockMessage as never);
+    expect(replyGate.judge).not.toHaveBeenCalled();
+    expect(replyRecordService.createPending).not.toHaveBeenCalled();
+    expect(mockReply).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  test.each(["text", "rejected", "image"])(
+    "reply judgment preserves the existing response for %s",
+    async (kind) => {
+      await enableGate();
+      if (kind !== "text")
+        mockMessage.attachments = makeAttachments([
+          {
+            id: "file",
+            name: kind === "image" ? "image.png" : "bad.txt",
+            url: "unused",
+            contentType: kind === "image" ? "image/png" : "text/plain",
+          },
+        ]);
+      mockModelService.isMultimodalCapable = mock(async () => false);
+      const replyGate = {
+        judge: mock(async () => "reply" as const),
+        wasSilenced: mock(() => false),
+      };
+      const replyRecordService = gateRecords();
+      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+        replyGate,
+        replyRecordService,
+      })(mockMessage as never);
+      expect(replyGate.judge).toHaveBeenCalledTimes(1);
+      if (kind === "text") {
+        expect(mockSend).toHaveBeenCalled();
+        expect(mockChatService.generateChatResponse).toHaveBeenCalled();
+        expect(replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
+      } else {
+        expect(mockSend).not.toHaveBeenCalled();
+        expect(mockReply).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(mockReply.mock.calls)).toContain(
+          kind === "image" ? "画像入力に対応していません" : "添付ファイルを処理できませんでした",
+        );
+        expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith(mockMessage.id);
+      }
+    },
+  );
+
+  test("judge reuses the window and resolves a reply target by ref after creating pending", async () => {
+    await enableGate();
+    const replyRecordService = gateRecords();
+    const target = {
+      id: "old",
+      channelId: "channel-123",
+      kind: "assistant" as const,
+      author: "DisQord",
+      text: "previous answer",
+      time: "now",
+      timestampMs: 1,
+      exchangeId: "old",
+      attachments: [],
+      ref: "m1",
+    };
+    const build = mock(async () => {
+      expect(replyRecordService.createPending).toHaveBeenCalled();
+      return { messages: [target], replyTargetRef: "m1" } as unknown as ConversationWindowContext;
+    });
+    const judge = mock(async (input: { state: Record<string, unknown> }) => {
+      expect(build).toHaveBeenCalled();
+      expect(input.state).toEqual({
+        bot_name: "DisQord",
+        recent_messages: ["DisQord: previous answer"],
+        reply_target: "DisQord: previous answer",
+        new_message: "author-123: hello",
+      });
+      return "silent" as const;
+    });
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyGate: { judge, wasSilenced: mock(() => false) },
+      replyRecordService,
+      conversationWindow: { build } as unknown as ConversationWindowService,
+    })(mockMessage as never);
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(["history-off", "window-failed"])("judge uses minimal state when %s", async (kind) => {
+    await enableGate();
+    if (kind === "history-off")
+      (await mockSettingsService.getGuildSettings("guild-123")).historyEnabled = false;
+    mockMessage.mentions.repliedUser = { id: "123456789" };
+    if (mockMessage.guild) mockMessage.guild.members = { me: null };
+    const build = mock(async () => {
+      throw new Error("failed");
+    });
+    const judge = mock(async (input: { state: Record<string, unknown>; botName: string }) => {
+      expect(input.botName).toBe("DisQord");
+      expect(input.state).toEqual({
+        bot_name: "DisQord",
+        new_message: "author-123: hello",
+        is_reply_to_bot: true,
+      });
+      return "silent" as const;
+    });
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyGate: { judge, wasSilenced: mock(() => false) },
+      conversationWindow: { build } as unknown as ConversationWindowService,
+    })(mockMessage as never);
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(build.mock.calls.length).toBe(kind === "history-off" ? 0 : 1);
   });
 
   async function attachmentConversation(
@@ -499,6 +710,7 @@ describe("createMessageCreateHandler", () => {
       fetch: mock(async () => ({ status: "found" as const, message: attachment })),
     };
     const repository: IReplyRecordRepository = {
+      deletePendingWithoutPages: mock(() => true),
       createPending: () => true,
       appendPage: () => true,
       removePage: () => true,
@@ -723,6 +935,7 @@ describe("createMessageCreateHandler", () => {
             historyEnabled: false,
             discordToolsEnabled: false,
             cronEnabled: false,
+            replyGateEnabled: false,
             createdAt: "",
             updatedAt: "",
           }),
@@ -1486,6 +1699,7 @@ describe("createMessageCreateHandler", () => {
       return true;
     });
     const replyRecordService = {
+      deletePendingWithoutPages: mock(async () => true),
       createPending: mock(async () => true),
       appendPage: mock(async () => ({ recorded: true, finalized: false })),
       finalize,
