@@ -69,6 +69,8 @@ summary: "モデルが返答に書いた会話履歴の発言番号（m12 など
 
 ストリーミング中は、末尾が `[m1` のように途中までしか届いていない番号は置き換えず、次の描画で置き換わる。
 
+`[m12][m13]` のように番号が隣り合うと、置き換えた 2 つのリンクの文字が続けて青字で表示され、境目が読めない。そのため、置き換えたリンクの直後に置き換える番号が続くときは、間に「、」を挟む。
+
 ## Tasks
 
 - [x] `messageRefLinks.ts` と単体テスト（角括弧付き、裸の番号を置き換えないこと、示していない番号、後から読んだ発言の番号、コードブロック、インラインコード、既存のリンクの文字と URL（文字の中に説明と番号が混ざる場合、エスケープした角括弧を含む場合）、エスケープした `\[m12]`（直前のバックスラッシュが奇数個と偶数個）、生の URL、複数の番号、Markdown の記号を含む表示名、bot 自身の発言）
@@ -76,7 +78,7 @@ summary: "モデルが返答に書いた会話履歴の発言番号（m12 など
 - [x] `messageCreate.ts` と `streamingUpdater.ts` への組み込み、推論表示への適用と、停止時とエラー時の描画のテスト
 - [x] リンクに置き換えた bot の返答を履歴として読み直したとき、そのリンクが二重に置き換わらないことのテスト
 - [x] 会話履歴の安全指示の追加
-- [ ] e2e: 既定シナリオ、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`、推論表示の変更に求める `reasoning`
+- [x] e2e: 既定シナリオ、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`、推論表示の変更に求める `reasoning`、番号がメッセージリンクとして表示されることを確かめる `message-ref`（新設）
 - [ ] `docs/changes/message-ref-links/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

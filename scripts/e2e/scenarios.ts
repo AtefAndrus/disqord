@@ -338,6 +338,7 @@ const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
 const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
 // 実行ごとに変える: 固定値だと、窓に残った前回の回答から答えても通ってしまう。
 const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
+const MESSAGE_REF_TOKEN = `ref-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 // 数字だけにする: 画像から読ませるので、見間違えやすい英字を入れない。
 // 先頭を 0 にしない: 数として答えると先頭の 0 が落ち、正しく読めていても落ちる。
@@ -1015,6 +1016,25 @@ export const SCENARIOS: Scenario[] = [
       ...(reply.body.includes(WINDOW_TOKEN)
         ? []
         : ["the reply does not include the unmentioned message"]),
+      ...hasUsageFooter(reply),
+    ],
+  },
+  {
+    // The bot rewrites a [m<N>] the model writes into a masked link to that
+    // message. Named-only: it also fails when the model leaves the number
+    // out or writes it bare, which is the instruction, not the rewrite.
+    name: "message-ref",
+    manual: true,
+    setup: {
+      prompt: `[e2e] リンク確認用の合言葉は ${MESSAGE_REF_TOKEN} です。`,
+      mention: false,
+    },
+    prompt: "[e2e] 直前に合言葉を投稿した発言はどれ？その発言を、発言番号で示して 1 行で答えて。",
+    check: (reply) => [
+      ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(reply.body)
+        ? []
+        : ["the reply has no masked link to a message"]),
+      ...(/\[m\d+\]|\bm\d+\b/u.test(reply.body) ? ["the reply still shows a message number"] : []),
       ...hasUsageFooter(reply),
     ],
   },

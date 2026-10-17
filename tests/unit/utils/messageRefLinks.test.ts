@@ -13,6 +13,12 @@ describe("linkMessageRefs", () => {
       `${linked} m12 m3.medium [m13] [m1`,
     );
     expect(linkMessageRefs("[m12] and [m12]", resolve)).toBe(`${linked} and ${linked}`);
+    const both = (ref: string): { label: string; url: string } | undefined =>
+      ref === "m12" || ref === "m13" ? { label: `${ref} の発言`, url: `${url}/${ref}` } : undefined;
+    // Adjacent masked links would read as one run of blue text.
+    expect(linkMessageRefs("[m12][m13] と [m12] [m13]", both)).toBe(
+      `[m12 の発言](${url}/m12)、[m13 の発言](${url}/m13) と [m12 の発言](${url}/m12) [m13 の発言](${url}/m13)`,
+    );
     expect(linkMessageRefs("<[m12]>", resolve)).toBe(`<${linked}>`);
     expect(linkMessageRefs("[m12](Alice)", resolve)).toBe(`${linked}(Alice)`);
     expect(linkMessageRefs("[m12](note: 古い情報)", resolve)).toBe(`${linked}(note: 古い情報)`);

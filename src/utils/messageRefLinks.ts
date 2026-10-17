@@ -83,6 +83,7 @@ export function linkMessageRefs(
 ): string {
   return transformOutsideCodeFences(text, (outside) => {
     let result = "";
+    let replacedEnd = -1;
     for (let cursor = 0; cursor < outside.length; ) {
       const link = readLinkAt(outside, cursor);
       if (link) {
@@ -110,8 +111,11 @@ export function linkMessageRefs(
         const ref = /^\[(m\d+)\]/u.exec(outside.slice(cursor));
         const target = ref?.[1] ? resolve(ref[1]) : undefined;
         if (ref && target) {
+          // `[m12][m13]` would otherwise render as one run of link text.
+          if (replacedEnd === cursor) result += "、";
           result += `[${target.label}](${target.url})`;
           cursor += ref[0].length;
+          replacedEnd = cursor;
           continue;
         }
       }
