@@ -74,7 +74,7 @@ bot 自身の発言は、モデルへは今と同じく `assistant` のロール
 - [x] 今回の発言、会話履歴、`read_earlier_messages` の結果、返答するかの判定で、同じ人が同じ名前になること（単体テスト）
 - [x] リンクの文字（単体テスト: 人の発言、bot 自身の発言、Markdown の記号を含む表示名）
 - [x] `buildConversationSafetyMessage()` の指示
-- [ ] `bun run e2e` の既定シナリオと `message-ref` を通す
+- [x] `bun run e2e` の既定シナリオと `message-ref` を通す
 - [ ] 手動確認: ニックネームを全員同じにしたサーバーで、複数人の発言を bot が別人として扱うこと
 - [ ] `docs/changes/author-identity/` 削除（リリース完了時、git 履歴がアーカイブ）
 
