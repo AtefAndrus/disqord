@@ -529,6 +529,20 @@ export class ConversationWindowService {
         readPins: (fetch, signal, budgetTokens) =>
           this.readPins(responseState, fetch, signal, budgetTokens ?? Number.POSITIVE_INFINITY),
         toolContext: {
+          describeMessageRef: (ref) => {
+            const message = [
+              ...responseState.shown.values(),
+              ...responseState.pinShown.values(),
+            ].find((message) => message.ref === ref);
+            return message
+              ? {
+                  messageId: message.id,
+                  channelId: message.channelId,
+                  author: message.author,
+                  kind: message.kind,
+                }
+              : undefined;
+          },
           resolveMessageRef: (ref) =>
             [...responseState.shown.values(), ...responseState.pinShown.values()].find(
               (message) => message.ref === ref,

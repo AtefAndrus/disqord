@@ -150,6 +150,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
     sessionId: string;
     windowStartMessageId: string;
     toolContext: {
+      describeMessageRef: () => undefined;
       resolveMessageRef: (ref: string) => string | undefined;
       readEarlierMessages: typeof readEarlier;
       viewAttachment: () => Promise<string>;
@@ -163,6 +164,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
       sessionId: "session",
       windowStartMessageId: "start",
       toolContext: {
+        describeMessageRef: () => undefined,
         resolveMessageRef: () => undefined,
         readEarlierMessages: readEarlier,
         viewAttachment: async () => '{"error":"unused"}',
@@ -245,6 +247,7 @@ describe("conversation-context request construction", () => {
           sessionId: "must-not-be-sent",
           windowStartMessageId: "start",
           toolContext: {
+            describeMessageRef: () => undefined,
             resolveMessageRef: () => undefined,
             readEarlierMessages: async () => "history",
             viewAttachment: async () => "attachment",

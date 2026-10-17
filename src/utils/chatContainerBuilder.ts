@@ -10,6 +10,7 @@ import {
 import type { ChatCompletionResponse, MessageId } from "../types";
 import { EmbedColors } from "../types/embed";
 import { createStopButton } from "./buttonBuilder";
+import { readLinkAt, transformOutsideCodeFences } from "./messageRefLinks";
 
 /**
  * 1 message の全 TextDisplay 合計文字数上限。
@@ -199,7 +200,13 @@ function readMarkdownUnit(
   text: string,
   cursor: number,
   state: CodeFenceState | null,
+  maxChars: number,
+  maxBytes: number,
 ): MarkdownUnit {
+  const link = !state ? readLinkAt(text, cursor) : undefined;
+  if (link && link.length <= maxChars && byteLength(link) <= maxBytes) {
+    return { text: link, nextState: state, opensFence: false };
+  }
   if (!text.startsWith("```", cursor)) {
     const codePoint = text.codePointAt(cursor);
     return {
@@ -265,7 +272,7 @@ export function splitMarkdownByCharsAndBytes(
     let lastNewlineFit: MarkdownSplitCandidate | null = null;
 
     while (cursor < text.length) {
-      const markdownUnit = readMarkdownUnit(text, cursor, workingState);
+      const markdownUnit = readMarkdownUnit(text, cursor, workingState, maxChars, maxBytes);
       const unit = markdownUnit.text;
       const nextState = markdownUnit.nextState;
 
@@ -312,8 +319,18 @@ export function splitMarkdownByCharsAndBytes(
 
     // 実運用の本文予算では到達しないが、極端に小さい予算でもコードポイントまたは fence 単位で前進する。
     if (!chosen) {
-      const markdownUnit = readMarkdownUnit(text, position, state);
+      const markdownUnit = readMarkdownUnit(text, position, state, maxChars, maxBytes);
       const unit = markdownUnit.text;
+      // A link may fit a normal page but not the first page's reasoning reserve.
+      if (
+        chunks.length === 0 &&
+        firstChunk &&
+        (unit.length > limitChars || byteLength(unit) > limitBytes) &&
+        readLinkAt(text, position) === unit
+      ) {
+        chunks.push("");
+        continue;
+      }
       chosen = {
         end: position + unit.length,
         state: markdownUnit.nextState,
@@ -486,27 +503,12 @@ export const THEMATIC_BREAK_MARK = "\uE000".repeat(3);
  * fence can span pages and a page alone cannot tell whether it is inside one.
  */
 export function markThematicBreaks(text: string): string {
-  // The open fence's character and length (CommonMark): a fence closes only on
-  // a line of the same character, at least as long, with nothing after it.
-  let fence: { char: string; length: number } | null = null;
-  return text
-    .split(/\r?\n/u)
-    .map((line) => {
-      const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
-      if (marker) {
-        const [, run = "", rest = ""] = marker;
-        if (!fence) {
-          if (!(run[0] === "`" && rest.includes("`"))) {
-            fence = { char: run[0] ?? "", length: run.length };
-          }
-        } else if (run[0] === fence.char && run.length >= fence.length && rest.trim() === "") {
-          fence = null;
-        }
-        return line;
-      }
-      return !fence && THEMATIC_BREAK.test(line) ? THEMATIC_BREAK_MARK : line;
-    })
-    .join("\n");
+  return transformOutsideCodeFences(text.replaceAll("\r\n", "\n"), (outside) =>
+    outside
+      .split("\n")
+      .map((line) => (THEMATIC_BREAK.test(line) ? THEMATIC_BREAK_MARK : line))
+      .join("\n"),
+  );
 }
 
 /**
@@ -702,11 +704,17 @@ export function fitReasoning(reasoning: string, remaining: TextBudget): FittedRe
   if (maxChars < REASONING_MIN_INLINE_CHARS || maxBytes < REASONING_MIN_INLINE_CHARS) {
     return { text: `${REASONING_HEADING}${REASONING_TRUNCATED_NOTE}`, needsFile: true };
   }
+  let cut = splitTextByCharsAndBytes(escaped, maxChars, maxBytes)[0] ?? "";
+  for (let cursor = 0; cursor < cut.length; ) {
+    const link = readLinkAt(escaped, cursor);
+    if (link && cursor + link.length > cut.length) {
+      cut = escaped.slice(0, cursor);
+      break;
+    }
+    cursor += link?.length ?? 1;
+  }
   // A cut inside an escaped `\|\|` would leave a stray backslash or bar next to the closing `||`.
-  const cut = (splitTextByCharsAndBytes(escaped, maxChars, maxBytes)[0] ?? "").replace(
-    /\\(\|\\?)?$/u,
-    "",
-  );
+  cut = cut.replace(/\\(\|\\?)?$/u, "");
   return {
     text: `${REASONING_HEADING}\n||${cut}…||${REASONING_TRUNCATED_NOTE}`,
     needsFile: true,

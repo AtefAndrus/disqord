@@ -12,6 +12,7 @@ function context(): IToolContext {
     channelId: "channel",
     userId: "user",
     conversation: {
+      describeMessageRef: () => undefined,
       resolveMessageRef: () => undefined,
       readEarlierMessages: async () => "",
       viewAttachment: async () => "",

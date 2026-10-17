@@ -1540,6 +1540,121 @@ describe("createMessageCreateHandler", () => {
     expect(texts).toContain("最大出力長");
   });
 
+  function messageRefWindow(): ConversationWindowService {
+    const context: ConversationWindowContext = {
+      messages: [],
+      sessionId: "session",
+      windowStartMessageId: "100",
+      toolContext: {
+        resolveMessageRef: (ref) => (ref === "m12" ? "100" : undefined),
+        describeMessageRef: (ref) =>
+          ref === "m12"
+            ? {
+                messageId: "100",
+                channelId: "earlier-channel",
+                author: "Alice",
+                kind: "user",
+              }
+            : undefined,
+        readEarlierMessages: async () => "",
+        viewAttachment: async () => "",
+      },
+    };
+    return { build: mock(async () => context) } as unknown as ConversationWindowService;
+  }
+
+  test.each(["final", "stopped", "error"] as const)(
+    "links refs before splitting a %s reply and preserves raw received counts",
+    async (status) => {
+      const raw = `${"あ".repeat(2900)} [m12] trailing`;
+      const response =
+        status === "final"
+          ? createMockChatResponseFn(raw)
+          : status === "stopped"
+            ? createCancelledChatResponseFn(raw)
+            : createFatalErrorChatResponseFn(raw, new Error("failed"));
+      (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+        response,
+      );
+      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+        conversationWindow: messageRefWindow(),
+      })(mockMessage as never);
+      const pages = [mockBotMessage, ...extraBotMessages].map((message) =>
+        extractTextContents(toContainerJSON(lastCallArg(message.edit))).join("\n"),
+      );
+      expect(pages.join("\n")).toContain(
+        "[Alice の発言](https://discord.com/channels/guild-123/earlier-channel/100)",
+      );
+      expect(pages.join("\n")).not.toContain("[m12]");
+      if (status === "stopped") expect(pages.at(-1)).toContain(`${raw.length}字`);
+    },
+  );
+
+  test("threads the transform into streaming and leaves the staged model output raw", async () => {
+    const raw = "[m12]";
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (_guild, _input, _id, updater: IToolLoopUpdater) => {
+        setSystemTime(Date.now() + 2100);
+        await updater.stageContent(raw);
+        const streaming = extractTextContents(
+          toContainerJSON(lastCallArg(mockBotMessage.edit)),
+        ).join("\n");
+        expect(streaming).toContain(
+          "[Alice の発言](https://discord.com/channels/guild-123/earlier-channel/100)",
+        );
+        expect((updater as IToolLoopUpdater & { text: string }).text).toBe(raw);
+        return { status: "final", text: raw, history: [] };
+      },
+    );
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      conversationWindow: messageRefWindow(),
+    })(mockMessage as never);
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
+  test("history disabled leaves refs as written even when a window service is available", async () => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.historyEnabled = false;
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      createMockChatResponseFn("[m12]"),
+    );
+    const window = messageRefWindow();
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      conversationWindow: window,
+    })(mockMessage as never);
+    expect(window.build).not.toHaveBeenCalled();
+    expect(
+      extractTextContents(toContainerJSON(lastCallArg(mockBotMessage.edit))).join("\n"),
+    ).toContain("[m12]");
+  });
+
+  test.each([false, true])("links reasoning text and its full file (long=%s)", async (long) => {
+    const settings = await mockSettingsService.getGuildSettings("guild-123");
+    settings.reasoningDisplayEnabled = true;
+    const rawReasoning = `[m12] ${long ? "考".repeat(6000) : "考えた内容"} [m12]`;
+    const response = createMockChatResponseFn("answer");
+    (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
+      async (...args: Parameters<ChatResponseFn>) => ({
+        ...(await response(...args)),
+        reasoningText: rawReasoning,
+      }),
+    );
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      conversationWindow: messageRefWindow(),
+    })(mockMessage as never);
+    const payload = lastCallArg(mockBotMessage.edit);
+    const reasoning = toContainerJSON(payload).components.find(
+      (component) => component.id === REASONING_COMPONENT_ID,
+    );
+    const link = "[Alice の発言](https://discord.com/channels/guild-123/earlier-channel/100)";
+    expect(reasoning?.content).toContain(link);
+    expect(reasoning?.content).not.toContain("[m12]");
+    if (long) {
+      const file = payload.files?.[0] as { attachment: Buffer };
+      expect(file.attachment.toString("utf8")).toContain(`${link} ${"考".repeat(6000)} ${link}`);
+    } else expect(payload.files).toBeUndefined();
+  });
+
   test("推論表示が有効なら、1 ページ目の回答の前に spoiler の推論を同じ Container に入れる", async () => {
     const settings = await mockSettingsService.getGuildSettings("guild-123");
     settings.reasoningDisplayEnabled = true;

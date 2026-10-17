@@ -1,10 +1,19 @@
 import type { FunctionTool, ResponsesInputContentPart } from "../../types";
+import type { NormalizedMessageKind } from "../../utils/discordMessageNormalizer";
 
 export type ToolLlmResult = string | ResponsesInputContentPart[];
+
+export interface MessageRefTarget {
+  messageId: string;
+  channelId: string;
+  author: string;
+  kind: NormalizedMessageKind;
+}
 
 /** `budgetTokens` is `IToolContext.resultBudgetTokens` of the call; absent means unlimited. */
 export interface ConversationToolContext {
   resolveMessageRef(ref: string): string | undefined;
+  describeMessageRef(ref: string): MessageRefTarget | undefined;
   readEarlierMessages(
     count: number,
     signal: AbortSignal,

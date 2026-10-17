@@ -39,6 +39,64 @@ import {
 
 const textEncoder = new TextEncoder();
 
+describe("link boundaries", () => {
+  const url = "https://discord.com/channels/1/2/3";
+  const link = `[Alice の発言](${url})`;
+
+  test.each([link, url, `<${url}>`, String.raw`[A \[name\] の発言](${url})`])(
+    "moves an intact link onto the next page: %s",
+    (unit) => {
+      const text = `${"あ".repeat(20)}${unit} end`;
+      const chunks = splitMarkdownByCharsAndBytes(text, 70, 100);
+      expect(chunks.join("")).toBe(text);
+      expect(chunks.some((chunk) => chunk.includes(unit))).toBe(true);
+      for (const chunk of chunks) {
+        expect(chunk.length).toBeLessThanOrEqual(70);
+        expect(byteLength(chunk)).toBeLessThanOrEqual(100);
+      }
+    },
+  );
+
+  test("a newline in a link's label is not used as a page boundary", () => {
+    const unit = `[Alice\nの発言](${url})`;
+    const text = `${"a".repeat(10)}${unit}${"b".repeat(40)}`;
+    const chunks = splitMarkdownByCharsAndBytes(text, 65, 1000);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.some((chunk) => chunk.includes(unit))).toBe(true);
+  });
+
+  test.each([
+    `https://example.com/${"a".repeat(200)}`,
+    `[long](https://example.com/${"a".repeat(200)})`,
+  ])("a unit longer than the page falls back to code points: %s", (unit) => {
+    const chunks = splitMarkdownByCharsAndBytes(unit, 50, 60);
+    expect(chunks.join("")).toBe(unit);
+    expect(chunks.every((chunk) => chunk.length <= 50 && byteLength(chunk) <= 60)).toBe(true);
+  });
+
+  test("a link that only fits the full page leaves the reasoning page intact", () => {
+    const chunks = splitMarkdownByCharsAndBytes(link, 100, 200, { maxChars: 10, maxBytes: 20 });
+    expect(chunks).toEqual(["", link]);
+  });
+
+  test.each([link, url])("reasoning drops a link at the truncation point: %s", (unit) => {
+    const prefix = `${"x".repeat(220)} `;
+    const suffix = "z".repeat(1000);
+    const truncated = fitReasoning(`${prefix}${unit} ${suffix}`, { chars: 300, bytes: 1000 });
+    expect(truncated.needsFile).toBe(true);
+    expect(truncated.text).toContain(prefix);
+    expect(truncated.text).not.toContain("https:");
+    expect(truncated.text).not.toContain("[Alice");
+    expect(truncated.text.length).toBeLessThanOrEqual(300);
+  });
+
+  test("reasoning retains whole links before the truncation point", () => {
+    const fitted = fitReasoning(link + "z".repeat(1000), { chars: 300, bytes: 1000 });
+    expect(fitted.needsFile).toBe(true);
+    expect(fitted.text).toContain(link);
+  });
+});
+
 function byteLength(text: string): number {
   return textEncoder.encode(text).length;
 }

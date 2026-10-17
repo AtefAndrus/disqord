@@ -17,6 +17,7 @@ test("passes the dispatcher signal to the conversation context", async () => {
       channelId: "channel",
       userId: "user",
       conversation: {
+        describeMessageRef: () => undefined,
         resolveMessageRef: () => undefined,
         readEarlierMessages,
         viewAttachment: async () => "{}",
