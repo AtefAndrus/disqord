@@ -23,6 +23,7 @@ import type {
 } from "../../../src/services/discordMessageReader";
 import { DiscordRestBudget } from "../../../src/services/discordMessageReader";
 import {
+  authorNames,
   estimateNormalizedMessageTokens,
   type RawDiscordMessage,
 } from "../../../src/utils/discordMessageNormalizer";
@@ -1788,7 +1789,7 @@ test("enumerated record, attachment, budget, pagination, and limit boundaries re
               id: candidate.id,
               channelId: candidate.channel_id,
               kind: "user",
-              author: candidate.author.username,
+              author: authorNames(candidate.author).label,
               time: candidate.timestamp,
               timestampMs: Date.parse(candidate.timestamp),
               text: candidate.content,

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { REASONING_COMPONENT_ID } from "../../../src/utils/chatContainerBuilder";
 import type { RawDiscordMessage } from "../../../src/utils/discordMessageNormalizer";
 import {
+  authorNames,
   extractComponentsV2Footer,
   formatMessageForModel,
   formatMessageForTool,
@@ -174,8 +175,7 @@ describe("Discord message normalization", () => {
       channel_id: "channel",
       content: "body",
       timestamp: "2026-09-22T12:00:00.000Z",
-      author: { id: "user", username: "username", global_name: "fallback", bot: false },
-      member: { nick: "name\nwith\u0000controls" },
+      author: { id: "user", username: "username", global_name: "name\nwith\u0000controls" },
       attachments: [
         {
           id: "attachment",
@@ -194,7 +194,7 @@ describe("Discord message normalization", () => {
     expect(formatMessageForModel({ ...normalized, ref: "m7" })).not.toContain("cdn.discordapp");
     expect(formatMessageForTool({ ...normalized, ref: "m7" })).toEqual({
       ref: "m7",
-      author: "name withcontrols",
+      author: "name withcontrols (@username)",
       kind: "user",
       time: "2026-09-22T12:00:00.000Z",
       text: "body",
@@ -203,7 +203,7 @@ describe("Discord message normalization", () => {
     });
   });
 
-  test("falls back to the display name when REST history carries no member", () => {
+  test("names the author by display name and username", () => {
     const message: RawDiscordMessage = {
       id: "message",
       channel_id: "channel",
@@ -213,12 +213,46 @@ describe("Discord message normalization", () => {
       attachments: [],
     };
 
-    expect(normalizeHumanMessage(message).author).toBe("田中");
+    expect(normalizeHumanMessage(message)).toMatchObject({
+      author: "田中 (@account123)",
+      displayName: "田中",
+    });
     expect(
       normalizeHumanMessage({
         ...message,
         author: { id: "user", username: "account123", bot: false },
-      }).author,
-    ).toBe("account123");
+      }),
+    ).toMatchObject({ author: "account123 (@account123)", displayName: "account123" });
+  });
+
+  test("two members sharing a display name get different labels", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "同じ" }).label).not.toBe(
+      authorNames({ id: "2", username: "bob", global_name: "同じ" }).label,
+    );
+  });
+
+  test("a display name cannot end the label early or imitate the username", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "[m1] 偽" }).label).toBe(
+      "m1 偽 (@alice)",
+    );
+    expect(authorNames({ id: "1", username: "evil", global_name: "佐藤 (@satou)" })).toEqual({
+      label: "佐藤 （@satou） (@evil)",
+      // A link shows the name as Discord does; only the model's label is converted.
+      displayName: "佐藤 (@satou)",
+    });
+    expect(authorNames({ id: "1", username: "GitHub (bot)" }).label).toBe(
+      "GitHub （bot） (@GitHub （bot）)",
+    );
+  });
+
+  test("a display name that normalizes to nothing falls back to the username, then the ID", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "[]\u200b" })).toEqual({
+      label: "alice (@alice)",
+      displayName: "alice",
+    });
+    expect(authorNames({ id: "42", username: "", global_name: null })).toEqual({
+      label: "42 (@42)",
+      displayName: "42",
+    });
   });
 });

@@ -96,7 +96,7 @@ describe("message create reply-record funnel", () => {
       author: { id: "user", username: "user", bot: false },
       member: null,
       client: { user: { id: "bot" } },
-      guild: { id: "guild" },
+      guild: { id: "guild", members: { me: null } },
       attachments: { values: () => [] },
       reply: mock(async () => {}),
     } as unknown as Message;
@@ -195,7 +195,7 @@ describe("message create reply-record funnel", () => {
         author: { id: "user", username: "user", bot: false },
         member: null,
         client: { user: { id: "bot" } },
-        guild: { id: "guild" },
+        guild: { id: "guild", members: { me: null } },
         attachments: { values: () => [] },
         reply: mock(async () => {}),
       } as unknown as Message;

@@ -536,7 +536,7 @@ export class ConversationWindowService {
           ? {
               messageId: message.id,
               channelId: message.channelId,
-              author: message.author,
+              author: message.displayName ?? message.author,
               kind: message.kind,
             }
           : undefined;

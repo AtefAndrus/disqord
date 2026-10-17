@@ -52,7 +52,6 @@ export interface RawDiscordMessage {
     global_name?: string | null;
     bot?: boolean;
   };
-  member?: { nick?: string | null } | null;
   webhook_id?: string;
   type?: number;
   components?: unknown[];
@@ -79,7 +78,10 @@ export interface NormalizedMessage {
   id: string;
   channelId: string;
   kind: NormalizedMessageKind;
+  /** The name the model reads (`authorNames().label`), or `assistant` for the bot. */
   author: string;
+  /** The name a link to the message shows; absent for the bot's own messages. */
+  displayName?: string;
   time: string;
   timestampMs: number;
   text: string;
@@ -175,11 +177,43 @@ export function normalizeAuthorLabel(rawLabel: string, authorId: string): string
   return Array.from(trimmed).slice(0, 32).join("");
 }
 
-// REST で読んだ履歴の Message には member が無く、ニックネームは今回の発言でしか得られない。
-// 追加の取得を避けるため、履歴では表示名 (global_name)、それも無ければユーザ名に落とす。
-function authorLabel(message: RawDiscordMessage): string {
-  const label = message.member?.nick ?? message.author.global_name ?? message.author.username;
-  return normalizeAuthorLabel(label, message.author.id);
+export interface AuthorNames {
+  /** What the model reads: the display name with the unique username, `佐藤 (@satou_jayo)`. */
+  label: string;
+  /** What a message link shows: the display name alone. */
+  displayName: string;
+}
+
+/**
+ * Names one author the same way in history and in the current message.
+ * The username is what tells apart members who share a display name. The
+ * server nickname is not used: history read over REST carries no member, so
+ * the current message alone would name the same person differently.
+ *
+ * The label always has both parts, even when they are equal: a bare
+ * `@alice:` reads to the reply gate as a message addressed to alice. ASCII
+ * parentheses in the label become full-width, so a display name cannot
+ * imitate the trailing `(@username)`; webhook and bot names are free text,
+ * so the username side is converted too. A link shows `displayName` as
+ * Discord does.
+ */
+export function authorNames(author: {
+  id: string;
+  username: string;
+  global_name?: string | null;
+}): AuthorNames {
+  const username = normalizeAuthorLabel(author.username, author.id);
+  const displayName = normalizeAuthorLabel(author.global_name ?? "", "") || username;
+  const fullWidth = (name: string): string =>
+    name.replace(/[()]/gu, (paren) => (paren === "(" ? "（" : "）"));
+  return { label: `${fullWidth(displayName)} (@${fullWidth(username)})`, displayName };
+}
+
+function authorFields(
+  message: RawDiscordMessage,
+): Pick<NormalizedMessage, "author" | "displayName"> {
+  const names = authorNames(message.author);
+  return { author: names.label, displayName: names.displayName };
 }
 
 function attachmentKind(contentType: string | null | undefined): NormalizedAttachmentKind {
@@ -286,7 +320,7 @@ export function normalizeHumanMessage(
     id: message.id,
     channelId: message.channel_id,
     kind: "user",
-    author: authorLabel(message),
+    ...authorFields(message),
     time: message.timestamp,
     timestampMs: timestampMs(message),
     text: message.content,
@@ -358,7 +392,7 @@ export function normalizePollResultNotice(
     id: message.id,
     channelId: message.channel_id,
     kind: fromBot ? "assistant" : "user",
-    author: fromBot ? "assistant" : authorLabel(message),
+    ...(fromBot ? { author: "assistant" } : authorFields(message)),
     time: message.timestamp,
     timestampMs: timestampMs(message),
     text: formatPollResultNotice(message) ?? "",

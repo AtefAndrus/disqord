@@ -9,7 +9,7 @@
 <!-- AUTO:PROGRESS:START -->
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
-| [発言者の区別と名前の見せ方](changes/author-identity/design.md) | 高 | planned | モデルに渡す発言者の名前を表示名とユーザー名の組に揃え、同じ表示名の人を区別できるようにし、発言へのリンクの文字も整える |
+| [発言者の区別と名前の見せ方](changes/author-identity/design.md) | 高 | in-progress | モデルに渡す発言者の名前を表示名とユーザー名の組に揃え、同じ表示名の人を区別できるようにし、発言へのリンクの文字も整える |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
 | [自動応答の返答判定の見直し](changes/reply-gate-tuning/design.md) | 高 | investigating | 人どうしの会話や bot への制止に返答してしまう判定を、判定の問いの見直しと、bot が自動応答を一時停止できる tool で直す |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |

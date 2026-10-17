@@ -155,9 +155,9 @@ test("places a poll after the text, and a poll-only message has no placeholder",
     poll: poll(),
   };
   expect(formatMessageForModel(normalizeHumanMessage(base, NOW))).toBe(
-    `[m1] alice: ${formatPoll(poll(), NOW)}`,
+    `[m1] alice (@alice): ${formatPoll(poll(), NOW)}`,
   );
   expect(formatMessageForModel(normalizeHumanMessage({ ...base, content: "どう？" }, NOW))).toBe(
-    `[m1] alice: どう？\n${formatPoll(poll(), NOW)}`,
+    `[m1] alice (@alice): どう？\n${formatPoll(poll(), NOW)}`,
   );
 });
