@@ -527,6 +527,29 @@ describe("createMessageCreateHandler", () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
+  test("a deferred input check that throws after a reply judgment deletes the pending record", async () => {
+    await enableGate();
+    mockMessage.attachments = makeAttachments([
+      { id: "file", name: "bad.txt", url: "unused", contentType: "text/plain" },
+    ]);
+    mockReply.mockImplementation(async () => {
+      throw new Error("Unknown Message");
+    });
+    const replyRecordService = gateRecords();
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      {
+        replyGate: { judge: mock(async () => "reply" as const), wasSilenced: mock(() => false) },
+        replyRecordService,
+      },
+    );
+    await expect(handler(mockMessage as never)).rejects.toThrow("Unknown Message");
+    expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith(mockMessage.id);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
   test("sticker-only messages skip judging and pending records", async () => {
     await enableGate();
     mockMessage.content = "";
