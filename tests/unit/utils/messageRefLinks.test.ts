@@ -14,6 +14,7 @@ describe("linkMessageRefs", () => {
     );
     expect(linkMessageRefs("[m12] and [m12]", resolve)).toBe(`${linked} and ${linked}`);
     expect(linkMessageRefs("<[m12]>", resolve)).toBe(`<${linked}>`);
+    expect(linkMessageRefs("[m12](Alice)", resolve)).toBe(`${linked}(Alice)`);
   });
 
   test.each([

@@ -65,6 +65,11 @@ describe("link boundaries", () => {
     expect(chunks.some((chunk) => chunk.includes(unit))).toBe(true);
   });
 
+  test("a link left unclosed before a code block does not swallow the opening fence", () => {
+    const text = "[doc](https://a.com/x\n```js\nf(a));\n```\nafter";
+    expect(splitMarkdownByCharsAndBytes(text, 1000, 1000)).toEqual([text]);
+  });
+
   test.each([
     `https://example.com/${"a".repeat(200)}`,
     `[long](https://example.com/${"a".repeat(200)})`,
