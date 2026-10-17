@@ -56,6 +56,25 @@ export function observeResponsesBody(body: unknown): InputObservation | undefine
   return messages;
 }
 
+/**
+ * The tool a `Tool call` log line (`ToolDispatcher.logCall`) says ran
+ * successfully. Calls the dispatcher refused or the loop never ran also
+ * produce a line, so only `status: "ok"` counts as an invocation.
+ */
+export function parseToolCallLine(line: string): string | undefined {
+  const json = /^\[[^\]]+\] \[INFO\] Tool call (\{.*\})$/u.exec(line)?.[1];
+  if (!json) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!record(parsed) || parsed.status !== "ok" || typeof parsed.name !== "string") {
+      return undefined;
+    }
+    return parsed.name;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseInputLine(line: string): InputObservation | undefined {
   if (!line.startsWith(INPUT_PREFIX)) return undefined;
   try {

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { BadRequestError, ContextLengthExceededError } from "../../../src/errors";
 import { estimateToolResultTokens, MESSAGE_OVERHEAD_TOKENS } from "../../../src/llm/contextBudget";
 import type { ILLMClient } from "../../../src/llm/openrouter";
@@ -13,6 +13,7 @@ import type {
   StreamToolCallChunk,
   ToolChatMessage,
 } from "../../../src/types";
+import { logger } from "../../../src/utils/logger";
 
 type StreamYield = StreamChunk | StreamToolCallChunk | StreamFinalResult;
 type TurnScript = () => AsyncGenerator<StreamYield, void, void>;
@@ -198,14 +199,30 @@ describe("runToolLoop context budget", () => {
       disobey("answer anyway", "later"),
     ]);
 
-    const result = await runToolLoop(
-      params(client, [big, tool("later", later)], {
-        contextLength: 30_000,
-        requestFields: { max_output_tokens: 1_000 },
-      }),
-    );
+    const toolLines: string[][] = [];
+    const log = spyOn(logger, "info").mockImplementation((message, meta) => {
+      if (message !== "Tool call") return;
+      const { name, status } = meta as { name: string; status: string };
+      toolLines.push([name, status]);
+    });
+    let result: Awaited<ReturnType<typeof runToolLoop>>;
+    try {
+      result = await runToolLoop(
+        params(client, [big, tool("later", later)], {
+          contextLength: 30_000,
+          requestFields: { max_output_tokens: 1_000 },
+        }),
+      );
+    } finally {
+      log.mockRestore();
+    }
 
     expect(result.status).toBe("final");
+    // The stopped call never reaches the dispatcher but is still logged.
+    expect(toolLines).toEqual([
+      ["big", "error"],
+      ["later", "error"],
+    ]);
     const [first, second] = toolMessages(result.history);
     expect(JSON.parse(first?.content as string)).toMatchObject({ error: "result_too_large" });
     expect(second?.content).toBe('{"error":"client_tools_stopped","reason":"result_too_large"}');

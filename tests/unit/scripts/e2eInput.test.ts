@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   BOT_CONTEXT_PREFIX,
   botContextMarker,
@@ -9,9 +9,11 @@ import {
   type InputObservation,
   observeResponsesBody,
   parseInputLine,
+  parseToolCallLine,
   selectInput,
 } from "../../../scripts/e2e/input";
 import { SCENARIOS, toReply } from "../../../scripts/e2e/scenarios";
+import { logger } from "../../../src/utils/logger";
 
 const marker = "[e2e-bot-context:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee]";
 const expectation: InputExpectation = {
@@ -281,4 +283,44 @@ test("preload forwards fetch arguments and response unread and scopes the build 
   ]);
   expect(stdout).not.toContain("secret-credential");
   expect(stdout).not.toContain("base64-secret");
+});
+
+describe("parseToolCallLine", () => {
+  function loggedLine(meta: Record<string, unknown>): string {
+    const lines: string[] = [];
+    const info = spyOn(console, "info").mockImplementation((line: string) => {
+      lines.push(line);
+    });
+    try {
+      logger.info("Tool call", meta);
+    } finally {
+      info.mockRestore();
+    }
+    return lines[0] ?? "";
+  }
+
+  test("reads the tool name from the line the logger writes for a successful call", () => {
+    const line = loggedLine({
+      messageId: "1",
+      name: "read_earlier_messages",
+      status: "ok",
+      elapsed: 3,
+      args: "{}",
+      result: { messages: 0 },
+    });
+
+    expect(parseToolCallLine(line)).toBe("read_earlier_messages");
+  });
+
+  test("does not count a call that did not succeed", () => {
+    const line = loggedLine({ messageId: "1", name: "view_attachment", status: "error" });
+
+    expect(parseToolCallLine(line)).toBeUndefined();
+  });
+
+  test("ignores other log lines", () => {
+    expect(
+      parseToolCallLine(loggedLine({ name: "x", status: "ok" }).replace("Tool call", "Reply gate")),
+    ).toBeUndefined();
+  });
 });

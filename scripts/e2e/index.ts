@@ -37,6 +37,7 @@ import {
   type InputEvidence,
   type InputObservation,
   parseInputLine,
+  parseToolCallLine,
   selectInput,
 } from "./input";
 import { createStopper, DeadlineError, waitForReply, waitForStreaming } from "./runner";
@@ -259,10 +260,8 @@ async function startBot(): Promise<RunningBot> {
       if (input) inputs.push(input);
       if (line.startsWith(BOT_CONTEXT_PREFIX))
         botContextMarkers.add(line.slice(BOT_CONTEXT_PREFIX.length));
-      for (const match of line.matchAll(/\] Tool call \{"messageId":"\d*","name":"([\w-]+)"/g)) {
-        const name = match[1];
-        if (name) toolCalls.add(name);
-      }
+      const toolName = parseToolCallLine(line);
+      if (toolName) toolCalls.add(toolName);
     }
   };
   const loggedIn = (async (): Promise<boolean> => {

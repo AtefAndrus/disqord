@@ -994,13 +994,17 @@ async function dispatchCalls(
       for (let j = i; j < normalizedCalls.length; j++) {
         const remaining = normalizedCalls[j];
         if (!remaining) continue;
-        history.push(dispatcher.buildCancelledOutcome(remaining).toolMessage);
+        const cancelled = dispatcher.buildCancelledOutcome(remaining);
+        dispatcher.logCall(remaining, cancelled, requestId, 0);
+        history.push(cancelled.toolMessage);
       }
       return { cancelled: true, stopped };
     }
 
     if (stopped) {
-      const stoppedMessage = dispatcher.buildStoppedOutcome(call).toolMessage;
+      const stoppedOutcome = dispatcher.buildStoppedOutcome(call);
+      dispatcher.logCall(call, stoppedOutcome, requestId, 0);
+      const stoppedMessage = stoppedOutcome.toolMessage;
       history.push(stoppedMessage);
       budget.charge(stoppedMessage);
       continue;
@@ -1028,7 +1032,9 @@ async function dispatchCalls(
       for (let j = i + 1; j < normalizedCalls.length; j++) {
         const remaining = normalizedCalls[j];
         if (!remaining) continue;
-        history.push(dispatcher.buildCancelledOutcome(remaining).toolMessage);
+        const cancelled = dispatcher.buildCancelledOutcome(remaining);
+        dispatcher.logCall(remaining, cancelled, requestId, 0);
+        history.push(cancelled.toolMessage);
       }
       return { cancelled: true, stopped };
     }

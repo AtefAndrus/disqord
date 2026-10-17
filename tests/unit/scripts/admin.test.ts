@@ -97,7 +97,7 @@ describe("linesBetween", () => {
     const log = [
       "[2026-10-15T04:00:00.000Z] [INFO] before",
       "[2026-10-15T04:21:00.000Z] [INFO] inside",
-      "[tool] client tool invoked name=read_earlier_messages",
+      "DisQord logged in as disqord#0000",
       "[2026-10-15T05:00:00.000Z] [INFO] after",
     ].join("\n");
 

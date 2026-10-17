@@ -467,22 +467,24 @@ describe("ToolDispatcher tool-call log", () => {
     log.mockRestore();
   });
 
+  /** The one `Tool call` line a call produced; a second line for the same call fails here. */
   function logged(): Record<string, unknown> {
-    const call = log.mock.calls.find(([message]) => message === "Tool call");
-    return call?.[1] as Record<string, unknown>;
+    const calls = log.mock.calls.filter(([message]) => message === "Tool call");
+    expect(calls).toHaveLength(1);
+    return calls[0]?.[1] as Record<string, unknown>;
   }
 
-  test("an ok JSON result is logged by shape: scalars and short strings kept, arrays counted", async () => {
+  test("an ok JSON result is logged by shape: counts, scalars, and status strings, not what was read", async () => {
     const { dispatcher } = setup([
       makeTool({
         handler: async () => ({
           llmResult: JSON.stringify({
             messages: [{ text: "secret" }, { text: "secret" }],
             has_more: false,
-            stop_reason: null,
-            note: "short",
-            body: "x".repeat(201),
-            nested: { text: "secret" },
+            stop_reason: "fetch_deadline",
+            name: "secret-channel",
+            topic: "secret topic",
+            active: { events: [{ name: "secret" }], has_more: true, detail: { deep: 1 } },
           }),
         }),
       }),
@@ -498,10 +500,62 @@ describe("ToolDispatcher tool-call log", () => {
       name: "echo",
       status: "ok",
       args: '{"count":5}',
-      result: { messages: 2, has_more: false, stop_reason: null, note: "short" },
+      result: {
+        messages: 2,
+        has_more: false,
+        stop_reason: "fetch_deadline",
+        active: { events: 1, has_more: true },
+      },
     });
     expect(typeof logged().elapsed).toBe("number");
     expect(JSON.stringify(logged())).not.toContain("secret");
+  });
+
+  test("a multimodal result is logged as its part count", async () => {
+    const { dispatcher } = setup([
+      makeTool({
+        handler: async () => ({ llmResult: [{ type: "input_text", text: "secret" }] }),
+      }),
+    ]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().result).toEqual({ parts: 1 });
+  });
+
+  test("a precomputed error is logged without running the tool", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ precomputedError: "too many tool calls" }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({ status: "error", result: "too many tool calls" });
+  });
+
+  test("a timed-out call is logged as timeout", async () => {
+    const { dispatcher } = setup([
+      makeTool({ timeoutMs: MIN_TOOL_TIMEOUT_MS, handler: () => new Promise(() => {}) }),
+    ]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().status).toBe("timeout");
+  });
+
+  test("logCall writes the line for a call the loop answers without dispatching", () => {
+    const { dispatcher } = setup([makeTool()]);
+    const call = makeCall();
+    dispatcher.logCall(call, dispatcher.buildStoppedOutcome(call), "msg-1", 0);
+
+    expect(logged()).toMatchObject({ messageId: "msg-1", status: "error", elapsed: 0 });
   });
 
   test("a result that is not a JSON object is logged by length", async () => {
