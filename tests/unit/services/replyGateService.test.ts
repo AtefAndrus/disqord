@@ -130,7 +130,7 @@ describe("buildReplyGateState", () => {
     });
     expect(state.recent_messages).toEqual(["author0: @bot question"]);
     expect(state.reply_target).toBe("bot: answer");
-    expect(state.new_message).toBe("new author: @bot and <@200>");
+    expect(state.new_message).toBe("new author: @bot and @メンバー");
   });
 
   test("drops oldest messages first to fit the budget including target and new message", () => {

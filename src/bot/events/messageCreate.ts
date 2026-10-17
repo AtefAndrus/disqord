@@ -442,11 +442,10 @@ export function createMessageCreateHandler(
           botName,
           botUserId: botId,
           current: {
+            // Without the nickname, as the window labels this author's earlier messages read
+            // over REST; a different name would read as a different speaker to the judgment.
             author: normalizeAuthorLabel(
-              message.member?.nickname ??
-                message.author.globalName ??
-                message.author.username ??
-                message.author.id,
+              message.author.globalName ?? message.author.username ?? message.author.id,
               message.author.id,
             ),
             text: inputText,

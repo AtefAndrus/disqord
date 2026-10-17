@@ -1,7 +1,8 @@
 /**
  * Hand-written reply-gate cases for `scripts/reply-gate-eval.ts`. `expect`
  * is true when the bot should answer. Each history line is `<author>: <text>`
- * and a line by `BOT_NAME` is the bot's own reply. The `hard` set puts the
+ * and a line by `BOT_NAME` is the bot's own reply. A mention of a person is
+ * written `<@id>`, as the judgment receives it. The `hard` set puts the
  * surface cue and the right answer on opposite sides: a bot-shaped question
  * addressed to one person, a question only a human can answer, a question
  * that follows thanks to the bot.
@@ -177,7 +178,7 @@ const easy: ReplyGateCase[] = [
     id: "s-at-human",
     expect: false,
     history: ["はなこ: 明日の会議の資料まだ？", "たろう: 今作ってる"],
-    current: "はなこ: @じろう 明日の資料送った？",
+    current: "はなこ: <@200000000000000002> 明日の資料送った？",
   },
   {
     id: "s-share-link",
@@ -403,7 +404,7 @@ const hard: ReplyGateCase[] = [
     id: "hs-translate-to-human",
     expect: false,
     history: ["はなこ: 英語の歌詞で意味わからないとこある"],
-    current: "はなこ: @じろう この英文訳せる？ 'break a leg'",
+    current: "はなこ: <@200000000000000002> この英文訳せる？ 'break a leg'",
   },
   {
     id: "hs-anyone-free",

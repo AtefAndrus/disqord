@@ -60,8 +60,10 @@ function toNormalized(line: string, index: number): NormalizedMessage {
 
 function stateFor(c: ReplyGateCase): Record<string, unknown> {
   const messages = c.history.map(toNormalized);
-  const replyTarget =
-    c.replyTarget === undefined ? undefined : messages[c.history.indexOf(c.replyTarget)];
+  const targetIndex = c.replyTarget === undefined ? -1 : c.history.indexOf(c.replyTarget);
+  if (c.replyTarget !== undefined && targetIndex < 0)
+    throw new Error(`${c.id}: replyTarget is not one of its history lines`);
+  const replyTarget = targetIndex < 0 ? undefined : messages[targetIndex];
   const current = splitLine(c.current);
   return buildReplyGateState({
     botName: BOT_NAME,
@@ -137,6 +139,12 @@ function report(model: string, judgments: Judgment[], threshold: number): void {
   const negative = mean.filter((m) => !m.expect).map((m) => m.noul);
   const missed = mean.filter((m) => m.expect && m.noul < threshold);
   const intruded = mean.filter((m) => !m.expect && m.noul >= threshold);
+  // The bot decides on a single judgment, so the per-judgment figures are the ones the
+  // threshold has to hold for; the per-case means hide a run that dipped below it.
+  const answered = judgments.filter((j) => j.noul !== undefined) as (Judgment & { noul: number })[];
+  const replyJudgments = answered.filter((j) => j.expect);
+  const singleMissed = replyJudgments.filter((j) => j.noul < threshold).length;
+  const singleIntruded = answered.filter((j) => !j.expect && j.noul >= threshold).length;
   const ms = judgments
     .filter((j) => j.noul !== undefined)
     .map((j) => j.ms)
@@ -152,8 +160,10 @@ function report(model: string, judgments: Judgment[], threshold: number): void {
   console.log(
     [
       `AUC ${auc(positive, negative).toFixed(3)}`,
-      `at threshold ${threshold}: missed ${missed.length}/${positive.length} reply cases, answered ${intruded.length}/${negative.length} silent cases`,
-      `lowest reply case ${Math.min(...positive).toFixed(2)}, highest silent case ${Math.max(...negative).toFixed(2)}`,
+      `at threshold ${threshold}, single judgments: missed ${singleMissed}/${replyJudgments.length} reply judgments, answered ${singleIntruded}/${answered.length - replyJudgments.length} silent judgments`,
+      `lowest single reply judgment ${Math.min(...replyJudgments.map((j) => j.noul)).toFixed(2)}`,
+      `at threshold ${threshold}, case means: missed ${missed.length}/${positive.length} reply cases, answered ${intruded.length}/${negative.length} silent cases`,
+      `lowest reply case mean ${Math.min(...positive).toFixed(2)}, highest silent case mean ${Math.max(...negative).toFixed(2)}`,
       `max spread between runs ${Math.max(...mean.map((m) => m.spread)).toFixed(2)}`,
       `latency median ${Math.round(ms[Math.floor(ms.length / 2)])}ms p90 ${Math.round(ms[Math.floor(ms.length * 0.9)])}ms`,
       `errors ${errors.length}/${judgments.length}`,

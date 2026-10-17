@@ -29,15 +29,18 @@ interface ReplyGateMessage {
  * The question names the bot, so the bot's own replies (author "assistant"
  * in the window) and mentions of it (`<@id>` in raw content) are rewritten
  * to that name; otherwise "a follow-up to the bot's answer" has nothing in
- * the state to match.
+ * the state to match. Any other user mention becomes `@メンバー`: a bare id
+ * does not tell the model the message is addressed to a person, and Jev
+ * scored "<@id> この英文訳せる？" as one for the bot. Names are not looked up,
+ * since the window keeps no member data and a lookup per mention would delay
+ * every judged message.
  */
 function formatMessage(message: ReplyGateMessage, botName: string, botUserId: string): string {
   const author = message.kind === "assistant" ? botName : message.author;
   const body = [message.text, message.poll]
     .filter(Boolean)
     .join("\n")
-    .replaceAll(`<@${botUserId}>`, `@${botName}`)
-    .replaceAll(`<@!${botUserId}>`, `@${botName}`);
+    .replace(/<@!?(\d+)>/g, (_, id: string) => (id === botUserId ? `@${botName}` : "@メンバー"));
   const text = Array.from(body);
   const labels = { image: "画像", pdf: "PDF", other: "ファイル" };
   return `${author}: ${text.slice(0, 400).join("")}${text.length > 400 ? "…" : ""}${message.attachments.map((attachment) => ` [${labels[attachment.kind]} ${attachment.filename}]`).join("")}`;

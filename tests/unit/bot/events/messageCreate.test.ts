@@ -620,6 +620,9 @@ describe("createMessageCreateHandler", () => {
       attachments: [],
       ref: "m1",
     };
+    mockMessage.author.globalName = "Taro";
+    // The window has no nickname for earlier messages, so the judged message must not use one.
+    Object.assign(mockMessage, { member: { nickname: "nick" } });
     const build = mock(async () => {
       expect(replyRecordService.createPending).toHaveBeenCalled();
       return { messages: [target], replyTargetRef: "m1" } as unknown as ConversationWindowContext;
@@ -630,7 +633,7 @@ describe("createMessageCreateHandler", () => {
         bot_name: "DisQord",
         recent_messages: [],
         reply_target: "DisQord: previous answer",
-        new_message: "author-123: hello",
+        new_message: "Taro: hello",
       });
       return "silent" as const;
     });
