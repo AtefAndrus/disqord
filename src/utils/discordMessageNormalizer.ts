@@ -274,11 +274,12 @@ export function formatReactions(messages: readonly RawDiscordMessage[]): string 
       // A custom emoji's name can repeat across guilds; its ID keeps the counts apart.
       const key = emoji.id ? `custom:${emoji.id}` : name ? `unicode:${name}` : undefined;
       if (key === undefined) continue;
-      // Discord sends a null name for a deleted custom emoji; its count still stands.
+      // Discord sends a null name when a custom emoji's data is unavailable (for example it was
+      // deleted); its count still stands.
       // Only control characters are replaced: format characters such as the
       // zero-width joiner hold multi-part emoji like ❤️‍🔥 together.
       const label = emoji.id
-        ? `:${name ? oneLine(name) : "削除された絵文字"}:`
+        ? `:${name ? oneLine(name) : "名前の分からない絵文字"}:`
         : (name ?? "").replace(/\p{Cc}+/gu, " ").trim();
       if (label.length === 0) continue;
       const entry = counts.get(key) ?? { label, count: 0 };

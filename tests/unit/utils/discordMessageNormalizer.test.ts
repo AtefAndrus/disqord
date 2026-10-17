@@ -354,7 +354,7 @@ describe("reactions", () => {
           ] as unknown as RawDiscordMessage["reactions"],
         },
       ]),
-    ).toBe("[リアクション :削除された絵文字: 1、line break 1]");
+    ).toBe("[リアクション :名前の分からない絵文字: 1、line break 1]");
   });
 
   test("an emoji joined with zero-width joiners stays one emoji", () => {
