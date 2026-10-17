@@ -124,13 +124,14 @@ describe("buildReplyGateState", () => {
     const state = buildReplyGateState({
       botName: "bot",
       botUserId: "100",
-      current: { ...current, text: "<@!100> and <@200>" },
+      current: { ...current, text: "<@!100> and <@200> in <@&300> <#400>" },
       isReplyToBot: false,
       conversation: { messages: [message(0, "<@100> question"), reply], replyTarget: reply },
     });
     expect(state.recent_messages).toEqual(["author0: @bot question"]);
     expect(state.reply_target).toBe("bot: answer");
-    expect(state.new_message).toBe("new author: @bot and @メンバー");
+    // Role and channel mentions are not people, so they stay as they are.
+    expect(state.new_message).toBe("new author: @bot and @メンバー in <@&300> <#400>");
   });
 
   test("drops oldest messages first to fit the budget including target and new message", () => {

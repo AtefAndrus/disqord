@@ -170,8 +170,17 @@ function report(model: string, judgments: Judgment[], threshold: number): void {
       `cost $${cost.toFixed(6)}`,
     ].join("\n"),
   );
-  for (const m of [...missed, ...intruded])
-    console.log(`  ${m.expect ? "MISSED  " : "ANSWERED"} ${m.id} ${m.noul.toFixed(2)}`);
+  // Listed by single judgment, the figure the threshold is judged on, with every crossing value.
+  const crossings = new Map<string, number[]>();
+  for (const j of answered)
+    if (j.expect ? j.noul < threshold : j.noul >= threshold)
+      crossings.set(j.id, [...(crossings.get(j.id) ?? []), j.noul]);
+  for (const [id, values] of crossings) {
+    const expect = replyGateCases.find((c) => c.id === id)?.expect;
+    console.log(
+      `  ${expect ? "MISSED  " : "ANSWERED"} ${id} ${values.map((v) => v.toFixed(2)).join(" ")}`,
+    );
+  }
 }
 
 const args = process.argv.slice(2);
