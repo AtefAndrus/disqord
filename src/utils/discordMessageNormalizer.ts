@@ -192,8 +192,10 @@ export interface AuthorNames {
  *
  * The label always has both parts, even when they are equal: a bare
  * `@alice:` reads to the reply gate as a message addressed to alice. ASCII
- * parentheses in the display name become full-width, so a display name
- * cannot imitate the trailing `(@username)`.
+ * parentheses in the label become full-width, so a display name cannot
+ * imitate the trailing `(@username)`; webhook and bot names are free text,
+ * so the username side is converted too. A link shows `displayName` as
+ * Discord does.
  */
 export function authorNames(author: {
   id: string;
@@ -201,11 +203,10 @@ export function authorNames(author: {
   global_name?: string | null;
 }): AuthorNames {
   const username = normalizeAuthorLabel(author.username, author.id);
-  const displayName =
-    normalizeAuthorLabel(author.global_name ?? "", "").replace(/[()]/gu, (paren) =>
-      paren === "(" ? "（" : "）",
-    ) || username;
-  return { label: `${displayName} (@${username})`, displayName };
+  const displayName = normalizeAuthorLabel(author.global_name ?? "", "") || username;
+  const fullWidth = (name: string): string =>
+    name.replace(/[()]/gu, (paren) => (paren === "(" ? "（" : "）"));
+  return { label: `${fullWidth(displayName)} (@${fullWidth(username)})`, displayName };
 }
 
 function authorFields(

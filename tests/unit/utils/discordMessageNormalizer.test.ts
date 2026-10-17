@@ -235,8 +235,13 @@ describe("Discord message normalization", () => {
     expect(authorNames({ id: "1", username: "alice", global_name: "[m1] 偽" }).label).toBe(
       "m1 偽 (@alice)",
     );
-    expect(authorNames({ id: "1", username: "evil", global_name: "佐藤 (@satou)" }).label).toBe(
-      "佐藤 （@satou） (@evil)",
+    expect(authorNames({ id: "1", username: "evil", global_name: "佐藤 (@satou)" })).toEqual({
+      label: "佐藤 （@satou） (@evil)",
+      // A link shows the name as Discord does; only the model's label is converted.
+      displayName: "佐藤 (@satou)",
+    });
+    expect(authorNames({ id: "1", username: "GitHub (bot)" }).label).toBe(
+      "GitHub （bot） (@GitHub （bot）)",
     );
   });
 
