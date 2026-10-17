@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
@@ -17,6 +17,7 @@ import {
   MIN_TOOL_TIMEOUT_MS,
   ToolDispatcher,
 } from "../../../src/llm/tools/toolHandler";
+import { logger } from "../../../src/utils/logger";
 
 const ctx: IToolContext = { guildId: "g1", channelId: "c1", userId: "u1" };
 const utf8Encoder = new TextEncoder();
@@ -454,6 +455,171 @@ describe("ToolDispatcher.dispatch", () => {
     expect(outcome.toolMessage.content).toBe(
       "Tool execution failed and the error detail could not be serialized.",
     );
+  });
+});
+
+describe("ToolDispatcher tool-call log", () => {
+  let log: ReturnType<typeof spyOn<typeof logger, "info">>;
+  beforeEach(() => {
+    log = spyOn(logger, "info").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    log.mockRestore();
+  });
+
+  /** The one `Tool call` line a call produced; a second line for the same call fails here. */
+  function logged(): Record<string, unknown> {
+    const calls = log.mock.calls.filter(([message]) => message === "Tool call");
+    expect(calls).toHaveLength(1);
+    return calls[0]?.[1] as Record<string, unknown>;
+  }
+
+  test("an ok JSON result is logged by shape: counts, scalars, and status strings, not what was read", async () => {
+    const { dispatcher } = setup([
+      makeTool({
+        handler: async () => ({
+          llmResult: JSON.stringify({
+            messages: [{ text: "secret" }, { text: "secret" }],
+            has_more: false,
+            stop_reason: "fetch_deadline",
+            name: "secret-channel",
+            topic: "secret topic",
+            active: { events: [{ name: "secret" }], has_more: true, detail: { deep: 1 } },
+          }),
+        }),
+      }),
+    ]);
+    await dispatcher.dispatch(makeCall({ rawArguments: '{"count":5}' }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({
+      messageId: "msg-1",
+      name: "echo",
+      status: "ok",
+      args: '{"count":5}',
+      result: {
+        messages: 2,
+        has_more: false,
+        stop_reason: "fetch_deadline",
+        active: { events: 1, has_more: true },
+      },
+    });
+    expect(typeof logged().elapsed).toBe("number");
+    expect(JSON.stringify(logged())).not.toContain("secret");
+  });
+
+  test("a multimodal result is logged as its part count", async () => {
+    const { dispatcher } = setup([
+      makeTool({
+        handler: async () => ({ llmResult: [{ type: "input_text", text: "secret" }] }),
+      }),
+    ]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().result).toEqual({ parts: 1 });
+  });
+
+  test("a precomputed error is logged without running the tool", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ precomputedError: "too many tool calls" }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({ status: "error", result: "too many tool calls" });
+  });
+
+  test("a timed-out call is logged as timeout", async () => {
+    const { dispatcher } = setup([
+      makeTool({ timeoutMs: MIN_TOOL_TIMEOUT_MS, handler: () => new Promise(() => {}) }),
+    ]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().status).toBe("timeout");
+  });
+
+  test("logCall writes the line for a call the loop answers without dispatching", () => {
+    const { dispatcher } = setup([makeTool()]);
+    const call = makeCall();
+    dispatcher.logCall(call, dispatcher.buildStoppedOutcome(call), "msg-1", 0);
+
+    expect(logged()).toMatchObject({ messageId: "msg-1", status: "error", elapsed: 0 });
+  });
+
+  test("a result that is not a JSON object is logged by length", async () => {
+    const { dispatcher } = setup([makeTool({ handler: async () => ({ llmResult: "plain" }) })]);
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().result).toEqual({ chars: 5 });
+  });
+
+  test("an error outcome, including a call never executed, is logged with its message", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ name: "missing" }), {
+      ctx,
+      frozenToolNames: new Set(["missing"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged()).toMatchObject({ name: "missing", status: "error" });
+    expect(logged().result).toContain("Unknown tool");
+  });
+
+  test("a cancelled call is logged as cancelled", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    const controller = new AbortController();
+    controller.abort();
+    await dispatcher.dispatch(makeCall(), {
+      ctx,
+      requestSignal: controller.signal,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(logged().status).toBe("cancelled");
+  });
+
+  test("long arguments are clipped to 200 characters", async () => {
+    const { dispatcher } = setup([makeTool()]);
+    await dispatcher.dispatch(makeCall({ rawArguments: `{"q":"${"あ".repeat(300)}"}` }), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(Array.from(logged().args as string)).toHaveLength(201);
+    expect(logged().args as string).toEndWith("…");
+  });
+
+  test("a failing log does not replace the outcome", async () => {
+    log.mockImplementation(() => {
+      throw new Error("log failed");
+    });
+    const { dispatcher } = setup([makeTool({ handler: async () => ({ llmResult: "ran" }) })]);
+    const outcome = await dispatcher.dispatch(makeCall(), {
+      ctx,
+      frozenToolNames: new Set(["echo"]),
+      requestId: "msg-1",
+    });
+
+    expect(outcome.status).toBe("ok");
+    expect(outcome.toolMessage.content).toBe("ran");
   });
 });
 

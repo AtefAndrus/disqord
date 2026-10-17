@@ -90,7 +90,11 @@ export interface ReadEarlierMessageResult {
   messages: ReadEarlierToolMessage[];
   has_more: boolean;
   stop_reason: ConversationStopReason;
+  note?: string;
 }
+
+export const NOTHING_OLDER_NOTE =
+  "Nothing older can be read. This is not an error: the messages already shown (the conversation and any earlier results of this tool) reach back to the oldest readable message.";
 
 interface WindowState {
   startMessageId: string;
@@ -337,6 +341,9 @@ function asToolResult(
     messages: entries.map((entry) => entry.value),
     has_more: hasMore,
     stop_reason: reason,
+    // An empty result alone reads as a failed fetch to the model, which then
+    // tells users it cannot see history it already has.
+    ...(entries.length === 0 && !hasMore && reason === null && { note: NOTHING_OLDER_NOTE }),
   };
   return JSON.stringify(value);
 }

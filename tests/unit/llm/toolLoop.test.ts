@@ -25,6 +25,7 @@ import type {
   StreamReasoningItemChunk,
   StreamToolCallChunk,
 } from "../../../src/types";
+import { logger } from "../../../src/utils/logger";
 
 type StreamYield =
   | StreamChunk
@@ -1679,18 +1680,34 @@ describe("runToolLoop: cancellation", () => {
       setTimeout(() => controller.abort(), 15);
 
       const updater = new RecordedUpdater();
-      const result = await runToolLoop(
-        baseParams({
-          llmClient: client,
-          registry,
-          updater,
-          signal: controller.signal,
-          timeouts: FAST_TIMEOUTS,
-        }),
-      );
+      const toolLines: string[][] = [];
+      const log = spyOn(logger, "info").mockImplementation((message, meta) => {
+        if (message !== "Tool call") return;
+        const { name, status } = meta as { name: string; status: string };
+        toolLines.push([name, status]);
+      });
+      let result: Awaited<ReturnType<typeof runToolLoop>>;
+      try {
+        result = await runToolLoop(
+          baseParams({
+            llmClient: client,
+            registry,
+            updater,
+            signal: controller.signal,
+            timeouts: FAST_TIMEOUTS,
+          }),
+        );
+      } finally {
+        log.mockRestore();
+      }
 
       expectCancelled(result);
       expect(bCalled).toBe(false);
+      // The call the loop filled in without dispatching is logged as well.
+      expect(toolLines).toEqual([
+        ["call_a", "cancelled"],
+        ["call_b", "cancelled"],
+      ]);
       expect(callCount()).toBe(1); // no turn-2 model request
 
       const toolMsgs = result.history.filter((m) => m.role === "tool");

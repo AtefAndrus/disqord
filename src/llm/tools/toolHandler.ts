@@ -1,4 +1,5 @@
 import type { ResponsesInputContentPart, ToolChatMessage } from "../../types";
+import { logger } from "../../utils/logger";
 import {
   CALL_ID_TOKEN_ALLOWANCE,
   estimateToolResultTokens,
@@ -183,6 +184,59 @@ function clipToolResultParts(
   return encoded.length <= MAX_TOOL_RESULT_PART_BYTES ? parts : null;
 }
 
+const LOG_TEXT_CHARS = 200;
+
+function clipLogText(text: string): string {
+  const chars = Array.from(text);
+  return chars.length > LOG_TEXT_CHARS ? `${chars.slice(0, LOG_TEXT_CHARS).join("")}…` : text;
+}
+
+/**
+ * String fields kept in the log. Other strings can be what a tool read
+ * (`get_channel_info` returns the channel's name and topic), so they are left
+ * out rather than clipped.
+ */
+const LOGGED_STRING_KEYS = new Set(["error", "reason", "stop_reason", "status", "next_before"]);
+
+/**
+ * The result's shape for the log, not its content: arrays are counted, and
+ * only scalars and the status-like strings above are kept, one nesting level
+ * deep so `list_events`' `active` and `scheduled` keep their counts. An error
+ * result is the dispatcher's own message, so it is logged as text.
+ */
+function summarizeToolResult(outcome: IToolDispatchOutcome): unknown {
+  const content = outcome.toolMessage.content;
+  if (typeof content !== "string") return { parts: content.length };
+  if (outcome.status !== "ok") return clipLogText(content);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return { chars: content.length };
+  }
+  if (!isPlainRecord(parsed)) return { chars: content.length };
+  return summarizeRecord(parsed, true);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeRecord(record: Record<string, unknown>, nest: boolean): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (Array.isArray(value)) summary[key] = value.length;
+    else if (value === null || typeof value === "boolean" || typeof value === "number") {
+      summary[key] = value;
+    } else if (typeof value === "string" && LOGGED_STRING_KEYS.has(key)) {
+      summary[key] = clipLogText(value);
+    } else if (nest && isPlainRecord(value)) {
+      summary[key] = summarizeRecord(value, false);
+    }
+  }
+  return summary;
+}
+
 export class ToolDispatcher {
   constructor(private readonly registry: ToolRegistry) {}
 
@@ -192,6 +246,41 @@ export class ToolDispatcher {
    * error `role:"tool"` result.
    */
   async dispatch(
+    call: INormalizedToolCall,
+    options: IToolDispatchOptions,
+  ): Promise<IToolDispatchOutcome> {
+    const startedAt = Date.now();
+    const outcome = await this.dispatchGuarded(call, options);
+    this.logCall(call, outcome, options.requestId, Date.now() - startedAt);
+    return outcome;
+  }
+
+  /**
+   * Writes the `Tool call` log line. `dispatch` calls it for every call it
+   * handles; the loop calls it for the calls it answers without dispatching
+   * (stopped after `result_too_large`, or left over after a cancel).
+   */
+  logCall(
+    call: INormalizedToolCall,
+    outcome: IToolDispatchOutcome,
+    requestId: string,
+    elapsedMs: number,
+  ): void {
+    try {
+      logger.info("Tool call", {
+        messageId: requestId,
+        name: call.name,
+        status: outcome.status,
+        elapsed: elapsedMs,
+        args: clipLogText(call.rawArguments),
+        result: summarizeToolResult(outcome),
+      });
+    } catch {
+      // A log failure must not replace the outcome of a tool that already ran.
+    }
+  }
+
+  private async dispatchGuarded(
     call: INormalizedToolCall,
     options: IToolDispatchOptions,
   ): Promise<IToolDispatchOutcome> {
@@ -313,8 +402,6 @@ export class ToolDispatcher {
       toolCallId: call.id,
       invocationId: crypto.randomUUID(),
     };
-
-    console.info(`[tool] client tool invoked name=${tool.name}`);
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let onRequestAbort: (() => void) | undefined;
