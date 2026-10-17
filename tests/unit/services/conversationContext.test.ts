@@ -2014,3 +2014,20 @@ test("sweeps stale channel states on access", async () => {
   expect(reader.fetchQueries).toEqual([]);
   expect(reader.listQueries.at(-1)).toEqual({ before: "1003", limit: 100 });
 });
+
+test("reactions read with the history reach the window and read_earlier_messages", async () => {
+  const reader = new FakeReader();
+  const reacted = (id: string): RawDiscordMessage =>
+    message(id, undefined, { reactions: [{ count: 2, emoji: { id: null, name: "👍" } }] });
+  reader.listResponses.push({ status: "ok", messages: [reacted("999")] });
+  const service = new ConversationWindowService(reader, records(), () => NOW);
+  const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
+
+  expect(context?.messages[0]?.reactions).toBe("[リアクション 👍 2]");
+
+  reader.listResponses.push({ status: "ok", messages: [reacted("998"), reacted("999")] });
+  const result = JSON.parse(
+    (await context?.toolContext.readEarlierMessages(5, new AbortController().signal)) as string,
+  ) as { messages: Array<{ reactions?: string }> };
+  expect(result.messages.map((entry) => entry.reactions)).toEqual(["[リアクション 👍 2]"]);
+});
