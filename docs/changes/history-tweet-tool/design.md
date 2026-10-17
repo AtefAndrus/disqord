@@ -16,7 +16,7 @@ summary: "会話履歴の発言に貼られた X のポストを、モデルが�
 ## 依存 / 関連 change
 
 - 関連: [Web 検索 + ツイート展開](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/web-search/design.md) — 呼びかけ本文の URL を client tool にせず必ず展開する判断と、`<untrusted-tweet>` の整形、画像の扱い、取得の上限はここで決めた。本 change はその自動展開を変えず、届かなかった履歴の分を tool で補う。
-- 関連: [返答中の発言番号をメッセージリンクにする](../message-ref-links/design.md) — どちらも会話履歴の発言番号（`m<N>`）を使う。互いに依存しない。
+- 関連: [返答中の発言番号をメッセージリンクにする](https://github.com/AtefAndrus/disqord/blob/c0cec01239f7e4eb45a7553ee58b5a24efcd9bca/docs/changes/message-ref-links/design.md) — どちらも会話履歴の発言番号（`m<N>`）を使う。互いに依存しない。
 
 ## Goals / Non-Goals
 
