@@ -658,7 +658,7 @@ describe("createMessageCreateHandler", () => {
       expect(input.botName).toBe("DisQord");
       expect(input.state).toEqual({
         bot_name: "DisQord",
-        new_message: "@author-123: hello",
+        new_message: "author-123 (@author-123): hello",
         is_reply_to_bot: true,
       });
       return "silent" as const;
@@ -1132,7 +1132,7 @@ describe("createMessageCreateHandler", () => {
     // generateChatResponseが呼ばれる（parts は空配列）
     expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
       "guild-123",
-      { text: "Hello", parts: [], authorLabel: "@author-123" },
+      { text: "Hello", parts: [], authorLabel: "author-123 (@author-123)" },
       "msg-123",
       expect.anything(),
       { channelId: "channel-123", userId: "author-123" },
@@ -1442,7 +1442,7 @@ describe("createMessageCreateHandler", () => {
         {
           text: "Hello",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
-          authorLabel: "@author-123",
+          authorLabel: "author-123 (@author-123)",
         },
         "msg-123",
         expect.anything(),
@@ -1535,7 +1535,7 @@ describe("createMessageCreateHandler", () => {
               file: { filename: "spec.pdf", file_data: "data:application/pdf;base64,UERG" },
             },
           ],
-          authorLabel: "@author-123",
+          authorLabel: "author-123 (@author-123)",
         },
         "msg-123",
         expect.anything(),
@@ -1678,7 +1678,7 @@ describe("createMessageCreateHandler", () => {
         {
           text: "",
           parts: [{ type: "image_url", image_url: { url: "https://cdn.discord.test/photo.png" } }],
-          authorLabel: "@author-123",
+          authorLabel: "author-123 (@author-123)",
         },
         "msg-123",
         expect.anything(),

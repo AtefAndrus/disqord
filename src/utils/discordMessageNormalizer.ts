@@ -52,7 +52,6 @@ export interface RawDiscordMessage {
     global_name?: string | null;
     bot?: boolean;
   };
-  member?: { nick?: string | null } | null;
   webhook_id?: string;
   type?: number;
   components?: unknown[];
@@ -190,6 +189,11 @@ export interface AuthorNames {
  * The username is what tells apart members who share a display name. The
  * server nickname is not used: history read over REST carries no member, so
  * the current message alone would name the same person differently.
+ *
+ * The label always has both parts, even when they are equal: a bare
+ * `@alice:` reads to the reply gate as a message addressed to alice. ASCII
+ * parentheses in the display name become full-width, so a display name
+ * cannot imitate the trailing `(@username)`.
  */
 export function authorNames(author: {
   id: string;
@@ -197,11 +201,11 @@ export function authorNames(author: {
   global_name?: string | null;
 }): AuthorNames {
   const username = normalizeAuthorLabel(author.username, author.id);
-  const displayName = normalizeAuthorLabel(author.global_name ?? author.username, author.id);
-  return {
-    label: displayName === username ? `@${username}` : `${displayName} (@${username})`,
-    displayName,
-  };
+  const displayName =
+    normalizeAuthorLabel(author.global_name ?? "", "").replace(/[()]/gu, (paren) =>
+      paren === "(" ? "（" : "）",
+    ) || username;
+  return { label: `${displayName} (@${username})`, displayName };
 }
 
 function authorFields(

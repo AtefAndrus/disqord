@@ -158,7 +158,7 @@ test.each([0, 19])(
       ),
     );
     expect(context?.messages.map((entry) => entry.id)).toEqual(["950"]);
-    expect(context?.replyTarget).toMatchObject({ kind: "user", author: "@Other Bot" });
+    expect(context?.replyTarget).toMatchObject({ kind: "user", author: "Other Bot (@Other Bot)" });
     for (const text of [
       "bot text",
       "embed title",
@@ -576,7 +576,9 @@ test("resolves only shown message references, including pages shown by read_earl
   reader.listResponses.push({
     status: "ok",
     messages: [
-      message("900"),
+      message("900", undefined, {
+        author: { id: "user-900", username: "user-900", global_name: "田中", bot: false },
+      }),
       message("950", undefined, {
         author: { id: "other-bot", username: "other-bot", bot: true },
       }),
@@ -586,11 +588,13 @@ test("resolves only shown message references, including pages shown by read_earl
   const context = await service.build(input(message("1000", new Date(NOW).toISOString())));
   const first = context?.messages.find((entry) => entry.id === "900");
   expect(first?.ref).toBeString();
+  expect(first?.author).toBe("田中 (@user-900)");
   expect(context?.toolContext.resolveMessageRef(first?.ref ?? "")).toBe("900");
+  // A link shows the display name alone, not the model's label.
   expect(context?.toolContext.describeMessageRef(first?.ref ?? "")).toEqual({
     messageId: "900",
     channelId: "channel",
-    author: "user-900",
+    author: "田中",
     kind: "user",
   });
   expect(context?.toolContext.resolveMessageRef("m2")).toBeUndefined();

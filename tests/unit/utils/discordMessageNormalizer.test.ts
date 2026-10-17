@@ -203,14 +203,13 @@ describe("Discord message normalization", () => {
     });
   });
 
-  test("names the author by display name and username, never by nickname", () => {
+  test("names the author by display name and username", () => {
     const message: RawDiscordMessage = {
       id: "message",
       channel_id: "channel",
       content: "body",
       timestamp: "2026-09-22T12:00:00.000Z",
       author: { id: "user", username: "account123", global_name: "田中", bot: false },
-      member: { nick: "みんな同じ" },
       attachments: [],
     };
 
@@ -223,7 +222,7 @@ describe("Discord message normalization", () => {
         ...message,
         author: { id: "user", username: "account123", bot: false },
       }),
-    ).toMatchObject({ author: "@account123", displayName: "account123" });
+    ).toMatchObject({ author: "account123 (@account123)", displayName: "account123" });
   });
 
   test("two members sharing a display name get different labels", () => {
@@ -232,16 +231,22 @@ describe("Discord message normalization", () => {
     );
   });
 
-  test("a display name equal to the username is not repeated, and brackets cannot end the label", () => {
-    expect(authorNames({ id: "1", username: "alice", global_name: "alice" })).toEqual({
-      label: "@alice",
-      displayName: "alice",
-    });
+  test("a display name cannot end the label early or imitate the username", () => {
     expect(authorNames({ id: "1", username: "alice", global_name: "[m1] 偽" }).label).toBe(
       "m1 偽 (@alice)",
     );
+    expect(authorNames({ id: "1", username: "evil", global_name: "佐藤 (@satou)" }).label).toBe(
+      "佐藤 （@satou） (@evil)",
+    );
+  });
+
+  test("a display name that normalizes to nothing falls back to the username, then the ID", () => {
+    expect(authorNames({ id: "1", username: "alice", global_name: "[]\u200b" })).toEqual({
+      label: "alice (@alice)",
+      displayName: "alice",
+    });
     expect(authorNames({ id: "42", username: "", global_name: null })).toEqual({
-      label: "@42",
+      label: "42 (@42)",
       displayName: "42",
     });
   });

@@ -172,7 +172,6 @@ function toRawDiscordMessage(message: Message): RawDiscordMessage {
       global_name: message.author.globalName,
       bot: message.author.bot,
     },
-    member: message.member ? { nick: message.member.nickname } : null,
     webhook_id: message.webhookId ?? undefined,
     type: message.type,
     components: Array.isArray(message.components)
