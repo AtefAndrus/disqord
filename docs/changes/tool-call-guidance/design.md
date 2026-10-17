@@ -46,15 +46,17 @@ client tool の呼び出しは `console.info` で tool 名だけを出してお�
 
 - 修正: `src/services/conversationWindow.ts` — `read_earlier_messages` の結果を作る処理に `note` を足す
 - 修正: `src/llm/tools/discord/addReaction.ts` — 説明を変える
-- 修正: `src/llm/tools/toolHandler.ts` — `console.info` の行を、実行の終わりの `logger.info` に置き換える
-- 修正: `.claude/skills/production-investigation/SKILL.md` — tool 呼び出しはコンテナの標準出力にしか出ない、という記述を直す
+- 修正: `src/llm/tools/toolHandler.ts` — `console.info` の行を、`dispatch` の終わりの `logCall` に置き換える
+- 修正: `src/llm/toolLoop.ts` — dispatch を通さずに埋める呼び出しも `logCall` で記録する
+- 修正: `scripts/e2e/input.ts`、`scripts/e2e/index.ts` — tool の呼び出しを、`Tool call` の行の `status` が `ok` のものから数える
+- 修正: `.agents/skills/production-investigation/SKILL.md` — tool 呼び出しはコンテナの標準出力にしか出ない、という記述を直す
 
 ## Tasks
 
 - [x] `note` の追加（単体テスト: 0 件で古い発言が無い、0 件で `stop_reason` がある、1 件以上）
 - [x] `add_reaction` の説明
 - [x] `Tool call` のログ（単体テスト: 各 `status`、結果が JSON のオブジェクト、JSON でない文字列、長い引数の切り詰め、記録の失敗）。e2e が tool の呼び出しを確かめる行（`scripts/e2e/index.ts`）もこの行に合わせる
-- [x] `bun run e2e` の既定シナリオと、`history-set history-recall read-earlier` を通す
+- [x] `bun run e2e` の既定シナリオと、`history-set history-recall history-window read-earlier view-attachment view-image` を通す
 - [ ] `docs/changes/tool-call-guidance/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
