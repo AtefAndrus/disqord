@@ -15,6 +15,7 @@ describe("linkMessageRefs", () => {
     expect(linkMessageRefs("[m12] and [m12]", resolve)).toBe(`${linked} and ${linked}`);
     expect(linkMessageRefs("<[m12]>", resolve)).toBe(`<${linked}>`);
     expect(linkMessageRefs("[m12](Alice)", resolve)).toBe(`${linked}(Alice)`);
+    expect(linkMessageRefs("[m12](note: 古い情報)", resolve)).toBe(`${linked}(note: 古い情報)`);
   });
 
   test.each([
@@ -29,6 +30,7 @@ describe("linkMessageRefs", () => {
     "`across\n[m12]`",
     "[m12](https://example.com)",
     "[supplement [m12]](https://example.com/a_(b))",
+    "[supplement [m12]](<https://example.com>)",
     String.raw`[escaped \[bracket\] [m12]](https://example.com)`,
     String.raw`[escaped \] [m12]](https://example.com)`,
     "[link](https://example.com/[m12])",

@@ -47,11 +47,12 @@ export function readLinkAt(text: string, cursor: number): string | undefined {
       else if (text[end] === "[") depth++;
       else if (text[end] === "]") depth--;
     }
-    // Discord renders `[x](y)` as a link only when y is a URL, and a URL never
-    // spans lines: a missing `)` must not swallow a following code fence.
-    if (depth === 0 && text[end] === "(" && /^[a-z][a-z\d+.-]*:/iu.test(text.slice(end + 1))) {
+    // Discord renders `[x](y)` as a link only when y is an http(s) URL, bare or
+    // in `<>` as search results write it, and a URL holds no whitespace: a
+    // missing `)` must not swallow a following code fence.
+    if (depth === 0 && text[end] === "(" && /^<?https?:\/\//iu.test(text.slice(end + 1))) {
       depth = 1;
-      for (end++; end < text.length && text[end] !== "\n"; end++) {
+      for (end++; end < text.length && !/\s/u.test(text[end] ?? ""); end++) {
         if (text[end] === "\\") end++;
         else if (text[end] === "(") depth++;
         else if (text[end] === ")" && --depth === 0) return text.slice(cursor, end + 1);

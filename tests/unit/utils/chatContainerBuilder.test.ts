@@ -777,6 +777,22 @@ describe("chatContainerBuilder", () => {
       ]);
     });
 
+    test("本文が次のページから始まる推論だけの 1 ページ目には「応答なし」を出さない", () => {
+      const json = toJSON(
+        buildFinalContainer({
+          text: "",
+          modelName: "m",
+          color: 0x00ff00,
+          isFirst: true,
+          isLast: false,
+          metadata: { showDetails: false },
+          reasoning: { text: `${REASONING_HEADING}\n||考え||`, needsFile: false },
+        }),
+      );
+      expect(JSON.stringify(json)).not.toContain("（応答なし）");
+      expect(JSON.stringify(json)).toContain("考え");
+    });
+
     test("本文の区切り線は divider 付きの Separator になり、footer の Separator は divider を持たない", () => {
       const json = toJSON(
         buildFinalContainer({
