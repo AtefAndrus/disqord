@@ -2,7 +2,8 @@
  * Hand-written reply-gate cases for `scripts/reply-gate-eval.ts`. `expect`
  * is true when the bot should answer. Each history line is `<author>: <text>`
  * and a line by `BOT_NAME` is the bot's own reply. A mention of a person is
- * written `<@id>`, as the judgment receives it. The `hard` set puts the
+ * written `<@id>`, as Discord delivers it, so the rewriting in
+ * `buildReplyGateState` is part of what a run measures. The `hard` set puts the
  * surface cue and the right answer on opposite sides: a bot-shaped question
  * addressed to one person, a question only a human can answer, a question
  * that follows thanks to the bot.
