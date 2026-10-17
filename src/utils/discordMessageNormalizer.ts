@@ -59,6 +59,13 @@ export interface RawDiscordMessage {
   message_reference?: { channel_id?: string; message_id?: string } | null;
   poll?: RawDiscordPoll | null;
   embeds?: RawDiscordEmbed[];
+  reactions?: RawDiscordReaction[];
+}
+
+/** One emoji's reactions as REST returns them on a message; who reacted is not included. */
+export interface RawDiscordReaction {
+  count: number;
+  emoji: { id?: string | null; name?: string | null };
 }
 
 export type NormalizedMessageKind = "user" | "assistant";
@@ -87,6 +94,8 @@ export interface NormalizedMessage {
   text: string;
   /** The message's poll as text, placed after `text`. */
   poll?: string;
+  /** The reactions on the message as one line, placed after the body. */
+  reactions?: string;
   attachments: NormalizedAttachment[];
   exchangeId: string;
   triggerMsgId?: string;
@@ -245,6 +254,43 @@ function pollMediaText(media: RawDiscordPollMedia): string {
   return oneLine([emojiText, media.text ?? ""].filter((part) => part.length > 0).join(" "));
 }
 
+/**
+ * The reactions on one message, or on all pages of one bot reply, as
+ * `[リアクション 👍 2、:kusa: 1]`, summed per emoji in the order Discord lists
+ * them. The bot's own reactions are counted like anyone's. REST data is not
+ * typed at runtime, so malformed entries are skipped.
+ */
+export function formatReactions(messages: readonly RawDiscordMessage[]): string | undefined {
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const message of messages) {
+    if (!Array.isArray(message.reactions)) continue;
+    for (const reaction of message.reactions as unknown[]) {
+      if (typeof reaction !== "object" || reaction === null) continue;
+      const { count, emoji } = reaction as Partial<RawDiscordReaction>;
+      if (typeof count !== "number" || count <= 0 || typeof emoji !== "object" || emoji === null) {
+        continue;
+      }
+      const name = typeof emoji.name === "string" ? emoji.name : undefined;
+      // A custom emoji's name can repeat across guilds; its ID keeps the counts apart.
+      const key = emoji.id ? `custom:${emoji.id}` : name ? `unicode:${name}` : undefined;
+      if (key === undefined) continue;
+      // Discord sends a null name when a custom emoji's data is unavailable (for example it was
+      // deleted); its count still stands.
+      // Only control characters are replaced: format characters such as the
+      // zero-width joiner hold multi-part emoji like ❤️‍🔥 together.
+      const label = emoji.id
+        ? `:${name ? oneLine(name) : "名前の分からない絵文字"}:`
+        : (name ?? "").replace(/\p{Cc}+/gu, " ").trim();
+      if (label.length === 0) continue;
+      const entry = counts.get(key) ?? { label, count: 0 };
+      entry.count += count;
+      counts.set(key, entry);
+    }
+  }
+  if (counts.size === 0) return undefined;
+  return `[リアクション ${[...counts.values()].map(({ label, count }) => `${label} ${count}`).join("、")}]`;
+}
+
 const JST_OFFSET_MS = 9 * 3_600_000;
 
 function formatJst(ms: number): string {
@@ -325,9 +371,15 @@ export function normalizeHumanMessage(
     timestampMs: timestampMs(message),
     text: message.content,
     ...(message.poll && { poll: formatPoll(message.poll, nowMs) }),
+    ...reactionsOf([message]),
     attachments: attachmentsOf(message),
     exchangeId: message.id,
   };
+}
+
+function reactionsOf(messages: readonly RawDiscordMessage[]): Pick<NormalizedMessage, "reactions"> {
+  const reactions = formatReactions(messages);
+  return reactions === undefined ? {} : { reactions };
 }
 
 /** Explicit quotes of other bots retain their text without DisQord's page filtering. */
@@ -377,6 +429,7 @@ export function normalizeBotPoll(
     timestampMs: timestampMs(message),
     text: message.content,
     ...(message.poll && { poll: formatPoll(message.poll, nowMs) }),
+    ...reactionsOf([message]),
     attachments: [],
     exchangeId,
   };
@@ -396,6 +449,7 @@ export function normalizePollResultNotice(
     time: message.timestamp,
     timestampMs: timestampMs(message),
     text: formatPollResultNotice(message) ?? "",
+    ...reactionsOf([message]),
     attachments: [],
     exchangeId,
   };
@@ -419,6 +473,7 @@ export function normalizeBotReply(
     time: first?.timestamp ?? "",
     timestampMs: first ? timestampMs(first) : 0,
     text,
+    ...reactionsOf(ordered),
     attachments: [],
     exchangeId: triggerMsgId,
     triggerMsgId,
@@ -431,10 +486,11 @@ function formatAttachment(attachment: NormalizedAttachment, ref: string): string
   return `[添付 ${ref}/${attachment.index}: ${kind} "${attachment.filename}" ${attachment.sizeBytes} bytes]`;
 }
 
-/** The text and the poll, or a placeholder when the message has neither. */
+/** The text and the poll, or a placeholder when the message has neither, then the reactions. */
 export function messageBody(message: NormalizedMessage): string {
   const parts = [message.text, message.poll ?? ""].filter((part) => part.length > 0);
-  return parts.length > 0 ? parts.join("\n") : "（本文なし）";
+  const body = parts.length > 0 ? parts.join("\n") : "（本文なし）";
+  return message.reactions === undefined ? body : `${body}\n${message.reactions}`;
 }
 
 export function formatMessageForModel(
@@ -453,6 +509,7 @@ export function formatMessageForTool(message: NormalizedMessage): {
   time: string;
   text: string;
   poll?: string;
+  reactions?: string;
   attachments: Array<{
     index: number;
     kind: NormalizedAttachmentKind;
@@ -468,6 +525,7 @@ export function formatMessageForTool(message: NormalizedMessage): {
     time: message.time,
     text: message.text,
     ...(message.poll !== undefined && { poll: message.poll }),
+    ...(message.reactions !== undefined && { reactions: message.reactions }),
     attachments: message.attachments.map(({ index, kind, filename, sizeBytes }) => ({
       index,
       kind,

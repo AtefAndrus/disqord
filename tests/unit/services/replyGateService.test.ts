@@ -41,6 +41,20 @@ describe("buildReplyGateState", () => {
     expect(state.reply_target).toBe("author0: text 0");
     expect(state.new_message).toBe(`new author: new text [ファイル ${filename}]`);
   });
+  test("reactions on history messages are not part of the judged state", () => {
+    const state = buildReplyGateState({
+      botName: "bot",
+      botUserId: "100",
+      current,
+      isReplyToBot: false,
+      conversation: {
+        messages: [{ ...message(1), reactions: "[リアクション 👍 2]" }],
+        replyTarget: { ...message(0), reactions: "[リアクション 😢 1]" },
+      },
+    });
+    expect(JSON.stringify(state)).not.toContain("リアクション");
+  });
+
   test("history off includes only the current message and reply flag", () => {
     expect(
       buildReplyGateState({ botName: "bot", botUserId: "100", current, isReplyToBot: true }),

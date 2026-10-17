@@ -6,9 +6,11 @@ import {
   extractComponentsV2Footer,
   formatMessageForModel,
   formatMessageForTool,
+  formatReactions,
   normalizeBotReply,
   normalizeExternalBotMessage,
   normalizeHumanMessage,
+  normalizePollResultNotice,
 } from "../../../src/utils/discordMessageNormalizer";
 
 function botPage(id: string, body: string, footer: string): RawDiscordMessage {
@@ -254,5 +256,120 @@ describe("Discord message normalization", () => {
       label: "42 (@42)",
       displayName: "42",
     });
+  });
+});
+
+describe("reactions", () => {
+  const base: RawDiscordMessage = {
+    id: "message",
+    channel_id: "channel",
+    content: "body",
+    timestamp: "2026-09-22T12:00:00.000Z",
+    author: { id: "user", username: "alice" },
+    attachments: [],
+  };
+
+  test("lists each emoji with its count after the body, custom emoji by name", () => {
+    const normalized = normalizeHumanMessage({
+      ...base,
+      reactions: [
+        { count: 2, emoji: { id: null, name: "👍" } },
+        { count: 1, emoji: { id: "123", name: "kusa" } },
+      ],
+    });
+
+    expect(formatMessageForModel({ ...normalized, ref: "m1" })).toBe(
+      "[m1] alice (@alice): body\n[リアクション 👍 2、:kusa: 1]",
+    );
+    expect(formatMessageForTool({ ...normalized, ref: "m1" }).reactions).toBe(
+      "[リアクション 👍 2、:kusa: 1]",
+    );
+  });
+
+  test("a message without reactions gets no line", () => {
+    const normalized = normalizeHumanMessage({ ...base, reactions: [] });
+
+    expect(normalized.reactions).toBeUndefined();
+    expect(formatMessageForModel({ ...normalized, ref: "m1" })).toBe("[m1] alice (@alice): body");
+  });
+
+  test("a message with only reactions keeps the empty-body placeholder", () => {
+    const normalized = normalizeHumanMessage({
+      ...base,
+      content: "",
+      reactions: [{ count: 1, emoji: { name: "😢" } }],
+    });
+
+    expect(formatMessageForModel({ ...normalized, ref: "m1" })).toBe(
+      "[m1] alice (@alice): （本文なし）\n[リアクション 😢 1]",
+    );
+  });
+
+  test("a bot reply sums the reactions of all its pages per emoji", () => {
+    const page = (id: string, seq: number, reactions: RawDiscordMessage["reactions"]) => ({
+      ...base,
+      id,
+      author: { id: "bot", username: "bot", bot: true },
+      content: "",
+      reactions,
+      page: { pageMsgId: id, triggerMsgId: "trigger", seq },
+    });
+
+    const reply = normalizeBotReply("trigger", [
+      page("2", 1, [
+        { count: 1, emoji: { name: "😢" } },
+        { count: 2, emoji: { name: "👍" } },
+      ]),
+      page("1", 0, [{ count: 1, emoji: { name: "👍" } }]),
+    ]);
+
+    expect(reply.reactions).toBe("[リアクション 👍 3、😢 1]");
+  });
+
+  test("custom emoji with the same name but different IDs are counted apart", () => {
+    expect(
+      formatReactions([
+        {
+          ...base,
+          reactions: [
+            { count: 1, emoji: { id: "1", name: "ok" } },
+            { count: 2, emoji: { id: "2", name: "ok" } },
+          ],
+        },
+      ]),
+    ).toBe("[リアクション :ok: 1、:ok: 2]");
+  });
+
+  test("malformed entries from REST are skipped, and a deleted custom emoji keeps its count", () => {
+    expect(
+      formatReactions([
+        {
+          ...base,
+          reactions: [
+            { count: 0, emoji: { name: "👍" } },
+            { emoji: { name: "👎" } },
+            { count: 1, emoji: { id: "1", name: null } },
+            null,
+            { count: 1, emoji: { name: "line\nbreak" } },
+          ] as unknown as RawDiscordMessage["reactions"],
+        },
+      ]),
+    ).toBe("[リアクション :名前の分からない絵文字: 1、line break 1]");
+  });
+
+  test("an emoji joined with zero-width joiners stays one emoji", () => {
+    expect(formatReactions([{ ...base, reactions: [{ count: 1, emoji: { name: "❤️‍🔥" } }] }])).toBe(
+      "[リアクション ❤️‍🔥 1]",
+    );
+  });
+
+  test("a poll-closed notice carries its reactions", () => {
+    const notice = normalizePollResultNotice(
+      { ...base, type: 46, reactions: [{ count: 3, emoji: { name: "🎉" } }] },
+      "poll",
+      false,
+    );
+
+    expect(notice.reactions).toBe("[リアクション 🎉 3]");
   });
 });

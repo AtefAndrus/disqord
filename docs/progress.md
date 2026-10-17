@@ -21,7 +21,7 @@
 | [LLM 入力の表示（コンテキストメニュー）](changes/llm-input-inspect/design.md) | 中 | planned | bot の返答を右クリックして「アプリ → LLM 入力を見る」を選ぶと、その返答を生成したときに OpenRouter へ送った入力と生成のメタデータを、実行した本人にだけ見える返信で返す |
 | [数式を画像で表示する](changes/math-rendering/design.md) | 中 | investigating | 返答の別行立ての数式を PNG にして本文の該当位置に差し込み、文中の数式はコードの表記にする |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
-| [発言に付いたリアクションを読む](changes/message-reactions/design.md) | 中 | planned | 会話履歴の各発言に付いたリアクションの種類と数を、発言の本文の後ろに添えてモデルに渡す |
+| [発言に付いたリアクションを読む](changes/message-reactions/design.md) | 中 | in-progress | 会話履歴の各発言に付いたリアクションの種類と数を、発言の本文の後ろに添えてモデルに渡す |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [client tool の案内と呼び出しの記録](changes/tool-call-guidance/design.md) | 中 | implemented | read_earlier_messages が 0 件のときの結果と add_reaction の説明を直し、client tool の呼び出しを admin API で読めるログに残す |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
