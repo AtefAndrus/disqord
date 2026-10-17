@@ -23,6 +23,7 @@ import {
   estimateNormalizedMessageTokens,
   type RawDiscordMessage,
 } from "../../../src/utils/discordMessageNormalizer";
+import { createMessageRefResolver, linkMessageRefs } from "../../../src/utils/messageRefLinks";
 
 const NOW = Date.parse("2026-09-22T12:00:00.000Z");
 
@@ -235,7 +236,11 @@ test.each(["inside", "outside", "deleted-page", "deleted-trigger"])(
     repository.listPages = mock(() =>
       [0, 1].map((seq) => ({ triggerMsgId: "800", pageMsgId: String(900 + seq), seq })),
     );
-    const pages = ["first answer", "second answer"].map((content, index) =>
+    const firstAnswer = linkMessageRefs("[m1]", () => ({
+      label: "Alice [m1] の発言",
+      url: "https://discord.com/channels/guild/channel/700",
+    }));
+    const pages = [firstAnswer, "second answer"].map((content, index) =>
       message(String(900 + index), undefined, {
         content: "",
         author: { id: "bot", username: "bot", bot: true },
@@ -279,11 +284,21 @@ test.each(["inside", "outside", "deleted-page", "deleted-trigger"])(
         : context?.replyTarget;
     expect(quote).toMatchObject({
       id: "900",
-      text: "first answer\nsecond answer",
+      text: `${firstAnswer}\nsecond answer`,
       pageIds: ["900", "901"],
     });
     expect(context?.replyTargetRef).toBe(quote?.ref);
     expect(context?.toolContext.resolveMessageRef(context?.replyTargetRef ?? "")).toBe("900");
+    expect(context?.toolContext.describeMessageRef(context?.replyTargetRef ?? "")).toEqual({
+      messageId: "900",
+      channelId: "channel",
+      author: "assistant",
+      kind: "assistant",
+    });
+    if (!context || !quote) throw new Error("reply context missing");
+    expect(
+      linkMessageRefs(quote.text, createMessageRefResolver("guild", context.toolContext)),
+    ).toBe(quote.text);
     if (location === "inside") expect(context?.replyTarget).toBeUndefined();
   },
 );
@@ -563,7 +578,14 @@ test("resolves only shown message references, including pages shown by read_earl
   const first = context?.messages.find((entry) => entry.id === "900");
   expect(first?.ref).toBeString();
   expect(context?.toolContext.resolveMessageRef(first?.ref ?? "")).toBe("900");
+  expect(context?.toolContext.describeMessageRef(first?.ref ?? "")).toEqual({
+    messageId: "900",
+    channelId: "channel",
+    author: "user-900",
+    kind: "user",
+  });
   expect(context?.toolContext.resolveMessageRef("m2")).toBeUndefined();
+  expect(context?.toolContext.describeMessageRef("m2")).toBeUndefined();
 
   reader.listResponses.push({ status: "ok", messages: [message("800")] });
   const earlier = JSON.parse(
@@ -571,6 +593,12 @@ test("resolves only shown message references, including pages shown by read_earl
   ) as { messages: Array<{ ref: string }> };
   expect(earlier.messages).toHaveLength(1);
   expect(context?.toolContext.resolveMessageRef(earlier.messages[0]?.ref ?? "")).toBe("800");
+  expect(context?.toolContext.describeMessageRef(earlier.messages[0]?.ref ?? "")).toEqual({
+    messageId: "800",
+    channelId: "channel",
+    author: "user-800",
+    kind: "user",
+  });
 });
 
 test("anchored windows shrink to the compact limits and rebuild after sixty minutes", async () => {

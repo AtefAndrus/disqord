@@ -606,6 +606,12 @@ test("pin budget paging returns the dropped pin on the follow-up call", async ()
   expect(next.pins[0].text).toBe("x".repeat(5000));
   expect(next.has_more).toBe(false);
   expect(f.context.toolContext.resolveMessageRef(next.pins[0].ref)).toBe("200");
+  expect(f.context.toolContext.describeMessageRef(next.pins[0].ref)).toEqual({
+    messageId: "200",
+    channelId: "channel",
+    author: "user",
+    kind: "user",
+  });
   expect(first.next_before).toBe(items[0]?.pinnedAt.toISOString());
 });
 

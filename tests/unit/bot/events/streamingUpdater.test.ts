@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import type { Message } from "discord.js";
 import { DiscordStreamingUpdater } from "../../../../src/bot/events/streamingUpdater";
+import { linkMessageRefs } from "../../../../src/utils/messageRefLinks";
 
 /** 手動で resolve タイミングを制御できる Promise。 */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -12,6 +13,44 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 describe("DiscordStreamingUpdater — markFinalized", () => {
+  test("transforms full streaming text before splitting, including a ref completed in a later update", async () => {
+    setSystemTime(new Date(2020, 0, 1));
+    const edits = mock(async (_payload: unknown) => {});
+    const initialMessage = { id: "bot-1", edit: edits } as unknown as Message;
+    const send = mock(
+      async (_payload: unknown) => ({ id: "bot-2", edit: edits }) as unknown as Message,
+    );
+    const originalMessage = { id: "trigger", channel: { send } } as unknown as Message;
+    const link = "[Alice の発言](https://discord.com/channels/guild/channel/message)";
+    const transform = (text: string): string =>
+      linkMessageRefs(text, (ref) =>
+        ref === "m12"
+          ? {
+              label: "Alice の発言",
+              url: "https://discord.com/channels/guild/channel/message",
+            }
+          : undefined,
+      );
+    const updater = new DiscordStreamingUpdater(
+      originalMessage,
+      initialMessage,
+      "Model",
+      0,
+      undefined,
+      undefined,
+      transform,
+    );
+    setSystemTime(Date.now() + 2100);
+    await updater.stageContent("[m1");
+    expect(JSON.stringify(edits.mock.calls)).toContain("[m1");
+    setSystemTime(Date.now() + 2100);
+    const raw = `${"あ".repeat(2900)}[m12]`;
+    await updater.stageContent(raw);
+    expect(updater.text).toBe(raw);
+    const payloads = [...edits.mock.calls, ...send.mock.calls];
+    expect(payloads.some((call) => JSON.stringify(call[0]).includes(link))).toBe(true);
+  });
+
   afterEach(() => {
     // setSystemTime を書き換えたテストが実時間に戻す
     setSystemTime();

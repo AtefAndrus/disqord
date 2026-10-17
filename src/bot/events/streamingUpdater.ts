@@ -243,6 +243,7 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
       await message.delete();
     },
     private readonly onBotMessageSent: OnBotMessageSent = async () => {},
+    private readonly transformText?: (text: string) => string,
   ) {
     this.botMessages = [initialBotMessage];
   }
@@ -324,7 +325,7 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
       try {
         const rendered = await updateStreamingMessages(
           this.botMessages,
-          snapshotText,
+          this.transformText ? this.transformText(snapshotText) : snapshotText,
           this.modelName,
           this.color,
           this.originalMessage,

@@ -53,6 +53,7 @@ import {
 } from "../../utils/discordMessageNormalizer";
 import { getColorForModel } from "../../utils/embedBuilder";
 import { logger } from "../../utils/logger";
+import { createMessageRefResolver, linkMessageRefs } from "../../utils/messageRefLinks";
 import { type DeleteOwnMessage, DiscordStreamingUpdater } from "./streamingUpdater";
 
 function operationError(error: unknown): string {
@@ -406,6 +407,13 @@ export function createMessageCreateHandler(
       }
     }
 
+    const resolveRef = conversation
+      ? createMessageRefResolver(guildId, conversation.toolContext)
+      : undefined;
+    const transformText = resolveRef
+      ? (text: string): string => linkMessageRefs(text, resolveRef)
+      : undefined;
+
     // 終了処理が始まっていたら初期メッセージを送らない: 送った直後に停止表示へ書き換えるだけで、
     // 限られた待機時間の中で書き換えが間に合わなければ「生成中...」が残る。pending の記録は次の起動で failed になる。
     if (chatService.isClosing) return;
@@ -441,6 +449,7 @@ export function createMessageCreateHandler(
         color,
         deleteMessage,
         botMessageCreated,
+        transformText,
       );
       await botMessageCreated(initialBotMessage);
 
@@ -497,7 +506,9 @@ export function createMessageCreateHandler(
         const receivedChars = Array.from(updater.text).length;
         const renderedPageCount = await updateStoppedMessages(
           updater.messages,
-          updater.text || "（応答なし）",
+          transformText
+            ? transformText(updater.text || "（応答なし）")
+            : updater.text || "（応答なし）",
           modelName,
           color,
           elapsedSeconds,
@@ -569,9 +580,13 @@ export function createMessageCreateHandler(
         : answerText;
       const footerBudget = estimateFinalFooterBudget(metadata);
       const reasoningText =
-        settings.reasoningDisplayEnabled && result.reasoningText ? result.reasoningText : undefined;
+        settings.reasoningDisplayEnabled && result.reasoningText
+          ? transformText
+            ? transformText(result.reasoningText)
+            : result.reasoningText
+          : undefined;
       const chunks = splitTextIntoMessages(
-        finalText,
+        transformText ? transformText(finalText) : finalText,
         measureTextBudget(badgeText(answeredModelName)),
         footerBudget,
         reasoningText ? reasoningReserve(reasoningText) : undefined,
@@ -651,7 +666,7 @@ export function createMessageCreateHandler(
       // 「生成中...」+ 停止ボタンが残置されないよう best-effort でクリーンアップする
       const renderedPageCount = await cleanupBotMessagesOnFatalError(
         updater?.messages ?? [],
-        updater?.text ?? "",
+        transformText ? transformText(updater?.text ?? "") : (updater?.text ?? ""),
         modelName,
         color,
         message,

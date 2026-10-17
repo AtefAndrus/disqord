@@ -1,7 +1,11 @@
 import type { IReplyRecordRepository } from "../db/repositories/replyRecord";
 import { estimateToolResultTokens } from "../llm/contextBudget";
 import { READ_EARLIER_MAX_COUNT } from "../llm/tools/readEarlierMessages";
-import type { ConversationToolContext, ToolLlmResult } from "../llm/tools/registry";
+import type {
+  ConversationToolContext,
+  MessageRefTarget,
+  ToolLlmResult,
+} from "../llm/tools/registry";
 import type { NormalizedMessage, RawDiscordMessage } from "../utils/discordMessageNormalizer";
 import {
   buildConversationUntrustedDataSystemMessage,
@@ -517,6 +521,19 @@ export class ConversationWindowService {
           ? this.addShown(responseState, replyTargetResult)
           : undefined;
       responseState.replyTarget = replyTarget;
+      const describeMessageRef = (ref: string): MessageRefTarget | undefined => {
+        const message = [...responseState.shown.values(), ...responseState.pinShown.values()].find(
+          (message) => message.ref === ref,
+        );
+        return message
+          ? {
+              messageId: message.id,
+              channelId: message.channelId,
+              author: message.author,
+              kind: message.kind,
+            }
+          : undefined;
+      };
       return {
         messages,
         ...(replyTarget && { replyTarget }),
@@ -529,10 +546,8 @@ export class ConversationWindowService {
         readPins: (fetch, signal, budgetTokens) =>
           this.readPins(responseState, fetch, signal, budgetTokens ?? Number.POSITIVE_INFINITY),
         toolContext: {
-          resolveMessageRef: (ref) =>
-            [...responseState.shown.values(), ...responseState.pinShown.values()].find(
-              (message) => message.ref === ref,
-            )?.id,
+          describeMessageRef,
+          resolveMessageRef: (ref) => describeMessageRef(ref)?.messageId,
           readEarlierMessages: (count, signal, budgetTokens) =>
             this.readEarlier(
               responseState,

@@ -338,6 +338,7 @@ const HISTORY_PASSPHRASE = `sorama-${crypto.randomUUID().slice(0, 8)}`;
 const READ_EARLIER_TOKEN = `earlier-${crypto.randomUUID().slice(0, 8)}`;
 // 実行ごとに変える: 固定値だと、窓に残った前回の回答から答えても通ってしまう。
 const WINDOW_TOKEN = `window-${crypto.randomUUID().slice(0, 8)}`;
+const MESSAGE_REF_TOKEN = `ref-${crypto.randomUUID().slice(0, 8)}`;
 const VIEW_ATTACHMENT_TOKEN = `ATTACH-${crypto.randomUUID().replaceAll("-", "")}`;
 // 数字だけにする: 画像から読ませるので、見間違えやすい英字を入れない。
 // 先頭を 0 にしない: 数として答えると先頭の 0 が落ち、正しく読めていても落ちる。
@@ -1017,6 +1018,55 @@ export const SCENARIOS: Scenario[] = [
         : ["the reply does not include the unmentioned message"]),
       ...hasUsageFooter(reply),
     ],
+  },
+  {
+    // The bot rewrites a [m<N>] the model writes into a masked link to that
+    // message. Named-only: it also fails when the model leaves the number
+    // out or writes it bare, which is the instruction, not the rewrite.
+    name: "message-ref",
+    manual: true,
+    setup: {
+      prompt: `[e2e] リンク確認用の合言葉は ${MESSAGE_REF_TOKEN} です。`,
+      mention: false,
+    },
+    // Earlier runs leave fixtures with other tokens in the channel, so the
+    // prompt names this run's token rather than asking for the latest one.
+    prompt: `[e2e] 合言葉 ${MESSAGE_REF_TOKEN} を投稿した発言を、発言番号で示して 1 行で答えて。`,
+    check: (reply) => {
+      // The badge can hold a model id and the link label the tester's name,
+      // either of which may contain `m<N>` without being a message number.
+      const answer = reply.body
+        .replace(/^\*\*Model:\*\*.*$/gmu, "")
+        .replace(/\[(?:\\.|[^\]\\\n])*\]\([^)\s]*\)/gu, "");
+      return [
+        ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(
+          reply.body,
+        )
+          ? []
+          : ["the reply has no masked link to a message (is /config → 機能 → 会話履歴 enabled?)"]),
+        ...(/\[m\d+\]|\bm\d+\b/u.test(answer) ? ["the reply still shows a message number"] : []),
+        ...hasUsageFooter(reply),
+      ];
+    },
+    // A link of the right shape could be copied from an earlier run's reply in
+    // the window, so the link must point at this run's fixture.
+    verify: async (triggerId, channelId, request, botId) => {
+      const before = await request(`/channels/${channelId}/messages?before=${triggerId}&limit=10`);
+      if (!before.ok) return [`cannot read the fixture: HTTP ${before.status}`];
+      const fixture = ((await before.json()) as DiscordMessage[]).find((item) =>
+        item.content?.includes(MESSAGE_REF_TOKEN),
+      );
+      if (!fixture) return ["the fixture message is not before the trigger"];
+      const after = await request(`/channels/${channelId}/messages?after=${triggerId}&limit=50`);
+      if (!after.ok) return [`cannot read the reply: HTTP ${after.status}`];
+      // The answer only, as check reads it: a link in the reasoning is not shown as the answer.
+      const answer = toReply(
+        ((await after.json()) as DiscordMessage[]).filter((item) => item.author?.id === botId),
+      ).body;
+      return new RegExp(`/channels/\\d+/${channelId}/${fixture.id}\\)`, "u").test(answer)
+        ? []
+        : [`the reply does not link to the fixture message ${fixture.id}`];
+    },
   },
   {
     name: "read-earlier",
