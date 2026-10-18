@@ -55,6 +55,24 @@ describe("buildReplyGateState", () => {
     expect(JSON.stringify(state)).not.toContain("リアクション");
   });
 
+  test("marks the bot's replies the gate chose", () => {
+    const reply = (id: number): NormalizedMessage => ({
+      ...message(id, `answer ${id}`),
+      kind: "assistant",
+      author: "assistant",
+    });
+    const state = buildReplyGateState({
+      botName: "bot",
+      botUserId: "100",
+      current,
+      isReplyToBot: false,
+      conversation: { messages: [reply(1), reply(2)], replyTarget: reply(3) },
+      isAutoReply: (m) => m.exchangeId !== "1",
+    });
+    expect(state.recent_messages).toEqual(["bot: answer 1", "bot（自動応答）: answer 2"]);
+    expect(state.reply_target).toBe("bot（自動応答）: answer 3");
+  });
+
   test("history off includes only the current message and reply flag", () => {
     expect(
       buildReplyGateState({ botName: "bot", botUserId: "100", current, isReplyToBot: true }),
@@ -216,6 +234,29 @@ describe("ReplyGateService", () => {
       }),
     ]);
     expect(JSON.stringify(log.mock.calls)).not.toContain("private");
+  });
+
+  test("remembers answered IDs, including fail-open ones, for one hour", async () => {
+    let now = 100;
+    let fail = false;
+    const gate = new ReplyGateService(
+      {
+        decideNoul: mock(async () => {
+          if (fail) throw new Error("down");
+          return { noul: 0.9 };
+        }),
+      },
+      0.3,
+      () => now,
+    );
+    await gate.judge(input);
+    fail = true;
+    await gate.judge({ ...input, messageId: "failed" });
+    expect(gate.wasAnswered(input.messageId)).toBe(true);
+    expect(gate.wasAnswered("failed")).toBe(true);
+    expect(gate.wasSilenced(input.messageId)).toBe(false);
+    now += 3_600_000;
+    expect(gate.wasAnswered(input.messageId)).toBe(false);
   });
 
   test("expires silent IDs after exactly one hour", async () => {

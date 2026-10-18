@@ -468,6 +468,8 @@ export function createMessageCreateHandler(
             },
           }),
           isReplyToBot: message.mentions.repliedUser?.id === botId,
+          // A bot reply's exchange is the message it answered.
+          isAutoReply: (reply) => options.replyGate?.wasAnswered(reply.exchangeId) ?? false,
         }),
       });
       if (decision === "silent") {
@@ -541,6 +543,8 @@ export function createMessageCreateHandler(
           text: inputText,
           parts: attachmentResult.parts,
           authorLabel: authorNames(rawMessage.author).label,
+          // Also when the judgment failed and fell back to replying: the message still did not call the bot.
+          ...(gated && { autoReply: true }),
           ...(conversation && { conversation }),
           ...(conversation && {
             discordInfo: new DiscordInfoService(

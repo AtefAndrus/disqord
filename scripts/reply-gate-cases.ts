@@ -15,6 +15,35 @@ export interface ReplyGateCase {
   current: string;
   replyTarget?: string;
   attachments?: { kind: "image" | "pdf" | "other"; filename: string }[];
+  /** A request to the bot to stop talking, which must be silent on every judgment. */
+  restraint?: boolean;
+  /** A case the decision cannot be made without (the pass criterion in the reply-gate-tuning design). */
+  required?: boolean;
+}
+
+/** A whole conversation in `<author>: <text>` lines, and the lines the reply gate judged in it. */
+export interface ReplyGateThread {
+  lines: string[];
+  judgments: { index: number; expect: boolean; restraint?: boolean; required?: boolean }[];
+}
+
+/**
+ * One case per judged line, its history being every line before it, as the
+ * conversation window held the whole thread when it was judged.
+ */
+export function casesFromThread(thread: ReplyGateThread, prefix: string): ReplyGateCase[] {
+  return thread.judgments.map(({ index, expect, restraint, required }, n) => {
+    const current = thread.lines[index];
+    if (current === undefined) throw new Error(`${prefix}: no line ${index}`);
+    return {
+      id: `${prefix}-${n + 1}`,
+      expect,
+      history: thread.lines.slice(0, index),
+      current,
+      ...(restraint && { restraint }),
+      ...(required && { required }),
+    };
+  });
 }
 
 export const BOT_NAME = "DisQord";
@@ -615,6 +644,31 @@ const hard: ReplyGateCase[] = [
       `${BOT_NAME}: Fisher-Yates 法で書けます。for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }`,
     ],
     current: "たろう: TypeScript で型付けて",
+  },
+  // Sentence endings point the wrong way: a "〜かな" asked of the bot, a direct question to a person.
+  {
+    id: "hr-kana-to-bot",
+    expect: true,
+    history: ["たろう: ちょっとコード整理してる"],
+    current: "たろう: DisQord、この関数ってもっと短く書けるかな",
+  },
+  {
+    id: "hr-kana-weather-to-bot",
+    expect: true,
+    history: ["じろう: 明日は朝から出かける"],
+    current: "じろう: DisQord、明日の東京って雨降るかな",
+  },
+  {
+    id: "hs-direct-question-to-person",
+    expect: false,
+    history: ["たろう: 昨日のライブ行ってきた", "じろう: どうだった？"],
+    current: "はなこ: たろう、チケットいくらだった？",
+  },
+  {
+    id: "hs-direct-plan-question",
+    expect: false,
+    history: ["じろう: 今日は早めに帰る", "はなこ: おつかれ"],
+    current: "たろう: はなこはこの後どうするの？",
   },
   {
     id: "hr-english-room",
