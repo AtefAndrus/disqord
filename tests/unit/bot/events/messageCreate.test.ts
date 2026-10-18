@@ -680,10 +680,11 @@ describe("createMessageCreateHandler", () => {
       await enableGate();
       const replyRecordService = gateRecords();
       const target = {
-        id: "old",
+        id: "old-page",
         channelId: "channel-123",
         kind: "assistant" as const,
-        // What normalizeBotReply puts in the window for the bot's own reply.
+        // What normalizeBotReply puts in the window for the bot's own reply: its first page's ID,
+        // and the message it answered as the exchange, which the gate's memory is keyed by.
         author: "assistant",
         text: "previous answer",
         time: "now",
