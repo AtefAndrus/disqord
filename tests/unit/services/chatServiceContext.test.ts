@@ -212,6 +212,53 @@ describe("conversation-context request construction", () => {
     expect(request.messages).toEqual([{ role: "user", content: "question" }]);
   });
 
+  test.each([
+    [true, true],
+    [false, false],
+  ])("with history, autoReply %s sends the auto-reply instruction: %s", async (autoReply, sent) => {
+    const fixture = createRetryFixture(false, false);
+    fixture.llmClient.chatStream = mock((request) => {
+      fixture.requests.push(request);
+      return finalTurn("answer");
+    });
+    await fixture.chatService.generateChatResponse(
+      "guild",
+      { ...retryInput(fixture.readEarlier), text: "question", autoReply },
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    const system = (fixture.requests[0]?.messages ?? []).filter((m) => m.role === "system");
+    expect(system.some((m) => String(m.content).includes("自動応答の判定"))).toBe(sent);
+  });
+
+  test("without history, an auto-reply still gets the instruction", async () => {
+    const llmClient = createMockLLMClient();
+    const chatService = new ChatService(
+      llmClient,
+      createMockSettingsService(),
+      new ToolRegistry(),
+      "perplexity",
+      createMockTweetService(),
+      new ModelService(llmClient),
+    );
+    await chatService.generateChatResponse(
+      "guild",
+      { text: "question", autoReply: true },
+      "request",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    const [request] = (llmClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
+      ChatCompletionRequest,
+    ];
+    expect(
+      request.messages.some(
+        (m) => m.role === "system" && String(m.content).includes("自動応答の判定"),
+      ),
+    ).toBe(true);
+  });
+
   test("history-off construction retains the no-history request shape", () => {
     expect(buildChatRequest("model", { text: "question" })).toEqual({
       model: "model",

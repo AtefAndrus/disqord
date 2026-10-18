@@ -476,6 +476,7 @@ describe("createMessageCreateHandler", () => {
       const replyGate = {
         judge: mock(async () => "silent" as const),
         wasSilenced: mock(() => false),
+        wasAnswered: mock(() => false),
       };
       await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
         replyGate,
@@ -494,6 +495,7 @@ describe("createMessageCreateHandler", () => {
     const replyGate = {
       judge: mock(gate.judge.bind(gate)),
       wasSilenced: gate.wasSilenced.bind(gate),
+      wasAnswered: gate.wasAnswered.bind(gate),
     };
     const replyRecordService = gateRecords();
     const handler = createMessageCreateHandler(
@@ -512,6 +514,58 @@ describe("createMessageCreateHandler", () => {
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ["a reply judgment", async () => "reply" as const],
+    [
+      "a failed judgment",
+      async () => {
+        const gate = new ReplyGateService(
+          {
+            decideNoul: mock(async () => {
+              throw new Error("down");
+            }),
+          },
+          0.3,
+        );
+        return gate.judge({
+          guildId: "g",
+          channelId: "c",
+          messageId: "m",
+          state: {},
+          botName: "b",
+        });
+      },
+    ],
+  ])("%s answers with the auto-reply instruction", async (_label, judge) => {
+    await enableGate();
+    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+      replyGate: {
+        judge: mock(judge),
+        wasSilenced: mock(() => false),
+        wasAnswered: mock(() => false),
+      },
+    })(mockMessage as never);
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
+      "guild-123",
+      expect.objectContaining({ autoReply: true }),
+      "msg-123",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  test("a mention is answered without the auto-reply instruction", async () => {
+    const handler = createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+    );
+    await handler(mockMessage as never);
+    const input = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
+      .calls[0]?.[1] as { autoReply?: boolean };
+    expect(input.autoReply).toBeUndefined();
+  });
+
   test("silent judgment suppresses attachment rejection without fetching the attachment", async () => {
     await enableGate();
     mockMessage.attachments = makeAttachments([
@@ -520,6 +574,7 @@ describe("createMessageCreateHandler", () => {
     const replyGate = {
       judge: mock(async () => "silent" as const),
       wasSilenced: mock(() => false),
+      wasAnswered: mock(() => false),
     };
     await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
       replyGate,
@@ -544,7 +599,11 @@ describe("createMessageCreateHandler", () => {
       mockSettingsService,
       mockModelService,
       {
-        replyGate: { judge: mock(async () => "reply" as const), wasSilenced: mock(() => false) },
+        replyGate: {
+          judge: mock(async () => "reply" as const),
+          wasSilenced: mock(() => false),
+          wasAnswered: mock(() => false),
+        },
         replyRecordService,
       },
     );
@@ -556,7 +615,11 @@ describe("createMessageCreateHandler", () => {
   test("sticker-only messages skip judging and pending records", async () => {
     await enableGate();
     mockMessage.content = "";
-    const replyGate = { judge: mock(async () => "reply" as const), wasSilenced: mock(() => false) };
+    const replyGate = {
+      judge: mock(async () => "reply" as const),
+      wasSilenced: mock(() => false),
+      wasAnswered: mock(() => false),
+    };
     const replyRecordService = gateRecords();
     await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
       replyGate,
@@ -585,6 +648,7 @@ describe("createMessageCreateHandler", () => {
       const replyGate = {
         judge: mock(async () => "reply" as const),
         wasSilenced: mock(() => false),
+        wasAnswered: mock(() => false),
       };
       const replyRecordService = gateRecords();
       await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
@@ -607,46 +671,55 @@ describe("createMessageCreateHandler", () => {
     },
   );
 
-  test("judge reuses the window and resolves a reply target by ref after creating pending", async () => {
-    await enableGate();
-    const replyRecordService = gateRecords();
-    const target = {
-      id: "old",
-      channelId: "channel-123",
-      kind: "assistant" as const,
-      // What normalizeBotReply puts in the window for the bot's own reply.
-      author: "assistant",
-      text: "previous answer",
-      time: "now",
-      timestampMs: 1,
-      exchangeId: "old",
-      attachments: [],
-      ref: "m1",
-    };
-    mockMessage.author.globalName = "Taro";
-    // The window has no nickname for earlier messages, so the judged message must not use one.
-    Object.assign(mockMessage, { member: { nickname: "nick" } });
-    const build = mock(async () => {
-      expect(replyRecordService.createPending).toHaveBeenCalled();
-      return { messages: [target], replyTargetRef: "m1" } as unknown as ConversationWindowContext;
-    });
-    const judge = mock(async (input: { state: Record<string, unknown> }) => {
-      expect(build).toHaveBeenCalled();
-      expect(input.state).toEqual({
-        bot_name: "DisQord",
-        recent_messages: [],
-        reply_target: "DisQord: previous answer",
-        new_message: "Taro (@author-123): hello",
+  test.each([
+    [false, "DisQord: previous answer"],
+    [true, "DisQord（自動応答）: previous answer"],
+  ])(
+    "judge reuses the window and resolves a reply target by ref after creating pending (answered by the gate: %s)",
+    async (answered, replyTarget) => {
+      await enableGate();
+      const replyRecordService = gateRecords();
+      const target = {
+        id: "old-page",
+        channelId: "channel-123",
+        kind: "assistant" as const,
+        // What normalizeBotReply puts in the window for the bot's own reply: its first page's ID,
+        // and the message it answered as the exchange, which the gate's memory is keyed by.
+        author: "assistant",
+        text: "previous answer",
+        time: "now",
+        timestampMs: 1,
+        exchangeId: "old",
+        attachments: [],
+        ref: "m1",
+      };
+      mockMessage.author.globalName = "Taro";
+      // The window has no nickname for earlier messages, so the judged message must not use one.
+      Object.assign(mockMessage, { member: { nickname: "nick" } });
+      const build = mock(async () => {
+        expect(replyRecordService.createPending).toHaveBeenCalled();
+        return { messages: [target], replyTargetRef: "m1" } as unknown as ConversationWindowContext;
       });
-      return "silent" as const;
-    });
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate: { judge, wasSilenced: mock(() => false) },
-      replyRecordService,
-      conversationWindow: { build } as unknown as ConversationWindowService,
-    })(mockMessage as never);
-    expect(judge).toHaveBeenCalledTimes(1);
-  });
+      const judge = mock(async (input: { state: Record<string, unknown> }) => {
+        expect(build).toHaveBeenCalled();
+        expect(input.state).toEqual({
+          bot_name: "DisQord",
+          recent_messages: [],
+          reply_target: replyTarget,
+          new_message: "Taro (@author-123): hello",
+        });
+        return "silent" as const;
+      });
+      // The bot's reply is looked up by the message it answered.
+      const wasAnswered = mock((id: string) => answered && id === "old");
+      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
+        replyGate: { judge, wasSilenced: mock(() => false), wasAnswered },
+        replyRecordService,
+        conversationWindow: { build } as unknown as ConversationWindowService,
+      })(mockMessage as never);
+      expect(judge).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test.each(["history-off", "window-failed"])("judge uses minimal state when %s", async (kind) => {
     await enableGate();
@@ -667,7 +740,7 @@ describe("createMessageCreateHandler", () => {
       return "silent" as const;
     });
     await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate: { judge, wasSilenced: mock(() => false) },
+      replyGate: { judge, wasSilenced: mock(() => false), wasAnswered: mock(() => false) },
       conversationWindow: { build } as unknown as ConversationWindowService,
     })(mockMessage as never);
     expect(judge).toHaveBeenCalledTimes(1);

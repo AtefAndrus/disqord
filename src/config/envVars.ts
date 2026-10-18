@@ -65,7 +65,7 @@ export const envVarDefinitions: EnvVarDefinition[] = [
     name: "REPLY_GATE_THRESHOLD",
     required: false,
     description: "自動応答の取捨選択で返答する確率のしきい値（0〜1）",
-    default: "0.3",
+    default: "0.4",
   },
   {
     name: "FXTWITTER_API_BASE",

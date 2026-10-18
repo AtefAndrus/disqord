@@ -44,6 +44,8 @@ export interface ChatUserInput {
   discord?: DiscordToolContext;
   discordInfo?: DiscordInfoContext;
   cron?: CronToolContext;
+  /** The message did not mention the bot and was answered because the reply gate chose it. */
+  autoReply?: boolean;
 }
 
 export interface ChatRequestContext {
@@ -410,6 +412,7 @@ export class ChatService implements IChatService {
       const volatileSystemMessages: ChatMessage[] = [
         ...(expansion && expansion.textParts.length > 0 ? [buildTweetSystemMessage()] : []),
         buildDateTimeSystemMessage(new Date(), settings.webSearchEnabled),
+        ...(input.autoReply ? [buildAutoReplySystemMessage()] : []),
       ];
       const buildWithoutHistory = (): ChatCompletionRequest =>
         buildChatRequest(settings.defaultModel, input, tweetParts, [
@@ -761,6 +764,20 @@ const DISCORD_FORMAT_SYSTEM_MESSAGE: ChatMessage = {
   content:
     "回答は Discord のメッセージとして表示される。Discord は Markdown の表を表示しないので、表を使わないこと。表にしたくなる内容は、見出しと箇条書きで書くこと。",
 };
+
+/**
+ * For a reply the reply gate chose. Whether the bot answers is the gate's
+ * decision, so a promise about future replies cannot be kept, and a reply
+ * that ends by inviting more makes the next message read as addressed to
+ * the bot. Length is left alone: the gate also passes real requests.
+ */
+function buildAutoReplySystemMessage(): ChatMessage {
+  return {
+    role: "system",
+    content:
+      "今回の発言は Bot へのメンションが無く、自動応答の判定で返答すると決まったものである。Bot に向けた発言ではない可能性がある。役に立つ内容を返し、返答を誘う問いかけで締めないこと。返答するかは自動応答の判定が決めるので、今後の返答のしかた（黙る、呼ばれたときだけ返すなど）を約束しないこと。",
+  };
+}
 
 function buildConversationSafetyMessage(): ChatMessage {
   return {

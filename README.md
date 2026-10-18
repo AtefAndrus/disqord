@@ -135,7 +135,7 @@ Health Check を有効にすると、Coolify は画面に保存した値で判�
 | LOG_DIR | No | ログファイル保存ディレクトリ（本番のみ書込み、未設定でno-op） |
 | LOG_MAX_BYTES | No | ログローテーション閾値（バイト）（デフォルト: `10485760`） |
 | WEB_SEARCH_ENGINE | No | Web検索のエンジン（perplexity / exa / parallel / native / auto / firecrawl）。料金はエンジンごとに異なる（デフォルト: `perplexity`） |
-| REPLY_GATE_THRESHOLD | No | 自動応答の取捨選択で返答する確率のしきい値（0〜1）（デフォルト: `0.3`） |
+| REPLY_GATE_THRESHOLD | No | 自動応答の取捨選択で返答する確率のしきい値（0〜1）（デフォルト: `0.4`） |
 | FXTWITTER_API_BASE | No | ツイート展開に使う fxtwitter API のベース URL（デフォルト: `https://api.fxtwitter.com`） |
 | E2E_TESTER_BOT_ID | No | e2e 用テスト bot のユーザ ID。この bot からの発言にだけ応答する（NODE_ENV=production では無視） |
 | E2E_TESTER_BOT_TOKEN | No | e2e 用テスト bot のトークン（`bun run e2e` だけが使う） |

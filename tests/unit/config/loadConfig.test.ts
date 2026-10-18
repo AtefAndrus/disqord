@@ -104,11 +104,11 @@ describe("loadConfig: WEB_SEARCH_ENGINE", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  test("reply gate threshold defaults to 0.3 and accepts both boundaries", () => {
+  test("reply gate threshold defaults to 0.4 and accepts both boundaries", () => {
     delete process.env.REPLY_GATE_THRESHOLD;
-    expect(loadConfig().replyGateThreshold).toBe(0.3);
+    expect(loadConfig().replyGateThreshold).toBe(0.4);
     process.env.REPLY_GATE_THRESHOLD = "";
-    expect(loadConfig().replyGateThreshold).toBe(0.3);
+    expect(loadConfig().replyGateThreshold).toBe(0.4);
     for (const value of ["0", "0.7", "1"]) {
       process.env.REPLY_GATE_THRESHOLD = value;
       expect(loadConfig().replyGateThreshold).toBe(Number(value));
