@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- client tool の呼び出しをログに残し、遡って読む tool の 0 件の結果を誤解されないようにする (#227)
-- 発言者を表示名とユーザー名で区別し、発言へのリンクの文字を整える (#228)
-- 会話履歴の発言に付いたリアクションの種類と数をモデルに渡す (#229)
-- 自動応答の判定が人どうしの会話と制止に返答しないようにする (#231)
+- client tool の呼び出しをログに残し、遡って読む tool の 0 件の結果を誤解されないようにする ([#227](https://github.com/AtefAndrus/disqord/pull/227))
+- 発言者を表示名とユーザー名で区別し、発言へのリンクの文字を整える ([#228](https://github.com/AtefAndrus/disqord/pull/228))
+- 会話履歴の発言に付いたリアクションの種類と数をモデルに渡す ([#229](https://github.com/AtefAndrus/disqord/pull/229))
+- 自動応答の判定が人どうしの会話と制止に返答しないようにする ([#231](https://github.com/AtefAndrus/disqord/pull/231))
 
 
 ## [1.15.0] - 2026-10-17
@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 自動応答チャンネルで、メンションの無い発言に返答するかを判定する (#225)
+- 自動応答チャンネルで、メンションの無い発言に返答するかを判定する ([#225](https://github.com/AtefAndrus/disqord/pull/225))
 
 
 ## [1.14.0] - 2026-10-17
@@ -31,14 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Release の公開でコンテナイメージを GHCR へ公開する (#215)
-- 返答中の発言番号を、その発言へのメッセージリンクで表示する (#222)
+- Release の公開でコンテナイメージを GHCR へ公開する ([#215](https://github.com/AtefAndrus/disqord/pull/215))
+- 返答中の発言番号を、その発言へのメッセージリンクで表示する ([#222](https://github.com/AtefAndrus/disqord/pull/222))
 
 
 ### Fixed
 
-- イメージ公開のタグ名を v<major>.<minor>.<patch> に限る (#216)
-- デプロイ workflow で新しい版が本番で動き始めるまで待つ (#218)
+- イメージ公開のタグ名を v<major>.<minor>.<patch> に限る ([#216](https://github.com/AtefAndrus/disqord/pull/216))
+- デプロイ workflow で新しい版が本番で動き始めるまで待つ ([#218](https://github.com/AtefAndrus/disqord/pull/218))
 
 
 ### Dependencies
@@ -51,8 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ピン留め、チャンネル情報、イベントを読む tool を足す (#203)
-- Discord のイベントを作る create_event を足す (#204)
+- ピン留め、チャンネル情報、イベントを読む tool を足す ([#203](https://github.com/AtefAndrus/disqord/pull/203))
+- Discord のイベントを作る create_event を足す ([#204](https://github.com/AtefAndrus/disqord/pull/204))
 
 
 ## [1.12.0] - 2026-10-08
@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 終了時に生成途中の返信を停止表示にしてから落とす (#202)
+- 終了時に生成途中の返信を停止表示にしてから落とす ([#202](https://github.com/AtefAndrus/disqord/pull/202))
 
 
 ## [1.11.1] - 2026-10-08
@@ -68,8 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 失敗した OpenRouter の応答をログで区別し、定期実行の e2e で失敗理由を返す (#196)
-- 返信先の別Bot引用とX展開を修正しE2Eで入力を検証 (#198)
+- 失敗した OpenRouter の応答をログで区別し、定期実行の e2e で失敗理由を返す ([#196](https://github.com/AtefAndrus/disqord/pull/196))
+- 返信先の別Bot引用とX展開を修正しE2Eで入力を検証 ([#198](https://github.com/AtefAndrus/disqord/pull/198))
 
 
 ### Dependencies
@@ -83,8 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 会話の中の投票と締め切りの結果をモデルに渡す (#193)
-- 定期実行のジョブで Web 検索を使えるようにする (#195)
+- 会話の中の投票と締め切りの結果をモデルに渡す ([#193](https://github.com/AtefAndrus/disqord/pull/193))
+- 定期実行のジョブで Web 検索を使えるようにする ([#195](https://github.com/AtefAndrus/disqord/pull/195))
 
 
 ## [1.10.0] - 2026-09-29
@@ -92,16 +92,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- 会話履歴の 24 時間の制限をなくし、tool の結果を context 予算で抑える (#176)
-- モデルが会話の流れでリアクション、投票、スレッド作成、ピン留めを行えるようにする (#178)
-- Discord で表示されない Markdown の表を使わないようモデルに指示する (#182)
-- 登録したプロンプトを決まった時刻に実行して投稿する定期実行を追加する (#188)
+- 会話履歴の 24 時間の制限をなくし、tool の結果を context 予算で抑える ([#176](https://github.com/AtefAndrus/disqord/pull/176))
+- モデルが会話の流れでリアクション、投票、スレッド作成、ピン留めを行えるようにする ([#178](https://github.com/AtefAndrus/disqord/pull/178))
+- Discord で表示されない Markdown の表を使わないようモデルに指示する ([#182](https://github.com/AtefAndrus/disqord/pull/182))
+- 登録したプロンプトを決まった時刻に実行して投稿する定期実行を追加する ([#188](https://github.com/AtefAndrus/disqord/pull/188))
 
 
 ### Fixed
 
-- 断った設定変更を警告として記録し、preview の Chromium に Windows のフォントを使わせない (#174)
-- ルーターのモデルで返答の見出しにフッタと同じモデルを出す (#181)
+- 断った設定変更を警告として記録し、preview の Chromium に Windows のフォントを使わせない ([#174](https://github.com/AtefAndrus/disqord/pull/174))
+- ルーターのモデルで返答の見出しにフッタと同じモデルを出す ([#181](https://github.com/AtefAndrus/disqord/pull/181))
 
 
 ## [1.9.0] - 2026-09-25
@@ -109,14 +109,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- /config を設定パネルにし、許可チャンネルと管理ロールを設定できるようにする (#169)
-- 新しい版で起動したら、設定したチャンネルへ変更点を通知する (#170)
-- 設定パネルのチャンネル一覧を 1 つの選択欄で編集できるようにする (#172)
+- /config を設定パネルにし、許可チャンネルと管理ロールを設定できるようにする ([#169](https://github.com/AtefAndrus/disqord/pull/169))
+- 新しい版で起動したら、設定したチャンネルへ変更点を通知する ([#170](https://github.com/AtefAndrus/disqord/pull/170))
+- 設定パネルのチャンネル一覧を 1 つの選択欄で編集できるようにする ([#172](https://github.com/AtefAndrus/disqord/pull/172))
 
 
 ### Fixed
 
-- 設定パネルの on/off ボタンを「有効にする」「無効にする」だけにし、状態で色を分ける (#171)
+- 設定パネルの on/off ボタンを「有効にする」「無効にする」だけにし、状態で色を分ける ([#171](https://github.com/AtefAndrus/disqord/pull/171))
 
 
 ## [1.8.0] - 2026-09-25
@@ -124,8 +124,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ギルド設定のすべての変更に共通の認可を掛ける (#165)
-- /release-note で版ごとの変更点を表示する (#166)
+- ギルド設定のすべての変更に共通の認可を掛ける ([#165](https://github.com/AtefAndrus/disqord/pull/165))
+- /release-note で版ごとの変更点を表示する ([#166](https://github.com/AtefAndrus/disqord/pull/166))
 
 
 ## [1.7.0] - 2026-09-24
@@ -133,13 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Web 検索の有無にかかわらず現在日時をモデルに渡す (#157)
+- Web 検索の有無にかかわらず現在日時をモデルに渡す ([#157](https://github.com/AtefAndrus/disqord/pull/157))
 
 
 ### Fixed
 
-- 現在日時が実際の日時であることをモデルに明示する (#156)
-- Web 検索が無効でも過去の画像を開いた後の応答が失敗しないようにする (#158)
+- 現在日時が実際の日時であることをモデルに明示する ([#156](https://github.com/AtefAndrus/disqord/pull/156))
+- Web 検索が無効でも過去の画像を開いた後の応答が失敗しないようにする ([#158](https://github.com/AtefAndrus/disqord/pull/158))
 
 
 ## [1.6.0] - 2026-09-23
@@ -147,26 +147,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ギルド単位で有効にできる Web 検索を追加する (#129)
-- Web 検索の上限を 1 リクエスト 4 回に上げる (#131)
-- X のポストの URL を fxtwitter で展開してモデルに渡す (#135)
-- 会話履歴を保存してモデルの文脈に使う (#136)
-- 会話履歴を Discord から読み、窓の外は tool で取りに行く (#140)
-- コマンドの返信を Components V2 にし、/status で設定を切り替えられるようにする (#149)
-- モデルの推論を受け取り、送り返し、設定に応じて回答の上に表示する (#150)
-- /status の各項目を項目名と値の 2 行で表示する (#151)
-- 回答の区切り線を Separator で描く (#152)
+- ギルド単位で有効にできる Web 検索を追加する ([#129](https://github.com/AtefAndrus/disqord/pull/129))
+- Web 検索の上限を 1 リクエスト 4 回に上げる ([#131](https://github.com/AtefAndrus/disqord/pull/131))
+- X のポストの URL を fxtwitter で展開してモデルに渡す ([#135](https://github.com/AtefAndrus/disqord/pull/135))
+- 会話履歴を保存してモデルの文脈に使う ([#136](https://github.com/AtefAndrus/disqord/pull/136))
+- 会話履歴を Discord から読み、窓の外は tool で取りに行く ([#140](https://github.com/AtefAndrus/disqord/pull/140))
+- コマンドの返信を Components V2 にし、/status で設定を切り替えられるようにする ([#149](https://github.com/AtefAndrus/disqord/pull/149))
+- モデルの推論を受け取り、送り返し、設定に応じて回答の上に表示する ([#150](https://github.com/AtefAndrus/disqord/pull/150))
+- /status の各項目を項目名と値の 2 行で表示する ([#151](https://github.com/AtefAndrus/disqord/pull/151))
+- 回答の区切り線を Separator で描く ([#152](https://github.com/AtefAndrus/disqord/pull/152))
 
 
 ### Fixed
 
-- 1 ページに収まる返信を最後の行だけ次のページに分けない (#128)
-- 回答フッターの所要時間を Latency ではなく Time と秒で表示する (#130)
-- 同時に走ったギルド設定の変更が互いを消さないようにする (#132)
-- ツイート展開と会話履歴の設定の注意書きを Discord 上から削る (#137)
-- 会話履歴で過去の添付を送り直さず表記にする (#138)
-- 最終ターンの tool 呼び出しに本文が付いていれば、その本文で答える (#142)
-- Web 検索が失敗したら検索なしで答え直す (#153)
+- 1 ページに収まる返信を最後の行だけ次のページに分けない ([#128](https://github.com/AtefAndrus/disqord/pull/128))
+- 回答フッターの所要時間を Latency ではなく Time と秒で表示する ([#130](https://github.com/AtefAndrus/disqord/pull/130))
+- 同時に走ったギルド設定の変更が互いを消さないようにする ([#132](https://github.com/AtefAndrus/disqord/pull/132))
+- ツイート展開と会話履歴の設定の注意書きを Discord 上から削る ([#137](https://github.com/AtefAndrus/disqord/pull/137))
+- 会話履歴で過去の添付を送り直さず表記にする ([#138](https://github.com/AtefAndrus/disqord/pull/138))
+- 最終ターンの tool 呼び出しに本文が付いていれば、その本文で答える ([#142](https://github.com/AtefAndrus/disqord/pull/142))
+- Web 検索が失敗したら検索なしで答え直す ([#153](https://github.com/AtefAndrus/disqord/pull/153))
 
 
 ### Dependencies
@@ -213,9 +213,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - complete Renovate migration safeguards
 - preserve code fences across split messages
 - accept OpenRouter final usage frames
-- Coolify の Deploy Webhook を POST で呼び、手動起動もできるようにする (#95)
-- keep the version status across gateway reconnects (#98)
-- bun run preview を Components V2 の現行 UI に追従させる (#111)
+- Coolify の Deploy Webhook を POST で呼び、手動起動もできるようにする ([#95](https://github.com/AtefAndrus/disqord/pull/95))
+- keep the version status across gateway reconnects ([#98](https://github.com/AtefAndrus/disqord/pull/98))
+- bun run preview を Components V2 の現行 UI に追従させる ([#111](https://github.com/AtefAndrus/disqord/pull/111))
 
 
 ### Dependencies
@@ -228,7 +228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump discord.js, biome, bun-types, @types/node, and lefthook
 - bump @biomejs/biome from 2.4.10 to 2.4.11
 - bump the all-dependencies group with 8 updates
-- bump @types/node in the all-dependencies group (#59)
+- bump @types/node in the all-dependencies group ([#59](https://github.com/AtefAndrus/disqord/pull/59))
 - bump the all-dependencies group with 3 updates
 - bump the all-dependencies group across 1 directory with 3 updates
 - bump the all-dependencies group across 1 directory with 3 updates

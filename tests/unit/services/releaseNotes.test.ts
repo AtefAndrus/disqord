@@ -149,7 +149,7 @@ describe("parseChangelog", () => {
     expect(formatVersion(versions.at(-1) ?? v("0.0.0"))).toBe("1.0.0");
     // Released sections change only when cliff.toml's template does, so these pin both ends.
     expect(okBody(notes.section(v("1.7.0")))).toContain(
-      "- Web 検索の有無にかかわらず現在日時をモデルに渡す (#157)",
+      "- Web 検索の有無にかかわらず現在日時をモデルに渡す ([#157](https://github.com/AtefAndrus/disqord/pull/157))",
     );
     expect(
       okBody(notes.section(v("1.0.0")))
@@ -161,6 +161,8 @@ describe("parseChangelog", () => {
       expect(body).not.toBe("");
       expect(body).not.toContain("<!--");
       expect(body).not.toMatch(/^\[\d+\.\d+\.\d+\]: /m);
+      // Discord does not autolink a bare `#123` the way GitHub does.
+      expect(body).not.toMatch(/\(#\d+\)/);
     }
   });
 });

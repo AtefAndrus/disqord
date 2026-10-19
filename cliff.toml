@@ -21,7 +21,8 @@ body = """
 - {{ commit.message | split(pat="\n") | first | trim \
   | replace_regex(from="^\\[(?:feat|fix|docs|refactor|test|perf)\\]\\s*", to="") \
   | replace_regex(from="^(?:feat|fix|docs|refactor|test|perf)(?:\\(.*?\\))?:\\s*", to="") \
-  | replace_regex(from="^build\\(deps(?:-dev)?\\):\\s*", to="") }}
+  | replace_regex(from="^build\\(deps(?:-dev)?\\):\\s*", to="") \
+  | replace_regex(from="\\(#(\\d+)\\)$", to="([#${1}](https://github.com/AtefAndrus/disqord/pull/${1}))") }}
 {% endfor %}
 {%- endfor %}
 """
