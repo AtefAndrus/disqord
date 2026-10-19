@@ -18,7 +18,7 @@
     "format:md": "markdownlint-cli2 --fix \"docs/**/*.md\" \"*.md\"",
     "changelog": "git-cliff --output CHANGELOG.md",
     "generate:readme": "bun scripts/generate-readme.ts",
-    "preview": "bun scripts/preview/index.ts",
+    "preview": "playwright install chromium-headless-shell && bun scripts/preview/index.ts",
     "e2e": "bun scripts/e2e/index.ts",
     "prepare": "lefthook install"
   },

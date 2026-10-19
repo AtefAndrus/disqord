@@ -39,6 +39,9 @@ The pre-commit hook runs it and stages the results, so edit the source instead o
 
 Deleting an AUTO marker breaks every commit in the repository: the generator throws `Marker not found` and the hook fails before anything else runs.
 
+Two open PRs that both change `docs/changes/` frontmatter conflict in `docs/progress.md`, and GitHub runs no `pull_request` workflow while a PR conflicts, so `gh pr checks` reports no checks rather than a failure.
+Merge `origin/main`, take its `docs/progress.md`, and rerun `bun scripts/generate-readme.ts`.
+
 ## docs/changes (per-feature design docs)
 
 - One folder per change, `docs/changes/<kebab-case-name>/design.md`, copied from [TEMPLATE.md](docs/changes/TEMPLATE.md). The template owns the frontmatter schema and the section list; the title heading is the Japanese feature name.
