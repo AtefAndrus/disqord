@@ -127,6 +127,11 @@ describe("linkMessageRefs", () => {
     ["a link destination", "[資料](https://example.com/Alice) と [m12] を参照"],
     ["a bare URL", "https://example.com/Alice と [m12] を参照"],
     ["an autolink", "<https://example.com/Alice> と [m12] を参照"],
+    [
+      "a link destination with parentheses",
+      "[資料](https://example.com/a_(b)/Alice) と [m12] を参照",
+    ],
+    ["a double-backtick code span", "`` Alice `x` `` と [m12] を参照"],
   ])("a name only inside %s is not taken as written", (_, text) => {
     expect(linkMessageRefs(text, resolve)).toBe(text.replace("[m12]", linked));
   });
@@ -135,6 +140,15 @@ describe("linkMessageRefs", () => {
     expect(linkMessageRefs("Alice uses m3.medium [m12]", resolve)).toBe(
       `Alice uses m3.medium ${unnamed}`,
     );
+  });
+
+  test.each([
+    ["full-width parentheses as the model reads them", "A(B)", "A（B） の案 [m12]"],
+    ["escaped backticks, which are not code", "A`B`C", "A\\`B\\`C の案 [m12]"],
+  ])("finds a name written with %s", (_, name, text) => {
+    const named = (ref: string): MessageRefLink | undefined =>
+      ref === "m12" ? { name, label: "x の発言", url } : undefined;
+    expect(linkMessageRefs(text, named)).toBe(text.replace("[m12]", unnamed));
   });
 
   test("an empty name never drops the label", () => {
