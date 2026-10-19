@@ -26,6 +26,7 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
       linkMessageRefs(text, (ref) =>
         ref === "m12"
           ? {
+              name: "Alice",
               label: "Alice の発言",
               url: "https://discord.com/channels/guild/channel/message",
             }

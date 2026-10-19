@@ -1039,7 +1039,8 @@ export const SCENARIOS: Scenario[] = [
         .replace(/^\*\*Model:\*\*.*$/gmu, "")
         .replace(/\[(?:\\.|[^\]\\\n])*\]\([^)\s]*\)/gu, "");
       return [
-        ...(/\[[^\]\n]+ の発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(
+        // The label drops the author when the sentence already names them.
+        ...(/\[(?:[^\]\n]+ の)?発言\]\(https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+\)/u.test(
           reply.body,
         )
           ? []

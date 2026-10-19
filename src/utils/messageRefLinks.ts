@@ -77,50 +77,136 @@ export function readLinkAt(text: string, cursor: number): string | undefined {
   return undefined;
 }
 
+export interface MessageRefLink {
+  /** The author as written in prose, to find it beside the ref. */
+  name: string;
+  /** `<author> の発言`, Markdown-escaped. */
+  label: string;
+  url: string;
+}
+
+/** The label of a link whose sentence already names the message's author. */
+export const UNNAMED_REF_LABEL = "発言";
+
+interface Segment {
+  kind: "link" | "code" | "text";
+  text: string;
+}
+
+/** Splits text outside code fences into links, code spans, and the text between them. */
+function segmentsOf(outside: string): Segment[] {
+  const segments: Segment[] = [];
+  let text = "";
+  const push = (kind: Segment["kind"], value: string): void => {
+    if (text) segments.push({ kind: "text", text });
+    text = "";
+    segments.push({ kind, text: value });
+  };
+  for (let cursor = 0; cursor < outside.length; ) {
+    const link = readLinkAt(outside, cursor);
+    if (link) {
+      push("link", link);
+      cursor += link.length;
+      continue;
+    }
+    if (outside[cursor] === "`" && !isEscaped(outside, cursor)) {
+      const run = /^`+/u.exec(outside.slice(cursor))?.[0] ?? "`";
+      const runs = /`+/gu;
+      runs.lastIndex = cursor + run.length;
+      let closing = runs.exec(outside);
+      while (closing && closing[0].length !== run.length) closing = runs.exec(outside);
+      if (closing) {
+        const end = closing.index + run.length;
+        push("code", outside.slice(cursor, end));
+        cursor = end;
+        continue;
+      }
+      text += run;
+      cursor += run.length;
+      continue;
+    }
+    text += outside[cursor];
+    cursor++;
+  }
+  if (text) segments.push({ kind: "text", text });
+  return segments;
+}
+
+function sentenceAround(text: string, start: number, end: number): string {
+  let from = 0;
+  // A period may be followed by closing quotes or emphasis before the space.
+  for (const match of text.slice(0, start).matchAll(/[。！？!?\n]|\.(?=["'”’」』»)*_~]*\s)/gu)) {
+    from = match.index + match[0].length;
+  }
+  const next = /[。！？!?\n]|\.(?=["'”’」』»)*_~]*(?:\s|$))/u.exec(text.slice(end));
+  return text.slice(from, next ? end + next.index : text.length);
+}
+
+/**
+ * Models often name the author beside the ref (`[m2] で、田中さんの発言です`),
+ * which with the author's label renders the name twice; instructions alone
+ * did not stop it. The label is dropped rather than the prose, since telling
+ * the model's naming apart from content would risk deleting the answer.
+ * `prose` has links and code spans blanked out, so their punctuation ends no
+ * sentence and a name inside them is not taken as written. A missed name (an
+ * abbreviation's period, or punctuation in the name itself, ending the
+ * sentence early) only keeps the label as it was.
+ */
+function namesAuthor(prose: string, start: number, end: number, name: string): boolean {
+  // The model reads names with full-width parentheses (`authorNames`).
+  const plain = (value: string): string => value.replace(/（/gu, "(").replace(/）/gu, ")");
+  return (
+    name.length > 0 &&
+    plain(
+      sentenceAround(prose, start, end)
+        .replace(/\[m\d+\]/gu, "")
+        .replace(/\\(.)/gu, "$1"),
+    ).includes(plain(name))
+  );
+}
+
 export function linkMessageRefs(
   text: string,
-  resolve: (ref: string) => { label: string; url: string } | undefined,
+  resolve: (ref: string) => MessageRefLink | undefined,
 ): string {
   return transformOutsideCodeFences(text, (outside) => {
+    const segments = segmentsOf(outside);
+    const prose = segments
+      .map((segment) =>
+        segment.kind === "text" ? segment.text : "\u0000".repeat(segment.text.length),
+      )
+      .join("");
     let result = "";
     let replacedEnd = -1;
-    for (let cursor = 0; cursor < outside.length; ) {
-      const link = readLinkAt(outside, cursor);
-      if (link) {
-        result += link;
-        cursor += link.length;
+    let offset = 0;
+    for (const segment of segments) {
+      if (segment.kind !== "text") {
+        result += segment.text;
+        offset += segment.text.length;
         continue;
       }
-      if (outside[cursor] === "`" && !isEscaped(outside, cursor)) {
-        const run = /^`+/u.exec(outside.slice(cursor))?.[0] ?? "`";
-        const runs = /`+/gu;
-        runs.lastIndex = cursor + run.length;
-        let closing = runs.exec(outside);
-        while (closing && closing[0].length !== run.length) closing = runs.exec(outside);
-        if (closing) {
-          const end = closing.index + run.length;
-          result += outside.slice(cursor, end);
-          cursor = end;
-          continue;
+      for (let index = 0; index < segment.text.length; ) {
+        const cursor = offset + index;
+        if (outside[cursor] === "[" && !isEscaped(outside, cursor)) {
+          const ref = /^\[(m\d+)\]/u.exec(segment.text.slice(index));
+          const target = ref?.[1] ? resolve(ref[1]) : undefined;
+          if (ref && target) {
+            // `[m12][m13]` would otherwise render as one run of link text.
+            if (replacedEnd === cursor) result += "、";
+            const end = cursor + ref[0].length;
+            const label = namesAuthor(prose, cursor, end, target.name)
+              ? UNNAMED_REF_LABEL
+              : target.label;
+            result += `[${label}](${target.url})`;
+            index += ref[0].length;
+            replacedEnd = end;
+            continue;
+          }
         }
-        result += run;
-        cursor += run.length;
-        continue;
+        result += segment.text[index];
+        index++;
       }
-      if (outside[cursor] === "[" && !isEscaped(outside, cursor)) {
-        const ref = /^\[(m\d+)\]/u.exec(outside.slice(cursor));
-        const target = ref?.[1] ? resolve(ref[1]) : undefined;
-        if (ref && target) {
-          // `[m12][m13]` would otherwise render as one run of link text.
-          if (replacedEnd === cursor) result += "、";
-          result += `[${target.label}](${target.url})`;
-          cursor += ref[0].length;
-          replacedEnd = cursor;
-          continue;
-        }
-      }
-      result += outside[cursor];
-      cursor++;
+      offset += segment.text.length;
     }
     return result;
   });
@@ -131,16 +217,14 @@ export function createMessageRefResolver(
   guildId: string,
   context: ConversationToolContext,
   botName: string,
-): (ref: string) => { label: string; url: string } | undefined {
+): (ref: string) => MessageRefLink | undefined {
   return (ref) => {
     const target = context.describeMessageRef(ref);
     if (!target) return undefined;
-    const author = (target.kind === "assistant" ? botName : target.author).replace(
-      /[[\]*_`~|\\]/gu,
-      "\\$&",
-    );
+    const name = target.kind === "assistant" ? botName : target.author;
     return {
-      label: `${author} の発言`,
+      name,
+      label: `${name.replace(/[[\]*_`~|\\]/gu, "\\$&")} の発言`,
       url: `https://discord.com/channels/${guildId}/${target.channelId}/${target.messageId}`,
     };
   };
