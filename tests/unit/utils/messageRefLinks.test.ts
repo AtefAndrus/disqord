@@ -95,6 +95,16 @@ describe("linkMessageRefs", () => {
     ["a line break", "- Alice\n- [m12]", `- Alice\n- ${linked}`],
     ["a period and a space", "Alice did. See [m12].", `Alice did. See ${linked}.`],
     [
+      "a period before emphasis",
+      "**Alice has answered.** See [m12].",
+      `**Alice has answered.** See ${linked}.`,
+    ],
+    [
+      "a period before a quote",
+      'Alice said "hello." See [m12].',
+      `Alice said "hello." See ${linked}.`,
+    ],
+    [
       "a later sentence",
       "[m12] です。Alice さんにも聞いた",
       `${linked} です。Alice さんにも聞いた`,
