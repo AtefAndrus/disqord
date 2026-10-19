@@ -77,9 +77,44 @@ export function readLinkAt(text: string, cursor: number): string | undefined {
   return undefined;
 }
 
+export interface MessageRefLink {
+  /** The author as written in prose, to find it beside the ref. */
+  name: string;
+  /** `<author> の発言`, Markdown-escaped. */
+  label: string;
+  url: string;
+}
+
+/** The label of a link whose sentence already names the message's author. */
+export const UNNAMED_REF_LABEL = "発言";
+
+function sentenceAround(text: string, start: number, end: number): string {
+  let from = 0;
+  for (const match of text.slice(0, start).matchAll(/[。！？!?\n]|\.(?=\s)/gu)) {
+    from = match.index + match[0].length;
+  }
+  const next = /[。！？!?\n]|\.(?=\s|$)/u.exec(text.slice(end));
+  return text.slice(from, next ? end + next.index : text.length);
+}
+
+/**
+ * Models often name the author beside the ref (`[m2] で、田中さんの発言です`),
+ * which with the author's label renders the name twice; instructions alone
+ * did not stop it. The label is dropped rather than the prose, since telling
+ * the model's naming apart from content would risk deleting the answer.
+ */
+function namesAuthor(text: string, start: number, end: number, name: string): boolean {
+  return (
+    name.length > 0 &&
+    sentenceAround(text, start, end)
+      .replace(/\[m\d+\]/gu, "")
+      .includes(name)
+  );
+}
+
 export function linkMessageRefs(
   text: string,
-  resolve: (ref: string) => { label: string; url: string } | undefined,
+  resolve: (ref: string) => MessageRefLink | undefined,
 ): string {
   return transformOutsideCodeFences(text, (outside) => {
     let result = "";
@@ -113,8 +148,12 @@ export function linkMessageRefs(
         if (ref && target) {
           // `[m12][m13]` would otherwise render as one run of link text.
           if (replacedEnd === cursor) result += "、";
-          result += `[${target.label}](${target.url})`;
-          cursor += ref[0].length;
+          const end = cursor + ref[0].length;
+          const label = namesAuthor(outside, cursor, end, target.name)
+            ? UNNAMED_REF_LABEL
+            : target.label;
+          result += `[${label}](${target.url})`;
+          cursor = end;
           replacedEnd = cursor;
           continue;
         }
@@ -131,16 +170,14 @@ export function createMessageRefResolver(
   guildId: string,
   context: ConversationToolContext,
   botName: string,
-): (ref: string) => { label: string; url: string } | undefined {
+): (ref: string) => MessageRefLink | undefined {
   return (ref) => {
     const target = context.describeMessageRef(ref);
     if (!target) return undefined;
-    const author = (target.kind === "assistant" ? botName : target.author).replace(
-      /[[\]*_`~|\\]/gu,
-      "\\$&",
-    );
+    const name = target.kind === "assistant" ? botName : target.author;
     return {
-      label: `${author} の発言`,
+      name,
+      label: `${name.replace(/[[\]*_`~|\\]/gu, "\\$&")} の発言`,
       url: `https://discord.com/channels/${guildId}/${target.channelId}/${target.messageId}`,
     };
   };

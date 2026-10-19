@@ -243,6 +243,7 @@ test.each(["inside", "outside", "deleted-page", "deleted-trigger"])(
       [0, 1].map((seq) => ({ triggerMsgId: "800", pageMsgId: String(900 + seq), seq })),
     );
     const firstAnswer = linkMessageRefs("[m1]", () => ({
+      name: "Alice [m1]",
       label: "Alice [m1] の発言",
       url: "https://discord.com/channels/guild/channel/700",
     }));
