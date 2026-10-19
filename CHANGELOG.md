@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.16.0] - 2026-10-19
+
+
+### Added
+
+- client tool の呼び出しをログに残し、遡って読む tool の 0 件の結果を誤解されないようにする (#227)
+- 発言者を表示名とユーザー名で区別し、発言へのリンクの文字を整える (#228)
+- 会話履歴の発言に付いたリアクションの種類と数をモデルに渡す (#229)
+- 自動応答の判定が人どうしの会話と制止に返答しないようにする (#231)
+
+
 ## [1.15.0] - 2026-10-17
 
 
@@ -371,6 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump zod from 4.1.13 to 4.2.0
 - bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.16.0]: https://github.com/AtefAndrus/disqord/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/AtefAndrus/disqord/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/AtefAndrus/disqord/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/AtefAndrus/disqord/compare/v1.12.0...v1.13.0
