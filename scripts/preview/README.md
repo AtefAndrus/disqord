@@ -19,7 +19,7 @@ Claude は生成された PNG を読んでデザインを視認し、`src/utils/
 
 描画に使う Chromium（`chromium-headless-shell`）は、`bun run preview` が毎回 `playwright install` で確保する。
 Playwright は版ごとに決まったブラウザのリビジョンを使うので、`playwright` の版が上がった後の初回だけダウンロードが入る。
-必要なリビジョンの headless shell と、一緒に入る FFmpeg の両方が入っていれば何もしない。
+その環境で必要な実行ファイル（headless shell や FFmpeg）がすべて入っていれば、追加のダウンロードはしない。
 
 CJK フォント（Noto Sans JP woff）は初回実行時に `scripts/preview/fonts/` へ自動ダウンロードされる。
 
