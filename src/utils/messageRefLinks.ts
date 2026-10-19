@@ -88,6 +88,19 @@ export interface MessageRefLink {
 /** The label of a link whose sentence already names the message's author. */
 export const UNNAMED_REF_LABEL = "発言";
 
+/**
+ * Blanks out what is not read as prose (code spans, link destinations, URLs)
+ * at the same length, so their punctuation ends no sentence and a name in a
+ * URL is not taken as written.
+ */
+function maskNonProse(text: string): string {
+  const blank = (match: string): string => "\u0000".repeat(match.length);
+  return text
+    .replace(/(`+)[^`]*?\1/gu, blank)
+    .replace(/\]\([^)\s]*\)/gu, (match) => `]${blank(match.slice(1))}`)
+    .replace(/<[a-z][a-z\d+.-]*:[^\s<>]*>|[a-z][a-z\d+.-]*:\/\/[^\s<>]+/giu, blank);
+}
+
 function sentenceAround(text: string, start: number, end: number): string {
   let from = 0;
   for (const match of text.slice(0, start).matchAll(/[。！？!?\n]|\.(?=\s)/gu)) {
@@ -102,12 +115,15 @@ function sentenceAround(text: string, start: number, end: number): string {
  * which with the author's label renders the name twice; instructions alone
  * did not stop it. The label is dropped rather than the prose, since telling
  * the model's naming apart from content would risk deleting the answer.
+ * A missed name (an abbreviation's period ending the sentence early) only
+ * keeps the label as it was.
  */
 function namesAuthor(text: string, start: number, end: number, name: string): boolean {
   return (
     name.length > 0 &&
-    sentenceAround(text, start, end)
+    sentenceAround(maskNonProse(text), start, end)
       .replace(/\[m\d+\]/gu, "")
+      .replace(/\\(.)/gu, "$1")
       .includes(name)
   );
 }

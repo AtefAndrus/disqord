@@ -103,6 +103,34 @@ describe("linkMessageRefs", () => {
     expect(linkMessageRefs(text, resolve)).toBe(expected);
   });
 
+  test.each([
+    [
+      "a code span",
+      "Alice の案 `status?` は [m12] です",
+      `Alice の案 \`status?\` は ${unnamed} です`,
+    ],
+    [
+      "a link destination",
+      "Alice の案 [資料](https://example.com/?id=1) は [m12] です",
+      `Alice の案 [資料](https://example.com/?id=1) は ${unnamed} です`,
+    ],
+    [
+      "a bare URL",
+      "Alice の案 https://example.com/?id=1 は [m12]",
+      `Alice の案 https://example.com/?id=1 は ${unnamed}`,
+    ],
+  ])("punctuation inside %s does not end the sentence", (_, text, expected) => {
+    expect(linkMessageRefs(text, resolve)).toBe(expected);
+  });
+
+  test.each([
+    ["a link destination", "[資料](https://example.com/Alice) と [m12] を参照"],
+    ["a bare URL", "https://example.com/Alice と [m12] を参照"],
+    ["an autolink", "<https://example.com/Alice> と [m12] を参照"],
+  ])("a name only inside %s is not taken as written", (_, text) => {
+    expect(linkMessageRefs(text, resolve)).toBe(text.replace("[m12]", linked));
+  });
+
   test("a period inside a word does not end the sentence", () => {
     expect(linkMessageRefs("Alice uses m3.medium [m12]", resolve)).toBe(
       `Alice uses m3.medium ${unnamed}`,
@@ -158,5 +186,8 @@ test("resolver reads current targets, uses each message's channel, and escapes a
   // The bot is found by its own name, unescaped, as prose writes it.
   expect(linkMessageRefs("Dis*Qord の回答は [m12]", resolver)).toBe(
     "Dis*Qord の回答は [発言](https://discord.com/channels/guild/channel/bot-message)",
+  );
+  expect(linkMessageRefs("Dis\\*Qord の回答は [m12]", resolver)).toBe(
+    "Dis\\*Qord の回答は [発言](https://discord.com/channels/guild/channel/bot-message)",
   );
 });
