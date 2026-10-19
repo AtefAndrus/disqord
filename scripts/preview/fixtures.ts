@@ -91,7 +91,7 @@ const RELEASE_NOTE_BODY = (() => {
   const items = Array.from(
     { length: 100 },
     (_, i) =>
-      `- 会話履歴を Discord から読み、窓の外は tool で取りに行く変更の ${i + 1} 番目の項目 (#${100 + i})`,
+      `- 会話履歴を Discord から読み、窓の外は tool で取りに行く変更の ${i + 1} 番目の項目 ([#${100 + i}](https://github.com/AtefAndrus/disqord/pull/${100 + i}))`,
   );
   return `### Added\n\n${items.slice(0, 70).join("\n")}\n\n### Fixed\n\n${items.slice(70).join("\n")}`;
 })();
@@ -358,7 +358,7 @@ export function buildFixtures(): IFixture[] {
     messages: packContainers([buildSuccessNoticeContainer(HELP_TEXT, "DisQord ヘルプ")]),
   });
 
-  // /release-note（長い節が 2 ページに分かれる）
+  // /release-note（長い節が複数ページに分かれる）
   fixtures.push({
     id: "release-note",
     title: "/release-note",
