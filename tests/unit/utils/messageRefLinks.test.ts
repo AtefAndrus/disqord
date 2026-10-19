@@ -105,6 +105,11 @@ describe("linkMessageRefs", () => {
       `Alice said "hello." See ${linked}.`,
     ],
     [
+      "a period before a corner bracket",
+      "Alice said 「hello.」 See [m12].",
+      `Alice said 「hello.」 See ${linked}.`,
+    ],
+    [
       "a later sentence",
       "[m12] です。Alice さんにも聞いた",
       `${linked} です。Alice さんにも聞いた`,

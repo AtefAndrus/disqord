@@ -135,10 +135,10 @@ function segmentsOf(outside: string): Segment[] {
 function sentenceAround(text: string, start: number, end: number): string {
   let from = 0;
   // A period may be followed by closing quotes or emphasis before the space.
-  for (const match of text.slice(0, start).matchAll(/[。！？!?\n]|\.(?=["'”’)*_~]*\s)/gu)) {
+  for (const match of text.slice(0, start).matchAll(/[。！？!?\n]|\.(?=["'”’」』»)*_~]*\s)/gu)) {
     from = match.index + match[0].length;
   }
-  const next = /[。！？!?\n]|\.(?=["'”’)*_~]*(?:\s|$))/u.exec(text.slice(end));
+  const next = /[。！？!?\n]|\.(?=["'”’」』»)*_~]*(?:\s|$))/u.exec(text.slice(end));
   return text.slice(from, next ? end + next.index : text.length);
 }
 
