@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.17.1] - 2026-10-22
+
+
+### Fixed
+
+- Bun 1.4.4 で鍵が漏えいした eMudhra の CA の証明書を拒否する ([#240](https://github.com/AtefAndrus/disqord/pull/240))
+
+
 ## [1.17.0] - 2026-10-19
 
 
@@ -395,6 +403,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump zod from 4.1.13 to 4.2.0
 - bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.17.1]: https://github.com/AtefAndrus/disqord/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/AtefAndrus/disqord/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/AtefAndrus/disqord/compare/v1.15.0...v1.16.0
 [1.15.0]: https://github.com/AtefAndrus/disqord/compare/v1.14.0...v1.15.0
