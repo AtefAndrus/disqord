@@ -229,7 +229,7 @@ async function repliesAfter(
 interface RunningBot {
   stop: () => Promise<void>;
   /** How the child ended; both null while it is still running. */
-  exitStatus: () => { exitCode: number | null; signalCode: string | null };
+  exitStatus: () => { exitCode: number | null; signalCode: NodeJS.Signals | number | null };
   toolCalls: Set<string>;
   inputs: InputObservation[];
   botContextMarkers: Set<string>;
