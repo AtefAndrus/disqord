@@ -31,7 +31,7 @@
     "@biomejs/biome": "2.5.15",
     "@skyra/discord-components-core": "4.0.2",
     "@types/node": "26.6.5",
-    "bun-types": "1.4.2",
+    "bun-types": "1.4.4",
     "lefthook": "2.2.1",
     "markdownlint-cli2": "0.23.3",
     "playwright": "1.64.0",
