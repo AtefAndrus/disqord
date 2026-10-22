@@ -100,7 +100,7 @@ Merge `origin/main`, take its `docs/progress.md`, and rerun `bun scripts/generat
 
 - Commit subjects are English, in the form `[type] short description`.
 - PR titles and bodies are Japanese, and the title carries the same `[type]` prefix. Squash merge turns the PR title into the commit subject, and `cliff.toml` lists no catch-all parser, so a subject without a prefix matches no CHANGELOG group.
-- `[feat]` → Added, `[fix]` → Fixed, `[perf]` → Performance, and Renovate's `build(deps...)` → Dependencies. `[docs]`, `[refactor]`, `[test]`, `[chore]`, and `[release]` are skipped, because the CHANGELOG is the release notes users read and those changes mean nothing to them. A README change that operators must act on, such as a new permission or environment variable, belongs under `[feat]` or `[fix]` with the code that needs it. `cliff.toml` is the source of truth.
+- `[feat]` → Added, `[fix]` → Fixed, `[perf]` → Performance, and Renovate's `build(deps...)` → Dependencies. `[docs]`, `[refactor]`, `[test]`, `[chore]`, and `[release]` are skipped, because the CHANGELOG is the release notes users read and those changes mean nothing to them. `cliff.toml` is the source of truth.
 - Direct commits to `main` are blocked by lefthook (`00_guard-branch`). Work on a branch and open a PR.
 
 ## Bot invitations
