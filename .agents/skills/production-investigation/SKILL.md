@@ -65,7 +65,13 @@ Decide what the model actually received before blaming the model. The request is
 
 Read the current code instead of trusting this list; the names are where to start, not a specification.
 
-Production runs the latest release, not necessarily `HEAD`. Take the version that produced the event from the log: each process start writes `Configuration loaded` with `version`, so the version is the one on the last such line before the event. `/health` under `ADMIN_API_BASE_URL` reports the running process's `version` and `startedAt`, which covers an event after `startedAt` when the start line is no longer in the stored log. Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version. A start line without `version` predates the field, so say the version is assumed from the release dates.
+Production runs the latest release, not necessarily `HEAD`. Find the version that produced the event in this order:
+
+1. `/health` under `ADMIN_API_BASE_URL` reports the running process's `version` and `startedAt`. An event after `startedAt` came from that process, so its `version` is the answer.
+2. Otherwise, each process start writes `Configuration loaded` with `version`, and the version is the one on the last such line before the event. Fetch with `logs --since` an earlier time when that line is outside the range you read.
+3. When neither gives a version (the event predates `startedAt` and no start line with `version` precedes it, because it was rotated out or written before the field existed), the version is unknown: pick the tag whose release date precedes the event and say it is assumed.
+
+Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version.
 
 With only an エラーID and no logs, this step ends once you have shown where the error is raised and which error classes it can be. Do not pick one of them as the cause.
 
