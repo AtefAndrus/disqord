@@ -176,6 +176,8 @@ Cloudflare Tunnel で新しく公開する場合は、次の手順で DisQord �
 `bun scripts/admin.ts metrics`、`bun scripts/admin.ts logs [--level L] [--lines N] [--since ISO]` で呼ぶ。
 署名はスクリプトが計算し、接続先と秘密鍵は `.env` の `ADMIN_API_BASE_URL` と `ADMIN_API_SECRET` から読む。
 `bun scripts/admin.ts message <Discord のメッセージリンク>` は、リンク先の前後の会話と、その時刻の前後のログをまとめて表示する。
+あわせて、`/health` が返す稼働中のバージョンとその起動時刻、リンク先より前の最後の起動行を表示する。
+`bun scripts/admin.ts channel <チャンネル ID> --since <ISO 8601>` は、その時刻以降のチャンネルの発言をすべてと、同じ時刻以降のログを表示する。
 調査の手順は `.agents/skills/production-investigation/SKILL.md` にある。
 
 ## 参考リンク

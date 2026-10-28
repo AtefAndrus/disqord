@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   adminHeaders,
+  dateToSnowflake,
+  describeHealth,
   formatMessage,
+  lastStartLine,
   linesBetween,
   messageText,
   parseMessageLink,
+  retryAfterSeconds,
   snowflakeToDate,
 } from "../../../scripts/admin";
 import { verifyAdminRequest } from "../../../src/http/adminAuth";
@@ -104,5 +108,66 @@ describe("linesBetween", () => {
     expect(
       linesBetween(log, new Date("2026-10-15T04:16:00Z"), new Date("2026-10-15T04:31:00Z")),
     ).toEqual(["[2026-10-15T04:21:00.000Z] [INFO] inside"]);
+  });
+});
+
+describe("dateToSnowflake", () => {
+  test("encodes a time that snowflakeToDate decodes back", () => {
+    const date = new Date("2026-10-22T13:00:00.000Z");
+
+    expect(snowflakeToDate(dateToSnowflake(date)).toISOString()).toBe(date.toISOString());
+  });
+});
+
+describe("lastStartLine", () => {
+  const log = [
+    '[2026-10-22T13:32:01.304Z] [INFO] Configuration loaded {"nodeEnv":"production"}',
+    "[2026-10-23T17:21:28.043Z] [INFO] Web search {}",
+    '[2026-10-28T04:44:19.243Z] [INFO] Configuration loaded {"nodeEnv":"production","version":"1.18.0"}',
+    "[2026-10-28T05:00:00.000Z] [INFO] Reply gate {}",
+  ].join("\n");
+
+  test("returns the last start before the time, not a later one", () => {
+    expect(lastStartLine(log, new Date("2026-10-25T00:00:00Z"))).toBe(
+      '[2026-10-22T13:32:01.304Z] [INFO] Configuration loaded {"nodeEnv":"production"}',
+    );
+    expect(lastStartLine(log, new Date("2026-10-28T05:00:00Z"))).toContain('"version":"1.18.0"');
+  });
+
+  test("returns nothing when no start precedes the time", () => {
+    expect(lastStartLine(log, new Date("2026-10-01T00:00:00Z"))).toBeUndefined();
+  });
+
+  test("ignores a later line that only quotes the phrase", () => {
+    const quoted = `${log}\n[2026-10-28T05:10:00.000Z] [INFO] Web search {"searches":[{"query":"Configuration loaded"}]}`;
+
+    expect(lastStartLine(quoted, new Date("2026-10-28T06:00:00Z"))).toContain('"version":"1.18.0"');
+  });
+});
+
+describe("retryAfterSeconds", () => {
+  test("prefers the body's retry_after, then the header, then one second", () => {
+    expect(retryAfterSeconds({ retry_after: 0.5 }, "3")).toBe(0.5);
+    expect(retryAfterSeconds(undefined, "3")).toBe(3);
+    expect(retryAfterSeconds({}, null)).toBe(1);
+  });
+});
+
+describe("describeHealth", () => {
+  const health = { version: "1.18.0", startedAt: "2026-10-28T04:44:21.325Z" };
+
+  test("says whether the running process had started by the time", () => {
+    expect(describeHealth(health, new Date("2026-10-28T05:00:00Z"))).toBe(
+      "health: version 1.18.0, started 2026-10-28T04:44:21.325Z (the message is after its start)",
+    );
+    expect(describeHealth(health, new Date("2026-10-25T00:00:00Z"))).toContain(
+      "another process answered it",
+    );
+  });
+
+  test("reports missing fields as unknown", () => {
+    expect(describeHealth({}, new Date())).toBe(
+      "health: version unknown, started unknown (start time unknown)",
+    );
   });
 });

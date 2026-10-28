@@ -9,4 +9,20 @@ env_file = ".env"
 
 [tasks.setup]
 description = "Install dependencies and initialize environment file"
-run = ["bun install", "if [ ! -f .env ]; then cp .env.example .env; fi"]
+# A linked worktree (an Orca worker's, for one) takes the main worktree's .env
+# and a copy of its database, so `bun run e2e` runs there with the dev bot and
+# the guild settings the scenarios need. Pointing DATABASE_PATH at the main
+# worktree's file instead failed to open under the sandbox.
+run = [
+  "bun install",
+  """
+  root="$(git rev-parse --show-toplevel)"
+  main="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  if [ ! -f .env ]; then
+    if [ "$main" != "$root" ] && [ -f "$main/.env" ]; then cp "$main/.env" .env; else cp .env.example .env; fi
+  fi
+  if [ "$main" != "$root" ] && [ ! -f data/disqord.db ] && [ -f "$main/data/disqord.db" ] && command -v sqlite3 >/dev/null; then
+    mkdir -p data && sqlite3 "$main/data/disqord.db" ".backup data/disqord.db"
+  fi
+  """,
+]

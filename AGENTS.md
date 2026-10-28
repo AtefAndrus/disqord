@@ -18,6 +18,7 @@ bun run lint:md    # markdownlint-cli2
 bun run preview    # render the bot's UI to PNG under .preview/
 bun run e2e        # drive the real bot through Discord with a tester bot (not in CI)
 bun scripts/admin.ts message <link>  # a deployed bot's conversation and logs around a message
+bun scripts/admin.ts channel <id> --since <ISO>  # a channel's messages and the logs since a time
 bun scripts/reply-gate-eval.ts [--runs N] [model ...]  # judge the hand-written reply-gate cases with decision models (paid)
 ```
 
