@@ -68,10 +68,10 @@ Read the current code instead of trusting this list; the names are where to star
 Production runs the latest release, not necessarily `HEAD`. Find the version that produced the event in this order:
 
 1. `/health` under `ADMIN_API_BASE_URL` reports the running process's `version` and `startedAt`. An event after `startedAt` came from that process, so its `version` is the answer.
-2. Otherwise, each process start writes `Configuration loaded` with `version`, and the version is the one on the last such line before the event. Fetch with `logs --since` an earlier time when that line is outside the range you read.
-3. When neither gives a version (the event predates `startedAt` and no start line with `version` precedes it, because it was rotated out or written before the field existed), the version is unknown: pick the tag whose release date precedes the event and say it is assumed.
+2. Otherwise, each process start writes `Configuration loaded`, with `version` since the field was added. Find the last `Configuration loaded` line before the event: its `version` is the answer, and a line without `version` leaves the version unknown even when an earlier start line has one. `logs` returns the newest matching lines, at most 10,000 (`--lines 10000`), so a start line followed by more lines than that before now is out of its reach however early `--since` is; read the container's stdout log then.
+3. When neither gives a version, the version is unknown: pick the tag whose release date precedes the event and say it is assumed.
 
-Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version.
+Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version. Coolify builds the head of `main`, not the tag, and a manual run of `deploy.yml` deploys it without a release, so the running code can include commits after the tag under the same version. When `git log v<version>..origin/main` lists commits and `gh run list -w deploy.yml` shows a `workflow_dispatch` run before the event, say the code is assumed to be the tag's.
 
 With only an エラーID and no logs, this step ends once you have shown where the error is raised and which error classes it can be. Do not pick one of them as the cause.
 
