@@ -69,6 +69,8 @@ function setup(
       pages.some((page) => page.pageMsgId === id) ? triggerRecord : null,
     ),
     listPages: mock(() => pages),
+    appendGenerations: mock(() => 0),
+    listGenerations: mock(() => []),
     markPendingFailed: mock(() => 0),
     deleteByGuild: mock(() => 0),
     deleteByChannel: mock(() => 0),
@@ -148,6 +150,8 @@ describe("MessageEligibilityService", () => {
         pageListCalls += 1;
         return pageListCalls === 1 ? [{ pageMsgId: "page", triggerMsgId: "trigger", seq: 0 }] : [];
       }),
+      appendGenerations: mock(() => 0),
+      listGenerations: mock(() => []),
       markPendingFailed: mock(() => 0),
       deleteByGuild: mock(() => 0),
       deleteByChannel: mock(() => 0),
@@ -233,6 +237,8 @@ describe("MessageEligibilityService", () => {
       findByTrigger: mock(() => null),
       findByPage: mock(() => null),
       listPages: mock(() => []),
+      appendGenerations: mock(() => 0),
+      listGenerations: mock(() => []),
       markPendingFailed: mock(() => 0),
       deleteByGuild: mock(() => 0),
       deleteByChannel: mock(() => 0),

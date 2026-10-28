@@ -15,7 +15,7 @@
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
 | [カスタム絵文字・スタンプ・GIF への対応](changes/discord-expressions/design.md) | 中 | planned | カスタム絵文字、スタンプ、GIF の埋め込みをモデルが読めるようにし、返信でサーバーのカスタム絵文字を使えるようにする |
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
-| [LLM 入力の表示（コンテキストメニュー）](changes/llm-input-inspect/design.md) | 中 | planned | bot の返答を右クリックして「アプリ → LLM 入力を見る」を選ぶと、その返答を生成したときに OpenRouter へ送った入力と生成のメタデータを、実行した本人にだけ見える返信で返す |
+| [LLM 入力の表示（コンテキストメニュー）](changes/llm-input-inspect/design.md) | 中 | in-progress | bot の返答を右クリックして「アプリ → LLM 入力を見る」を選ぶと、その返答を生成したときに OpenRouter へ送った入力と生成のメタデータを、実行した本人にだけ見える返信で返す |
 | [数式を画像で表示する](changes/math-rendering/design.md) | 中 | investigating | 返答の別行立ての数式を PNG にして本文の該当位置に差し込み、文中の数式はコードの表記にする |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
 | [リアクションだけで応える返答](changes/reaction-only-reply/design.md) | 中 | planned | 礼や相づちのように答えを求めていない発言に、bot が本文を書かずリアクションだけで応えられるようにする |

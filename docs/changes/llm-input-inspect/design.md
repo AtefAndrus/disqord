@@ -1,6 +1,6 @@
 ---
 title: "LLM 入力の表示（コンテキストメニュー）"
-status: planned
+status: in-progress
 priority: medium
 summary: "bot の返答を右クリックして「アプリ → LLM 入力を見る」を選ぶと、その返答を生成したときに OpenRouter へ送った入力と生成のメタデータを、実行した本人にだけ見える返信で返す"
 ---
