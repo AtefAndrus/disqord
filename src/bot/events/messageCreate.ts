@@ -642,9 +642,7 @@ export function createMessageCreateHandler(
           searches: result.webSearch.calls,
         });
       }
-      const resultLinks = result.webSearch
-        ? formatSearchResultLinks(result.webSearch.results)
-        : undefined;
+      const resultLinks = result.webSearch ? formatSearchResultLinks(result.webSearch) : undefined;
       // 表示には updater が保持する全表示テキスト（commit 済み過去ターンの preamble + 最終ターンの
       // content）を使う。result.text は最終ターンの content のみのため、tool_calls を挟んだ場合に
       // 使うと commit 済み preamble が最終描画から消えてしまう（tool 未登録時は preamble が無く

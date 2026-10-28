@@ -1,5 +1,5 @@
 import type { AppConfig } from "../../config";
-import type { ServerTool, SystemChatMessage, WebSearchResultLink } from "../../types";
+import type { ServerTool, SystemChatMessage, WebSearchTrace } from "../../types";
 
 export type WebSearchEngine = AppConfig["webSearchEngine"];
 
@@ -123,11 +123,23 @@ function sanitizeTitle(raw: string): string {
  * link's host as `URL` serializes it (ASCII, punycode for IDNs), so a title
  * that names another site cannot pass for a link to it.
  */
-export function formatSearchResultLinks(results: WebSearchResultLink[]): string | undefined {
+export function formatSearchResultLinks(trace: WebSearchTrace): string | undefined {
+  const sourceGroups = new Map<string, number>();
+  const groups: string[][] = trace.calls.map((call, index) => {
+    for (const source of call.sources) {
+      try {
+        const href = new URL(source).href;
+        if (!sourceGroups.has(href)) sourceGroups.set(href, index);
+      } catch {
+        // A malformed source must not discard otherwise displayable results.
+      }
+    }
+    return [];
+  });
   const lines: string[] = [];
+  const unmatched: string[] = [];
   const seen = new Set<string>();
-  for (const result of results) {
-    if (lines.length >= MAX_RESULT_LINKS) break;
+  for (const result of trace.results) {
     let url: URL;
     try {
       url = new URL(result.url);
@@ -144,7 +156,24 @@ export function formatSearchResultLinks(results: WebSearchResultLink[]): string 
     // so the host shown in the label gets its own check.
     if (!/^[a-z0-9.-]+$/.test(host)) continue;
     const label = title.length > 0 ? `${title.slice(0, MAX_TITLE_CHARS)} (${host})` : host;
-    lines.push(`- [${label}](<${href}>)`);
+    const line = `- [${label}](<${href}>)`;
+    lines.push(line);
+    const groupIndex = sourceGroups.get(href);
+    if (groupIndex === undefined) unmatched.push(line);
+    else groups[groupIndex].push(line);
   }
-  return lines.length > 0 ? `-# 検索結果\n${lines.join("\n")}` : undefined;
+  const populatedGroups = groups.filter((group) => group.length > 0);
+  const selected: string[] = [];
+  if (populatedGroups.length <= 1) {
+    selected.push(...lines.slice(0, MAX_RESULT_LINKS));
+  } else {
+    for (let round = 0; round < MAX_RESULT_LINKS && selected.length < MAX_RESULT_LINKS; round++) {
+      for (const group of populatedGroups) {
+        if (selected.length >= MAX_RESULT_LINKS) break;
+        if (group[round] !== undefined) selected.push(group[round]);
+      }
+    }
+    selected.push(...unmatched.slice(0, MAX_RESULT_LINKS - selected.length));
+  }
+  return selected.length > 0 ? `-# 検索結果\n${selected.join("\n")}` : undefined;
 }

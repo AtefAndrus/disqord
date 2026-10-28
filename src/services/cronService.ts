@@ -722,7 +722,7 @@ export class CronService implements ICronService {
               notice: "Web 検索に失敗したため検索なしで答えました。",
             }),
             ...(response.webSearch && {
-              links: formatSearchResultLinks(response.webSearch.results),
+              links: formatSearchResultLinks(response.webSearch),
             }),
           },
         ).entries()) {
