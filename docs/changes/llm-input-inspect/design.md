@@ -9,7 +9,7 @@ summary: "bot の返答を右クリックして「アプリ → LLM 入力を見
 
 ## Why
 
-bot の返答が期待と違ったとき、モデルに何が渡っていたか（システムプロンプト、会話履歴として入ったメッセージ、tool の結果）を確かめる手段が今は無い。
+bot の返答が期待と違ったとき、モデルに何が渡っていたか（システムプロンプト、会話履歴として入ったメッセージ、tool の結果）を確認する手段が今は無い。
 返答を右クリックするだけで、その返答を生成したときの入力を確認できるようにする。
 
 ## 依存 / 関連 change
@@ -30,6 +30,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 
 - 入力本文を bot の DB に保存すること。保存は OpenRouter の入出力ログに任せ、bot は generation ID だけを持つ。理由は Decisions の「入力の取得元」に書いた。
 - 定期実行の投稿、メッセージの解説（ephemeral 返信）など、`messageCreate.ts` を通らない生成。返答の記録（`reply_records`）に載らないため、右クリックされたメッセージから generation を引けない。
+- 自動応答チャンネルで返答するかを決めた判定の入力。判定は `/responses` ではなく Decisions API（`decideNoul`）で行い、generation の入出力ログに載らない。判定の結果とモデルは `Reply gate` のログ行に残り、管理 API のログで確認できる。
 - 各 generation がどの種類の turn か（tool の続き、Web 検索なしの再生成、ツイート画像を除いた再試行、コンテキスト超過後の tool なしの回答）の表示。この区別は chat service と tool loop の中でしか分からず、OpenRouter のメタデータにも無いので、表示するには種類を別に記録する必要がある。生成順と各 generation の入力を見れば区別できるので、記録は足さない。
 - Discord 側の材料（会話の窓にどのメッセージが入ったか、添付の元 URL）の表示。OpenRouter に渡した形で足りると判断した。
 
@@ -37,20 +38,21 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 
 | 判断事項 | 選択 | 理由 |
 | -------- | ---- | ---- |
-| 入力の取得元 | OpenRouter の `GET /api/v1/generation/content?id=` と `GET /api/v1/generation?id=` | 前者は保存された入力と出力を、後者はモデル、token 数、コストを返す。bot の DB に入力本文を持たないので、画像や PDF を含む入力で DB が肥大化せず、保存期間の管理も要らない。2026-10-11 に bot の通常の API キーで両方を呼び、system と user のメッセージが返ることを確認した（management key は不要だった） |
-| 返す入力の形 | OpenRouter が保存した形のまま返し、bot が送った形への変換はしない | bot は Responses API（`POST /responses`）の `input` 配列を送るが（`src/llm/openrouter.ts:574`、`src/llm/openrouter.ts:726`）、上の確認では `/generation/content` は `input.messages` の形で返した。保存時に OpenRouter が形を変えているので、tool の結果（`function_call_output`）や reasoning の項目が送ったとおりに残るかは確認できていない（Open Questions / Risks の「tool と reasoning の保存形」）。bot 側で送った形へ戻す変換は、保存されていない情報を補えないので行わない |
+| 入力の取得元 | OpenRouter の `GET /api/v1/generation/content?id=` と `GET /api/v1/generation?id=` | 前者は保存された入力と出力を、後者はモデル、token 数、コストを返す。bot の DB に入力本文を持たないので、画像や PDF を含む入力で DB が肥大化せず、保存期間の管理も要らない。OpenRouter の文書では入出力ログの保存期間は 3 か月以上である（Input & Output Logging のページ）。OpenAPI 定義は `/generation/content` の 403 を「management key 専用」と書いているが、2026-10-29 に bot の通常の API キーで両方を呼び、入力と出力が返ることを確認した |
+| 入出力ログの前提 | bot のキーで生成した入力が保存されるよう、デプロイ先の OpenRouter アカウントで Input & Output Logging を有効にし、API キーの絞り込みで bot のキーを除外しない。README の運用者向けの節にこの前提を書く | `/generation/content` が入力を返すのは、ログを有効にした後の generation だけである。設定はアカウント側にあり bot から確認できないので、運用者が設定する前提として明記する |
+| 返す入力の形 | OpenRouter が保存した形のまま返し、bot が送った形への変換はしない | bot は Responses API（`POST /responses`）の `input` 配列を送るが（`src/llm/openrouter.ts` の `toResponsesInput`）、OpenRouter は Chat Completions の `messages` の形で保存する。2026-10-29 に tool を使った 2 turn の生成で確認したところ、tool の呼び出しは assistant の `tool_calls`、tool の結果は `role: "tool"` のメッセージ、推論の本文は assistant の `reasoning_content` として残り、暗号化された推論は入らなかった。保存された `output` は本文（`completion`）と推論（`reasoning`）の文字列だけで、ある generation が出した tool の呼び出しはその generation の `output` には無く、次の generation の入力に現れる。bot 側で送った形へ戻す変換は、保存されていない情報を補えないので行わない |
 | bot が保存するもの | 返答ごとの generation ID の列 | OpenRouter から入力を引くための鍵である |
-| generation ID の取り方 | HTTP 応答を受け取った時点で、状態コードの判定と本文の読み取りより前に `X-Generation-Id` 応答ヘッダーから取る。ヘッダーが無いときはストリームの `response.created` イベントの `response.id`、非ストリームでは応答本文の `id` で補い、同じ ID は 1 件にまとめる | ヘッダーは本文より先に届くので、`response.created` を受け取る前の停止や切断でも ID が残る。エラー応答もストリームを読まずに例外になるため（`src/llm/openrouter.ts:769`）、ヘッダーで取らないと再試行前の generation が落ちる。2026-10-11 に、ストリーミングの成功応答（200）と存在しないモデルを指定したエラー応答（400）の両方で `x-generation-id` が付くことを確認した。応答ヘッダー自体を受け取れなかった試行（接続の失敗）は ID が無いので記録の対象外である |
-| 返答の記録を作る条件 | 会話履歴の設定に関係なく、`messageCreate.ts` が返答するときは常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず（`src/bot/events/messageCreate.ts:368`）、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:384`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
-| 右クリックされたメッセージから返答を引く方法 | まず `findByPage()` でページとして引き、無ければ、bot 自身のメッセージで返信先（`message.reference.messageId`）があるときに限り `findByTrigger()` でトリガーとして引く | エラーで終わった返答では、本文の無いページは削除され（`src/bot/events/messageCreate.ts:719`）、エラー表示は記録の確定後に `message.reply()` で別に送られ、ページとして登録されない（`src/bot/events/messageCreate.ts:661-674`）。エラー表示をページとして登録する方法は、`appendPage()` が確定前の記録にしか書けず（`src/db/repositories/replyRecord.ts:111-114`）、記録はエラー表示を送る前に `failed` で確定しているので採らない。返信先のトリガーから引けば、記録の意味を変えずにエラー表示から generation に届く |
+| generation ID の取り方 | HTTP 応答を受け取った時点で、状態コードの判定と本文の読み取りより前に `X-Generation-Id` 応答ヘッダーから取る。ヘッダーが無いときはストリームの `response.created` イベントの `response.id`、非ストリームでは応答本文の `id` で補い、同じ ID は 1 件にまとめる | ヘッダーは本文より先に届くので、`response.created` を受け取る前の停止や切断でも ID が残る。エラー応答もストリームを読まずに例外になるため（`chat()` と `chatStream()` の `handleErrorResponse()` 呼び出し）、ヘッダーで取らないと再試行前の generation が落ちる。2026-10-29 に、ストリーミングの成功応答（200）と存在しないモデルを指定したエラー応答（400）の両方で `x-generation-id` が付くことを確認した。400 のように受け付ける前に拒否されたリクエストの ID は、両方の endpoint で 404 になる。応答ヘッダー自体を受け取れなかった試行（接続の失敗）は ID が無いので記録の対象外である |
+| 返答の記録を作る条件 | 会話履歴の設定に関係なく、`messageCreate.ts` が返答するときは常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず（`src/bot/events/messageCreate.ts:397`）、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。自動応答の判定で黙ると決まったときは、今と同じく保留中の記録をページの無いまま消す（`deletePendingWithoutPages`）。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:395`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
+| 右クリックされたメッセージから返答を引く方法 | まず `findByPage()` でページとして引き、無ければ、bot 自身のメッセージで返信先（`message.reference.messageId`）があるときに限り `findByTrigger()` でトリガーとして引く | エラーで終わった返答では、本文の無いページは削除され（`cleanupBotMessagesOnFatalError`）、エラー表示は記録の確定後に `message.reply()` で別に送られ、ページとして登録されない（`src/bot/events/messageCreate.ts:753-764`）。エラー表示をページとして登録する方法は、`appendPage()` が確定前の記録にしか書けず（`src/db/repositories/replyRecord.ts:112-126`）、記録はエラー表示を送る前に `failed` で確定しているので採らない。返信先のトリガーから引けば、記録の意味を変えずにエラー表示から generation に届く |
 | 利用できる人 | 「サーバーの管理」権限か `/config` の管理者ロールを持ち（既存の `canManageGuildSettings()`）、かつ返答のあるチャンネルの履歴を今読める人（既存の `checkConversationAccess()`。`ViewChannel` と `ReadMessageHistory`、非公開スレッドではスレッドへの参加を見る。ボイスチャンネルとステージチャンネルでは、このコマンドの側で `Connect` も確認する） | 入力には、投稿者が後から削除したメッセージや、窓の外から tool で読んだ古いメッセージがそのまま残る。誰でも見られると、削除した発言をこのコマンドで掘り起こせてしまう。管理者に限れば、bot の挙動を調べる用途は満たせる。設定の管理権限は履歴の閲覧権限を含まないので（`src/services/settingsAuthorization.ts:14` は `ManageGuild` とロールしか見ない）、`ReadMessageHistory` を持たない管理者が入力経由で古いメッセージを読めないよう、履歴の認可も別に掛ける。Discord はボイスチャンネルのメッセージ取得に `Connect` も要求するが、`checkConversationAccess()` はこれを見ないので（`src/services/messageAuthorization.ts:31`）、その分をコマンド側で足す。共有関数のほうを直すと会話履歴の認可も変わるため、それは Open Questions / Risks の「ボイスチャンネルの履歴認可」に残す |
 | `default_member_permissions` | `ManageGuild` を設定し、加えて実行時にも上の判定を行う | 前者で一般の利用者のメニューに出なくなる。管理者ロールの持ち主には前者だけでは出ないので、サーバー側の連携サービス設定で許可してもらう。前者はサーバー管理者が上書きできるため、実行時の判定を省けない |
 | 返信の公開範囲 | ephemeral | 入力の中身をチャンネルに出さない |
-| 表示形式 | Components V2 の TextDisplay に generation ごとの要約を 1 行ずつ出し、全体は JSON ファイルを添付して、添付ごとに File コンポーネント（`attachment://<ファイル名>`）を置く。`followUp()` で続けて送る添付も同じ | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える。Components V2 のメッセージでは、コンポーネントから参照されない添付は表示されない。`reasoning.md` の添付も同じ形で File コンポーネントを置いている（`src/utils/chatContainerBuilder.ts:553`） |
+| 表示形式 | Components V2 の TextDisplay に generation ごとの要約を 1 行ずつ出し、全体は JSON ファイルを添付して、添付ごとに File コンポーネント（`attachment://<ファイル名>`）を置く。`followUp()` で続けて送る添付も同じ | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える。Components V2 のメッセージでは、コンポーネントから参照されない添付は表示されない。`reasoning.md` の添付も同じ形で File コンポーネントを置いている（`src/utils/chatContainerBuilder.ts:555`） |
 | JSON に入れる内容 | generation ごとに `/generation/content` の `input` と `output` と `error`、`/generation` のメタデータ、取得に失敗した endpoint とその理由 | turn が進むと後の入力は前の入力を含むので重複するが、各 generation で OpenRouter が保存した内容をそのまま示すことを優先する。重複を除く加工をすると、保存された内容との照合ができなくなる |
-| 画像と PDF のデータ | data URL と base64 の値を `[base64 省略: N バイト, MIME]` に置き換える | 添付ファイルの上限を超えやすく、人が読む用途では中身が要らない |
+| 画像と PDF のデータ | bot の側では置き換えない | OpenRouter は画像と PDF のデータを `[OR_REDACTED]` に置き換えて保存する。2026-10-29 に、user メッセージの画像（data URL）、PDF（`file_data`）、tool の結果に入れた画像のいずれも、`/generation/content` が `[OR_REDACTED]` で返すことを確認した |
 | 大きすぎるときの扱い | JSON 全体が interaction の `attachment_size_limit` を超えたら generation ごとのファイルに分け、1 件でも上限を超える generation はファイルを付けずに、要約にそのサイズと省略した旨を書く。添付が 10 件を超える分は `followUp()` の ephemeral メッセージで続けて送る。要約は 4000 文字に収まらない分を「他 N 件は JSON を参照」にまとめる | 上限を超えたものを切り詰めると、どこが欠けたか分からない JSON になり、保存された内容との照合という目的に反する。Discord の 1 メッセージの添付は 10 件までで、TextDisplay の合計は 4000 文字までである |
-| 取得の失敗と締め切り | generation ごとに 2 つの endpoint を並行して呼び、generation は生成順に 1 件ずつ処理する。endpoint ごとに成否を記録し、片方が失敗しても成功した側は返す。失敗した generation があっても次の generation へ進む。全体の締め切りは defer から 60 秒とし、締め切りまでに取得できなかった generation は「時間切れ」として要約と JSON に書く | `/generation/content` の 404 は入力が保存されていないか、まだ反映されていないことを表すが、`/generation` の 404 は入力の保存とは関係が無いので、別々に扱う。401、403、429、5xx、通信失敗は理由をそのまま記録する。interaction token は 15 分で失効するが、1 件あたり数秒の取得に 15 分近く待つ理由は無く、60 秒で打ち切れば返答を受け取れないまま待たせる時間が短くなる |
+| 取得の失敗と締め切り | generation ごとに 2 つの endpoint を並行して呼び、generation は生成順に 1 件ずつ処理する。endpoint ごとに成否を記録し、片方が失敗しても成功した側は返す。失敗した generation があっても次の generation へ進む。全体の締め切りは defer から 60 秒とし、締め切りまでに取得できなかった generation は「時間切れ」として要約と JSON に書く | `/generation/content` の 404 は入力が保存されていないか、まだ反映されていないことを表す。`/generation` の 404 は、受け付ける前に拒否されたリクエストか、まだ反映されていないことを表す。401、403、429、5xx、通信失敗は理由をそのまま記録する。途中で停止した generation も保存される（2026-10-29 にストリームを途中で切り、15 秒後に `/generation` が `cancelled: true` を、`/generation/content` が入力と途中までの出力を返すことを確認した）。interaction token は 15 分で失効するが、1 件あたり数秒の取得に 15 分近く待つ理由は無く、60 秒で打ち切れば返答を受け取れないまま待たせる時間が短くなる |
 | コマンド名 | `LLM 入力を見る`（ローカライズなし） | bot の UI は日本語だけで提供している |
 
 ## Design
@@ -67,7 +69,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 - 修正: `src/bot/events/messageCreate.ts` — 履歴設定に関係なく返答の記録を作り、返答の確定時（完了、停止、エラーのいずれも）に generation ID を保存する。
 - 修正: `scripts/generate-readme.ts` — chat input 以外をコマンド表から除く（message-explain が先に入れていれば不要）。
 - 修正: `src/bot/commands/handlers.ts` — `/help` の手書きのコマンド一覧に 1 行足す。
-- 修正: `README.md` — コマンド一覧の AUTO ブロックの外に 1 行足す。
+- 修正: `README.md` — コマンド一覧の AUTO ブロックの外に 1 行足し、入出力ログを有効にする前提を書く。
 
 ### DBスキーマ変更
 
@@ -88,8 +90,8 @@ CREATE TABLE IF NOT EXISTS reply_generations (
 1. interaction を受けたら 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。
 2. DM などギルドの外での実行、管理者でない実行者、返答のあるチャンネルの履歴を読めない実行者は、理由を返して終える。
 3. Decisions の「右クリックされたメッセージから返答を引く方法」で返答の記録を引く。記録が無いか、記録に generation ID が無ければ「この bot の返答ではないか、記録がありません」を返す。
-4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。`/generation/content` が全件 404 のときは、OpenRouter 側の反映が遅れている場合があるので「少し待ってから再実行してください」を添える。
-5. base64 を置き換えた JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<seq>.json`）として添付し、要約と合わせて `editReply()` で返す。
+4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。`/generation/content` が全件 404 のときは、OpenRouter 側の反映が遅れているか、入出力ログが無効な場合があるので、「少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください」を添える。
+5. JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<seq>.json`）として添付し、要約と合わせて `editReply()` で返す。
 
 ### 設計メモ
 
@@ -103,17 +105,15 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 - [ ] `reply_generations` 表と repository、service の操作
 - [ ] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
 - [ ] `/generation` と `/generation/content` の client メソッド
-- [ ] コマンドの実装（認可、返答の引き当て、取得、base64 の置き換え、サイズ超過時の分割、要約、添付）
-- [ ] unit テスト（ID の収集、エラー表示からの引き当て、管理権限と履歴の認可、endpoint ごとの失敗、締め切り、base64 の置き換え、サイズ超過時の分割）
-- [ ] `/help` と README の追記
-- [ ] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確かめる
+- [ ] コマンドの実装（認可、返答の引き当て、取得、サイズ超過時の分割、要約、添付）
+- [ ] unit テスト（ID の収集、エラー表示からの引き当て、管理権限と履歴の認可、endpoint ごとの失敗、締め切り、サイズ超過時の分割）
+- [ ] `/help` と README の追記（コマンドの 1 行と、入出力ログを有効にする前提）
+- [ ] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確認する
 - [ ] `docs/changes/llm-input-inspect/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
 
-- **OpenRouter の保存期間**: 入出力ログが何日残るかは確認していない。期限を過ぎた返答は `/generation/content` が 404 になり、「保存されていない」と返す。
-- **tool と reasoning の保存形**: tool 呼び出しとその結果、reasoning の項目を含む入力が `/generation/content` でどう返るか（省かれるか、別の形に変わるか）は確認していない。実装時に tool を使った返答で確かめ、欠ける項目があれば要約にその旨を書く。
-- **BYOK で生成した返答**: oauth-byok が実装されると、利用者のキーで生成した返答の入力は、その利用者の OpenRouter アカウントの入出力ログ設定に従って保存される（推測）。bot のキーでは他アカウントの generation を読めない可能性が高く、その場合はこのコマンドで見られない。未確認であり、oauth-byok の実装時に確かめる。
-- **画像の表現**: 画像を含む入力で `/generation/content` が base64 をどの形で返すか（data URL か、別のフィールドか、そもそも省かれるか）は確認していない。実装時に画像付きの返答で確かめ、置き換えの対象を決める。
+- **入出力ログが無効なときの応答（未確認）**: 入出力ログを有効にしていないアカウントの generation で、`/generation/content` が 404 を返すか、空の入力を返すかは確認していない。開発用のアカウントは有効なので、無効な場合の表示は 404 の扱いで足りると見込んでいるが、本番のキーのアカウントで有効かも未確認である。実装後の手動確認で、本番の返答を右クリックして確認する。
+- **BYOK で生成した返答**: oauth-byok が実装されると、利用者のキーで生成した返答の入力は、その利用者の OpenRouter アカウントの入出力ログ設定に従って保存される（推測）。bot のキーでは他アカウントの generation を読めない可能性が高く、その場合はこのコマンドで見られない。未確認であり、oauth-byok の実装時に確認する。
 - **ボイスチャンネルの履歴認可**: `checkConversationAccess()` はボイスチャンネルとステージチャンネルで `Connect` を確認しないので、会話履歴と `read_earlier_messages` の認可にも同じ不足がある。このコマンドとは独立した既存の問題であり、直すかどうかは別に決める。
 - **e2e テスト**: bot は message command を実行できないので、e2e のシナリオにはできない。ID の収集と保存は unit テストで、コマンドの表示は手動確認で見る。
