@@ -20,6 +20,7 @@ import type {
   StreamChunk,
   StreamFinalResult,
   StreamHeartbeatChunk,
+  StreamToolCallChunk,
 } from "../../../src/types";
 import {
   createMockGuildSettings,
@@ -331,6 +332,129 @@ describe("ChatService", () => {
   afterEach(() => {
     setSystemTime();
   });
+
+  test("collects generation IDs across two tool turns in order without duplicates", async () => {
+    const fixture = createFixture({ discordToolsEnabled: true });
+    fixture.toolRegistry.register(createAddReactionTool());
+    fixture.llmClient.listModelsWithPricing = mock(async () => [
+      {
+        id: "test-model:fixture",
+        name: "Fixture",
+        created: 0,
+        contextLength: 128_000,
+        pricing: { prompt: "0", completion: "0" },
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+        supportedParameters: ["tools"],
+      },
+    ]);
+    const addReaction = mock(async () => '{"ok":true}');
+    const discord: DiscordToolContext = {
+      channelType: 0,
+      addReaction,
+      createPoll: async () => "{}",
+      createThread: async () => "{}",
+      pinMessage: async () => "{}",
+      createEvent: async () => "{}",
+    };
+    let turn = 0;
+    fixture.llmClient.chatStream = mock(async function* (
+      _request: ChatCompletionRequest,
+      _signal?: AbortSignal,
+      onGenerationId?: (id: string) => void,
+    ) {
+      turn += 1;
+      if (turn > 1) onGenerationId?.("generation-1");
+      onGenerationId?.(`generation-${turn}`);
+      onGenerationId?.(`generation-${turn}`);
+      if (turn === 1) {
+        yield {
+          toolCall: {
+            index: 0,
+            id: "reaction-call",
+            name: "add_reaction",
+            argumentsDelta: '{"emoji":"👍"}',
+          },
+          done: false,
+        } satisfies StreamToolCallChunk;
+        yield { done: true, fullText: "", finishReason: "tool_calls" } satisfies StreamFinalResult;
+      } else {
+        yield { content: "done", done: false } satisfies StreamChunk;
+        yield { done: true, fullText: "done", finishReason: "stop" } satisfies StreamFinalResult;
+      }
+    });
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      { text: "react", discord },
+      "tool-generations",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    expect(result.status).toBe("final");
+    expect(addReaction).toHaveBeenCalledTimes(1);
+    expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
+    expect(result.generationIds).toEqual(["generation-1", "generation-2"]);
+  });
+
+  test.each(["web search", "tweet images"] as const)(
+    "collects IDs before and after retrying %s",
+    async (retry) => {
+      const fixture = createFixture({
+        webSearchEnabled: retry === "web search",
+        twitterExpandEnabled: true,
+      });
+      if (retry === "tweet images") {
+        const image = {
+          type: "image_url" as const,
+          image_url: { url: "https://pbs.twimg.com/test.jpg" },
+        };
+        fixture.tweetService.extractTweetIds = mock(() => ["20"]);
+        fixture.tweetService.expandTweets = mock(async () => ({
+          status: "expanded" as const,
+          parts: [image],
+          textParts: [],
+          imageParts: [image],
+          loadedPostIds: ["20"],
+        }));
+      }
+      let turn = 0;
+      fixture.llmClient.chatStream = mock(async function* (
+        _request: ChatCompletionRequest,
+        _signal?: AbortSignal,
+        onGenerationId?: (id: string) => void,
+      ) {
+        turn += 1;
+        onGenerationId?.("first");
+        onGenerationId?.(turn === 1 ? "first" : "retry");
+        if (turn === 1) {
+          throw retry === "web search"
+            ? new WebSearchFailedError("search failed")
+            : new BadRequestError("image rejected");
+        }
+        yield { content: "answer", done: false } satisfies StreamChunk;
+        yield { done: true, fullText: "answer", finishReason: "stop" } satisfies StreamFinalResult;
+      });
+      const result = await fixture.chatService.generateChatResponse(
+        "guild",
+        { text: "request" },
+        `retry-${retry}`,
+        createUpdater(),
+        { channelId: "channel", userId: "user" },
+      );
+      expect(result.status).toBe("final");
+      expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
+      expect(result.generationIds).toEqual(["first", "retry"]);
+      const firstRequest = fixture.llmClient.chatStream.mock.calls[0]?.[0] as ChatCompletionRequest;
+      const retryRequest = fixture.llmClient.chatStream.mock.calls[1]?.[0] as ChatCompletionRequest;
+      if (retry === "web search") {
+        expect(firstRequest.tools).toBeDefined();
+        expect(retryRequest.tools).toBeUndefined();
+      } else {
+        expect(JSON.stringify(firstRequest.messages)).toContain("test.jpg");
+        expect(JSON.stringify(retryRequest.messages)).not.toContain("test.jpg");
+      }
+    },
+  );
 
   test.each([false, true])(
     "explicit reply ref and tweet expansion include only the target (inside window %s)",
@@ -938,6 +1062,7 @@ describe("ChatService", () => {
         plugins: [PDF_PARSER_PLUGIN],
       },
       expect.any(AbortSignal),
+      expect.any(Function),
     );
   });
 
@@ -1453,7 +1578,11 @@ describe("ChatService", () => {
       createUpdater(),
       { channelId: "channel-1", userId: "user-1" },
     );
-    expect(reply).toEqual({ status: "cancelled", history: [{ role: "user", content: "Hi" }] });
+    expect(reply).toEqual({
+      status: "cancelled",
+      history: [{ role: "user", content: "Hi" }],
+      generationIds: [],
+    });
     expect(fixture.settingsService.getGuildSettings).not.toHaveBeenCalled();
     expect(fixture.llmClient.chatStream).not.toHaveBeenCalled();
     expect(fixture.llmClient.chat).not.toHaveBeenCalled();

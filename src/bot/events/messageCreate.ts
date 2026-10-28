@@ -394,7 +394,7 @@ export function createMessageCreateHandler(
     const guildId = message.guild.id;
     const rawMessage = toRawDiscordMessage(message);
     let replyRecordCreated = false;
-    if (settings.historyEnabled && options.replyRecordService) {
+    if (options.replyRecordService) {
       replyRecordCreated = await options.replyRecordService.createPending({
         triggerMsgId: message.id,
         channelId: message.channel.id,
@@ -514,6 +514,7 @@ export function createMessageCreateHandler(
       const result = await options.replyRecordService.appendPage(message.id, botMessage.id);
       if (result.finalized) await deleteMessage(botMessage);
     };
+    let generationIds: string[] | undefined;
     try {
       // 初期メッセージ送信（Components V2、停止ボタン付き Section）
       const initialContainer = buildStreamingContainer({
@@ -572,6 +573,7 @@ export function createMessageCreateHandler(
         updater,
         { channelId: message.channel.id, userId: message.author.id },
       );
+      generationIds = result.generationIds;
 
       if (result.status === "cancelled") {
         const reason = chatService.isClosing ? "shutdown" : "user";
@@ -599,6 +601,8 @@ export function createMessageCreateHandler(
         );
         if (replyRecordCreated) {
           await options.replyRecordService?.finalize(message.id, "stopped", renderedPageCount);
+          if (generationIds?.length)
+            await options.replyRecordService?.saveGenerationIds(message.id, generationIds);
         }
         return;
       }
@@ -726,6 +730,8 @@ export function createMessageCreateHandler(
       }
       if (replyRecordCreated) {
         await options.replyRecordService?.finalize(message.id, "completed", chunks.length);
+        if (generationIds?.length)
+          await options.replyRecordService?.saveGenerationIds(message.id, generationIds);
       }
     } catch (error) {
       // ログ検索とユーザーからの問い合わせ突合用の短いID（先頭8桁の16進数）
@@ -752,6 +758,8 @@ export function createMessageCreateHandler(
       );
       if (replyRecordCreated) {
         await options.replyRecordService?.finalize(message.id, "failed", renderedPageCount);
+        if (generationIds?.length)
+          await options.replyRecordService?.saveGenerationIds(message.id, generationIds);
       }
 
       const userMessage =

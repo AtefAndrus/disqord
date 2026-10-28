@@ -162,7 +162,7 @@ type ChatResponseFn = (
   requestId: string,
   updater: IToolLoopUpdater,
   ctx: ChatRequestContext,
-) => Promise<ToolLoopResult>;
+) => Promise<ToolLoopResult & { generationIds: string[] }>;
 
 /**
  * chatService.generateChatResponse() のフェイク実装。runToolLoop() 自体は経由せず、
@@ -188,6 +188,7 @@ function createMockChatResponseFn(
     return {
       status: "final",
       text: fullText,
+      generationIds: [],
       finishReason,
       history: [],
       usage: undefined,
@@ -220,6 +221,7 @@ function createPreambleThenFinalChatResponseFn(
     return {
       status: "final",
       text: finalTurnText,
+      generationIds: [],
       finishReason,
       history: [],
       usage: undefined,
@@ -237,7 +239,7 @@ function createCancelledChatResponseFn(partialText = ""): ChatResponseFn {
       await updater.stageContent(partialText);
     }
     updater.abortTurn("cancelled (test)");
-    return { status: "cancelled", history: [] };
+    return { status: "cancelled", history: [], generationIds: [] };
   };
 }
 
@@ -249,7 +251,7 @@ function createFatalErrorChatResponseFn(partialText: string, error: unknown): Ch
       await updater.stageContent(partialText);
     }
     updater.abortTurn("error (test)");
-    return { status: "error", error, history: [] };
+    return { status: "error", error, history: [], generationIds: [] };
   };
 }
 
@@ -277,6 +279,7 @@ function createTimedChatResponseFn(
     return {
       status: "final",
       text: finalFullText,
+      generationIds: [],
       finishReason: "stop",
       history: [],
       usage: undefined,

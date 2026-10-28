@@ -236,10 +236,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 export interface ILLMClient {
-  chat(request: ChatCompletionRequest, signal?: AbortSignal): Promise<ChatCompletionResponse>;
+  chat(
+    request: ChatCompletionRequest,
+    signal?: AbortSignal,
+    onGenerationId?: (id: string) => void,
+  ): Promise<ChatCompletionResponse>;
   chatStream(
     request: ChatCompletionRequest,
     signal?: AbortSignal,
+    onGenerationId?: (id: string) => void,
   ): AsyncGenerator<
     | StreamChunk
     | StreamToolCallChunk
@@ -736,6 +741,7 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
   async chat(
     request: ChatCompletionRequest,
     signal?: AbortSignal,
+    onGenerationId?: (id: string) => void,
   ): Promise<ChatCompletionResponse> {
     if (this.isRateLimited()) {
       const retryAfterSeconds = this.rateLimitResetAt
@@ -747,6 +753,14 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
     metrics.increment("openrouter.requests");
     try {
       const response = await this.postResponses(request, false, signal);
+      const generationId = onGenerationId ? response.headers.get("x-generation-id") : null;
+      if (generationId !== null) {
+        try {
+          onGenerationId?.(generationId);
+        } catch {
+          // Observing the request must not interrupt its generation.
+        }
+      }
 
       if (!response.ok) {
         await this.handleErrorResponse(response);
@@ -755,6 +769,13 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
       const data: unknown = await response.json();
       if (!isPlainObject(data)) {
         throw new StreamProtocolError(`Response body is not an object: ${JSON.stringify(data)}`);
+      }
+      if (generationId === null && typeof data.id === "string") {
+        try {
+          onGenerationId?.(data.id);
+        } catch {
+          // Observing the request must not interrupt its generation.
+        }
       }
       // A generation that failed after the request was accepted comes back
       // as HTTP 200 with `status:"failed"`, so `handleErrorResponse()` above
@@ -819,6 +840,7 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
   async *chatStream(
     request: ChatCompletionRequest,
     signal?: AbortSignal,
+    onGenerationId?: (id: string) => void,
   ): AsyncGenerator<
     | StreamChunk
     | StreamToolCallChunk
@@ -838,6 +860,39 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
     metrics.increment("openrouter.requests");
     try {
       const response = await this.postResponses(request, true, signal);
+      let generationIdReported = false;
+      const reportGenerationId = (id: string): void => {
+        if (generationIdReported) return;
+        generationIdReported = true;
+        try {
+          onGenerationId?.(id);
+        } catch {
+          // Observing the request must not interrupt its generation.
+        }
+      };
+      const generationId = onGenerationId ? response.headers.get("x-generation-id") : null;
+      if (generationId !== null) reportGenerationId(generationId);
+
+      const captureCreatedId = (line: string): void => {
+        if (generationIdReported || !onGenerationId) return;
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) return;
+        let event: unknown;
+        try {
+          event = JSON.parse(trimmed.slice(5));
+        } catch {
+          // processSseLine owns protocol validation, including malformed JSON.
+          return;
+        }
+        if (
+          isPlainObject(event) &&
+          event.type === "response.created" &&
+          isPlainObject(event.response) &&
+          typeof event.response.id === "string"
+        ) {
+          reportGenerationId(event.response.id);
+        }
+      };
 
       if (!response.ok) {
         await this.handleErrorResponse(response);
@@ -931,6 +986,7 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
               line = decoded.slice(searchStart, lineEnd);
             }
             assertFrameSize(line);
+            captureCreatedId(line);
             const stop = yield* this.processSseLine(line, state);
             if (stop) return;
             searchStart = lineEnd + 1;
@@ -978,6 +1034,7 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
         if (carryParts.length > 0) {
           const finalLine = carryParts.join("");
           assertFrameSize(finalLine);
+          captureCreatedId(finalLine);
           const stop = yield* this.processSseLine(finalLine, state);
           if (stop) return;
         }
