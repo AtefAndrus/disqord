@@ -64,7 +64,7 @@ async function bootstrap(): Promise<void> {
     logFileWriter,
   });
 
-  logger.info("Configuration loaded", { nodeEnv: config.nodeEnv });
+  logger.info("Configuration loaded", { nodeEnv: config.nodeEnv, version: packageJson.version });
 
   const db = getDatabase();
   logger.info("Database initialized");
