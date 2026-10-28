@@ -38,6 +38,7 @@ function fixture(
     tools?: boolean;
     images?: boolean | null;
     autoText?: string;
+    truncated?: boolean;
     failAfterTool?: "images" | "search";
   } = {},
 ): {
@@ -61,7 +62,7 @@ function fixture(
       deleted.has(ref)
         ? { error: "message_unavailable" }
         : shown.has(ref)
-          ? { text: shown.get(ref) ?? "" }
+          ? { text: shown.get(ref) ?? "", ...(options.truncated && { toolTruncated: true }) }
           : { error: "message_ref_not_shown" },
     readEarlierMessages: async () => "{}",
     viewAttachment: async () => "{}",
@@ -211,6 +212,45 @@ function respond(images = false): ReturnType<typeof mock> {
 }
 
 describe("read_x_post", () => {
+  test.each([false, true])("handles an end-of-body URL when truncated is %s", async (truncated) => {
+    const fetch = respond();
+    const f = fixture({ truncated });
+    f.shown.set("m1", "https://x.com/a/status/123456");
+    await f.run();
+    if (truncated) {
+      expect(f.outputs).toEqual(['{"error":"no_x_post"}']);
+      expect(fetch).not.toHaveBeenCalled();
+    } else {
+      expect(Array.isArray(f.outputs[0])).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  test("counts complete URLs before a truncated terminal URL", async () => {
+    const fetch = respond();
+    const f = fixture({ truncated: true, calls: [{ index: 1 }, { index: 2 }] });
+    f.shown.set("m1", "https://x.com/a/status/20 https://x.com/a/status/123456");
+    await f.run();
+    expect(f.outputs[0]).toContainEqual({
+      type: "input_text",
+      text: "この発言のポスト: 1 件中 1 件目",
+    });
+    expect(f.outputs[1]).toBe('{"error":"post_index_out_of_range"}');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test("can load images omitted by automatic expansion", async () => {
+    const fetch = respond(true);
+    const f = fixture({ autoText: "https://x.com/a/status/20 https://x.com/a/status/21" });
+    f.shown.set("m1", "https://x.com/a/status/21");
+    await f.run();
+    expect(f.fetchPost).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(
+      (f.outputs[0] as ResponsesInputContentPart[]).filter((p) => p.type === "input_image"),
+    ).toHaveLength(4);
+  });
+
   test("validates references and defaults the deduplicated post index", () => {
     const tool = createReadXPostTool();
     expect(tool.validate({ message_ref: "m0" })).toEqual({

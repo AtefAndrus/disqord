@@ -255,6 +255,44 @@ test("shown message bodies cover the window, earlier messages and pins without r
   expect(context.toolContext.shownMessageBody(ref)).toEqual({ error: "message_unavailable" });
 });
 
+test.each(["earlier", "pins"] as const)(
+  "shown %s bodies preserve truncation metadata",
+  async (source) => {
+    const reader = new FakeReader();
+    reader.listResponses.push({ status: "ok", messages: [] });
+    const context = await new ConversationWindowService(reader, records(), () => NOW).build(
+      input(message("1000", new Date(NOW).toISOString())),
+    );
+    if (!context?.readPins) throw new Error("missing context");
+    const long = message("900", undefined, { content: "https://x.com/a/status/20 ".repeat(100) });
+    let entry: { ref: string; text: string; truncated: boolean };
+    if (source === "earlier") {
+      reader.listResponses.push({ status: "ok", messages: [long] });
+      const result = JSON.parse(
+        String(await context.toolContext.readEarlierMessages(1, new AbortController().signal, 180)),
+      );
+      entry = result.messages[0];
+    } else {
+      const result = JSON.parse(
+        await context.readPins(
+          async () => ({
+            items: [{ message: long, pinnedAt: new Date(NOW).toISOString() }],
+            hasMore: false,
+          }),
+          new AbortController().signal,
+          180,
+        ),
+      );
+      entry = result.pins[0];
+    }
+    expect(entry.truncated).toBe(true);
+    expect(context.toolContext.shownMessageBody(entry.ref)).toEqual({
+      text: entry.text,
+      toolTruncated: true,
+    });
+  },
+);
+
 test("explicit replies quote webhooks outside the window", async () => {
   const reader = new FakeReader();
   reader.listResponses.push({ status: "ok", messages: [] });

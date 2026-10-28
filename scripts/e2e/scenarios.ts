@@ -774,7 +774,8 @@ export const SCENARIOS: Scenario[] = [
     manual: true,
     toolName: "read_x_post",
     setup: {
-      prompt: "[e2e] https://x.com/jack/status/20",
+      // https://x.com/BarackObama/status/266031293945503744: check "Four more years".
+      prompt: "[e2e] https://x.com/BarackObama/status/266031293945503744",
       mention: false,
     },
     prompt: "[e2e] さっきのポストを要約して。原文の英語も引用して。",
@@ -782,7 +783,9 @@ export const SCENARIOS: Scenario[] = [
       inputPreconditions(channelId, request, env, { history: true, tweet: true }),
     check: (reply) => [
       ...(reply.isError ? ["the history tweet reply ended in an error"] : []),
-      ...(reply.body.includes("twttr") ? [] : ["the reply does not contain twttr"]),
+      ...(reply.body.toLowerCase().includes("four more years")
+        ? []
+        : ["the reply does not contain Four more years"]),
       ...hasUsageFooter(reply),
     ],
   },

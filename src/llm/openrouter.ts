@@ -522,7 +522,7 @@ function readOutputText(output: unknown): string {
   return text;
 }
 
-function toResponsesContentPart(part: ChatMessageContent): ResponsesInputContentPart {
+export function toResponsesContentPart(part: ChatMessageContent): ResponsesInputContentPart {
   switch (part.type) {
     case "text":
       return { type: "input_text", text: part.text };

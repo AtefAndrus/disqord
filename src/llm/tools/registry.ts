@@ -16,7 +16,9 @@ export interface ConversationToolContext {
   describeMessageRef(ref: string): MessageRefTarget | undefined;
   shownMessageBody(
     ref: string,
-  ): { text: string } | { error: "message_ref_not_shown" | "message_unavailable" };
+  ):
+    | { text: string; toolTruncated?: boolean }
+    | { error: "message_ref_not_shown" | "message_unavailable" };
   readEarlierMessages(
     count: number,
     signal: AbortSignal,

@@ -1,7 +1,7 @@
 import type { CronJob } from "../db/repositories/cronRepository";
 import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens, estimateToolResultTokens } from "../llm/contextBudget";
-import type { ILLMClient } from "../llm/openrouter";
+import { type ILLMClient, toResponsesContentPart } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
 import type {
@@ -667,7 +667,7 @@ export class ChatService implements IChatService {
       readPost: async (messageRef, postIndex, signal, budgetTokens) => {
         const shown = conversation.shownMessageBody(messageRef);
         if ("error" in shown) return JSON.stringify(shown);
-        const ids = this.tweetService.extractTweetIds(shown.text);
+        const ids = this.tweetService.extractTweetIds(shown.text, shown.toolTruncated);
         if (ids.length === 0) return '{"error":"no_x_post"}';
         const id = ids[postIndex - 1];
         if (!id) return '{"error":"post_index_out_of_range"}';
@@ -686,13 +686,7 @@ export class ChatService implements IChatService {
           results.set(id, error);
           return error;
         }
-        const content: ResponsesInputContentPart[] = parts.map((part) => {
-          if (part.type === "text") return { type: "input_text", text: part.text };
-          if (part.type === "image_url") {
-            return { type: "input_image", image_url: part.image_url.url, detail: "auto" };
-          }
-          return { type: "input_file", ...part.file };
-        });
+        const content: ResponsesInputContentPart[] = parts.map(toResponsesContentPart);
         content.push({
           type: "input_text",
           text: `この発言のポスト: ${ids.length} 件中 ${postIndex} 件目`,

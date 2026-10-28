@@ -564,7 +564,7 @@ export class ConversationWindowService {
             if (responseState.externalDeletions.has(message.exchangeId)) {
               return { error: "message_unavailable" };
             }
-            return { text: message.text };
+            return { text: message.text, ...(message.toolTruncated && { toolTruncated: true }) };
           },
           readEarlierMessages: (count, signal, budgetTokens) =>
             this.readEarlier(

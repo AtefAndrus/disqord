@@ -48,7 +48,7 @@ export interface TweetExpansionResult {
 }
 
 export interface ITweetService {
-  extractTweetIds(text: string): string[];
+  extractTweetIds(text: string, truncated?: boolean): string[];
   fetchPost(
     id: string,
     signal: AbortSignal,
@@ -134,11 +134,13 @@ function isString(value: unknown): value is string {
 }
 
 /** Extracts only the supported URL paths, so arbitrary numbers in a message are ignored. */
-export function extractTweetUrls(text: string): TweetUrl[] {
+export function extractTweetUrls(text: string, truncated = false): TweetUrl[] {
   const urls: TweetUrl[] = [];
   const seen = new Set<string>();
 
   for (const match of text.matchAll(TWEET_URL_PATTERN)) {
+    // A cut-off ID can name a different post, so require a visible delimiter.
+    if (truncated && match.index + match[0].length === text.length) continue;
     const id = match[1];
     if (!id || !/^\d{2,20}$/u.test(id) || seen.has(id)) continue;
     seen.add(id);
@@ -148,8 +150,8 @@ export function extractTweetUrls(text: string): TweetUrl[] {
   return urls;
 }
 
-export function extractTweetIds(text: string): string[] {
-  return extractTweetUrls(text).map(({ id }) => id);
+export function extractTweetIds(text: string, truncated = false): string[] {
+  return extractTweetUrls(text, truncated).map(({ id }) => id);
 }
 
 function parseAuthor(value: unknown): TweetAuthor | undefined {
@@ -700,8 +702,8 @@ export class TweetService implements ITweetService {
     private readonly limiter: TweetRequestLimiter = sharedTweetRequestLimiter,
   ) {}
 
-  extractTweetIds(text: string): string[] {
-    return extractTweetIds(text);
+  extractTweetIds(text: string, truncated = false): string[] {
+    return extractTweetIds(text, truncated);
   }
 
   async fetchPost(
@@ -764,11 +766,14 @@ export class TweetService implements ITweetService {
       const textParts = successful.map(({ text }) => ({ type: "text", text }) as const);
       const imageParts: ImageContentPart[] = [];
       const parts: ChatMessageContent[] = [];
+      const loadedPostIds: string[] = [];
       let remainingImages = MAX_TWEET_IMAGES;
       for (const result of successful) {
         parts.push({ type: "text", text: result.text });
+        const imageUrls = includeImages ? result.imageUrls.slice(0, remainingImages) : [];
+        if (imageUrls.length === result.imageUrls.length) loadedPostIds.push(result.id);
         if (includeImages) {
-          for (const url of result.imageUrls.slice(0, remainingImages)) {
+          for (const url of imageUrls) {
             const part: ImageContentPart = { type: "image_url", image_url: { url } };
             imageParts.push(part);
             parts.push(part);
@@ -781,7 +786,7 @@ export class TweetService implements ITweetService {
         parts,
         textParts,
         imageParts,
-        loadedPostIds: successful.map(({ id }) => id),
+        loadedPostIds,
       };
     } finally {
       deadline.dispose();

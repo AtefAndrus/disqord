@@ -130,6 +130,16 @@ describe("tweetService", () => {
     ).toEqual(["20", "21"]);
   });
 
+  test.each([
+    ["https://x.com/a/status/20", []],
+    ["https://x.com/a/status/20 ", ["20"]],
+    ["[post](https://x.com/a/status/20)", ["20"]],
+    ["https://x.com/a/status/20 https://x.com/b/status/21", ["20"]],
+    ["https://x.com/a/status/20 https://x.com/b/status/20", ["20"]],
+  ] as const)("ignores only an end-of-body match in truncated text: %s", (text, expected) => {
+    expect(extractTweetIds(text, true)).toEqual([...expected]);
+  });
+
   test("出現順で4件目以降も抽出する", () => {
     expect(
       extractTweetIds(
@@ -519,6 +529,7 @@ describe("tweetService", () => {
       async () => capable,
     );
     expect(result.imageParts).toEqual([]);
+    expect(result.loadedPostIds).toEqual([]);
   });
 
   test("画像対応がtrueなら写真と動画サムネイルをツイート順に最大4枚追加する", async () => {
@@ -553,6 +564,32 @@ describe("tweetService", () => {
       "https://pbs.twimg.com/21-photo-1",
     ]);
     expect(result.imageParts).toHaveLength(MAX_TWEET_IMAGES);
+    expect(result.loadedPostIds).toEqual(["20"]);
+  });
+
+  test("画像枠を使い切った後も画像のないポストは読み込み済みにする", async () => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) =>
+      jsonResponse({
+        code: 200,
+        status: status({
+          media: {
+            photos: String(input).endsWith("/22")
+              ? []
+              : Array.from({ length: 4 }, (_, index) => ({
+                  url: `https://pbs.twimg.com/${index}`,
+                })),
+            videos: [],
+          },
+        }),
+      }),
+    );
+    const result = await new TweetService("https://api.fxtwitter.test", "test").expandTweets(
+      "https://x.com/a/status/20 https://x.com/a/status/21 https://x.com/a/status/22",
+      new AbortController().signal,
+      async () => true,
+    );
+    expect(result.imageParts).toHaveLength(4);
+    expect(result.loadedPostIds).toEqual(["20", "22"]);
   });
 
   test("画像対応判定の例外は画像なしとして扱う", async () => {
