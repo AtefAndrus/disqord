@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.18.0] - 2026-10-28
+
+
+### Added
+
+- 検索結果リンクを検索ごとに交互に選ぶ ([#243](https://github.com/AtefAndrus/disqord/pull/243))
+- 会話履歴の X のポストを発言番号で読む tool を追加する ([#244](https://github.com/AtefAndrus/disqord/pull/244))
+
+
 ## [1.17.1] - 2026-10-22
 
 
@@ -403,6 +412,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump zod from 4.1.13 to 4.2.0
 - bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.18.0]: https://github.com/AtefAndrus/disqord/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/AtefAndrus/disqord/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/AtefAndrus/disqord/compare/v1.16.0...v1.17.0
 [1.16.0]: https://github.com/AtefAndrus/disqord/compare/v1.15.0...v1.16.0
