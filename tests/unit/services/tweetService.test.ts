@@ -516,7 +516,10 @@ describe("tweetService", () => {
     ]);
   });
 
-  test.each([false, null])("画像対応が %p のとき画像を追加しない", async (capable) => {
+  test.each([
+    [false, ["20"]],
+    [null, []],
+  ])("画像対応が %p のとき画像を追加せず、渡したポストを %p とする", async (capable, loaded) => {
     mockFetch.mockResolvedValue(
       jsonResponse({
         code: 200,
@@ -529,7 +532,7 @@ describe("tweetService", () => {
       async () => capable,
     );
     expect(result.imageParts).toEqual([]);
-    expect(result.loadedPostIds).toEqual(["20"]);
+    expect(result.loadedPostIds).toEqual(loaded);
   });
 
   test("画像対応がtrueなら写真と動画サムネイルをツイート順に最大4枚追加する", async () => {
