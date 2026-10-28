@@ -63,6 +63,9 @@ interface HarnessOptions {
   generation?: (id: string, signal?: AbortSignal) => Promise<GenerationLookup>;
   content?: (id: string, signal?: AbortSignal) => Promise<GenerationLookup>;
   privateMember?: boolean;
+  /** The channel is missing from the cache and must be fetched; `"fails"` makes the fetch reject. */
+  uncachedChannel?: true | "fails";
+  followUp?: () => Promise<unknown>;
 }
 
 interface Payload {
@@ -82,12 +85,13 @@ interface Harness {
   generation: ReturnType<typeof mock>;
   content: ReturnType<typeof mock>;
   threadFetch: ReturnType<typeof mock>;
+  channelFetch: ReturnType<typeof mock>;
 }
 
 function harness(options: HarnessOptions = {}): Harness {
   const deferReply = mock(() => Promise.resolve());
   const editReply = mock(() => Promise.resolve());
-  const followUp = mock(() => Promise.resolve());
+  const followUp = mock(options.followUp ?? (() => Promise.resolve()));
   const threadFetch = mock(() =>
     options.privateMember === false ? Promise.reject({ status: 404 }) : Promise.resolve({}),
   );
@@ -104,30 +108,38 @@ function harness(options: HarnessOptions = {}): Harness {
   settings.getGuildSettings = mock(async () =>
     createMockGuildSettings({ adminRoleId: options.adminRole ? "admin-role" : null }),
   );
+  const channel = {
+    type: options.type ?? ChannelType.GuildText,
+    isDMBased: (): boolean => false,
+    isTextBased: (): boolean => true,
+    permissionsFor: (subject: { id?: string }): { has: (permission: bigint) => boolean } => ({
+      has: (permission: bigint): boolean =>
+        subject.id === "bot" ||
+        (permission === PermissionFlagsBits.ViewChannel
+          ? options.viewChannel !== false
+          : permission === PermissionFlagsBits.ReadMessageHistory
+            ? options.readHistory !== false
+            : permission === PermissionFlagsBits.Connect
+              ? options.connect !== false
+              : false),
+    }),
+    members: { fetch: threadFetch },
+  };
+  const channelFetch = mock(() =>
+    options.uncachedChannel === "fails"
+      ? Promise.reject(new Error("Missing Access"))
+      : Promise.resolve(channel),
+  );
   const interaction = {
     guildId: options.guildId === undefined ? "guild-1" : options.guildId,
     channelId: "channel-1",
     user: { id: "requester" },
-    client: { user: { id: "bot" } },
+    client: { user: { id: "bot" }, channels: { fetch: channelFetch } },
     member: { roles: options.adminRole ? ["admin-role"] : [] },
     memberPermissions: new PermissionsBitField(
       options.manageGuild === false ? 0n : PermissionFlagsBits.ManageGuild,
     ),
-    channel: {
-      type: options.type ?? ChannelType.GuildText,
-      permissionsFor: (subject: { id?: string }): { has: (permission: bigint) => boolean } => ({
-        has: (permission: bigint): boolean =>
-          subject.id === "bot" ||
-          (permission === PermissionFlagsBits.ViewChannel
-            ? options.viewChannel !== false
-            : permission === PermissionFlagsBits.ReadMessageHistory
-              ? options.readHistory !== false
-              : permission === PermissionFlagsBits.Connect
-                ? options.connect !== false
-                : false),
-      }),
-      members: { fetch: threadFetch },
-    },
+    channel: options.uncachedChannel ? null : channel,
     targetMessage: {
       id: "page-1",
       author: { id: options.targetAuthor ?? "bot" },
@@ -154,6 +166,7 @@ function harness(options: HarnessOptions = {}): Harness {
     generation,
     content,
     threadFetch,
+    channelFetch,
   };
 }
 
@@ -244,6 +257,21 @@ describe("LLM 入力を見る", () => {
     const h = harness({ guildId: null });
     await h.run();
     expect(textOf(h.editReply)).toContain("サーバー内");
+    expect(h.generation).not.toHaveBeenCalled();
+  });
+
+  test("fetches a channel missing from the cache, such as an archived thread", async () => {
+    const h = harness({ uncachedChannel: true });
+    await h.run();
+    expect(h.channelFetch).toHaveBeenCalledWith("channel-1");
+    expect(payload(h.editReply).files).toHaveLength(1);
+  });
+
+  test("reports an unreadable channel instead of calling it a direct message", async () => {
+    const h = harness({ uncachedChannel: "fails" });
+    await h.run();
+    expect(textOf(h.editReply)).toContain("チャンネルの情報を取得できませんでした");
+    expect(textOf(h.editReply)).not.toContain("サーバー内");
     expect(h.generation).not.toHaveBeenCalled();
   });
 
@@ -355,12 +383,66 @@ describe("LLM 入力を見る", () => {
     });
     expect(signal?.aborted).toBe(true);
     expect(h.generation).toHaveBeenCalledTimes(2);
-    expect(textOf(h.editReply)).toContain("時間切れ");
+    expect(textOf(h.editReply)).toContain("/generation/content: 時間切れ");
+  });
+
+  test("keeps every message's attachments within the size limit", async () => {
+    const ids = Array.from({ length: 5 }, (_, index) => `gen-${index}`);
+    const h = harness({ ids, sizeLimit: 1100 });
+    await h.run();
+    const parts = [
+      payload(h.editReply),
+      ...h.followUp.mock.calls.map((_, i) => payload(h.followUp, i)),
+    ];
+    const bytes = (part: Payload): number =>
+      part.files.reduce(
+        (sum, file) => sum + (Buffer.isBuffer(file.attachment) ? file.attachment.byteLength : 0),
+        0,
+      );
+    expect(parts.length).toBeGreaterThan(1);
+    for (const part of parts) expect(bytes(part)).toBeLessThanOrEqual(1100);
+    expect(
+      parts.flatMap((part) => part.files.flatMap((file) => fileJson(file).generations)),
+    ).toHaveLength(ids.length);
+  });
+
+  test("keeps the delivered result when a follow-up fails", async () => {
+    const ids = Array.from({ length: 5 }, (_, index) => `gen-${index}`);
+    const followUps: unknown[] = [];
+    const h = harness({
+      ids,
+      sizeLimit: 1100,
+      followUp: async () => {
+        followUps.push(undefined);
+        if (followUps.length === 1)
+          throw Object.assign(new Error("Request entity too large"), { code: 40005 });
+      },
+    });
+    await h.run();
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+    expect(payload(h.editReply).files.length).toBeGreaterThan(0);
+    const last = h.followUp.mock.calls.length - 1;
+    expect(payload(h.followUp, last).files).toHaveLength(0);
+    expect(payload(h.followUp, last).flags).toBe(
+      MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+    );
   });
 
   test("splits by generation and uses ephemeral follow-ups after ten attachments", async () => {
     const ids = Array.from({ length: 23 }, (_, index) => `gen-${index}`);
-    const h = harness({ ids, sizeLimit: 1100 });
+    // Size the limit from one generation's file so ten files fit in a message but the whole JSON does not.
+    const probe = harness({ ids, sizeLimit: 1100 });
+    await probe.run();
+    const fileSize = Math.max(
+      ...[
+        payload(probe.editReply),
+        ...probe.followUp.mock.calls.map((_, i) => payload(probe.followUp, i)),
+      ]
+        .flatMap((part) => part.files)
+        .map((file) => (Buffer.isBuffer(file.attachment) ? file.attachment.byteLength : 0)),
+      0,
+    );
+    const h = harness({ ids, sizeLimit: 12 * fileSize });
     await h.run();
     expect(payload(h.editReply).files).toHaveLength(10);
     expect(h.followUp).toHaveBeenCalledTimes(2);

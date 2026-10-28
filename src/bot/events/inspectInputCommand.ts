@@ -72,7 +72,9 @@ function summaryValue(value: unknown): string {
 }
 
 function lookupFailure(endpoint: string, lookup: GenerationLookup): string {
-  return lookup.ok ? "" : ` / ${endpoint}: ${lookup.status ?? ""} ${summaryValue(lookup.reason)}`;
+  if (lookup.ok) return "";
+  const status = lookup.status === undefined ? "" : `${lookup.status} `;
+  return ` / ${endpoint}: ${status}${summaryValue(lookup.reason)}`;
 }
 
 function generationSummary(log: GenerationLog, index: number): string {
@@ -114,6 +116,37 @@ function prepareFiles(
     }
   });
   return { files, omissions };
+}
+
+// A message carries at most 10 attachments, and the size limit is applied to the request as well as
+// to each file, so a batch is closed before either would be exceeded.
+function batchFiles(files: JsonFile[], sizeLimit: number): JsonFile[][] {
+  const batches: JsonFile[][] = [];
+  let current: JsonFile[] = [];
+  let bytes = 0;
+  for (const file of files) {
+    if (current.length === 10 || (current.length > 0 && bytes + file.data.byteLength > sizeLimit)) {
+      batches.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(file);
+    bytes += file.data.byteLength;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+function errorDetails(error: unknown): Record<string, unknown> {
+  const { code, status } = (typeof error === "object" && error !== null ? error : {}) as {
+    code?: unknown;
+    status?: unknown;
+  };
+  return {
+    errorType: error instanceof Error ? error.name : typeof error,
+    ...(typeof code === "number" || typeof code === "string" ? { code } : {}),
+    ...(typeof status === "number" ? { status } : {}),
+  };
 }
 
 function buildSummary(logs: GenerationLog[], omissions: Map<number, string>): string {
@@ -170,10 +203,21 @@ export function createInspectInputHandler(
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+    let resultSent = false;
     try {
-      if (!interaction.guildId || !interaction.channel) {
+      if (!interaction.guildId) {
         await interaction.editReply(
           replyPayload("このコマンドはサーバー内でのみ使用できます。", []),
+        );
+        return;
+      }
+      // interaction.channel reads only the cache, which lacks threads archived before the bot started.
+      const channel =
+        interaction.channel ??
+        (await interaction.client.channels.fetch(interaction.channelId).catch(() => null));
+      if (!channel || channel.isDMBased() || !channel.isTextBased()) {
+        await interaction.editReply(
+          replyPayload("このチャンネルの情報を取得できませんでした。", []),
         );
         return;
       }
@@ -184,7 +228,6 @@ export function createInspectInputHandler(
         );
         return;
       }
-      const channel = interaction.channel;
       const access = await checkConversationAccess(
         {
           channel: channel as unknown as AuthorizationChannelLike,
@@ -249,19 +292,30 @@ export function createInspectInputHandler(
         logs,
         interaction.attachmentSizeLimit,
       );
-      await interaction.editReply(replyPayload(buildSummary(logs, omissions), files.slice(0, 10)));
-      for (let index = 10; index < files.length; index += 10) {
+      const [first = [], ...rest] = batchFiles(files, interaction.attachmentSizeLimit);
+      await interaction.editReply(replyPayload(buildSummary(logs, omissions), first));
+      resultSent = true;
+      for (const batch of rest) {
         await interaction.followUp({
-          ...replyPayload("LLM 入出力ログ（続き）", files.slice(index, index + 10)),
+          ...replyPayload("LLM 入出力ログ（続き）", batch),
           flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
         });
       }
     } catch (error) {
       // Input logs can contain private history; never put the caught response in an application log.
-      logger.error("LLM input inspection failed", {
-        errorType: error instanceof Error ? error.name : typeof error,
-      });
-      await interaction.editReply(replyPayload("LLM 入力の取得中にエラーが発生しました。", []));
+      logger.error("LLM input inspection failed", errorDetails(error));
+      const payload = replyPayload("LLM 入力の取得中にエラーが発生しました。", []);
+      try {
+        // Editing the reply after the result went out would hide the summary and files already delivered.
+        if (resultSent)
+          await interaction.followUp({
+            ...payload,
+            flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+          });
+        else await interaction.editReply(payload);
+      } catch (replyError) {
+        logger.error("Failed to report the LLM input inspection failure", errorDetails(replyError));
+      }
     } finally {
       clearTimeout(timer);
     }

@@ -51,7 +51,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 | 表示形式 | Components V2 の TextDisplay に generation ごとの要約を 1 行ずつ出し、全体は JSON ファイルを添付して、添付ごとに File コンポーネント（`attachment://<ファイル名>`）を置く。`followUp()` で続けて送る添付も同じ | 入力は会話履歴を含むと数十 KB になり、メッセージには収まらない。JSON ならそのまま検索や差分比較に使える。Components V2 のメッセージでは、コンポーネントから参照されない添付は表示されない。`reasoning.md` の添付も同じ形で File コンポーネントを置いている（`src/utils/chatContainerBuilder.ts:555`） |
 | JSON に入れる内容 | generation ごとに `/generation/content` の `input` と `output` と `error`、`/generation` のメタデータ、取得に失敗した endpoint とその理由 | turn が進むと後の入力は前の入力を含むので重複するが、各 generation で OpenRouter が保存した内容をそのまま示すことを優先する。重複を除く加工をすると、保存された内容との照合ができなくなる |
 | 画像と PDF のデータ | bot の側では置き換えない | OpenRouter は画像と PDF のデータを `[OR_REDACTED]` に置き換えて保存する。2026-10-29 に、user メッセージの画像（data URL）、PDF（`file_data`）、tool の結果に入れた画像のいずれも、`/generation/content` が `[OR_REDACTED]` で返すことを確認した |
-| 大きすぎるときの扱い | JSON 全体が interaction の `attachment_size_limit` を超えたら generation ごとのファイルに分け、1 件でも上限を超える generation はファイルを付けずに、要約にそのサイズと省略した旨を書く。添付が 10 件を超える分は `followUp()` の ephemeral メッセージで続けて送る。要約は 4000 文字に収まらない分を「他 N 件は JSON を参照」にまとめる | 上限を超えたものを切り詰めると、どこが欠けたか分からない JSON になり、保存された内容との照合という目的に反する。Discord の 1 メッセージの添付は 10 件までで、TextDisplay の合計は 4000 文字までである |
+| 大きすぎるときの扱い | JSON 全体が interaction の `attachment_size_limit` を超えたら generation ごとのファイルに分け、1 件でも上限を超える generation はファイルを付けずに、要約にそのサイズと省略した旨を書く。1 通のメッセージには、添付が 10 件以下で合計が `attachment_size_limit` 以下に収まる分だけを載せ、残りは `followUp()` の ephemeral メッセージで続けて送る。要約は 4000 文字に収まらない分を「他 N 件は JSON を参照」にまとめる。結果を送った後の失敗は、送った返信を書き換えず、`followUp()` でエラーを足す | 上限を超えたものを切り詰めると、どこが欠けたか分からない JSON になり、保存された内容との照合という目的に反する。Discord の 1 メッセージの添付は 10 件までで、TextDisplay の合計は 4000 文字までである。`attachment_size_limit` が 1 リクエストの合計にも掛かるかは確認していないので、合計でも超えない側に分ける。送った返信をエラー表示に書き換えると、Components V2 では参照されない添付が表示されず、届いていた結果まで見えなくなる |
 | 取得の失敗と締め切り | generation ごとに 2 つの endpoint を並行して呼び、generation は生成順に 1 件ずつ処理する。endpoint ごとに成否を記録し、片方が失敗しても成功した側は返す。失敗した generation があっても次の generation へ進む。全体の締め切りは defer から 60 秒とし、締め切りまでに取得できなかった generation は「時間切れ」として要約と JSON に書く | `/generation/content` の 404 は入力が保存されていないか、まだ反映されていないことを表す。`/generation` の 404 は、受け付ける前に拒否されたリクエストか、まだ反映されていないことを表す。401、403、429、5xx、通信失敗は理由をそのまま記録する。途中で停止した generation も保存される（2026-10-29 にストリームを途中で切り、15 秒後に `/generation` が `cancelled: true` を、`/generation/content` が入力と途中までの出力を返すことを確認した）。interaction token は 15 分で失効するが、1 件あたり数秒の取得に 15 分近く待つ理由は無く、60 秒で打ち切れば返答を受け取れないまま待たせる時間が短くなる |
 | コマンド名 | `LLM 入力を見る`（ローカライズなし） | bot の UI は日本語だけで提供している |
 
@@ -63,8 +63,9 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 - 新規: `src/bot/events/inspectInputCommand.ts` — 認可、返答の引き当て、OpenRouter からの取得、要約と JSON の組み立て、ephemeral 返信。
 - 修正: `src/bot/commands/index.ts` — `commandDefinitions` に加える。
 - 修正: `src/bot/events/interactionCreate.ts` — `isMessageContextMenuCommand()` の分岐を、`isChatInputCommand()` の判定より前に置く。
-- 修正: `src/llm/openrouter.ts` — 応答ヘッダーの `X-Generation-Id`（無ければ `response.created` か応答本文の `id`）から ID を読み、エラー応答を例外にする前に呼び出し側へ渡す。`/generation` と `/generation/content` を呼ぶメソッドを `ILLMClient` に足す。
-- 修正: `src/llm/toolLoop.ts`、`src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて集め、`generateChatResponse()` の結果で返す。
+- 修正: `src/llm/openrouter.ts` — 応答ヘッダーの `X-Generation-Id`（無ければ `response.created` か応答本文の `id`）から ID を読み、エラー応答を例外にする前に、`chat()` と `chatStream()` の省略可能なコールバックで呼び出し側へ渡す。
+- 新規: `src/llm/generationLog.ts` — `/generation` と `/generation/content` を呼ぶ client。`ILLMClient` には足さない。`ILLMClient` はテストと chat service が実装や委譲をするので、このコマンドしか使わない取得を足すと、その全部に手が入る。
+- 修正: `src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて集め、`generateChatResponse()` の結果で返す。tool loop には、ID を集めるコールバックを付けた LLM client を渡すので、`src/llm/toolLoop.ts` は変えない。
 - 修正: `src/db/schema.ts`、`src/db/repositories/replyRecord.ts`、`src/services/replyRecordService.ts` — generation ID の表と、その追加と一覧の操作。
 - 修正: `src/bot/events/messageCreate.ts` — 履歴設定に関係なく返答の記録を作り、返答の確定時（完了、停止、エラーのいずれも）に generation ID を保存する。
 - 修正: `scripts/generate-readme.ts` — chat input 以外をコマンド表から除く（message-explain が先に入れていれば不要）。
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS reply_generations (
 2. DM などギルドの外での実行、管理者でない実行者、返答のあるチャンネルの履歴を読めない実行者は、理由を返して終える。
 3. Decisions の「右クリックされたメッセージから返答を引く方法」で返答の記録を引く。記録が無いか、記録に generation ID が無ければ「この bot の返答ではないか、記録がありません」を返す。
 4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。`/generation/content` が全件 404 のときは、OpenRouter 側の反映が遅れているか、入出力ログが無効な場合があるので、「少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください」を添える。
-5. JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<seq>.json`）として添付し、要約と合わせて `editReply()` で返す。
+5. JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<生成順の番号>.json`。番号は 1 から振る）として添付し、要約と合わせて `editReply()` で返す。
 
 ### 設計メモ
 
@@ -100,14 +101,14 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 
 ## Tasks
 
-- [ ] message command の分岐とコマンド表からの除外（message-explain が未実装なら）
-- [ ] 応答ヘッダーからの generation ID の取得と、chat service での収集
-- [ ] `reply_generations` 表と repository、service の操作
-- [ ] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
-- [ ] `/generation` と `/generation/content` の client メソッド
-- [ ] コマンドの実装（認可、返答の引き当て、取得、サイズ超過時の分割、要約、添付）
-- [ ] unit テスト（ID の収集、エラー表示からの引き当て、管理権限と履歴の認可、endpoint ごとの失敗、締め切り、サイズ超過時の分割）
-- [ ] `/help` と README の追記（コマンドの 1 行と、入出力ログを有効にする前提）
+- [x] message command の分岐とコマンド表からの除外（message-explain が未実装なら）
+- [x] 応答ヘッダーからの generation ID の取得と、chat service での収集
+- [x] `reply_generations` 表と repository、service の操作
+- [x] 返答の記録を履歴設定に関係なく作る変更と、確定時の ID 保存
+- [x] `/generation` と `/generation/content` の client メソッド
+- [x] コマンドの実装（認可、返答の引き当て、取得、サイズ超過時の分割、要約、添付）
+- [x] unit テスト（ID の収集、エラー表示からの引き当て、管理権限と履歴の認可、endpoint ごとの失敗、締め切り、サイズ超過時の分割）
+- [x] `/help` と README の追記（コマンドの 1 行と、入出力ログを有効にする前提）
 - [ ] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確認する
 - [ ] `docs/changes/llm-input-inspect/` 削除（リリース完了時、git 履歴がアーカイブ）
 
