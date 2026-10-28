@@ -7,11 +7,13 @@
  *   bun scripts/admin.ts metrics
  *   bun scripts/admin.ts logs [--level warn] [--lines 200] [--since <ISO 8601>]
  *   bun scripts/admin.ts message <discord message link> [--around 10]
+ *   bun scripts/admin.ts channel <channel id> --since <ISO 8601>
  *
  * Reads ADMIN_API_BASE_URL and ADMIN_API_SECRET from the environment (Bun
- * loads `.env`). `message` reads the channel with the first of DISCORD_TOKEN
- * and E2E_TESTER_BOT_TOKEN that Discord lets in, because the bot that answered
- * is usually the production bot, whose token is not on a development machine.
+ * loads `.env`). `message` and `channel` read the channel with the first of
+ * DISCORD_TOKEN and E2E_TESTER_BOT_TOKEN that Discord lets in, because the bot
+ * that answered is usually the production bot, whose token is not on a
+ * development machine.
  */
 import { canonicalizeQuery } from "../src/http/adminAuth";
 import { hmacSha256Hex } from "../src/http/hmac";
@@ -23,7 +25,12 @@ const LOG_LEAD_MS = 5 * 60_000;
 /** A reply streams for minutes at most; later lines belong to other requests. */
 const LOG_TRAIL_MS = 10 * 60_000;
 const LOG_LINES = 2000;
+/** The admin API's ceiling; a start line older than this many lines is out of reach. */
+const MAX_LOG_LINES = 10_000;
+/** Discord's page size for channel history. */
+const HISTORY_PAGE = 100;
 const LOG_TIMESTAMP = /^\[([^\]]+)\]/;
+const START_LINE = "Configuration loaded";
 /** Enough to tell whether a link preview carried the post's text, without dumping it. */
 const EMBED_PREVIEW_CHARS = 120;
 
@@ -43,6 +50,39 @@ export function parseMessageLink(link: string): MessageLink {
 
 export function snowflakeToDate(id: string): Date {
   return new Date(Number((BigInt(id) >> 22n) + DISCORD_EPOCH_MS));
+}
+
+/** The smallest snowflake created at `date`, for Discord's `after` cursor. */
+export function dateToSnowflake(date: Date): string {
+  return String((BigInt(date.getTime()) - DISCORD_EPOCH_MS) << 22n);
+}
+
+/**
+ * The last process start before `before`, which names the version that
+ * probably wrote the lines after it. A start line written before the field
+ * existed carries no `version`, and the caller reports that as unknown rather
+ * than reaching past it to an older start.
+ */
+export function lastStartLine(log: string, before: Date): string | undefined {
+  return linesBetween(log, new Date(0), before)
+    .filter((line) => line.includes(START_LINE))
+    .at(-1);
+}
+
+export interface HealthSnapshot {
+  version?: string;
+  startedAt?: string;
+}
+
+/** Whether the running process, as `/health` reports it, already ran at `at`. */
+export function describeHealth(health: HealthSnapshot, at: Date): string {
+  const started = health.startedAt ? Date.parse(health.startedAt) : Number.NaN;
+  const coverage = Number.isNaN(started)
+    ? "start time unknown"
+    : started <= at.getTime()
+      ? "the message is after its start"
+      : "the message is before its start, so another process answered it";
+  return `health: version ${health.version ?? "unknown"}, started ${health.startedAt ?? "unknown"} (${coverage})`;
 }
 
 export async function adminHeaders(
@@ -129,17 +169,70 @@ async function fetchAdmin(path: string, query = new URLSearchParams()): Promise<
   return body;
 }
 
-async function fetchChannelMessages(link: MessageLink, around: number): Promise<DiscordMessage[]> {
-  const url = `${DISCORD_API}/channels/${link.channelId}/messages?around=${link.messageId}&limit=${around}`;
+async function fetchDiscordMessages(path: string): Promise<DiscordMessage[]> {
   const failures: string[] = [];
   for (const name of ["DISCORD_TOKEN", "E2E_TESTER_BOT_TOKEN"]) {
     const token = process.env[name];
     if (!token) continue;
-    const response = await fetch(url, { headers: { Authorization: `Bot ${token}` } });
-    if (response.ok) return ((await response.json()) as DiscordMessage[]).reverse();
+    const response = await fetch(`${DISCORD_API}${path}`, {
+      headers: { Authorization: `Bot ${token}` },
+    });
+    if (response.ok) return (await response.json()) as DiscordMessage[];
     failures.push(`${name}: ${response.status} ${await response.text()}`);
   }
   throw new Error(`no bot token could read the channel\n${failures.join("\n")}`);
+}
+
+async function fetchChannelMessages(link: MessageLink, around: number): Promise<DiscordMessage[]> {
+  const page = await fetchDiscordMessages(
+    `/channels/${link.channelId}/messages?around=${link.messageId}&limit=${around}`,
+  );
+  return page.reverse();
+}
+
+/** Every message after `since`, oldest first. Discord returns a page newest first. */
+async function fetchChannelSince(channelId: string, since: Date): Promise<DiscordMessage[]> {
+  const messages: DiscordMessage[] = [];
+  let after = dateToSnowflake(since);
+  for (;;) {
+    const page = await fetchDiscordMessages(
+      `/channels/${channelId}/messages?after=${after}&limit=${HISTORY_PAGE}`,
+    );
+    page.sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    messages.push(...page);
+    const last = page.at(-1);
+    if (!last || page.length < HISTORY_PAGE) return messages;
+    after = last.id;
+  }
+}
+
+/** `/health` needs no signature; it is the only source for the running process's version. */
+async function fetchHealth(): Promise<HealthSnapshot | undefined> {
+  const base = env("ADMIN_API_BASE_URL").replace(/\/$/, "");
+  try {
+    const response = await fetch(`${base}/health`);
+    return (await response.json()) as HealthSnapshot;
+  } catch {
+    return undefined;
+  }
+}
+
+async function printHealth(at: Date): Promise<void> {
+  const health = await fetchHealth();
+  console.log(health ? describeHealth(health, at) : "health: unreadable");
+}
+
+async function printLastStart(at: Date): Promise<void> {
+  const log = await fetchAdmin(
+    "/admin/logs",
+    new URLSearchParams({ level: "info", lines: String(MAX_LOG_LINES) }),
+  );
+  const start = lastStartLine(log, at);
+  console.log(
+    start
+      ? `last start before it: ${start}`
+      : `last start before it: none in the newest ${MAX_LOG_LINES} info lines`,
+  );
 }
 
 function option(args: string[], name: string): string | undefined {
@@ -174,11 +267,13 @@ async function main(args: string[]): Promise<void> {
 
     const from = new Date(postedAt.getTime() - LOG_LEAD_MS);
     const to = new Date(postedAt.getTime() + LOG_TRAIL_MS);
+    await printHealth(postedAt);
     const metrics = JSON.parse(await fetchAdmin("/admin/metrics")) as { logBytes?: number };
     if (metrics.logBytes === 0) {
       console.log("logs: none stored (logBytes is 0, so LOG_DIR is unset or unwritable)");
       return;
     }
+    await printLastStart(postedAt);
     const log = await fetchAdmin(
       "/admin/logs",
       new URLSearchParams({ lines: String(LOG_LINES), since: from.toISOString() }),
@@ -186,9 +281,25 @@ async function main(args: string[]): Promise<void> {
     const lines = linesBetween(log, from, to);
     console.log(`logs ${from.toISOString()} .. ${to.toISOString()}: ${lines.length} lines`);
     for (const line of lines) console.log(line);
+  } else if (command === "channel" && rest[0] && option(rest, "since")) {
+    const since = new Date(option(rest, "since") ?? "");
+    if (Number.isNaN(since.getTime())) throw new Error("--since must be an ISO 8601 time");
+    const messages = await fetchChannelSince(rest[0], since);
+    console.log(`channel ${rest[0]}: ${messages.length} messages since ${since.toISOString()}\n`);
+    for (const message of messages) console.log(`${formatMessage(message, "")}\n`);
+
+    const log = await fetchAdmin(
+      "/admin/logs",
+      new URLSearchParams({ lines: String(MAX_LOG_LINES), since: since.toISOString() }),
+    );
+    // The log is shared by every guild; lines without this channel are kept
+    // because restarts, release announcements, and Web search lines name none.
+    const lines = log.split("\n").filter((line) => line.length > 0);
+    console.log(`logs since ${since.toISOString()}: ${lines.length} lines (all channels)`);
+    for (const line of lines) console.log(line);
   } else {
     console.error(
-      "usage: bun scripts/admin.ts metrics | logs [--level L] [--lines N] [--since ISO] | message <link> [--around N]",
+      "usage: bun scripts/admin.ts metrics | logs [--level L] [--lines N] [--since ISO] | message <link> [--around N] | channel <id> --since ISO",
     );
     process.exit(2);
   }
