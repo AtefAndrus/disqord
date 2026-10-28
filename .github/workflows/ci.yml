@@ -80,9 +80,9 @@ jobs:
             echo "::error::biome schema drift (expected=$expected)"; exit 1
           }
       # mise.toml を SSOT に bun のみ取得（setup-bun は使わない。git-cliff は入れない）
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
-          version: "2026.10.8" # mise 本体を固定（既定 latest=可変）。Renovate が jdx/mise として更新する
+          version: "2026.10.19" # mise 本体を固定（既定 latest=可変）。Renovate が jdx/mise として更新する
           install_args: bun # bun のみ。git-cliff は CI に入れない
       - run: bun install --frozen-lockfile
       - run: bun run lint
@@ -117,9 +117,9 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0 # base の bun.lock を git show で読むため
-      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+      - uses: jdx/mise-action@82a612c5ab8bcda7cc5db6b7e81a8e7584c3dc6e # v5.2.3
         with:
-          version: "2026.10.8"
+          version: "2026.10.19"
           install_args: bun
       - name: Check the age of packages bun.lock adds
         env:
