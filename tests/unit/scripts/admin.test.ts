@@ -8,6 +8,7 @@ import {
   linesBetween,
   messageText,
   parseMessageLink,
+  retryAfterSeconds,
   snowflakeToDate,
 } from "../../../scripts/admin";
 import { verifyAdminRequest } from "../../../src/http/adminAuth";
@@ -135,6 +136,20 @@ describe("lastStartLine", () => {
 
   test("returns nothing when no start precedes the time", () => {
     expect(lastStartLine(log, new Date("2026-10-01T00:00:00Z"))).toBeUndefined();
+  });
+
+  test("ignores a later line that only quotes the phrase", () => {
+    const quoted = `${log}\n[2026-10-28T05:10:00.000Z] [INFO] Web search {"searches":[{"query":"Configuration loaded"}]}`;
+
+    expect(lastStartLine(quoted, new Date("2026-10-28T06:00:00Z"))).toContain('"version":"1.18.0"');
+  });
+});
+
+describe("retryAfterSeconds", () => {
+  test("prefers the body's retry_after, then the header, then one second", () => {
+    expect(retryAfterSeconds({ retry_after: 0.5 }, "3")).toBe(0.5);
+    expect(retryAfterSeconds(undefined, "3")).toBe(3);
+    expect(retryAfterSeconds({}, null)).toBe(1);
   });
 });
 

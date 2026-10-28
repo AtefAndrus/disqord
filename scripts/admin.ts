@@ -30,7 +30,8 @@ const MAX_LOG_LINES = 10_000;
 /** Discord's page size for channel history. */
 const HISTORY_PAGE = 100;
 const LOG_TIMESTAMP = /^\[([^\]]+)\]/;
-const START_LINE = "Configuration loaded";
+/** The logger's message field, so a tool argument quoting the phrase does not count. */
+const START_LINE = /^\[[^\]]+\] \[INFO\] Configuration loaded(?: |$)/;
 /** Enough to tell whether a link preview carried the post's text, without dumping it. */
 const EMBED_PREVIEW_CHARS = 120;
 
@@ -65,7 +66,7 @@ export function dateToSnowflake(date: Date): string {
  */
 export function lastStartLine(log: string, before: Date): string | undefined {
   return linesBetween(log, new Date(0), before)
-    .filter((line) => line.includes(START_LINE))
+    .filter((line) => START_LINE.test(line))
     .at(-1);
 }
 
@@ -74,14 +75,18 @@ export interface HealthSnapshot {
   startedAt?: string;
 }
 
-/** Whether the running process, as `/health` reports it, already ran at `at`. */
+/**
+ * Whether the running process, as `/health` reports it, already ran at `at`.
+ * `startedAt` is when the HTTP server started, seconds after the bot logged
+ * in, so a message just before it may still be this process's.
+ */
 export function describeHealth(health: HealthSnapshot, at: Date): string {
   const started = health.startedAt ? Date.parse(health.startedAt) : Number.NaN;
   const coverage = Number.isNaN(started)
     ? "start time unknown"
     : started <= at.getTime()
       ? "the message is after its start"
-      : "the message is before its start, so another process answered it";
+      : "the message is before its HTTP server started, so probably another process answered it";
   return `health: version ${health.version ?? "unknown"}, started ${health.startedAt ?? "unknown"} (${coverage})`;
 }
 
@@ -169,16 +174,35 @@ async function fetchAdmin(path: string, query = new URLSearchParams()): Promise<
   return body;
 }
 
+/** Seconds Discord asks a rate-limited client to wait, from the body or the header. */
+export function retryAfterSeconds(body: unknown, header: string | null): number {
+  if (typeof body === "object" && body !== null && "retry_after" in body) {
+    const value = Number(body.retry_after);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  const value = header === null ? Number.NaN : Number(header);
+  return Number.isFinite(value) && value >= 0 ? value : 1;
+}
+
 async function fetchDiscordMessages(path: string): Promise<DiscordMessage[]> {
   const failures: string[] = [];
   for (const name of ["DISCORD_TOKEN", "E2E_TESTER_BOT_TOKEN"]) {
     const token = process.env[name];
     if (!token) continue;
-    const response = await fetch(`${DISCORD_API}${path}`, {
-      headers: { Authorization: `Bot ${token}` },
-    });
-    if (response.ok) return (await response.json()) as DiscordMessage[];
-    failures.push(`${name}: ${response.status} ${await response.text()}`);
+    for (;;) {
+      const response = await fetch(`${DISCORD_API}${path}`, {
+        headers: { Authorization: `Bot ${token}` },
+      });
+      if (response.ok) return (await response.json()) as DiscordMessage[];
+      // Paging a long channel hits the per-route limit; a 429 is not a missing permission.
+      if (response.status === 429) {
+        const body: unknown = await response.json().catch(() => undefined);
+        await Bun.sleep(retryAfterSeconds(body, response.headers.get("retry-after")) * 1000);
+        continue;
+      }
+      failures.push(`${name}: ${response.status} ${await response.text()}`);
+      break;
+    }
   }
   throw new Error(`no bot token could read the channel\n${failures.join("\n")}`);
 }
