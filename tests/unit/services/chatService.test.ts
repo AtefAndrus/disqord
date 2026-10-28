@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
+import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import { getEventListeners } from "node:events";
 import type { CronJob } from "../../../src/db/repositories/cronRepository";
 import { AppError, BadRequestError, WebSearchFailedError } from "../../../src/errors";
+import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
 import { createCreateEventTool } from "../../../src/llm/tools/discord/createEvent";
@@ -394,6 +395,37 @@ describe("ChatService", () => {
     expect(addReaction).toHaveBeenCalledTimes(1);
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
     expect(result.generationIds).toEqual(["generation-1", "generation-2"]);
+  });
+
+  test("returns the collected IDs as an error result when the loop throws", async () => {
+    const fixture = createFixture();
+    fixture.llmClient.chatStream = mock(async function* (
+      _request: ChatCompletionRequest,
+      _signal?: AbortSignal,
+      onGenerationId?: (id: string) => void,
+    ) {
+      onGenerationId?.("started");
+      yield { content: "partial", done: false } satisfies StreamChunk;
+    });
+    const thrown = new Error("loop exited without a result");
+    // The tool loop reports its own failures as results; this stands in for one that escapes it.
+    spyOn(fixture.chatService as never, "runChatLoop").mockImplementation((async (
+      ...args: unknown[]
+    ) => {
+      const client = args.at(-1) as ILLMClient;
+      await client.chatStream({ model: "m", messages: [] }).next();
+      throw thrown;
+    }) as never);
+    const result = await fixture.chatService.generateChatResponse(
+      "guild",
+      { text: "request" },
+      "loop-throws",
+      createUpdater(),
+      { channelId: "channel", userId: "user" },
+    );
+    expect(result.status).toBe("error");
+    expect(result.status === "error" && result.error).toBe(thrown);
+    expect(result.generationIds).toEqual(["started"]);
   });
 
   test.each(["web search", "tweet images"] as const)(

@@ -111,7 +111,15 @@ export function createInteractionCreateHandler(
 
     if (interaction.isMessageContextMenuCommand()) {
       if (interaction.commandName === INSPECT_INPUT_COMMAND_NAME && inspectInput) {
-        await inspectInput(interaction);
+        metrics.increment(`command.${interaction.commandName}`);
+        try {
+          await inspectInput(interaction);
+        } catch (error) {
+          // The handler reports its own failures once deferred; what reaches here is the defer itself
+          // (an expired or already acknowledged interaction), which leaves nothing to reply to.
+          metrics.increment("command.errors");
+          logger.error("Command execution failed", { commandName: interaction.commandName, error });
+        }
       }
       return;
     }

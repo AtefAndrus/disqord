@@ -207,6 +207,7 @@ export function createInspectInputHandler(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
     let resultSent = false;
+    let unsent: JsonFile[] = [];
     try {
       if (!interaction.guildId) {
         await interaction.editReply(
@@ -271,6 +272,13 @@ export function createInspectInputHandler(
         await interaction.editReply(replyPayload(MISSING_RECORD, []));
         return;
       }
+      // Generation ids are saved once the reply is finalized, so a reply still in progress has none yet.
+      if (record.status === "pending") {
+        await interaction.editReply(
+          replyPayload("この返答はまだ生成中です。生成が終わってから実行してください。", []),
+        );
+        return;
+      }
       const ids = replyRecordService.listGenerationIds(record.triggerMsgId);
       if (ids.length === 0) {
         await interaction.editReply(replyPayload(MISSING_RECORD, []));
@@ -295,16 +303,23 @@ export function createInspectInputHandler(
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
       await interaction.editReply(replyPayload(buildSummary(logs, omissions), first));
       resultSent = true;
+      unsent = rest.flat();
       for (const batch of rest) {
         await interaction.followUp({
           ...replyPayload("LLM 入出力ログ（続き）", batch),
           flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
         });
+        unsent = unsent.slice(batch.length);
       }
     } catch (error) {
       // Input logs can contain private history; never put the caught response in an application log.
       logger.error("LLM input inspection failed", errorDetails(error));
-      const payload = replyPayload("LLM 入力の取得中にエラーが発生しました。", []);
+      const payload = replyPayload(
+        resultSent
+          ? `続きのファイルを送れませんでした。届いていないファイル: ${unsent.map((file) => file.name).join("、")}`
+          : "LLM 入力の取得中にエラーが発生しました。",
+        [],
+      );
       try {
         // Editing the reply after the result went out would hide the summary and files already delivered.
         if (resultSent)

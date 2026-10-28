@@ -671,6 +671,9 @@ export class ChatService implements IChatService {
           ? { ...withUsage, webSearchSkipped: true }
           : withUsage;
       }
+    } catch (error) {
+      // Returned rather than rethrown so the generations already started still reach the reply record.
+      return { status: "error", error, history: initialMessages, generationIds };
     } finally {
       this.activeRequests.delete(requestId);
     }

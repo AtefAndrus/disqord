@@ -370,9 +370,9 @@ describe("LLM 入力を見る", () => {
 
   test("starts the deadline once the reply is deferred", async () => {
     const h = harness({
-      deferDelayMs: 60,
-      timeoutMs: 40,
-      content: () => new Promise((resolve) => setTimeout(() => resolve(CONTENT), 15)),
+      deferDelayMs: 400,
+      timeoutMs: 200,
+      content: () => new Promise((resolve) => setTimeout(() => resolve(CONTENT), 5)),
     });
     await h.run();
     expect(fileJson(payload(h.editReply).files[0]).generations[0].content).toEqual(CONTENT);
@@ -443,7 +443,31 @@ describe("LLM 入力を見る", () => {
     expect(payload(h.followUp, last).flags).toBe(
       MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
     );
+    // The first follow-up failed, so every file after the edited reply is reported as missing.
+    const failedBatch = payload(h.followUp, 0).files.map((file) => file.name ?? "");
+    const notice = textOf({ mock: { calls: [h.followUp.mock.calls[last]] } } as never);
+    expect(notice).toContain("届いていないファイル");
+    for (const name of failedBatch) expect(notice).toContain(name);
+    expect(notice).not.toContain("取得中");
   });
+
+  test("tells a reply still being generated apart from a missing record", async () => {
+    const h = harness({ record: { ...RECORD, status: "pending" } });
+    await h.run();
+    expect(textOf(h.editReply)).toContain("生成中");
+    expect(h.generation).not.toHaveBeenCalled();
+  });
+
+  for (const allowed of [
+    { type: ChannelType.GuildText, connect: false },
+    { type: ChannelType.GuildVoice, connect: true },
+  ]) {
+    test(`requires Connect only in voice channels: ${JSON.stringify(allowed)}`, async () => {
+      const h = harness(allowed);
+      await h.run();
+      expect(payload(h.editReply).files).toHaveLength(1);
+    });
+  }
 
   test("splits by generation and uses ephemeral follow-ups after ten attachments", async () => {
     const ids = Array.from({ length: 23 }, (_, index) => `gen-${index}`);
