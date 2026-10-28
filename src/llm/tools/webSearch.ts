@@ -124,7 +124,7 @@ function sanitizeTitle(raw: string): string {
  * that names another site cannot pass for a link to it.
  *
  * Results are taken from the searches in turn, because one search returns up
- * to `MAX_RESULT_LINKS` results and taking them in arrival order showed only
+ * to `RESULTS_PER_SEARCH` results and taking them in arrival order showed only
  * the first search. A result matching no search's `sources` comes after the
  * interleaved ones, since it represents no search. With at most one search
  * holding results there is no bias to remove, so the arrival order is kept.
