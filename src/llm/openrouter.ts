@@ -40,7 +40,7 @@ import type {
 import { logger } from "../utils/logger";
 import { metrics } from "../utils/metrics";
 
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_APP_URL = "https://github.com/AtefAndrus/disqord";
 const OPENROUTER_APP_TITLE = "DisQord";
 const OPENROUTER_APP_CATEGORIES = "general-chat";

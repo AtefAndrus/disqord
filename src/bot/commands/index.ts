@@ -2,6 +2,7 @@ import { REST, Routes } from "discord.js";
 import { configCommand } from "./config";
 import { cronCommand } from "./cron";
 import { helpCommand } from "./help";
+import { inspectInputCommand } from "./inspectInput";
 import { modelCommand } from "./model";
 import { releaseNoteCommand } from "./releaseNote";
 import { statusCommand } from "./status";
@@ -13,6 +14,7 @@ export const commandDefinitions = [
   configCommand,
   cronCommand,
   releaseNoteCommand,
+  inspectInputCommand,
 ];
 
 export async function registerCommands(applicationId: string, token: string): Promise<void> {

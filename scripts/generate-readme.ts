@@ -2,9 +2,10 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { resolve } from "node:path";
 import type {
   APIApplicationCommandOption,
+  RESTPostAPIApplicationCommandsJSONBody,
   RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
-import { ApplicationCommandOptionType } from "discord.js";
+import { ApplicationCommandOptionType, ApplicationCommandType } from "discord.js";
 import type { EnvVarDefinition } from "../src/config/envVars";
 
 // --- Pure functions (testable) ---
@@ -64,10 +65,12 @@ function formatOptionHints(options?: APIApplicationCommandOption[]): string {
   return ` ${params.map((p) => (p.required ? `<${p.name}>` : `[${p.name}]`)).join(" ")}`;
 }
 
-export function generateCommandTable(
-  commands: RESTPostAPIChatInputApplicationCommandsJSONBody[],
-): string {
-  const rows = commands.flatMap(flattenCommand);
+export function generateCommandTable(commands: RESTPostAPIApplicationCommandsJSONBody[]): string {
+  const rows = commands.flatMap((command) =>
+    command.type === undefined || command.type === ApplicationCommandType.ChatInput
+      ? flattenCommand(command)
+      : [],
+  );
   const lines = [
     "| コマンド | 説明 |",
     "| -------- | ---- |",
@@ -293,7 +296,7 @@ function main(): void {
 
   const { commandDefinitions } = require(resolve(rootDir, "src/bot/commands/index.ts"));
   const commands = commandDefinitions.map(
-    (cmd: { toJSON(): RESTPostAPIChatInputApplicationCommandsJSONBody }) => cmd.toJSON(),
+    (cmd: { toJSON(): RESTPostAPIApplicationCommandsJSONBody }) => cmd.toJSON(),
   );
   const { envVarDefinitions } = require(resolve(rootDir, "src/config/envVars.ts"));
 

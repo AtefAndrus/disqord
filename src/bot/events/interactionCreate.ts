@@ -4,6 +4,7 @@ import type {
   ChatInputCommandInteraction,
   ContainerBuilder,
   Interaction,
+  MessageContextMenuCommandInteraction,
 } from "discord.js";
 import packageJson from "../../../package.json";
 import { isSettingsRejection } from "../../errors";
@@ -23,6 +24,7 @@ import { logger } from "../../utils/logger";
 import { metrics } from "../../utils/metrics";
 import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
+import { INSPECT_INPUT_COMMAND_NAME } from "../commands/inspectInput";
 import { handleConfigPanelInteraction } from "./configPanelHandler";
 import { handleCronPanelInteraction, openCronPanel } from "./cronPanelHandler";
 
@@ -58,6 +60,7 @@ export function createInteractionCreateHandler(
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
   cronService: ICronService,
+  inspectInput?: (interaction: MessageContextMenuCommandInteraction) => Promise<void>,
 ): (interaction: Interaction) => Promise<void> {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
     if (interaction.isAutocomplete()) {
@@ -103,6 +106,13 @@ export function createInteractionCreateHandler(
         webSearchEngine,
         cronService,
       );
+      return;
+    }
+
+    if (interaction.isMessageContextMenuCommand()) {
+      if (interaction.commandName === INSPECT_INPUT_COMMAND_NAME && inspectInput) {
+        await inspectInput(interaction);
+      }
       return;
     }
 

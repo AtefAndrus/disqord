@@ -3,6 +3,7 @@ import packageJson from "../package.json";
 import { createBotClient } from "./bot/client";
 import { registerCommands } from "./bot/commands";
 import { createCommandHandlers } from "./bot/commands/handlers";
+import { createInspectInputHandler } from "./bot/events/inspectInputCommand";
 import { createInteractionCreateHandler } from "./bot/events/interactionCreate";
 import { createMessageCreateHandler } from "./bot/events/messageCreate";
 import { onReady } from "./bot/events/ready";
@@ -14,6 +15,7 @@ import { CronRepository } from "./db/repositories/cronRepository";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { ReplyRecordRepository } from "./db/repositories/replyRecord";
 import { startHttpServer } from "./health";
+import { OpenRouterGenerationLogClient } from "./llm/generationLog";
 import { OpenRouterClient } from "./llm/openrouter";
 import { createAddReactionTool } from "./llm/tools/discord/addReaction";
 import { createCreateEventTool } from "./llm/tools/discord/createEvent";
@@ -177,6 +179,11 @@ async function bootstrap(): Promise<void> {
     chatService,
     config.webSearchEngine,
     cronService,
+    createInspectInputHandler(
+      settingsService,
+      replyRecordService,
+      new OpenRouterGenerationLogClient(config.openRouterApiKey),
+    ),
   );
 
   const releaseAnnouncer = new ReleaseAnnouncer(
