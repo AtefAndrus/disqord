@@ -14,6 +14,11 @@ export interface MessageRefTarget {
 export interface ConversationToolContext {
   resolveMessageRef(ref: string): string | undefined;
   describeMessageRef(ref: string): MessageRefTarget | undefined;
+  shownMessageBody(
+    ref: string,
+  ):
+    | { text: string; toolTruncated?: boolean }
+    | { error: "message_ref_not_shown" | "message_unavailable" };
   readEarlierMessages(
     count: number,
     signal: AbortSignal,
@@ -23,6 +28,15 @@ export interface ConversationToolContext {
     messageRef: string,
     attachmentIndex: number,
     model: string,
+    signal: AbortSignal,
+    budgetTokens?: number,
+  ): Promise<ToolLlmResult>;
+}
+
+export interface TweetToolContext {
+  readPost(
+    messageRef: string,
+    postIndex: number,
     signal: AbortSignal,
     budgetTokens?: number,
   ): Promise<ToolLlmResult>;
@@ -93,6 +107,7 @@ export interface IToolContext {
   model?: string;
   toolsAllowed?: boolean;
   conversation?: ConversationToolContext;
+  tweets?: TweetToolContext;
   discord?: DiscordToolContext;
   discordInfo?: DiscordInfoContext;
   cron?: CronToolContext;

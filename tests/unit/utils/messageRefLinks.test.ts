@@ -186,6 +186,7 @@ describe("linkMessageRefs", () => {
 test("resolver reads current targets, uses each message's channel, and escapes author Markdown", () => {
   const targets = new Map<string, MessageRefTarget>();
   const context: ConversationToolContext = {
+    shownMessageBody: () => ({ error: "message_ref_not_shown" }),
     describeMessageRef: (ref) => targets.get(ref),
     resolveMessageRef: (ref) => targets.get(ref)?.messageId,
     readEarlierMessages: async () => "",

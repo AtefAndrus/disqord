@@ -1,6 +1,6 @@
 ---
 title: "会話履歴のツイートを読む tool"
-status: planned
+status: implemented
 priority: medium
 summary: "会話履歴の発言に貼られた X のポストを、モデルが発言番号を指定して読む client tool `read_x_post` を足す"
 ---
@@ -46,7 +46,7 @@ summary: "会話履歴の発言に貼られた X のポストを、モデルが�
 | 件数の上限 | tool で読むポストと画像には、返答あたりの件数の上限を設けない。発言から取り出すポスト ID も、自動展開の 1 発言 3 件（`MAX_TWEETS_PER_MESSAGE`）で打ち切らずにすべて番号の対象にする。1 ポストに付ける画像は自動展開と同じ 4 枚（`MAX_TWEET_IMAGES`）までとする | 量は結果の予算で抑えられる。画像は 1 枚 1,600 トークンという多めの見積もりで数えられ（`src/llm/contextBudget.ts:27`）、収まらなければ `result_budget_exhausted` になる。呼び出しの回数も tool loop の上限（`MAX_TURNS` 5 のうち tool を呼べるのは 4 ターン、1 ターンに `MAX_TOOL_CALLS_PER_TURN` 8 件、`src/llm/toolLoop.ts:135-136`）で返答あたり 32 回までに収まる。自動展開の上限は残す。自動展開はモデルへの最初の入力に入り、tool の結果の予算を通らないからである |
 | ポストの状態 | 返答ごとに、ポスト ID ごとの結果を 1 つ持つ: 渡した、取得に失敗した、予算に収まらなかった。渡したポストには `{"status":"already_loaded"}`、取得に失敗したポストには `{"error":"x_post_unavailable"}`、予算に収まらなかったポストには `{"error":"result_budget_exhausted"}` を返し、どれもその返答の中では取得し直さない | `already_loaded` を、モデルが実際に内容を受け取ったポストだけに使い、取れなかった理由をモデルに正しく伝える。結果の予算は 1 件の返答の中で消費されて減る一方なので（`src/llm/toolLoop.ts:193-202`、`:1011-1019`）、収まらなかったポストを取り直しても同じく収まらない |
 | 結果の予算 | 返す content part 全体（ポストのテキスト、画像、「N 件中 K 件目」の一文）を `estimateToolResultTokens()` で見積もり、`resultBudgetTokens` に収まるときだけ返して状態を確定する。決まった形の status と error の文字列は、`view_attachment` と同じく `terminal: true` で返す（`src/llm/tools/viewAttachment.ts:69`） | `resultBudgetTokens` の契約は、結果が予算に収まると確かめてから状態を確定することを求めており（`src/llm/tools/registry.ts:93`）、超えた結果は全体が `result_too_large` に置き換わって以後の client tool も止まる（`src/llm/tools/toolHandler.ts:406`、`:421`、`src/llm/toolLoop.ts:1020`）。`terminal` の付いた短い固定の結果だけはこの確認を免除されるので（`src/llm/tools/toolHandler.ts:408`、`:435`）、予算が残り少ないときもエラーがモデルに届き、以後の tool も止まらない |
-| 自動展開済みのポスト | 同じ返答で自動展開がモデルに渡したポスト ID は、渡したポストとして扱う。`expandTweets()` の結果に、渡したポストの ID の一覧を足す | 返信先のポストを tool でもう一度読むと、同じ内容が入力に二重に入る。今の結果（`TweetExpansionResult`、`src/services/tweetService.ts:42`）には、取得に成功した ID の一覧が無い |
+| 自動展開済みのポスト | 同じ返答で自動展開がモデルに渡したポスト ID は、渡したポストとして扱う。`expandTweets()` の結果に、渡したポストの ID の一覧を足す。画像に対応するモデルで、返答あたりの画像の上限（`MAX_TWEET_IMAGES`）のためにポストの画像を一部でも省いたときは、そのポストを一覧に入れない。画像に対応しないと判定できたモデルでは、画像の有無にかかわらず一覧に入れる。対応するかを判定できなかったとき（判定の時間切れなど）は、画像付きのポストを一覧に入れない | 返信先のポストを tool でもう一度読むと、同じ内容が入力に二重に入る。画像を省いたポストを一覧から外すのは、省いた画像を tool で読めるようにするためである。画像に対応しないモデルには tool も画像を返さないので、テキストを渡した時点でポストの内容はすべて渡っている。判定できなかったときに外すのは、tool を呼ぶ時点の判定では対応すると分かり、画像を読める場合があるためである。今の結果（`TweetExpansionResult`、`src/services/tweetService.ts:42`）には、取得に成功した ID の一覧が無い |
 | 再試行との関係 | `TweetToolContext` の呼び出しも、他の client tool と同じく `clientToolInvoked` を立てる | `generateChatResponse()` は、何も表示しておらず client tool も呼んでいない失敗に限って、Web 検索や自動展開の画像を外して答え直す（`src/services/chatService.ts:504-566`）。tool を呼んだ後の答え直しは、tool の取得を繰り返すことになるので、他の tool と同じ条件に揃える |
 | 有効になる条件 | `toolsAllowed` で、会話履歴の文脈があり、ギルド設定のツイート展開が有効なとき | ツイート展開を無効にしたギルドでは、ポスト ID を fxtwitter のホストへ送らない（README のツイート展開の説明） |
 | 非信頼データの指示 | ツイート展開の system メッセージ（`buildTweetSystemMessage()`）を、tool を渡すときは先頭側の system メッセージに置き、自動展開した場合の後方の同じメッセージは省く | tool の結果にも `<untrusted-tweet>` が入るため、tool を呼ぶ前から指示が要る。先頭側は返答ごとに変わらないメッセージを置く場所で（`src/services/chatService.ts:404-412`）、tool を渡すかどうかはギルド設定とモデルで決まる |
@@ -78,12 +78,12 @@ summary: "会話履歴の発言に貼られた X のポストを、モデルが�
 
 ## Tasks
 
-- [ ] `read_x_post` と `TweetToolContext`、`ConversationToolContext` の追加
-- [ ] `chatService.ts` の配線（有効条件、自動展開済み ID、system メッセージ）
-- [ ] 単体テスト: 有効条件、示していない番号、削除された発言（取得の前と後）、ポストの無い発言、範囲外の `post_index`、同じポストを別のホストの URL で 2 回貼った発言での `post_index`、予算がエラー文字列より小さいときのエラー応答、自動展開済み、取得の失敗と予算超過それぞれの記録と再呼び出しへの応答、削除された発言と削除されていない発言が同じポストを含む場合、ポストが 4 件以上ある発言の 4 件目、画像非対応モデル、`clientToolInvoked` が立つこと
-- [ ] e2e シナリオ: tester bot がメンションなしでポストの URL を投稿し、別の発言で「さっきのポストを要約して」と頼み、`read_x_post` の呼び出しと、返答がポストの内容に触れていることを確かめる
-- [ ] e2e: 既定シナリオ、`tweet`、`bot-reply-tweet`、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`
-- [ ] README と AGENTS.md の更新
+- [x] `read_x_post` と `TweetToolContext`、`ConversationToolContext` の追加
+- [x] `chatService.ts` の配線（有効条件、自動展開済み ID、system メッセージ）
+- [x] 単体テスト: 有効条件、示していない番号、削除された発言（取得の前と後）、ポストの無い発言、範囲外の `post_index`、同じポストを別のホストの URL で 2 回貼った発言での `post_index`、予算がエラー文字列より小さいときのエラー応答、自動展開済み、取得の失敗と予算超過それぞれの記録と再呼び出しへの応答、削除された発言と削除されていない発言が同じポストを含む場合、ポストが 4 件以上ある発言の 4 件目、画像非対応モデル、`clientToolInvoked` が立つこと
+- [x] e2e シナリオ: tester bot がメンションなしでポストの URL を投稿し、別の発言で「さっきのポストを要約して」と頼み、`read_x_post` の呼び出しと、返答がポストの内容に触れていることを確かめる
+- [x] e2e: 既定シナリオ、`tweet`、`bot-reply-tweet`、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`
+- [x] README と AGENTS.md の更新
 - [ ] `docs/changes/history-tweet-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

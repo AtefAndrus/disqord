@@ -1,7 +1,7 @@
 import type { CronJob } from "../db/repositories/cronRepository";
 import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
-import { computeMaxOutputTokens } from "../llm/contextBudget";
-import type { ILLMClient } from "../llm/openrouter";
+import { computeMaxOutputTokens, estimateToolResultTokens } from "../llm/contextBudget";
+import { type ILLMClient, toResponsesContentPart } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
 import { addUsage, runToolLoop } from "../llm/toolLoop";
 import type {
@@ -9,6 +9,7 @@ import type {
   DiscordInfoContext,
   DiscordToolContext,
   ToolRegistry,
+  TweetToolContext,
 } from "../llm/tools/registry";
 import {
   buildWebSearchServerTool,
@@ -22,6 +23,7 @@ import type {
   ChatMessageContent,
   GuildId,
   MessageId,
+  ResponsesInputContentPart,
   ServerTool,
   WebSearchTrace,
 } from "../types";
@@ -403,25 +405,6 @@ export class ChatService implements IChatService {
       }
       if (controller.signal.aborted) return { status: "cancelled", history: initialMessages };
 
-      const tweetParts = expansion?.parts ?? [];
-      const leadingSystemMessages: ChatMessage[] = [
-        DISCORD_FORMAT_SYSTEM_MESSAGE,
-        ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
-        ...(input.conversation ? [buildConversationSafetyMessage()] : []),
-      ];
-      const volatileSystemMessages: ChatMessage[] = [
-        ...(expansion && expansion.textParts.length > 0 ? [buildTweetSystemMessage()] : []),
-        buildDateTimeSystemMessage(new Date(), settings.webSearchEnabled),
-        ...(input.autoReply ? [buildAutoReplySystemMessage()] : []),
-      ];
-      const buildWithoutHistory = (): ChatCompletionRequest =>
-        buildChatRequest(settings.defaultModel, input, tweetParts, [
-          DISCORD_FORMAT_SYSTEM_MESSAGE,
-          ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
-          ...volatileSystemMessages,
-          ...buildChatMessages(input, tweetParts),
-        ]);
-
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
       const cron = settings.cronEnabled ? input.cron : undefined;
       let supportsTools = false;
@@ -464,6 +447,36 @@ export class ChatService implements IChatService {
           supportsTools = false;
         }
       }
+
+      const tweets =
+        supportsTools && conversation && settings.twitterExpandEnabled
+          ? this.createTweetToolContext(
+              conversation.toolContext,
+              settings.defaultModel,
+              expansion?.loadedPostIds ?? [],
+            )
+          : undefined;
+      const tweetParts = expansion?.parts ?? [];
+      const leadingSystemMessages: ChatMessage[] = [
+        DISCORD_FORMAT_SYSTEM_MESSAGE,
+        ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
+        ...(input.conversation ? [buildConversationSafetyMessage()] : []),
+        ...(tweets ? [buildTweetSystemMessage()] : []),
+      ];
+      const volatileSystemMessages: ChatMessage[] = [
+        ...(!tweets && expansion && expansion.textParts.length > 0
+          ? [buildTweetSystemMessage()]
+          : []),
+        buildDateTimeSystemMessage(new Date(), settings.webSearchEnabled),
+        ...(input.autoReply ? [buildAutoReplySystemMessage()] : []),
+      ];
+      const buildWithoutHistory = (): ChatCompletionRequest =>
+        buildChatRequest(settings.defaultModel, input, tweetParts, [
+          DISCORD_FORMAT_SYSTEM_MESSAGE,
+          ...(settings.webSearchEnabled ? [buildWebSearchStaticSystemMessage()] : []),
+          ...volatileSystemMessages,
+          ...buildChatMessages(input, tweetParts),
+        ]);
 
       const requestBase = conversation
         ? buildChatRequest(
@@ -513,6 +526,7 @@ export class ChatService implements IChatService {
           ? {
               describeMessageRef: (ref) => conversation.toolContext.describeMessageRef(ref),
               resolveMessageRef: (ref) => conversation.toolContext.resolveMessageRef(ref),
+              shownMessageBody: (ref) => conversation.toolContext.shownMessageBody(ref),
               readEarlierMessages: (count, signal, budgetTokens) => {
                 clientToolInvoked = true;
                 return conversation.toolContext.readEarlierMessages(count, signal, budgetTokens);
@@ -582,6 +596,14 @@ export class ChatService implements IChatService {
             }
           : undefined;
         const tracked = createTrackingUpdater(updater);
+        const tweetContext: TweetToolContext | undefined = tweets
+          ? {
+              readPost: (...args) => {
+                clientToolInvoked = true;
+                return tweets.readPost(...args);
+              },
+            }
+          : undefined;
         const result = await this.runChatLoop(
           requestWithout(dropTweetImages, dropWebSearch),
           settings.webSearchEnabled && !dropWebSearch,
@@ -595,6 +617,7 @@ export class ChatService implements IChatService {
           discordContext,
           discordInfoContext,
           cronContext,
+          tweetContext,
           settings.defaultModel,
           supportsTools,
           contextLength,
@@ -632,6 +655,53 @@ export class ChatService implements IChatService {
     }
   }
 
+  private createTweetToolContext(
+    conversation: ConversationWindowContext["toolContext"],
+    model: string,
+    loadedPostIds: string[],
+  ): TweetToolContext {
+    const results = new Map<string, string>(
+      loadedPostIds.map((id) => [id, '{"status":"already_loaded"}']),
+    );
+    return {
+      readPost: async (messageRef, postIndex, signal, budgetTokens) => {
+        const shown = conversation.shownMessageBody(messageRef);
+        if ("error" in shown) return JSON.stringify(shown);
+        const ids = this.tweetService.extractTweetIds(shown.text, shown.toolTruncated);
+        if (ids.length === 0) return '{"error":"no_x_post"}';
+        const id = ids[postIndex - 1];
+        if (!id) return '{"error":"post_index_out_of_range"}';
+        const previous = results.get(id);
+        if (previous) return previous;
+        const parts = await this.tweetService.fetchPost(id, signal, (capabilitySignal) =>
+          raceWithAbort(
+            this.modelService.isMultimodalCapable(model, "image"),
+            capabilitySignal,
+          ).then((result) => (result.ok ? result.value : null)),
+        );
+        const current = conversation.shownMessageBody(messageRef);
+        if ("error" in current) return JSON.stringify(current);
+        if (!parts) {
+          const error = '{"error":"x_post_unavailable"}';
+          results.set(id, error);
+          return error;
+        }
+        const content: ResponsesInputContentPart[] = parts.map(toResponsesContentPart);
+        content.push({
+          type: "input_text",
+          text: `この発言のポスト: ${ids.length} 件中 ${postIndex} 件目`,
+        });
+        if (estimateToolResultTokens(content) > (budgetTokens ?? Number.POSITIVE_INFINITY)) {
+          const error = '{"error":"result_budget_exhausted"}';
+          results.set(id, error);
+          return error;
+        }
+        results.set(id, '{"status":"already_loaded"}');
+        return content;
+      },
+    };
+  }
+
   private runChatLoop(
     request: ChatCompletionRequest,
     webSearchEnabled: boolean,
@@ -645,6 +715,7 @@ export class ChatService implements IChatService {
     discord: DiscordToolContext | undefined,
     discordInfo: DiscordInfoContext | undefined,
     cron: CronToolContext | undefined,
+    tweets: TweetToolContext | undefined,
     model: string,
     toolsAllowed: boolean,
     contextLength: number | null,
@@ -677,6 +748,7 @@ export class ChatService implements IChatService {
         ...(discord && { discord }),
         ...(discordInfo && { discordInfo }),
         ...(cron && { cron }),
+        ...(tweets && { tweets }),
       },
       updater,
       signal,

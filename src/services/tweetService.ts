@@ -44,10 +44,16 @@ export interface TweetExpansionResult {
   parts: ChatMessageContent[];
   textParts: TextContentPart[];
   imageParts: ImageContentPart[];
+  loadedPostIds: string[];
 }
 
 export interface ITweetService {
-  extractTweetIds(text: string): string[];
+  extractTweetIds(text: string, truncated?: boolean): string[];
+  fetchPost(
+    id: string,
+    signal: AbortSignal,
+    getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
+  ): Promise<ChatMessageContent[] | undefined>;
   expandTweets(
     text: string,
     signal: AbortSignal,
@@ -128,23 +134,24 @@ function isString(value: unknown): value is string {
 }
 
 /** Extracts only the supported URL paths, so arbitrary numbers in a message are ignored. */
-export function extractTweetUrls(text: string): TweetUrl[] {
+export function extractTweetUrls(text: string, truncated = false): TweetUrl[] {
   const urls: TweetUrl[] = [];
   const seen = new Set<string>();
 
   for (const match of text.matchAll(TWEET_URL_PATTERN)) {
+    // A cut-off ID can name a different post, so require a visible delimiter.
+    if (truncated && match.index + match[0].length === text.length) continue;
     const id = match[1];
     if (!id || !/^\d{2,20}$/u.test(id) || seen.has(id)) continue;
     seen.add(id);
     urls.push({ id, url: `https://x.com/i/status/${id}` });
-    if (urls.length >= MAX_TWEETS_PER_MESSAGE) break;
   }
 
   return urls;
 }
 
-export function extractTweetIds(text: string): string[] {
-  return extractTweetUrls(text).map(({ id }) => id);
+export function extractTweetIds(text: string, truncated = false): string[] {
+  return extractTweetUrls(text, truncated).map(({ id }) => id);
 }
 
 function parseAuthor(value: unknown): TweetAuthor | undefined {
@@ -695,8 +702,21 @@ export class TweetService implements ITweetService {
     private readonly limiter: TweetRequestLimiter = sharedTweetRequestLimiter,
   ) {}
 
-  extractTweetIds(text: string): string[] {
-    return extractTweetIds(text);
+  extractTweetIds(text: string, truncated = false): string[] {
+    return extractTweetIds(text, truncated);
+  }
+
+  async fetchPost(
+    id: string,
+    signal: AbortSignal,
+    getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
+  ): Promise<ChatMessageContent[] | undefined> {
+    const result = await this.expandTweets(
+      `https://x.com/i/web/status/${id}`,
+      signal,
+      getImageCapability,
+    );
+    return result.status === "expanded" ? result.parts : undefined;
   }
 
   async expandTweets(
@@ -704,9 +724,10 @@ export class TweetService implements ITweetService {
     signal: AbortSignal,
     getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
   ): Promise<TweetExpansionResult> {
-    const urls = extractTweetUrls(text);
-    if (urls.length === 0) return { status: "none", parts: [], textParts: [], imageParts: [] };
-    if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+    const urls = extractTweetUrls(text).slice(0, MAX_TWEETS_PER_MESSAGE);
+    const empty = { parts: [], textParts: [], imageParts: [], loadedPostIds: [] };
+    if (urls.length === 0) return { status: "none", ...empty };
+    if (signal.aborted) return { status: "cancelled", ...empty };
 
     const deadline = createExpansionDeadline();
     const capabilitySignals = combineSignals(signal, deadline.signal);
@@ -715,31 +736,49 @@ export class TweetService implements ITweetService {
       : Promise.resolve<boolean | null>(null);
 
     try {
-      const fetched = await Promise.all(urls.map((url) => this.fetchTweet(url, signal, deadline)));
-      if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+      const fetched = await Promise.all(
+        urls.map(async (url) => ({
+          ...(await this.fetchTweet(url, signal, deadline)),
+          id: url.id,
+        })),
+      );
+      if (signal.aborted) return { status: "cancelled", ...empty };
 
       const successful = fetched.filter(
         (
           result,
-        ): result is { kind: "success"; text: string; record: TweetRecord; imageUrls: string[] } =>
-          result.kind === "success",
+        ): result is {
+          kind: "success";
+          text: string;
+          record: TweetRecord;
+          imageUrls: string[];
+          id: string;
+        } => result.kind === "success",
       );
       if (successful.length === 0) {
-        return { status: "none", parts: [], textParts: [], imageParts: [] };
+        return { status: "none", ...empty };
       }
 
       const hasImages = successful.some((result) => result.imageUrls.length > 0);
       const capable = hasImages ? await capabilityPromise : false;
-      if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+      if (signal.aborted) return { status: "cancelled", ...empty };
       const includeImages = capable === true;
       const textParts = successful.map(({ text }) => ({ type: "text", text }) as const);
       const imageParts: ImageContentPart[] = [];
       const parts: ChatMessageContent[] = [];
+      const loadedPostIds: string[] = [];
       let remainingImages = MAX_TWEET_IMAGES;
       for (const result of successful) {
         parts.push({ type: "text", text: result.text });
+        const imageUrls = includeImages ? result.imageUrls.slice(0, remainingImages) : [];
+        // A model known to take no images gets none from read_x_post either, so the text alone
+        // is the whole post for it. An unknown capability (null, e.g. the lookup timed out) can
+        // still resolve to true when read_x_post asks again, so its images stay readable.
+        if (capable === false || imageUrls.length === result.imageUrls.length) {
+          loadedPostIds.push(result.id);
+        }
         if (includeImages) {
-          for (const url of result.imageUrls.slice(0, remainingImages)) {
+          for (const url of imageUrls) {
             const part: ImageContentPart = { type: "image_url", image_url: { url } };
             imageParts.push(part);
             parts.push(part);
@@ -747,7 +786,13 @@ export class TweetService implements ITweetService {
           }
         }
       }
-      return { status: "expanded", parts, textParts, imageParts };
+      return {
+        status: "expanded",
+        parts,
+        textParts,
+        imageParts,
+        loadedPostIds,
+      };
     } finally {
       deadline.dispose();
       capabilitySignals.dispose();

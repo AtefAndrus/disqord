@@ -12,6 +12,7 @@ function context(): IToolContext {
     channelId: "channel",
     userId: "user",
     conversation: {
+      shownMessageBody: () => ({ error: "message_ref_not_shown" }),
       describeMessageRef: () => undefined,
       resolveMessageRef: () => undefined,
       readEarlierMessages: async () => "",

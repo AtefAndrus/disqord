@@ -109,8 +109,15 @@ export function createMockSettingsService(): ISettingsService {
 export function createMockTweetService(): ITweetService {
   return {
     extractTweetIds: mock(() => []),
+    fetchPost: mock(async () => undefined),
     expandTweets: mock(() =>
-      Promise.resolve({ status: "none" as const, parts: [], textParts: [], imageParts: [] }),
+      Promise.resolve({
+        status: "none" as const,
+        parts: [],
+        textParts: [],
+        imageParts: [],
+        loadedPostIds: [],
+      }),
     ),
   };
 }
