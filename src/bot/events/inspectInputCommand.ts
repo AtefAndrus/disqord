@@ -33,6 +33,9 @@ interface JsonFile {
 }
 
 const TIMEOUT: GenerationLookup = { ok: false, reason: "時間切れ" };
+// Kept out of the attachment budget for the summary's payload_json and the multipart framing,
+// in case the upload limit applies to the whole request rather than to each file.
+export const REQUEST_OVERHEAD_BYTES = 64 * 1024;
 const MISSING_RECORD = "この bot の返答ではないか、記録がありません";
 const LOGGING_HINT =
   "少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください";
@@ -199,8 +202,8 @@ export function createInspectInputHandler(
   timeoutMs = 60_000,
 ): (interaction: MessageContextMenuCommandInteraction) => Promise<void> {
   return async (interaction: MessageContextMenuCommandInteraction): Promise<void> => {
-    const deadline = Date.now() + timeoutMs;
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const deadline = Date.now() + timeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
     let resultSent = false;
@@ -287,12 +290,9 @@ export function createInspectInputHandler(
         ]);
         logs.push({ id, generation, content });
       }
-      const { files, omissions } = prepareFiles(
-        record.triggerMsgId,
-        logs,
-        interaction.attachmentSizeLimit,
-      );
-      const [first = [], ...rest] = batchFiles(files, interaction.attachmentSizeLimit);
+      const sizeLimit = Math.max(0, interaction.attachmentSizeLimit - REQUEST_OVERHEAD_BYTES);
+      const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
+      const [first = [], ...rest] = batchFiles(files, sizeLimit);
       await interaction.editReply(replyPayload(buildSummary(logs, omissions), first));
       resultSent = true;
       for (const batch of rest) {

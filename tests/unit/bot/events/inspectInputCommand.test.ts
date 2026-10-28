@@ -11,7 +11,10 @@ import {
   PermissionsBitField,
 } from "discord.js";
 import { inspectInputCommand } from "../../../../src/bot/commands/inspectInput";
-import { createInspectInputHandler } from "../../../../src/bot/events/inspectInputCommand";
+import {
+  createInspectInputHandler,
+  REQUEST_OVERHEAD_BYTES,
+} from "../../../../src/bot/events/inspectInputCommand";
 import type { ReplyRecord } from "../../../../src/db/repositories/replyRecord";
 import type { GenerationLookup } from "../../../../src/llm/generationLog";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
@@ -66,6 +69,7 @@ interface HarnessOptions {
   /** The channel is missing from the cache and must be fetched; `"fails"` makes the fetch reject. */
   uncachedChannel?: true | "fails";
   followUp?: () => Promise<unknown>;
+  deferDelayMs?: number;
 }
 
 interface Payload {
@@ -89,7 +93,9 @@ interface Harness {
 }
 
 function harness(options: HarnessOptions = {}): Harness {
-  const deferReply = mock(() => Promise.resolve());
+  const deferReply = mock(
+    () => new Promise<void>((resolve) => setTimeout(resolve, options.deferDelayMs ?? 0)),
+  );
   const editReply = mock(() => Promise.resolve());
   const followUp = mock(options.followUp ?? (() => Promise.resolve()));
   const threadFetch = mock(() =>
@@ -145,7 +151,8 @@ function harness(options: HarnessOptions = {}): Harness {
       author: { id: options.targetAuthor ?? "bot" },
       reference: options.reference ? { messageId: options.reference } : null,
     },
-    attachmentSizeLimit: options.sizeLimit ?? 10_000_000,
+    // `sizeLimit` is the room left for attachments after the reserved request overhead.
+    attachmentSizeLimit: (options.sizeLimit ?? 10_000_000) + REQUEST_OVERHEAD_BYTES,
     deferReply,
     editReply,
     followUp,
@@ -359,6 +366,16 @@ describe("LLM 入力を見る", () => {
     release(METADATA);
     await run;
     expect(seen).toEqual(["metadata:gen-1", "content:gen-1", "metadata:gen-2", "content:gen-2"]);
+  });
+
+  test("starts the deadline once the reply is deferred", async () => {
+    const h = harness({
+      deferDelayMs: 60,
+      timeoutMs: 40,
+      content: () => new Promise((resolve) => setTimeout(() => resolve(CONTENT), 15)),
+    });
+    await h.run();
+    expect(fileJson(payload(h.editReply).files[0]).generations[0].content).toEqual(CONTENT);
   });
 
   test("times out unfinished endpoints and remaining generations while keeping completed data", async () => {
