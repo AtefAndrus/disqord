@@ -529,7 +529,7 @@ describe("tweetService", () => {
       async () => capable,
     );
     expect(result.imageParts).toEqual([]);
-    expect(result.loadedPostIds).toEqual([]);
+    expect(result.loadedPostIds).toEqual(["20"]);
   });
 
   test("画像対応がtrueなら写真と動画サムネイルをツイート順に最大4枚追加する", async () => {

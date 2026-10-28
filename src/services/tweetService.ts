@@ -771,7 +771,11 @@ export class TweetService implements ITweetService {
       for (const result of successful) {
         parts.push({ type: "text", text: result.text });
         const imageUrls = includeImages ? result.imageUrls.slice(0, remainingImages) : [];
-        if (imageUrls.length === result.imageUrls.length) loadedPostIds.push(result.id);
+        // A model that takes no images gets none from read_x_post either, so the text alone is
+        // the whole post for it; only images cut by MAX_TWEET_IMAGES leave something to read.
+        if (!includeImages || imageUrls.length === result.imageUrls.length) {
+          loadedPostIds.push(result.id);
+        }
         if (includeImages) {
           for (const url of imageUrls) {
             const part: ImageContentPart = { type: "image_url", image_url: { url } };
