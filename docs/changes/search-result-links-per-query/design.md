@@ -1,6 +1,6 @@
 ---
 title: "検索結果リンクを検索ごとに交互に選ぶ"
-status: planned
+status: in-progress
 priority: low
 summary: "回答の下に付ける検索結果リンク 5 件を、全検索の結果の先頭からではなく、検索ごとに 1 件ずつ交互に選ぶ"
 ---

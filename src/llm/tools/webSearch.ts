@@ -122,6 +122,12 @@ function sanitizeTitle(raw: string): string {
  * `TITLE_CHAR`, and only http(s) URLs are kept. Every label ends with the
  * link's host as `URL` serializes it (ASCII, punycode for IDNs), so a title
  * that names another site cannot pass for a link to it.
+ *
+ * Results are taken from the searches in turn, because one search returns up
+ * to `MAX_RESULT_LINKS` results and taking them in arrival order showed only
+ * the first search. A result matching no search's `sources` comes after the
+ * interleaved ones, since it represents no search. With at most one search
+ * holding results there is no bias to remove, so the arrival order is kept.
  */
 export function formatSearchResultLinks(trace: WebSearchTrace): string | undefined {
   const sourceGroups = new Map<string, number>();
