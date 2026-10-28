@@ -184,6 +184,14 @@ export function applyMigrations(db: Database): void {
       UNIQUE (trigger_msg_id, seq)
     )
   `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS reply_generations (
+      trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
+      seq             INTEGER NOT NULL,         -- 生成を始めた順
+      generation_id   TEXT NOT NULL,            -- OpenRouter の gen-...
+      PRIMARY KEY (trigger_msg_id, seq)
+    )
+  `);
   db.run("CREATE INDEX IF NOT EXISTS idx_reply_records_finalized ON reply_records(finalized_at)");
   db.run(`CREATE TABLE IF NOT EXISTS cron_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,

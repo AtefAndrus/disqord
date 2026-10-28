@@ -50,6 +50,8 @@ function records(): IReplyRecordRepository {
     findByTrigger: () => null,
     findByPage: () => null,
     listPages: () => [],
+    appendGenerations: () => 0,
+    listGenerations: () => [],
     markPendingFailed: () => 0,
     deleteByGuild: () => 0,
     deleteByChannel: () => 0,

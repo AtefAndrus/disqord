@@ -2,6 +2,7 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ComponentType,
   type ContainerBuilder,
+  type MessageContextMenuCommandInteraction,
   MessageFlags,
   PermissionFlagsBits,
 } from "discord.js";
@@ -13,6 +14,7 @@ import type { IChatService } from "../../../../src/services/chatService";
 import type { ICronService } from "../../../../src/services/cronService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
+import { logger } from "../../../../src/utils/logger";
 import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
 
 interface ButtonInteractionFixture {
@@ -23,6 +25,7 @@ interface ButtonInteractionFixture {
   isAutocomplete: () => boolean;
   isButton: () => boolean;
   isChatInputCommand: () => boolean;
+  isMessageContextMenuCommand: () => boolean;
   deferUpdate: ReturnType<typeof mock>;
   reply: ReturnType<typeof mock>;
   update: ReturnType<typeof mock>;
@@ -49,6 +52,7 @@ function buttonInteraction(
     isAutocomplete: () => false,
     isButton: () => true,
     isChatInputCommand: () => false,
+    isMessageContextMenuCommand: () => false,
     deferUpdate: mock(() => {
       fixture.deferred = true;
       return Promise.resolve();
@@ -63,7 +67,11 @@ function buttonInteraction(
   return fixture;
 }
 
-function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
+function createStatusHarness(
+  defaultModel = "free/model:free",
+  isFree = true,
+  inspectInput?: (interaction: MessageContextMenuCommandInteraction) => Promise<void>,
+) {
   const settingsService = createMockSettingsService();
   settingsService.getGuildSettings = mock(() =>
     Promise.resolve(createMockGuildSettings({ guildId: "guild-1", defaultModel })),
@@ -84,6 +92,7 @@ function createStatusHarness(defaultModel = "free/model:free", isFree = true) {
     { cancelAll: mock(() => {}), isClosing: false } as unknown as IChatService,
     "perplexity",
     { countJobs: mock(() => 2) } as unknown as ICronService,
+    inspectInput,
   );
   return { handler, settingsService, modelService, llmClient };
 }
@@ -134,6 +143,49 @@ function expectComponentsV2(callable: ReturnType<typeof mock>, ephemeral = false
 }
 
 describe("interactionCreate: 停止ボタン", () => {
+  test("routes inspection before testing for a chat-input command", async () => {
+    const inspect = mock(async () => {});
+    const { handler } = createStatusHarness("free/model:free", true, inspect);
+    const isChatInputCommand = mock(() => false);
+    const interaction = {
+      commandName: "LLM 入力を見る",
+      isAutocomplete: () => false,
+      isButton: () => false,
+      isStringSelectMenu: () => false,
+      isChannelSelectMenu: () => false,
+      isRoleSelectMenu: () => false,
+      isModalSubmit: () => false,
+      isMessageContextMenuCommand: () => true,
+      isChatInputCommand,
+    };
+    await handler(interaction as never);
+    expect(inspect).toHaveBeenCalledWith(interaction);
+    expect(isChatInputCommand).not.toHaveBeenCalled();
+  });
+  test("contains a failed inspection, such as an expired interaction, as a command error", async () => {
+    const inspect = mock(async () => {
+      throw Object.assign(new Error("Unknown interaction"), { code: 10062 });
+    });
+    const { handler } = createStatusHarness("free/model:free", true, inspect);
+    const errors = spyOn(logger, "error").mockImplementation(() => {});
+    const interaction = {
+      commandName: "LLM 入力を見る",
+      isAutocomplete: () => false,
+      isButton: () => false,
+      isStringSelectMenu: () => false,
+      isChannelSelectMenu: () => false,
+      isRoleSelectMenu: () => false,
+      isModalSubmit: () => false,
+      isMessageContextMenuCommand: () => true,
+      isChatInputCommand: () => false,
+    };
+    await expect(handler(interaction as never)).resolves.toBeUndefined();
+    expect(errors).toHaveBeenCalledWith(
+      "Command execution failed",
+      expect.objectContaining({ commandName: "LLM 入力を見る" }),
+    );
+    errors.mockRestore();
+  });
   test("status refresh defers and redraws without changing settings", async () => {
     const { handler, modelService, settingsService } = createStatusHarness();
     const interaction = buttonInteraction("status_model_refresh");
@@ -240,6 +292,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       isChannelSelectMenu: () => false,
       isRoleSelectMenu: () => false,
       isChatInputCommand: () => true,
+      isMessageContextMenuCommand: () => false,
       options: { getSubcommandGroup: () => null, getSubcommand: () => "twitter-expand" },
     } as never);
 
@@ -270,6 +323,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       isChannelSelectMenu: () => false,
       isRoleSelectMenu: () => false,
       isChatInputCommand: () => true,
+      isMessageContextMenuCommand: () => false,
       options: { getSubcommandGroup: () => null, getSubcommand: () => "free-only" },
       replied: false,
       deferred: false,
@@ -319,6 +373,7 @@ describe("interactionCreate: コマンドのエラー表示", () => {
       isChannelSelectMenu: () => false,
       isRoleSelectMenu: () => false,
       isChatInputCommand: () => true,
+      isMessageContextMenuCommand: () => false,
       options: { getSubcommandGroup: () => null, getSubcommand: () => "free-only" },
       replied: true,
       deferred: false,

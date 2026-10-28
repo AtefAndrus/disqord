@@ -20,6 +20,8 @@ function service(events: string[]): IReplyRecordService {
     findByTrigger: mock(() => null),
     findByPage: mock(() => null),
     listPages: mock(() => []),
+    saveGenerationIds: mock(async () => true),
+    listGenerationIds: mock(() => []),
     markPendingFailed: mock(async () => 0),
     deleteByGuild: mock(async () => 0),
     deleteByChannel: mock(async () => 0),

@@ -142,6 +142,131 @@ describe("OpenRouterClient", () => {
     mockFetch.mockResolvedValueOnce(sseResponse([...events.map(sseData), "data: [DONE]\n\n"]));
   }
 
+  describe("generation IDs", () => {
+    test("chat reports the header before reading the body and only once", async () => {
+      const onGenerationId = mock(() => {});
+      const response = new Response(JSON.stringify({ id: "body-id", output: [] }), {
+        headers: { "x-generation-id": "header-id" },
+      });
+      spyOn(response, "json").mockImplementation(async () => {
+        expect(onGenerationId).toHaveBeenCalledWith("header-id");
+        return { id: "body-id", output: [] };
+      });
+      mockFetch.mockResolvedValueOnce(response);
+      await client.chat(REQUEST, undefined, onGenerationId);
+      expect(onGenerationId).toHaveBeenCalledTimes(1);
+    });
+
+    test("chat falls back to the body ID without a header", async () => {
+      const onGenerationId = mock(() => {});
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ id: "body-id", output: [] })));
+      await client.chat(REQUEST, undefined, onGenerationId);
+      expect(onGenerationId).toHaveBeenCalledTimes(1);
+      expect(onGenerationId).toHaveBeenCalledWith("body-id");
+    });
+
+    test.each([false, true])("chatStream reports one ID (header=%s)", async (header) => {
+      const onGenerationId = mock(() => {});
+      const response = sseResponse([
+        sseData({ type: "response.created", response: { id: "created-id" } }),
+        sseData({ type: "response.created", response: { id: "second-created-id" } }),
+        sseData(completed({ id: "completed-id" })),
+        "data: [DONE]\n\n",
+      ]);
+      if (header) response.headers.set("x-generation-id", "header-id");
+      mockFetch.mockResolvedValueOnce(response);
+      await drain(client.chatStream(REQUEST, undefined, onGenerationId));
+      expect(onGenerationId).toHaveBeenCalledTimes(1);
+      expect(onGenerationId).toHaveBeenCalledWith(header ? "header-id" : "created-id");
+    });
+
+    test("captures a newline-less response.created at EOF", async () => {
+      const onGenerationId = mock(() => {});
+      mockFetch.mockResolvedValueOnce(
+        sseResponse([
+          `data: ${JSON.stringify({ type: "response.created", response: { id: "created-id" } })}`,
+        ]),
+      );
+      await drain(client.chatStream(REQUEST, undefined, onGenerationId));
+      expect(onGenerationId).toHaveBeenCalledWith("created-id");
+    });
+
+    test.each(["chat", "chatStream"] as const)(
+      "%s reports 400 header before throwing",
+      async (method) => {
+        const onGenerationId = mock(() => {});
+        const response = new Response(
+          JSON.stringify({ error: { code: 400, message: "invalid request" } }),
+          {
+            status: 400,
+            headers: { "x-generation-id": "rejected-id" },
+          },
+        );
+        spyOn(response, "json").mockImplementation(async () => {
+          expect(onGenerationId).toHaveBeenCalledWith("rejected-id");
+          return { error: { code: 400, message: "invalid request" } };
+        });
+        mockFetch.mockResolvedValueOnce(response);
+        const result =
+          method === "chat"
+            ? client.chat(REQUEST, undefined, onGenerationId)
+            : drain(client.chatStream(REQUEST, undefined, onGenerationId));
+        await expect(result).rejects.toBeInstanceOf(BadRequestError);
+        expect(onGenerationId).toHaveBeenCalledTimes(1);
+        expect(onGenerationId).toHaveBeenCalledWith("rejected-id");
+      },
+    );
+
+    test.each(["chat", "chatStream"] as const)(
+      "%s captures the header before a body read fails",
+      async (method) => {
+        const onGenerationId = mock(() => {});
+        const response = new Response(
+          new ReadableStream({
+            start(controller): void {
+              controller.error(new Error("disconnected"));
+            },
+          }),
+          { headers: { "x-generation-id": "interrupted-id" } },
+        );
+        mockFetch.mockResolvedValueOnce(response);
+        const result =
+          method === "chat"
+            ? client.chat(REQUEST, undefined, onGenerationId)
+            : drain(client.chatStream(REQUEST, undefined, onGenerationId));
+        await expect(result).rejects.toThrow("disconnected");
+        expect(onGenerationId).toHaveBeenCalledTimes(1);
+        expect(onGenerationId).toHaveBeenCalledWith("interrupted-id");
+      },
+    );
+
+    test.each([false, true])(
+      "observer errors do not break generation (header=%s)",
+      async (header) => {
+        const onGenerationId = mock(() => {
+          throw new Error("observer failed");
+        });
+        mockFetch.mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: "body-id", output: [] }), {
+            headers: header ? { "x-generation-id": "header-id" } : {},
+          }),
+        );
+        await expect(client.chat(REQUEST, undefined, onGenerationId)).resolves.toMatchObject({
+          id: "body-id",
+        });
+        const response = sseResponse([
+          sseData({ type: "response.created", response: { id: "created-id" } }),
+          sseData(completed()),
+          "data: [DONE]\n\n",
+        ]);
+        if (header) response.headers.set("x-generation-id", "header-id");
+        mockFetch.mockResolvedValueOnce(response);
+        await drain(client.chatStream(REQUEST, undefined, onGenerationId));
+        expect(onGenerationId).toHaveBeenCalledTimes(2);
+      },
+    );
+  });
+
   describe("chat", () => {
     test("non-stream response includes web search calls and cited links", async () => {
       mockFetch.mockResolvedValueOnce({

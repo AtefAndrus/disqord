@@ -39,6 +39,8 @@ export interface IReplyRecordRepository {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
+  appendGenerations(triggerMsgId: string, generationIds: readonly string[]): number;
+  listGenerations(triggerMsgId: string): string[];
   markPendingFailed(): number;
   deleteByGuild(guildId: string): number;
   deleteByChannel(channelId: string): number;
@@ -191,6 +193,38 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
       .all(triggerMsgId);
   }
 
+  // 記録の無いトリガーには書かない。返り値は書いた件数である。
+  appendGenerations(triggerMsgId: string, generationIds: readonly string[]): number {
+    if (generationIds.length === 0) return 0;
+    return this.db
+      .transaction((triggerId: string, ids: readonly string[]): number => {
+        if (!this.db.query("SELECT 1 FROM reply_records WHERE trigger_msg_id = ?").get(triggerId))
+          return 0;
+        const next =
+          this.db
+            .query<{ seq: number | null }, [string]>(
+              "SELECT MAX(seq) + 1 as seq FROM reply_generations WHERE trigger_msg_id = ?",
+            )
+            .get(triggerId)?.seq ?? 0;
+        const insert = this.db.query(
+          "INSERT INTO reply_generations (trigger_msg_id, seq, generation_id) VALUES (?, ?, ?)",
+        );
+        for (const [index, id] of ids.entries()) insert.run(triggerId, next + index, id);
+        return ids.length;
+      })
+      .immediate(triggerMsgId, generationIds);
+  }
+
+  listGenerations(triggerMsgId: string): string[] {
+    return this.db
+      .query<{ generationId: string }, [string]>(
+        `SELECT generation_id as generationId FROM reply_generations
+         WHERE trigger_msg_id = ? ORDER BY seq ASC`,
+      )
+      .all(triggerMsgId)
+      .map((row) => row.generationId);
+  }
+
   markPendingFailed(): number {
     return this.db
       .query("UPDATE reply_records SET status = 'failed' WHERE status = 'pending'")
@@ -222,6 +256,12 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
         this.db
           .query(
             `DELETE FROM reply_pages WHERE trigger_msg_id IN
+               (SELECT trigger_msg_id FROM reply_records WHERE ${condition})`,
+          )
+          .run(...params);
+        this.db
+          .query(
+            `DELETE FROM reply_generations WHERE trigger_msg_id IN
                (SELECT trigger_msg_id FROM reply_records WHERE ${condition})`,
           )
           .run(...params);

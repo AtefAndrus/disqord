@@ -8,6 +8,7 @@ import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
+import { createMockGuildSettings } from "../../../helpers/mockFactories";
 
 function createReplyRecordService(events: string[]): IReplyRecordService {
   return {
@@ -22,6 +23,8 @@ function createReplyRecordService(events: string[]): IReplyRecordService {
     findByTrigger: mock(() => null),
     findByPage: mock(() => null),
     listPages: mock(() => []),
+    saveGenerationIds: mock(async () => true),
+    listGenerationIds: mock(() => []),
     markPendingFailed: mock(async () => 0),
     deleteByGuild: mock(async () => 0),
     deleteByChannel: mock(async () => 0),
@@ -30,6 +33,108 @@ function createReplyRecordService(events: string[]): IReplyRecordService {
 }
 
 describe("message create reply-record funnel", () => {
+  test.each(["completed", "stopped", "failed", "throw", "empty", "duplicate"] as const)(
+    "records replies with history disabled (%s)",
+    async (outcome) => {
+      const events: string[] = [];
+      const page = {
+        id: "page",
+        edit: mock(async () => {}),
+        delete: mock(async () => {}),
+      };
+      const channel = { id: "channel", send: mock(async () => page) };
+      const message = {
+        id: "trigger",
+        content: "<@bot> request",
+        type: MessageType.Default,
+        channel,
+        mentions: { has: mock(() => true) },
+        author: { id: "user", username: "user", bot: false },
+        member: null,
+        client: { user: { id: "bot" } },
+        guild: { id: "guild", members: { me: null } },
+        attachments: { values: () => [] },
+        reply: mock(async () => {}),
+      } as unknown as Message;
+      const settingsService = {
+        getGuildSettings: mock(async () => createMockGuildSettings({ historyEnabled: false })),
+      } as unknown as ISettingsService;
+      const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
+      const generateChatResponse = mock(async () => {
+        if (outcome === "throw") throw new Error("generation threw before returning a result");
+        const generationIds = outcome === "empty" ? [] : ["generation-1", "generation-2"];
+        if (outcome === "stopped")
+          return { status: "cancelled" as const, history: [], generationIds };
+        if (outcome === "failed")
+          return {
+            status: "error" as const,
+            error: new Error("generation failed"),
+            history: [],
+            generationIds,
+          };
+        return {
+          status: "final" as const,
+          text: "answer",
+          finishReason: "stop" as const,
+          history: [],
+          generationIds,
+        };
+      });
+      const chatService = { isClosing: false, generateChatResponse } as unknown as IChatService;
+      const replyRecordService = {
+        ...createReplyRecordService(events),
+        finalize: mock(async () => {
+          events.push("finalize");
+          return true;
+        }),
+        saveGenerationIds: mock(async () => {
+          events.push("save");
+          return true;
+        }),
+      };
+      if (outcome === "duplicate") {
+        replyRecordService.createPending = mock(async () => false);
+        replyRecordService.findByTrigger = mock(() => ({
+          triggerMsgId: "trigger",
+          channelId: "channel",
+          guildId: "guild",
+          status: "completed",
+          pageCount: 1,
+          createdAt: 1,
+          finalizedAt: 2,
+        })) as IReplyRecordService["findByTrigger"];
+      }
+
+      await createMessageCreateHandler(chatService, settingsService, modelService, {
+        replyRecordService,
+      })(message);
+
+      expect(replyRecordService.createPending).toHaveBeenCalledWith(
+        expect.objectContaining({ triggerMsgId: "trigger" }),
+      );
+      if (outcome === "duplicate") {
+        expect(generateChatResponse).not.toHaveBeenCalled();
+        expect(channel.send).not.toHaveBeenCalled();
+      } else {
+        const status = outcome === "throw" ? "failed" : outcome === "empty" ? "completed" : outcome;
+        expect(replyRecordService.finalize).toHaveBeenCalledWith(
+          "trigger",
+          status,
+          expect.any(Number),
+        );
+        if (outcome === "throw" || outcome === "empty") {
+          expect(replyRecordService.saveGenerationIds).not.toHaveBeenCalled();
+        } else {
+          expect(replyRecordService.saveGenerationIds).toHaveBeenCalledWith("trigger", [
+            "generation-1",
+            "generation-2",
+          ]);
+          expect(events.slice(-2)).toEqual(["finalize", "save"]);
+        }
+      }
+    },
+  );
+
   test("removes a page record before deleting the Discord message", async () => {
     const events: string[] = [];
     const botMessage = {

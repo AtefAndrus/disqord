@@ -206,6 +206,14 @@ class ScenarioRecords implements IReplyRecordRepository {
     return null;
   }
 
+  appendGenerations(): number {
+    return 0;
+  }
+
+  listGenerations(): string[] {
+    return [];
+  }
+
   listPages(triggerMsgId: string): ReplyPage[] {
     const pages = [...(this.state.pages.get(triggerMsgId) ?? [])];
     this.state.afterListPages?.(triggerMsgId);

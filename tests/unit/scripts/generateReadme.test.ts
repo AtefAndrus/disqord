@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from "discord.js";
-import { ApplicationCommandOptionType } from "discord.js";
+import { ApplicationCommandOptionType, ApplicationCommandType } from "discord.js";
 import type { ProgressEntry } from "../../../scripts/generate-readme";
 import {
   generateCommandTable,
@@ -18,6 +18,16 @@ import {
 import type { EnvVarDefinition } from "../../../src/config/envVars";
 
 describe("generateCommandTable", () => {
+  test("message と user command をコマンド表に含めない", () => {
+    const result = generateCommandTable([
+      { name: "help", description: "ヘルプ" },
+      { name: "LLM 入力を見る", type: ApplicationCommandType.Message },
+      { name: "user action", type: ApplicationCommandType.User },
+    ]);
+    expect(result).toContain("/help");
+    expect(result).not.toContain("LLM 入力を見る");
+    expect(result).not.toContain("user action");
+  });
   test("サブコマンドなしのコマンド", () => {
     const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
       { name: "help", description: "ヘルプを表示" },

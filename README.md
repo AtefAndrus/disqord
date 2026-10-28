@@ -78,6 +78,13 @@ Coolify へのデプロイは `.github/workflows/deploy.yml` がこれまでど�
 
 初回の公開で作られる package は private なので、公開後に package の設定画面で公開範囲を public に切り替える。
 
+### OpenRouter の入出力ログ
+
+返答を右クリックして「アプリ → LLM 入力を見る」で入力と出力を取得するには、デプロイ先の OpenRouter アカウントで Input & Output Logging を有効にし、API キーの絞り込みで bot のキーを除外しない。
+有効にする前の generation には、入出力ログが保存されない。
+この操作は「サーバーの管理」権限か `/config` の管理者ロールを持ち、対象チャンネルの履歴を読める人だけが使える。
+管理者ロールでメニューを使うには、サーバーの連携サービス設定でコマンドを許可する。
+
 ### Coolify へのデプロイ
 
 `.github/workflows/deploy.yml` は Release の公開時に Coolify の Deploy Webhook を呼び、新しい版が本番で動き始めるまで待つ。
@@ -177,6 +184,8 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | `/cron` | 定期実行のパネルを開く |
 | `/release-note` | リリースノート（変更点）を表示 |
 <!-- AUTO:COMMANDS:END -->
+
+返答を右クリック → アプリ → **LLM 入力を見る**: 管理者向けに、その返答の入出力ログと生成情報を JSON ファイルで本人だけに返す。
 
 ## ライセンス
 

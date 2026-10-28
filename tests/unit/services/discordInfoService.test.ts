@@ -38,6 +38,8 @@ const records = (): IReplyRecordRepository => ({
   findByTrigger: mock(() => null),
   findByPage: mock(() => null),
   listPages: mock(() => []),
+  appendGenerations: mock(() => 0),
+  listGenerations: mock(() => []),
   markPendingFailed: mock(() => 0),
   deleteByGuild: mock(() => 0),
   deleteByChannel: mock(() => 0),

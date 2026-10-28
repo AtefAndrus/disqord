@@ -66,7 +66,7 @@ export interface IChatService {
     requestId: MessageId,
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
-  ): Promise<ToolLoopResult>;
+  ): Promise<ToolLoopResult & { generationIds: string[] }>;
   cancelRequest(requestId: MessageId): boolean;
   cancelAll(): void;
   readonly isClosing: boolean;
@@ -359,8 +359,24 @@ export class ChatService implements IChatService {
     requestId: MessageId,
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
-  ): Promise<ToolLoopResult> {
-    if (this.closing) return { status: "cancelled", history: buildChatMessages(input) };
+  ): Promise<ToolLoopResult & { generationIds: string[] }> {
+    const generationIds: string[] = [];
+    const seenGenerationIds = new Set<string>();
+    const onGenerationId = (id: string): void => {
+      if (seenGenerationIds.has(id)) return;
+      seenGenerationIds.add(id);
+      generationIds.push(id);
+    };
+    const llmClient: ILLMClient = {
+      chat: (request, signal) => this.llmClient.chat(request, signal, onGenerationId),
+      chatStream: (request, signal) => this.llmClient.chatStream(request, signal, onGenerationId),
+      listModels: () => this.llmClient.listModels(),
+      listModelsWithPricing: () => this.llmClient.listModelsWithPricing(),
+      getCredits: () => this.llmClient.getCredits(),
+      isRateLimited: () => this.llmClient.isRateLimited(),
+    };
+    if (this.closing)
+      return { status: "cancelled", history: buildChatMessages(input), generationIds };
     const controller = new AbortController();
     this.activeRequests.set(requestId, controller);
     const initialMessages = buildChatMessages(input);
@@ -370,7 +386,8 @@ export class ChatService implements IChatService {
         this.settingsService.getGuildSettings(guildId),
         controller.signal,
       );
-      if (!settingsResult.ok) return { status: "cancelled", history: initialMessages };
+      if (!settingsResult.ok)
+        return { status: "cancelled", history: initialMessages, generationIds };
       const settings = settingsResult.value;
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       const replyTarget =
@@ -396,14 +413,16 @@ export class ChatService implements IChatService {
             controller.signal,
           );
           if (!expansionResult.ok || expansionResult.value.status === "cancelled") {
-            return { status: "cancelled", history: initialMessages };
+            return { status: "cancelled", history: initialMessages, generationIds };
           }
           expansion = expansionResult.value;
         } catch {
-          if (controller.signal.aborted) return { status: "cancelled", history: initialMessages };
+          if (controller.signal.aborted)
+            return { status: "cancelled", history: initialMessages, generationIds };
         }
       }
-      if (controller.signal.aborted) return { status: "cancelled", history: initialMessages };
+      if (controller.signal.aborted)
+        return { status: "cancelled", history: initialMessages, generationIds };
 
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
       const cron = settings.cronEnabled ? input.cron : undefined;
@@ -426,7 +445,8 @@ export class ChatService implements IChatService {
             this.modelService.getModelDetails(settings.defaultModel),
             controller.signal,
           );
-          if (!detailsResult.ok) return { status: "cancelled", history: initialMessages };
+          if (!detailsResult.ok)
+            return { status: "cancelled", history: initialMessages, generationIds };
           const details = detailsResult.value;
           if (conversation || settings.discordToolsEnabled || settings.cronEnabled)
             supportsTools = details?.supportsTools ?? false;
@@ -622,6 +642,7 @@ export class ChatService implements IChatService {
           supportsTools,
           contextLength,
           maxOutputTokens,
+          llmClient,
         );
         usage = addUsage(usage, result.usage);
         const untouched = !tracked.stagedNonEmpty && !clientToolInvoked;
@@ -645,11 +666,14 @@ export class ChatService implements IChatService {
             continue;
           }
         }
-        const withUsage = usage ? { ...result, usage } : result;
+        const withUsage = { ...result, ...(usage && { usage }), generationIds };
         return withUsage.status === "final" && dropWebSearch
           ? { ...withUsage, webSearchSkipped: true }
           : withUsage;
       }
+    } catch (error) {
+      // Returned rather than rethrown so the generations already started still reach the reply record.
+      return { status: "error", error, history: initialMessages, generationIds };
     } finally {
       this.activeRequests.delete(requestId);
     }
@@ -720,9 +744,10 @@ export class ChatService implements IChatService {
     toolsAllowed: boolean,
     contextLength: number | null,
     maxOutputTokens: number | undefined,
+    llmClient: ILLMClient = this.llmClient,
   ): Promise<ToolLoopResult> {
     return runToolLoop({
-      llmClient: this.llmClient,
+      llmClient,
       model: request.model,
       messages: request.messages,
       ...(request.plugins && { plugins: request.plugins }),

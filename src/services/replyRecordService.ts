@@ -24,6 +24,9 @@ export interface IReplyRecordService {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
+  /** Appends the OpenRouter generation IDs of a reply after the ones already saved, in the given order. */
+  saveGenerationIds(triggerMsgId: string, generationIds: readonly string[]): Promise<boolean>;
+  listGenerationIds(triggerMsgId: string): string[];
   markPendingFailed(): Promise<number>;
   deleteByGuild(guildId: string): Promise<number>;
   deleteByChannel(channelId: string): Promise<number>;
@@ -121,6 +124,29 @@ export class ReplyRecordService implements IReplyRecordService {
       return this.repository.listPages(triggerMsgId);
     } catch (error) {
       console.error("[replyRecord] listPages failed", operationError(error));
+      return [];
+    }
+  }
+
+  async saveGenerationIds(
+    triggerMsgId: string,
+    generationIds: readonly string[],
+  ): Promise<boolean> {
+    try {
+      return (
+        this.repository.appendGenerations(triggerMsgId, generationIds) === generationIds.length
+      );
+    } catch (error) {
+      console.error("[replyRecord] saveGenerationIds failed", operationError(error));
+      return false;
+    }
+  }
+
+  listGenerationIds(triggerMsgId: string): string[] {
+    try {
+      return this.repository.listGenerations(triggerMsgId);
+    } catch (error) {
+      console.error("[replyRecord] listGenerationIds failed", operationError(error));
       return [];
     }
   }
