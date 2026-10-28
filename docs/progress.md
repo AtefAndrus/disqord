@@ -22,6 +22,7 @@
 | [リアクションだけで応える返答](changes/reaction-only-reply/design.md) | 中 | planned | 礼や相づちのように答えを求めていない発言に、bot が本文を書かずリアクションだけで応えられるようにする |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
+| [検索結果リンクを検索ごとに交互に選ぶ](changes/search-result-links-per-query/design.md) | 低 | planned | 回答の下に付ける検索結果リンク 5 件を、全検索の結果の先頭からではなく、検索ごとに 1 件ずつ交互に選ぶ |
 | [ストリーミング中の分割表示の改善](changes/streaming-split-ux/design.md) | 低 | planned | 複数メッセージに分かれる返信で、数文字だけのメッセージが現れたり文章が移動して見えたりする表示を直す |
 | [使用統計](changes/usage-stats/design.md) | 低 | planned | サーバー/ユーザー/モデル別の使用量とコストを記録し /stats で表示する |
 <!-- AUTO:PROGRESS:END -->
