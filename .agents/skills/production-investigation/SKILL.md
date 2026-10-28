@@ -65,13 +65,9 @@ Decide what the model actually received before blaming the model. The request is
 
 Read the current code instead of trusting this list; the names are where to start, not a specification.
 
-Production runs the latest release, not necessarily `HEAD`. Find the version that produced the event in this order:
+Production runs the latest release, not necessarily `HEAD`. Two sources name the version that probably produced the event: the last `Configuration loaded` line before it in the log, which carries `version` (an older line without it names none), and `/health` under `ADMIN_API_BASE_URL`, which reports the running process's `version` and `startedAt` and covers an event after `startedAt`. `logs` returns only the newest matching lines, at most 10,000 (`--lines 10000`), so an old start line can be out of its reach; the container's stdout log has it. Neither source proves which commit ran: Coolify builds the head of `main` rather than the tag, and a deploy can roll back to the previous container. Report the version as an inference from these sources, and say so explicitly when they disagree, when neither covers the event, or when `git log v<version>..origin/main` lists commits.
 
-1. `/health` under `ADMIN_API_BASE_URL` reports the running process's `version` and `startedAt`. An event after `startedAt` came from that process, so its `version` is the answer.
-2. Otherwise, each process start writes `Configuration loaded`, with `version` since the field was added. Find the last `Configuration loaded` line before the event: its `version` is the answer, and a line without `version` leaves the version unknown even when an earlier start line has one. `logs` returns the newest matching lines, at most 10,000 (`--lines 10000`), so a start line followed by more lines than that before now is out of its reach however early `--since` is; read the container's stdout log then.
-3. When neither gives a version, the version is unknown: pick the tag whose release date precedes the event and say it is assumed.
-
-Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version. Coolify builds the head of `main`, not the tag, and a manual run of `deploy.yml` deploys it without a release, so the running code can include commits after the tag under the same version. When `git log v<version>..origin/main` lists commits and `gh run list -w deploy.yml` shows a `workflow_dispatch` run before the event, say the code is assumed to be the tag's.
+Before citing a line, check that the file is the same in that version's tag and `HEAD`: `git fetch --tags`, then `git diff v<version> HEAD -- <files>`. Empty output means the lines in `HEAD` can be cited as they are; if it differs, cite the tagged version.
 
 With only an エラーID and no logs, this step ends once you have shown where the error is raised and which error classes it can be. Do not pick one of them as the cause.
 
