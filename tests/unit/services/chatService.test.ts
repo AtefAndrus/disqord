@@ -318,6 +318,7 @@ function conversationContext(): ConversationWindowContext {
     sessionId: "opaque-session-id",
     windowStartMessageId: "1",
     toolContext: {
+      shownMessageBody: () => ({ error: "message_ref_not_shown" }),
       describeMessageRef: () => undefined,
       resolveMessageRef: () => undefined,
       readEarlierMessages: async () => '{"messages":[]}',
@@ -356,6 +357,7 @@ describe("ChatService", () => {
         parts: [{ type: "text" as const, text: "expanded target" }],
         textParts: [{ type: "text" as const, text: "expanded target" }],
         imageParts: [],
+        loadedPostIds: ["21"],
       }));
       const text = "https://twitter.com/example/status/20 explain";
       await fixture.chatService.generateChatResponse(
@@ -1057,6 +1059,7 @@ describe("ChatService", () => {
       parts: [{ type: "text" as const, text: "tweet" }],
       textParts: [{ type: "text" as const, text: "tweet" }],
       imageParts: [],
+      loadedPostIds: ["20"],
     }));
 
     await fixture.chatService.generateChatResponse(
@@ -1292,6 +1295,7 @@ describe("ChatService", () => {
       parts: [{ type: "text" as const, text: "tweet" }, imagePart],
       textParts: [{ type: "text" as const, text: "tweet" }],
       imageParts: [imagePart],
+      loadedPostIds: ["20"],
     }));
     fixture.llmClient.chatStream = mock(async function* () {
       yield { content: "partial", done: false as const };
@@ -1562,6 +1566,7 @@ describe("ChatService", () => {
       parts: [imagePart],
       textParts: [],
       imageParts: [imagePart],
+      loadedPostIds: ["20"],
     }));
     let streamCall = 0;
     fixture.llmClient.chatStream = mock(() => {

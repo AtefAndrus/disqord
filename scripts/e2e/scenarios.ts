@@ -65,7 +65,12 @@ export interface Scenario extends ScenarioPost {
     after?: ScenarioPost[];
   };
   input?: InputExpectation;
-  toolName?: "read_earlier_messages" | "view_attachment" | "propose_cron_job" | "list_pins";
+  toolName?:
+    | "read_earlier_messages"
+    | "view_attachment"
+    | "propose_cron_job"
+    | "list_pins"
+    | "read_x_post";
   timeoutMs?: number;
   /** Bot messages that are not part of the reply, such as a separate card; the reply is read without them. */
   excludeFromReply?: (message: DiscordMessage) => boolean;
@@ -762,6 +767,23 @@ export const SCENARIOS: Scenario[] = [
     check: (reply) => [
       ...(reply.isError ? ["the tweet reply ended in an error"] : []),
       ...(reply.body.includes("twttr") ? [] : ["the reply does not contain twttr"]),
+    ],
+  },
+  {
+    name: "history-tweet",
+    manual: true,
+    toolName: "read_x_post",
+    setup: {
+      prompt: "[e2e] https://x.com/jack/status/20",
+      mention: false,
+    },
+    prompt: "[e2e] さっきのポストを要約して。原文の英語も引用して。",
+    before: (channelId, request, env) =>
+      inputPreconditions(channelId, request, env, { history: true, tweet: true }),
+    check: (reply) => [
+      ...(reply.isError ? ["the history tweet reply ended in an error"] : []),
+      ...(reply.body.includes("twttr") ? [] : ["the reply does not contain twttr"]),
+      ...hasUsageFooter(reply),
     ],
   },
   {

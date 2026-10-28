@@ -555,6 +555,17 @@ export class ConversationWindowService {
         toolContext: {
           describeMessageRef,
           resolveMessageRef: (ref) => describeMessageRef(ref)?.messageId,
+          shownMessageBody: (ref) => {
+            const message = [
+              ...responseState.shown.values(),
+              ...responseState.pinShown.values(),
+            ].find((message) => message.ref === ref);
+            if (!message) return { error: "message_ref_not_shown" };
+            if (responseState.externalDeletions.has(message.exchangeId)) {
+              return { error: "message_unavailable" };
+            }
+            return { text: message.text };
+          },
           readEarlierMessages: (count, signal, budgetTokens) =>
             this.readEarlier(
               responseState,

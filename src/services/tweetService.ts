@@ -44,10 +44,16 @@ export interface TweetExpansionResult {
   parts: ChatMessageContent[];
   textParts: TextContentPart[];
   imageParts: ImageContentPart[];
+  loadedPostIds: string[];
 }
 
 export interface ITweetService {
   extractTweetIds(text: string): string[];
+  fetchPost(
+    id: string,
+    signal: AbortSignal,
+    getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
+  ): Promise<ChatMessageContent[] | undefined>;
   expandTweets(
     text: string,
     signal: AbortSignal,
@@ -137,7 +143,6 @@ export function extractTweetUrls(text: string): TweetUrl[] {
     if (!id || !/^\d{2,20}$/u.test(id) || seen.has(id)) continue;
     seen.add(id);
     urls.push({ id, url: `https://x.com/i/status/${id}` });
-    if (urls.length >= MAX_TWEETS_PER_MESSAGE) break;
   }
 
   return urls;
@@ -699,14 +704,28 @@ export class TweetService implements ITweetService {
     return extractTweetIds(text);
   }
 
+  async fetchPost(
+    id: string,
+    signal: AbortSignal,
+    getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
+  ): Promise<ChatMessageContent[] | undefined> {
+    const result = await this.expandTweets(
+      `https://x.com/i/web/status/${id}`,
+      signal,
+      getImageCapability,
+    );
+    return result.status === "expanded" ? result.parts : undefined;
+  }
+
   async expandTweets(
     text: string,
     signal: AbortSignal,
     getImageCapability?: (signal: AbortSignal) => Promise<boolean | null>,
   ): Promise<TweetExpansionResult> {
-    const urls = extractTweetUrls(text);
-    if (urls.length === 0) return { status: "none", parts: [], textParts: [], imageParts: [] };
-    if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+    const urls = extractTweetUrls(text).slice(0, MAX_TWEETS_PER_MESSAGE);
+    const empty = { parts: [], textParts: [], imageParts: [], loadedPostIds: [] };
+    if (urls.length === 0) return { status: "none", ...empty };
+    if (signal.aborted) return { status: "cancelled", ...empty };
 
     const deadline = createExpansionDeadline();
     const capabilitySignals = combineSignals(signal, deadline.signal);
@@ -715,22 +734,32 @@ export class TweetService implements ITweetService {
       : Promise.resolve<boolean | null>(null);
 
     try {
-      const fetched = await Promise.all(urls.map((url) => this.fetchTweet(url, signal, deadline)));
-      if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+      const fetched = await Promise.all(
+        urls.map(async (url) => ({
+          ...(await this.fetchTweet(url, signal, deadline)),
+          id: url.id,
+        })),
+      );
+      if (signal.aborted) return { status: "cancelled", ...empty };
 
       const successful = fetched.filter(
         (
           result,
-        ): result is { kind: "success"; text: string; record: TweetRecord; imageUrls: string[] } =>
-          result.kind === "success",
+        ): result is {
+          kind: "success";
+          text: string;
+          record: TweetRecord;
+          imageUrls: string[];
+          id: string;
+        } => result.kind === "success",
       );
       if (successful.length === 0) {
-        return { status: "none", parts: [], textParts: [], imageParts: [] };
+        return { status: "none", ...empty };
       }
 
       const hasImages = successful.some((result) => result.imageUrls.length > 0);
       const capable = hasImages ? await capabilityPromise : false;
-      if (signal.aborted) return { status: "cancelled", parts: [], textParts: [], imageParts: [] };
+      if (signal.aborted) return { status: "cancelled", ...empty };
       const includeImages = capable === true;
       const textParts = successful.map(({ text }) => ({ type: "text", text }) as const);
       const imageParts: ImageContentPart[] = [];
@@ -747,7 +776,13 @@ export class TweetService implements ITweetService {
           }
         }
       }
-      return { status: "expanded", parts, textParts, imageParts };
+      return {
+        status: "expanded",
+        parts,
+        textParts,
+        imageParts,
+        loadedPostIds: successful.map(({ id }) => id),
+      };
     } finally {
       deadline.dispose();
       capabilitySignals.dispose();

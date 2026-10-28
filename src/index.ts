@@ -25,6 +25,7 @@ import { createListPinsTool } from "./llm/tools/discord/listPins";
 import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
 import { createProposeCronJobTool } from "./llm/tools/proposeCronJob";
 import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
+import { createReadXPostTool } from "./llm/tools/readXPost";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
 import { ChatService } from "./services/chatService";
@@ -82,6 +83,7 @@ async function bootstrap(): Promise<void> {
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(createReadEarlierMessagesTool());
   toolRegistry.register(createViewAttachmentTool());
+  toolRegistry.register(createReadXPostTool());
   toolRegistry.register(createAddReactionTool());
   toolRegistry.register(createCreatePollTool());
   toolRegistry.register(createCreateEventTool());

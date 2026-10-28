@@ -122,6 +122,7 @@ function createRetryFixture(
     parts: [imagePart],
     textParts: [],
     imageParts: [imagePart],
+    loadedPostIds: ["20"],
   }));
   const readEarlier = mock(async () => '{"messages":[]}');
   const registry = new ToolRegistry();
@@ -150,6 +151,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
     sessionId: string;
     windowStartMessageId: string;
     toolContext: {
+      shownMessageBody: () => { error: "message_ref_not_shown" };
       describeMessageRef: () => undefined;
       resolveMessageRef: (ref: string) => string | undefined;
       readEarlierMessages: typeof readEarlier;
@@ -164,6 +166,7 @@ function retryInput(readEarlier: ReturnType<typeof mock>): {
       sessionId: "session",
       windowStartMessageId: "start",
       toolContext: {
+        shownMessageBody: () => ({ error: "message_ref_not_shown" }),
         describeMessageRef: () => undefined,
         resolveMessageRef: () => undefined,
         readEarlierMessages: readEarlier,
@@ -294,6 +297,7 @@ describe("conversation-context request construction", () => {
           sessionId: "must-not-be-sent",
           windowStartMessageId: "start",
           toolContext: {
+            shownMessageBody: () => ({ error: "message_ref_not_shown" }),
             describeMessageRef: () => undefined,
             resolveMessageRef: () => undefined,
             readEarlierMessages: async () => "history",

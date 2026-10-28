@@ -1,6 +1,6 @@
 ---
 title: "会話履歴のツイートを読む tool"
-status: planned
+status: in-progress
 priority: medium
 summary: "会話履歴の発言に貼られた X のポストを、モデルが発言番号を指定して読む client tool `read_x_post` を足す"
 ---
@@ -78,12 +78,12 @@ summary: "会話履歴の発言に貼られた X のポストを、モデルが�
 
 ## Tasks
 
-- [ ] `read_x_post` と `TweetToolContext`、`ConversationToolContext` の追加
-- [ ] `chatService.ts` の配線（有効条件、自動展開済み ID、system メッセージ）
-- [ ] 単体テスト: 有効条件、示していない番号、削除された発言（取得の前と後）、ポストの無い発言、範囲外の `post_index`、同じポストを別のホストの URL で 2 回貼った発言での `post_index`、予算がエラー文字列より小さいときのエラー応答、自動展開済み、取得の失敗と予算超過それぞれの記録と再呼び出しへの応答、削除された発言と削除されていない発言が同じポストを含む場合、ポストが 4 件以上ある発言の 4 件目、画像非対応モデル、`clientToolInvoked` が立つこと
-- [ ] e2e シナリオ: tester bot がメンションなしでポストの URL を投稿し、別の発言で「さっきのポストを要約して」と頼み、`read_x_post` の呼び出しと、返答がポストの内容に触れていることを確かめる
+- [x] `read_x_post` と `TweetToolContext`、`ConversationToolContext` の追加
+- [x] `chatService.ts` の配線（有効条件、自動展開済み ID、system メッセージ）
+- [x] 単体テスト: 有効条件、示していない番号、削除された発言（取得の前と後）、ポストの無い発言、範囲外の `post_index`、同じポストを別のホストの URL で 2 回貼った発言での `post_index`、予算がエラー文字列より小さいときのエラー応答、自動展開済み、取得の失敗と予算超過それぞれの記録と再呼び出しへの応答、削除された発言と削除されていない発言が同じポストを含む場合、ポストが 4 件以上ある発言の 4 件目、画像非対応モデル、`clientToolInvoked` が立つこと
+- [x] e2e シナリオ: tester bot がメンションなしでポストの URL を投稿し、別の発言で「さっきのポストを要約して」と頼み、`read_x_post` の呼び出しと、返答がポストの内容に触れていることを確かめる
 - [ ] e2e: 既定シナリオ、`tweet`、`bot-reply-tweet`、AGENTS.md が会話履歴の変更に求める `history-set history-recall history-window read-earlier view-attachment view-image`
-- [ ] README と AGENTS.md の更新
+- [x] README と AGENTS.md の更新
 - [ ] `docs/changes/history-tweet-tool/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks

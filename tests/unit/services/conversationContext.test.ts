@@ -197,9 +197,63 @@ test.each([false, true])(
     const shown = inside ? context?.messages[0] : context?.replyTarget;
     expect(shown?.id).toBe("900");
     expect(context).toHaveProperty("replyTargetRef", shown?.ref);
+    expect(context?.toolContext.shownMessageBody(shown?.ref ?? "missing")).toEqual({
+      text: target.content,
+    });
     if (inside) expect(context?.replyTarget).toBeUndefined();
   },
 );
+
+test("shown message bodies cover the window, earlier messages and pins without refetching", async () => {
+  const reader = new FakeReader();
+  const original = message("900", undefined, {
+    content: "https://x.com/a/status/20",
+    attachments: [
+      {
+        id: "pdf",
+        filename: "file.pdf",
+        content_type: "application/pdf",
+        size: 3,
+        url: "https://cdn.discordapp.com/attachments/1/file.pdf",
+      },
+    ],
+  });
+  reader.listResponses.push({ status: "ok", messages: [original] });
+  const context = await new ConversationWindowService(reader, records(), () => NOW).build(
+    input(message("1000", new Date(NOW).toISOString())),
+  );
+  if (!context) throw new Error("missing context");
+  const ref = context.messages[0]?.ref ?? "missing";
+  original.content = "edited after being shown";
+  const queriesBefore = reader.listQueries.length;
+  expect(context.toolContext.shownMessageBody(ref)).toEqual({ text: "https://x.com/a/status/20" });
+  expect(context.toolContext.shownMessageBody("m999")).toEqual({ error: "message_ref_not_shown" });
+  expect(reader.fetchQueries).toHaveLength(0);
+  expect(reader.listQueries).toHaveLength(queriesBefore);
+  const earlier = message("800", undefined, { content: "https://x.com/a/status/21" });
+  reader.listResponses.push({ status: "ok", messages: [earlier] });
+  const result = JSON.parse(
+    String(await context.toolContext.readEarlierMessages(1, new AbortController().signal)),
+  );
+  expect(context.toolContext.shownMessageBody(result.messages[0].ref)).toEqual({
+    text: earlier.content,
+  });
+  const pin = message("700", undefined, { content: "https://x.com/a/status/22" });
+  if (!context.readPins) throw new Error("missing pin reader");
+  const pins = JSON.parse(
+    await context.readPins(
+      async () => ({
+        items: [{ message: pin, pinnedAt: new Date(NOW).toISOString() }],
+        hasMore: false,
+      }),
+      new AbortController().signal,
+    ),
+  );
+  expect(context.toolContext.shownMessageBody(pins.pins[0].ref)).toEqual({ text: pin.content });
+  reader.fetchResponses.push({ status: "not-found" });
+  await context.toolContext.viewAttachment(ref, 1, "model", new AbortController().signal);
+  expect(context.toolContext.shownMessageBody(ref)).toEqual({ error: "message_unavailable" });
+});
 
 test("explicit replies quote webhooks outside the window", async () => {
   const reader = new FakeReader();

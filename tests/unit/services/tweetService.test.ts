@@ -38,7 +38,9 @@ describe("tweetService", () => {
     originalFetch = globalThis.fetch;
     mockFetch = mock();
     globalThis.fetch = mockFetch as unknown as typeof fetch;
-    spyOn(console, "warn").mockImplementation(() => {});
+    spyOn(console, "warn")
+      .mockImplementation(() => {})
+      .mockClear();
   });
 
   afterEach(() => {
@@ -128,7 +130,7 @@ describe("tweetService", () => {
     ).toEqual(["20", "21"]);
   });
 
-  test("出現順で最大3件に制限する", () => {
+  test("出現順で4件目以降も抽出する", () => {
     expect(
       extractTweetIds(
         [
@@ -138,7 +140,7 @@ describe("tweetService", () => {
           "https://x.com/a/status/23",
         ].join(" "),
       ),
-    ).toEqual(["20", "21", "22"]);
+    ).toEqual(["20", "21", "22", "23"]);
   });
 
   test("成功、tombstone、404をそれぞれ展開する", async () => {
@@ -162,11 +164,29 @@ describe("tweetService", () => {
     expect(result.textParts[0]?.text).toContain("本文:\nok");
     expect(result.textParts[1]?.text).toContain("取得できないポスト（理由: deleted）");
     expect(result.textParts[2]?.text).toContain("取得できないポスト（理由: 見つからない）");
+    expect(result.loadedPostIds).toEqual(["20", "21", "22"]);
     expect(mockFetch).toHaveBeenCalledTimes(3);
     const firstCall = mockFetch.mock.calls.find(([input]) => String(input).endsWith("/20")) as
       | [RequestInfo | URL, RequestInit]
       | undefined;
     expect(firstCall?.[1]?.headers).toEqual({ "User-Agent": "DisQord/1.5.0" });
+  });
+
+  test("自動展開は先頭3件までを取得し、渡したIDだけを記録する", async () => {
+    mockFetch.mockImplementation(async (url: string) =>
+      url.endsWith("/21")
+        ? new Response("bad JSON")
+        : jsonResponse({ code: 200, status: status() }),
+    );
+    const result = await new TweetService("https://api.fxtwitter.test", "test").expandTweets(
+      [20, 21, 22, 23].map((id) => `https://x.com/a/status/${id}`).join(" "),
+      new AbortController().signal,
+    );
+    expect(result.loadedPostIds).toEqual(["20", "22"]);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch.mock.calls.map(([url]) => String(url))).not.toContain(
+      "https://api.fxtwitter.test/2/status/23",
+    );
   });
 
   test("400と非JSONは注入せず、警告に本文を含めない", async () => {
@@ -181,6 +201,7 @@ describe("tweetService", () => {
 
     expect(result.status).toBe("none");
     expect(result.parts).toEqual([]);
+    expect(result.loadedPostIds).toEqual([]);
     expect(console.warn).toHaveBeenCalledTimes(2);
     expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining("bad"));
   });

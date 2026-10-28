@@ -89,6 +89,11 @@ Merge `origin/main`, take its `docs/progress.md`, and rerun `bun scripts/generat
 - Do not automate a user account (Playwright against the web client, self-bots). Discord forbids it and terminates accounts for it. A bot can do everything except click a component.
 - The bot answers another bot only when its ID equals `E2E_TESTER_BOT_ID` and the message mentions the bot with non-empty text, and the config loader drops that setting when `NODE_ENV=production`.
 
+- `bun run e2e history-tweet` runs only when named and needs 会話履歴, ツイート展開, and LLM 詳細表示 enabled in the guild under test, with a model that supports tools (turn 会話履歴 off afterwards).
+  The tester posts an X URL without mentioning the bot, asks in a separate message for a summary, and checks that `read_x_post` was called and that the reply quotes the post's text.
+  It requires the spawned bot's logs to verify the call, so `--no-spawn` cannot run it.
+  Run it before merging a PR that changes `read_x_post`, its response state or availability in `chatService.ts`, shown-message text in `conversationWindow.ts`, or single-post fetching in `tweetService.ts`, together with the default scenarios, `bot-reply-tweet`, and the named history scenarios above.
+
 ### Manual checks
 
 - What only a human can do (clicking a button in a real client, judging how something looks) never blocks a merge. Record it in the design's Tasks as `- [ ] 手動確認: ...`, keep the design's `status` at `in-progress`, and carry on.

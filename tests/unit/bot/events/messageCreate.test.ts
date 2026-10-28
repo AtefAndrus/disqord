@@ -1866,6 +1866,7 @@ describe("createMessageCreateHandler", () => {
       sessionId: "session",
       windowStartMessageId: "100",
       toolContext: {
+        shownMessageBody: () => ({ error: "message_ref_not_shown" }),
         resolveMessageRef: (ref) => (ref === "m12" ? "100" : undefined),
         describeMessageRef: (ref) =>
           ref === "m12"
