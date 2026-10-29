@@ -101,7 +101,7 @@ bot は SIGTERM を受けると応答中の返答を打ち切り、`🛑 Stopped
 新しいバージョンが動き始めたかは、管理 API の `/health` が HTTP 200 と新しい `version` を返すかで確認する。
 それ以外の応答や応答がないときは、切り替わったとはみなさない。
 bot は Discord との接続が切れている間 `/health` に 503 を返し、readinessProbe が同じ `/health` を見るので、起動の途中の Pod にも接続が切れた Pod にも Service から届かないことがある。
-管理 API は tailnet 上の `talos2-personal-disqord` に HTTPS で届く（[docs/admin-api.md](docs/admin-api.md)）。
+管理 API は tailnet 上の `disqord` に HTTPS で届く（[docs/admin-api.md](docs/admin-api.md)）。
 
 ## 環境変数
 
