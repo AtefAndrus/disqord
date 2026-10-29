@@ -394,7 +394,10 @@ describe("ChatService", () => {
     expect(result.status).toBe("final");
     expect(addReaction).toHaveBeenCalledTimes(1);
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
-    expect(result.generationIds).toEqual(["generation-1", "generation-2"]);
+    expect(result.generations.map((generation) => generation.id)).toEqual([
+      "generation-1",
+      "generation-2",
+    ]);
   });
 
   test("returns the collected IDs as an error result when the loop throws", async () => {
@@ -425,7 +428,7 @@ describe("ChatService", () => {
     );
     expect(result.status).toBe("error");
     expect(result.status === "error" && result.error).toBe(thrown);
-    expect(result.generationIds).toEqual(["started"]);
+    expect(result.generations.map((generation) => generation.id)).toEqual(["started"]);
   });
 
   test.each(["web search", "tweet images"] as const)(
@@ -475,7 +478,11 @@ describe("ChatService", () => {
       );
       expect(result.status).toBe("final");
       expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
-      expect(result.generationIds).toEqual(["first", "retry"]);
+      // Only the web search request carried a server tool; its retry runs without one.
+      expect(result.generations).toEqual([
+        { id: "first", serverTools: retry === "web search" },
+        { id: "retry", serverTools: false },
+      ]);
       const firstRequest = fixture.llmClient.chatStream.mock.calls[0]?.[0] as ChatCompletionRequest;
       const retryRequest = fixture.llmClient.chatStream.mock.calls[1]?.[0] as ChatCompletionRequest;
       if (retry === "web search") {
@@ -1613,7 +1620,7 @@ describe("ChatService", () => {
     expect(reply).toEqual({
       status: "cancelled",
       history: [{ role: "user", content: "Hi" }],
-      generationIds: [],
+      generations: [],
     });
     expect(fixture.settingsService.getGuildSettings).not.toHaveBeenCalled();
     expect(fixture.llmClient.chatStream).not.toHaveBeenCalled();

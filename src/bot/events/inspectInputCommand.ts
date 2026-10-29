@@ -25,11 +25,10 @@ import {
 import type { ISettingsService } from "../../services/settingsService";
 import { logger } from "../../utils/logger";
 
-interface GenerationLog {
-  id: string;
-  generation: GenerationLookup;
-  content: GenerationLookup;
-}
+// A generation made with a server tool is not looked up: OpenRouter has no input for it to return.
+type GenerationLog =
+  | { id: string; serverTools: true }
+  | { id: string; serverTools: false; generation: GenerationLookup; content: GenerationLookup };
 
 interface JsonFile {
   name: string;
@@ -88,6 +87,9 @@ function lookupFailure(endpoint: string, lookup: GenerationLookup): string {
 }
 
 function generationSummary(log: GenerationLog, index: number): string {
+  if (log.serverTools) {
+    return `${index + 1}. ${summaryValue(log.id)}: OpenRouter に入力が残っていません（Web 検索か日時取得のツールを渡した生成）`;
+  }
   const data = log.generation.ok ? asObject(log.generation.data) : {};
   return (
     `${index + 1}. ${summaryValue(log.id)}: モデル ${summaryValue(data.model)}、` +
@@ -161,7 +163,7 @@ function errorDetails(error: unknown): Record<string, unknown> {
 
 function buildSummary(logs: GenerationLog[], omissions: Map<number, string>): string {
   // OpenRouter can reflect one generation of a reply before another, so a single 404 is worth a retry.
-  const hint = logs.some((log) => !log.content.ok && log.content.status === 404)
+  const hint = logs.some((log) => !log.serverTools && !log.content.ok && log.content.status === 404)
     ? `\n${LOGGING_HINT}`
     : "";
   let text = "LLM 入出力ログ";
@@ -310,13 +312,17 @@ export function createInspectInputHandler(
         await notify("この返答はまだ生成中です。生成が終わってから実行してください。");
         return;
       }
-      const ids = replyRecordService.listGenerationIds(record.triggerMsgId);
-      if (ids.length === 0) {
+      const generations = replyRecordService.listGenerations(record.triggerMsgId);
+      if (generations.length === 0) {
         await notify(MISSING_RECORD);
         return;
       }
       const logs: GenerationLog[] = [];
-      for (const id of ids) {
+      for (const { id, serverTools } of generations) {
+        if (serverTools) {
+          logs.push({ id, serverTools });
+          continue;
+        }
         const [generation, content] = await Promise.all([
           lookupBeforeDeadline(
             () => generationLogClient.getGeneration(id, controller.signal),
@@ -327,12 +333,14 @@ export function createInspectInputHandler(
             controller.signal,
           ),
         ]);
-        logs.push({ id, generation, content });
+        logs.push({ id, serverTools, generation, content });
       }
       const sizeLimit = Math.max(0, interaction.attachmentSizeLimit - REQUEST_OVERHEAD_BYTES);
       const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
-      const failed = logs.some((log) => !log.generation.ok || !log.content.ok);
+      const failed = logs.some(
+        (log) => !log.serverTools && (!log.generation.ok || !log.content.ok),
+      );
       await interaction.editReply({
         ...replyPayload(
           buildSummary(logs, omissions),

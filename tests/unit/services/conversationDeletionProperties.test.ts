@@ -1,6 +1,7 @@
 import { afterEach, test } from "bun:test";
 import type {
   IReplyRecordRepository,
+  ReplyGeneration,
   ReplyPage,
   ReplyRecord,
 } from "../../../src/db/repositories/replyRecord";
@@ -210,7 +211,7 @@ class ScenarioRecords implements IReplyRecordRepository {
     return 0;
   }
 
-  listGenerations(): string[] {
+  listGenerations(): ReplyGeneration[] {
     return [];
   }
 

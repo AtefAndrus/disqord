@@ -107,7 +107,7 @@ describe("ReplyRecordRepository", () => {
       repository.createPending({ triggerMsgId: trigger, channelId, guildId, createdAt: 1 });
       repository.appendPage(trigger, `${trigger}-page`);
       repository.finalize(trigger, "completed", 1, 2);
-      repository.appendGenerations(trigger, [`gen-${trigger}`]);
+      repository.appendGenerations(trigger, [{ id: `gen-${trigger}`, serverTools: false }]);
     };
     add("a1", "channel-a", "guild-a");
     add("a2", "thread-a", "guild-a");
@@ -142,16 +142,21 @@ describe("ReplyRecordRepository", () => {
     ).toBe(0);
   });
 
-  test("appends generation ids in order after the saved ones, only for an existing record", () => {
+  test("appends generations in order after the saved ones, only for an existing record", () => {
+    const gen = (id: string, serverTools = false) => ({ id, serverTools });
     repository.createPending({ triggerMsgId: "trigger", channelId: "channel", guildId: "guild" });
     expect(repository.listGenerations("trigger")).toEqual([]);
     expect(repository.appendGenerations("trigger", [])).toBe(0);
-    expect(repository.appendGenerations("trigger", ["gen-1", "gen-2"])).toBe(2);
+    expect(repository.appendGenerations("trigger", [gen("gen-1"), gen("gen-2", true)])).toBe(2);
     repository.finalize("trigger", "failed", 0);
-    expect(repository.appendGenerations("trigger", ["gen-3"])).toBe(1);
-    expect(repository.listGenerations("trigger")).toEqual(["gen-1", "gen-2", "gen-3"]);
+    expect(repository.appendGenerations("trigger", [gen("gen-3")])).toBe(1);
+    expect(repository.listGenerations("trigger")).toEqual([
+      gen("gen-1"),
+      gen("gen-2", true),
+      gen("gen-3"),
+    ]);
 
-    expect(repository.appendGenerations("missing", ["gen-4"])).toBe(0);
+    expect(repository.appendGenerations("missing", [gen("gen-4")])).toBe(0);
     expect(repository.listGenerations("missing")).toEqual([]);
   });
 

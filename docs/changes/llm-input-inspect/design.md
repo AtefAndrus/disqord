@@ -33,6 +33,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 - 自動応答チャンネルで返答するかを決めた判定の入力。判定は `/responses` ではなく Decisions API（`decideNoul`）で行い、generation の入出力ログに載らない。判定の結果とモデルは `Reply gate` のログ行に残り、管理 API のログで確認できる。
 - 各 generation がどの種類の turn か（tool の続き、Web 検索なしの再生成、ツイート画像を除いた再試行、コンテキスト超過後の tool なしの回答）の表示。この区別は chat service と tool loop の中でしか分からず、OpenRouter のメタデータにも無いので、表示するには種類を別に記録する必要がある。生成順と各 generation の入力を見れば区別できるので、記録は足さない。
 - Discord 側の材料（会話の窓にどのメッセージが入ったか、添付の元 URL）の表示。OpenRouter に渡した形で足りると判断した。
+- サーバーツール（`openrouter:web_search`、`openrouter:datetime`）を渡した generation の入力。OpenRouter が入力を残さないので、取得できないことを要約で示すだけにする。理由は Decisions の「サーバーツールを渡した generation」に書いた。
 
 ## Decisions
 
@@ -41,7 +42,8 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 | 入力の取得元 | OpenRouter の `GET /api/v1/generation/content?id=` と `GET /api/v1/generation?id=` | 前者は保存された入力と出力を、後者はモデル、token 数、コストを返す。bot の DB に入力本文を持たないので、画像や PDF を含む入力で DB が肥大化せず、保存期間の管理も要らない。OpenRouter の文書では入出力ログの保存期間は 3 か月以上である（Input & Output Logging のページ）。OpenAPI 定義は `/generation/content` の 403 を「management key 専用」と書いているが、2026-10-29 に bot の通常の API キーで両方を呼び、入力と出力が返ることを確認した |
 | 入出力ログの前提 | bot のキーで生成した入力が保存されるよう、デプロイ先の OpenRouter アカウントで Input & Output Logging を有効にし、API キーの絞り込みで bot のキーを除外しない。README の運用者向けの節にこの前提を書く | `/generation/content` が入力を返すのは、ログを有効にした後の generation だけである。設定はアカウント側にあり bot から確認できないので、運用者が設定する前提として明記する |
 | 返す入力の形 | OpenRouter が保存した形のまま返し、bot が送った形への変換はしない | bot は Responses API（`POST /responses`）の `input` 配列を送るが（`src/llm/openrouter.ts` の `toResponsesInput`）、OpenRouter は Chat Completions の `messages` の形で保存する。2026-10-29 に tool を使った 2 turn の生成で確認したところ、tool の呼び出しは assistant の `tool_calls`、tool の結果は `role: "tool"` のメッセージ、推論の本文は assistant の `reasoning_content` として残り、暗号化された推論は入らなかった。保存された `output` は本文（`completion`）と推論（`reasoning`）の文字列だけで、ある generation が出した tool の呼び出しはその generation の `output` には無く、次の generation の入力に現れる。bot 側で送った形へ戻す変換は、保存されていない情報を補えないので行わない |
-| bot が保存するもの | 返答ごとの generation ID の列 | OpenRouter から入力を引くための鍵である |
+| bot が保存するもの | 返答ごとの generation ID の列と、各 generation のリクエストにサーバーツールを渡したか | ID は OpenRouter から入力を引くための鍵である。サーバーツールの有無は、入力が残らない generation を見分けるために持つ |
+| サーバーツールを渡した generation | リクエストの `tools` に `function` 以外の種類があれば、generation ごとに `reply_generations.server_tools` を 1 にする。その generation は OpenRouter に問い合わせず、要約に「OpenRouter に入力が残っていません（Web 検索か日時取得のツールを渡した生成）」と書き、JSON には `id` と `serverTools: true` だけを入れる。再取得ボタンと 404 の案内の判定からは外す | OpenRouter はサーバーツールを含むリクエストを内部のエージェントループで処理する（Server Tools のページの Tool Call Limits 節）。2026-10-29 に、`openrouter:web_search` か `openrouter:datetime` を渡したリクエストで、返ってきた generation ID の `/generation` は 200 だが token 数 0、`provider_responses` が空、`finish_reason` が無いまま、`/generation/content` は 404 のままだった。85 分たっても変わらず、Responses と Chat Completions のどちらでも、ストリームの有無によらず同じだった。応答のヘッダーと本文には、この ID のほかに generation ID が無く、API にも ID 以外で generation を引く手段が無い（OpenAPI 定義の `/generation` と `/generation/content` は `id` だけを受け取る）。同じ本文からサーバーツールだけを除くと 1 分以内に入力が引けた。`file-parser` プラグインを渡しただけのリクエストは入力が引けた。問い合わせても 404 が続くだけなので、反映の遅れと区別できるよう、bot の側で記録して先に示す |
 | generation ID の取り方 | HTTP 応答を受け取った時点で、状態コードの判定と本文の読み取りより前に `X-Generation-Id` 応答ヘッダーから取る。ヘッダーが無いときはストリームの `response.created` イベントの `response.id`、非ストリームでは応答本文の `id` で補い、同じ ID は 1 件にまとめる | ヘッダーは本文より先に届くので、`response.created` を受け取る前の停止や切断でも ID が残る。エラー応答もストリームを読まずに例外になるため（`chat()` と `chatStream()` の `handleErrorResponse()` 呼び出し）、ヘッダーで取らないと再試行前の generation が落ちる。2026-10-29 に、ストリーミングの成功応答（200）と存在しないモデルを指定したエラー応答（400）の両方で `x-generation-id` が付くことを確認した。400 のように受け付ける前に拒否されたリクエストの ID は、両方の endpoint で 404 になる。応答ヘッダー自体を受け取れなかった試行（接続の失敗）は ID が無いので記録の対象外である |
 | 返答の記録を作る条件 | 会話履歴の設定に関係なく、`messageCreate.ts` が返答するときは常に `reply_records` を作る | 今は会話履歴が有効なギルドでしか作られず（`src/bot/events/messageCreate.ts:397`）、無効なギルドでは右クリックされたメッセージから返答を特定できない。重複配信の抑止（同じトリガーの記録が既にあれば返答しない）も常に掛かるようになるが、これは履歴設定に依存すべき動作ではない。自動応答の判定で黙ると決まったときは、今と同じく保留中の記録をページの無いまま消す（`deletePendingWithoutPages`）。会話の窓が記録を読むのは履歴が有効なときだけなので（`src/services/conversationWindow.ts:395`）、無効な間の返答の扱いは変わらない。履歴を後から有効にすると、無効な間の返答も記録があるため会話の窓に入りうる |
 | 右クリックされたメッセージから返答を引く方法 | まず `findByPage()` でページとして引き、無ければ、bot 自身のメッセージで返信先（`message.reference.messageId`）があるときに限り `findByTrigger()` でトリガーとして引く | エラーで終わった返答では、本文の無いページは削除され（`cleanupBotMessagesOnFatalError`）、エラー表示は記録の確定後に `message.reply()` で別に送られ、ページとして登録されない（`src/bot/events/messageCreate.ts:753-764`）。エラー表示をページとして登録する方法は、`appendPage()` が確定前の記録にしか書けず（`src/db/repositories/replyRecord.ts:112-126`）、記録はエラー表示を送る前に `failed` で確定しているので採らない。返信先のトリガーから引けば、記録の意味を変えずにエラー表示から generation に届く |
@@ -66,7 +68,7 @@ bot の返答が期待と違ったとき、モデルに何が渡っていたか�
 - 修正: `src/bot/events/interactionCreate.ts` — `isMessageContextMenuCommand()` の分岐を、`isChatInputCommand()` の判定より前に置く。
 - 修正: `src/llm/openrouter.ts` — 応答ヘッダーの `X-Generation-Id`（無ければ `response.created` か応答本文の `id`）から ID を読み、エラー応答を例外にする前に、`chat()` と `chatStream()` の省略可能なコールバックで呼び出し側へ渡す。
 - 新規: `src/llm/generationLog.ts` — `/generation` と `/generation/content` を呼ぶ client。`ILLMClient` には足さない。`ILLMClient` はテストと chat service が実装や委譲をするので、このコマンドしか使わない取得を足すと、その全部に手が入る。
-- 修正: `src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて集め、`generateChatResponse()` の結果で返す。tool loop には、ID を集めるコールバックを付けた LLM client を渡すので、`src/llm/toolLoop.ts` は変えない。
+- 修正: `src/services/chatService.ts` — 1 件の返答で始まった generation の ID を、再生成と再試行の分も含めて、リクエストにサーバーツールを渡したかと合わせて集め、`generateChatResponse()` の結果で返す。tool loop には、ID を集めるコールバックを付けた LLM client を渡すので、`src/llm/toolLoop.ts` は変えない。
 - 修正: `src/db/schema.ts`、`src/db/repositories/replyRecord.ts`、`src/services/replyRecordService.ts` — generation ID の表と、その追加と一覧の操作。
 - 修正: `src/bot/events/messageCreate.ts` — 履歴設定に関係なく返答の記録を作り、返答の確定時（完了、停止、エラーのいずれも）に generation ID を保存する。
 - 修正: `scripts/generate-readme.ts` — chat input 以外をコマンド表から除く（message-explain が先に入れていれば不要）。
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS reply_generations (
   trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
   seq             INTEGER NOT NULL,       -- 生成を始めた順
   generation_id   TEXT NOT NULL,          -- OpenRouter の gen-...
+  server_tools    INTEGER NOT NULL DEFAULT 0 CHECK (server_tools IN (0,1)), -- サーバーツールを渡したか
   PRIMARY KEY (trigger_msg_id, seq)
 );
 ```
@@ -92,7 +95,7 @@ CREATE TABLE IF NOT EXISTS reply_generations (
 1. interaction を受けたら 3 秒以内に `deferReply({ flags: Ephemeral })` を返す。
 2. DM などギルドの外での実行、管理者でない実行者、返答のあるチャンネルの履歴を読めない実行者は、理由を返して終える。
 3. Decisions の「右クリックされたメッセージから返答を引く方法」で返答の記録を引く。記録が無いか、記録に generation ID が無ければ「この bot の返答ではないか、記録がありません」を返す。
-4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。`/generation/content` が 1 件でも 404 のときは、OpenRouter 側の反映が遅れているか、入出力ログが無効な場合があるので、「少し待ってから「再取得」を押し、それでも 404 なら OpenRouter の入出力ログの設定を確認してください」を添える。
+4. Decisions の「取得の失敗と締め切り」に従って各 generation を取得する。サーバーツールを渡した generation は、Decisions の「サーバーツールを渡した generation」に従い取得しない。それ以外の generation で `/generation/content` が 1 件でも 404 のときは、OpenRouter 側の反映が遅れているか、入出力ログが無効な場合があるので、「少し待ってから「再取得」を押し、それでも 404 なら OpenRouter の入出力ログの設定を確認してください」を添える。
 5. JSON を `llm-input-<トリガーの message ID>.json`（分けるときは `llm-input-<トリガーの message ID>-<生成順の番号>.json`。番号は 1 から振る）として添付し、要約と合わせて `editReply()` で返す。取得に失敗した endpoint が 1 つでもあれば、Decisions の「再取得」の再取得ボタンを付ける。
 
 ### 設計メモ
@@ -112,6 +115,7 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 - [x] `/help` と README の追記（コマンドの 1 行と、入出力ログを有効にする前提）
 - [x] 手動確認: 開発用サーバーで tool を使った返答を右クリックし、全 turn の入力が JSON に入っていることを確認する
 - [x] 1 件でも 404 なら反映の遅れの案内を出す変更と、再取得ボタン
+- [x] サーバーツールを渡した generation の記録と、取得せずに入力が残らないことを示す表示
 - [ ] 手動確認: 開発用サーバーで取得に失敗した結果の「再取得」を押し、同じメッセージが新しい結果に置き換わり、すべて取得できたらボタンが消えることを確認する
 - [ ] `docs/changes/llm-input-inspect/` 削除（リリース完了時、git 履歴がアーカイブ）
 
@@ -120,4 +124,5 @@ Web 検索の失敗後の再生成とツイート画像の再試行は、tool lo
 - **入出力ログが無効なときの応答（未確認）**: 入出力ログを有効にしていないアカウントの generation で、`/generation/content` が 404 を返すか、空の入力を返すかは確認していない。開発用のアカウントは有効なので、無効な場合の表示は 404 の扱いで足りると見込んでいるが、本番のキーのアカウントで有効かも未確認である。実装後の手動確認で、本番の返答を右クリックして確認する。
 - **BYOK で生成した返答**: oauth-byok が実装されると、利用者のキーで生成した返答の入力は、その利用者の OpenRouter アカウントの入出力ログ設定に従って保存される（推測）。bot のキーでは他アカウントの generation を読めない可能性が高く、その場合はこのコマンドで見られない。未確認であり、oauth-byok の実装時に確認する。
 - **ボイスチャンネルの履歴認可**: `checkConversationAccess()` はボイスチャンネルとステージチャンネルで `Connect` を確認しないので、会話履歴と `read_earlier_messages` の認可にも同じ不足がある。このコマンドとは独立した既存の問題であり、直すかどうかは別に決める。
+- **会話履歴が有効なギルドでの有用性（要判断）**: chat service は、Web 検索が有効なときは `openrouter:web_search` を、無効でも会話履歴が有効で tool を使える返答では `openrouter:datetime` を毎回渡す（`src/services/chatService.ts` の `DATETIME_SERVER_TOOL` の注記）。そのため、どちらかを有効にしたギルドでは、ほとんどの返答で入力を見られない。`openrouter:datetime` は、`google/gemini-3.8-flash` で画像を返す tool の後の turn が HTTP 400 になるのを避けるために渡しているので、外すかどうかはその不具合の扱いと合わせて決める。
 - **e2e テスト**: bot は message command を実行できないので、e2e のシナリオにはできない。ID の収集と保存は unit テストで、コマンドの表示は手動確認で見る。

@@ -23,8 +23,8 @@ function createReplyRecordService(events: string[]): IReplyRecordService {
     findByTrigger: mock(() => null),
     findByPage: mock(() => null),
     listPages: mock(() => []),
-    saveGenerationIds: mock(async () => true),
-    listGenerationIds: mock(() => []),
+    saveGenerations: mock(async () => true),
+    listGenerations: mock(() => []),
     markPendingFailed: mock(async () => 0),
     deleteByGuild: mock(async () => 0),
     deleteByChannel: mock(async () => 0),
@@ -62,22 +62,28 @@ describe("message create reply-record funnel", () => {
       const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
       const generateChatResponse = mock(async () => {
         if (outcome === "throw") throw new Error("generation threw before returning a result");
-        const generationIds = outcome === "empty" ? [] : ["generation-1", "generation-2"];
+        const generations =
+          outcome === "empty"
+            ? []
+            : [
+                { id: "generation-1", serverTools: false },
+                { id: "generation-2", serverTools: true },
+              ];
         if (outcome === "stopped")
-          return { status: "cancelled" as const, history: [], generationIds };
+          return { status: "cancelled" as const, history: [], generations };
         if (outcome === "failed")
           return {
             status: "error" as const,
             error: new Error("generation failed"),
             history: [],
-            generationIds,
+            generations,
           };
         return {
           status: "final" as const,
           text: "answer",
           finishReason: "stop" as const,
           history: [],
-          generationIds,
+          generations,
         };
       });
       const chatService = { isClosing: false, generateChatResponse } as unknown as IChatService;
@@ -87,7 +93,7 @@ describe("message create reply-record funnel", () => {
           events.push("finalize");
           return true;
         }),
-        saveGenerationIds: mock(async () => {
+        saveGenerations: mock(async () => {
           events.push("save");
           return true;
         }),
@@ -123,11 +129,11 @@ describe("message create reply-record funnel", () => {
           expect.any(Number),
         );
         if (outcome === "throw" || outcome === "empty") {
-          expect(replyRecordService.saveGenerationIds).not.toHaveBeenCalled();
+          expect(replyRecordService.saveGenerations).not.toHaveBeenCalled();
         } else {
-          expect(replyRecordService.saveGenerationIds).toHaveBeenCalledWith("trigger", [
-            "generation-1",
-            "generation-2",
+          expect(replyRecordService.saveGenerations).toHaveBeenCalledWith("trigger", [
+            { id: "generation-1", serverTools: false },
+            { id: "generation-2", serverTools: true },
           ]);
           expect(events.slice(-2)).toEqual(["finalize", "save"]);
         }

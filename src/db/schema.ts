@@ -189,6 +189,7 @@ export function applyMigrations(db: Database): void {
       trigger_msg_id  TEXT NOT NULL REFERENCES reply_records(trigger_msg_id) ON DELETE CASCADE,
       seq             INTEGER NOT NULL,         -- 生成を始めた順
       generation_id   TEXT NOT NULL,            -- OpenRouter の gen-...
+      server_tools    INTEGER NOT NULL DEFAULT 0 CHECK (server_tools IN (0,1)), -- サーバーツールを渡したか
       PRIMARY KEY (trigger_msg_id, seq)
     )
   `);

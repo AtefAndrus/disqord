@@ -62,6 +62,8 @@ interface HarnessOptions {
   targetAuthor?: string;
   reference?: string;
   ids?: string[];
+  /** Generations among `ids` recorded as made with a server tool. */
+  serverTools?: string[];
   sizeLimit?: number;
   timeoutMs?: number;
   generation?: (id: string, signal?: AbortSignal) => Promise<GenerationLookup>;
@@ -114,7 +116,12 @@ function harness(options: HarnessOptions = {}): Harness {
   const records = {
     findByPage,
     findByTrigger,
-    listGenerationIds: mock(() => options.ids ?? ["gen-1"]),
+    listGenerations: mock(() =>
+      (options.ids ?? ["gen-1"]).map((id) => ({
+        id,
+        serverTools: options.serverTools?.includes(id) ?? false,
+      })),
+    ),
   } as unknown as IReplyRecordService;
   const settings = createMockSettingsService();
   settings.getGuildSettings = mock(async () =>
@@ -206,7 +213,13 @@ function textOf(call: ReturnType<typeof mock>): string {
 
 function fileJson(file: AttachmentBuilder): {
   triggerMessageId: string;
-  generations: { id: string; generation: GenerationLookup; content: GenerationLookup }[];
+  generations: {
+    id: string;
+    serverTools: boolean;
+    // Absent for a server-tool generation, which is not looked up.
+    generation?: GenerationLookup;
+    content?: GenerationLookup;
+  }[];
 } {
   if (!Buffer.isBuffer(file.attachment)) throw new Error("Expected an in-memory JSON attachment");
   return JSON.parse(file.attachment.toString("utf8"));
@@ -231,7 +244,7 @@ describe("LLM 入力を見る", () => {
     expect(result.files[0].name).toBe("llm-input-trigger-1.json");
     expect(fileJson(result.files[0])).toEqual({
       triggerMessageId: "trigger-1",
-      generations: [{ id: "gen-1", generation: METADATA, content: CONTENT }],
+      generations: [{ id: "gen-1", serverTools: false, generation: METADATA, content: CONTENT }],
     });
     expect(result.components[0].toJSON().components).toContainEqual({
       type: ComponentType.File,
@@ -337,7 +350,12 @@ describe("LLM 入力を見る", () => {
     const h = harness({ ids: ["gen-1", "gen-2"], content: async () => failure });
     await h.run();
     expect(fileJson(payload(h.editReply).files[0]).generations).toEqual(
-      ["gen-1", "gen-2"].map((id) => ({ id, generation: METADATA, content: failure })),
+      ["gen-1", "gen-2"].map((id) => ({
+        id,
+        serverTools: false,
+        generation: METADATA,
+        content: failure,
+      })),
     );
     expect(textOf(h.editReply)).toContain("403 forbidden");
   });
@@ -406,6 +424,7 @@ describe("LLM 入力を見る", () => {
     expect(logs[1].content).toEqual({ ok: false, reason: "時間切れ" });
     expect(logs[2]).toEqual({
       id: "gen-3",
+      serverTools: false,
       generation: { ok: false, reason: "時間切れ" },
       content: { ok: false, reason: "時間切れ" },
     });
@@ -558,6 +577,23 @@ describe("LLM 入力を見る", () => {
     await forbidden.run();
     expect(textOf(forbidden.editReply)).not.toContain("少し待ってから");
   });
+
+  test("explains a server-tool generation without looking it up, retry button, or 404 hint", async () => {
+    const h = harness({ ids: ["gen-1", "gen-2"], serverTools: ["gen-1"] });
+    await h.run();
+    expect(h.generation.mock.calls.map(([id]) => id)).toEqual(["gen-2"]);
+    expect(h.content.mock.calls.map(([id]) => id)).toEqual(["gen-2"]);
+    const result = payload(h.editReply);
+    expect(textOf(h.editReply)).toContain(
+      "1. gen-1: OpenRouter に入力が残っていません（Web 検索か日時取得のツールを渡した生成）",
+    );
+    expect(textOf(h.editReply)).not.toContain("少し待ってから");
+    expect(buttonsOf(result)).toEqual([]);
+    expect(fileJson(result.files[0]).generations).toEqual([
+      { id: "gen-1", serverTools: true },
+      { id: "gen-2", serverTools: false, generation: METADATA, content: CONTENT },
+    ]);
+  });
 });
 
 function buttonsOf(part: Payload): { custom_id?: string; label?: string }[] {
@@ -597,7 +633,7 @@ describe("LLM 入力を見る: 再取得", () => {
     const result = payload(h.editReply);
     expect(result.attachments).toEqual([]);
     expect(fileJson(result.files[0]).generations).toEqual([
-      { id: "gen-1", generation: METADATA, content: CONTENT },
+      { id: "gen-1", serverTools: false, generation: METADATA, content: CONTENT },
     ]);
     expect(buttonsOf(result)).toEqual([]);
     expect(h.followUp).not.toHaveBeenCalled();
