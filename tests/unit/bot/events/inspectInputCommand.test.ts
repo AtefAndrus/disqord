@@ -623,12 +623,11 @@ describe("LLM 入力を見る: 再取得", () => {
     });
   }
 
-  test("lets a later retry win over an earlier one still fetching", async () => {
+  test("only acknowledges a press while a retry runs on the same message", async () => {
     let release: (value: GenerationLookup) => void = () => {};
     const stalled = new Promise<GenerationLookup>((resolve) => {
       release = resolve;
     });
-    const failure: GenerationLookup = { ok: false, status: 404, reason: "not found" };
     let calls = 0;
     const h = harness({
       retryCustomId: "inspect:retry:trigger-1",
@@ -639,11 +638,25 @@ describe("LLM 入力を見る: 再取得", () => {
     const first = h.run();
     await new Promise((resolve) => setTimeout(resolve, 5));
     await h.run();
-    release(failure);
+    expect(h.deferUpdate).toHaveBeenCalledTimes(2);
+    expect(h.generation).toHaveBeenCalledTimes(1);
+    expect(h.editReply).not.toHaveBeenCalled();
+    release(METADATA);
     await first;
     expect(h.editReply).toHaveBeenCalledTimes(1);
-    expect(buttonsOf(payload(h.editReply))).toEqual([]);
-    expect(h.followUp).not.toHaveBeenCalled();
+    // Once the running retry finishes, the next press runs again.
+    await h.run();
+    expect(h.generation).toHaveBeenCalledTimes(2);
+    expect(h.editReply).toHaveBeenCalledTimes(2);
+  });
+
+  test("releases the message when the retry's acknowledgement fails", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    h.deferUpdate.mockImplementationOnce(() => Promise.reject(new Error("Unknown interaction")));
+    await expect(h.run()).rejects.toThrow("Unknown interaction");
+    await h.run();
+    expect(h.generation).toHaveBeenCalledTimes(1);
+    expect(h.editReply).toHaveBeenCalledTimes(1);
   });
 
   test("reports a retry failure in a new message instead of replacing the result", async () => {

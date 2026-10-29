@@ -220,22 +220,16 @@ export function createInspectInputHandler(
   generationLogClient: IGenerationLogClient,
   timeoutMs = 60_000,
 ): (interaction: InspectInputInteraction) => Promise<void> {
-  // The latest retry per result message; an earlier one still fetching must not overwrite it.
-  // The check runs before each send and does not order edits already in flight: an earlier retry's
-  // edit that passed the check was sent before the later retry started, so it reaches Discord first.
-  const latestRetry = new Map<string, number>();
-  let retryCount = 0;
-  return async (interaction: InspectInputInteraction): Promise<void> => {
+  // Result messages with a retry running. A press while one runs is only acknowledged, so a single
+  // retry writes to a message at a time. Letting the later press win instead would need the edits
+  // themselves ordered: two retries use different interaction tokens, and discord.js resends an edit
+  // after a 429 or 5xx, so an earlier retry's edit can land after a later one's.
+  const retrying = new Set<string>();
+  const inspect = async (interaction: InspectInputInteraction): Promise<void> => {
     // The retry button lives on the ephemeral result, so a retry rewrites that message in place.
     const retryTriggerId = interaction.isButton()
       ? interaction.customId.slice(INSPECT_RETRY_PREFIX.length)
       : null;
-    const retry = interaction.isButton()
-      ? { messageId: interaction.message.id, seq: ++retryCount }
-      : null;
-    if (retry) latestRetry.set(retry.messageId, retry.seq);
-    const superseded = (): boolean =>
-      retry !== null && latestRetry.get(retry.messageId) !== retry.seq;
     if (interaction.isButton()) await interaction.deferUpdate();
     else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const deadline = Date.now() + timeoutMs;
@@ -338,7 +332,6 @@ export function createInspectInputHandler(
       const sizeLimit = Math.max(0, interaction.attachmentSizeLimit - REQUEST_OVERHEAD_BYTES);
       const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
-      if (superseded()) return;
       const failed = logs.some((log) => !log.generation.ok || !log.content.ok);
       await interaction.editReply({
         ...replyPayload(
@@ -352,7 +345,6 @@ export function createInspectInputHandler(
       resultSent = true;
       unsent = rest.flat();
       for (const batch of rest) {
-        if (superseded()) return;
         await interaction.followUp({
           ...replyPayload("LLM 入出力ログ（続き）", batch),
           flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
@@ -381,8 +373,21 @@ export function createInspectInputHandler(
       }
     } finally {
       clearTimeout(timer);
-      // An earlier retry still running then finds no entry and treats itself as superseded.
-      if (retry && !superseded()) latestRetry.delete(retry.messageId);
+    }
+  };
+  return async (interaction: InspectInputInteraction): Promise<void> => {
+    if (!interaction.isButton()) return inspect(interaction);
+    const messageId = interaction.message.id;
+    if (retrying.has(messageId)) {
+      await interaction.deferUpdate();
+      return;
+    }
+    // Checked and claimed before any await, so two presses cannot both start a retry.
+    retrying.add(messageId);
+    try {
+      await inspect(interaction);
+    } finally {
+      retrying.delete(messageId);
     }
   };
 }
