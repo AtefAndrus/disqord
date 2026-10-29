@@ -1,5 +1,8 @@
 import {
   AttachmentBuilder,
+  ButtonBuilder,
+  type ButtonInteraction,
+  ButtonStyle,
   ChannelType,
   ContainerBuilder,
   escapeMarkdown,
@@ -7,6 +10,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
 } from "discord.js";
+import type { ReplyRecord } from "../../db/repositories/replyRecord";
 import type { GenerationLookup, IGenerationLogClient } from "../../llm/generationLog";
 import { DiscordRestBudget } from "../../services/discordMessageReader";
 import {
@@ -38,7 +42,10 @@ const TIMEOUT: GenerationLookup = { ok: false, reason: "時間切れ" };
 export const REQUEST_OVERHEAD_BYTES = 64 * 1024;
 const MISSING_RECORD = "この bot の返答ではないか、記録がありません";
 const LOGGING_HINT =
-  "少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください";
+  "404 は OpenRouter への反映が遅れている場合があります。少し待ってから「再取得」を押し、それでも 404 なら OpenRouter の入出力ログの設定を確認してください";
+export const INSPECT_RETRY_PREFIX = "inspect:retry:";
+
+export type InspectInputInteraction = MessageContextMenuCommandInteraction | ButtonInteraction;
 
 // Race the client as well as aborting fetch so a stalled response cannot hold the interaction open.
 function lookupBeforeDeadline(
@@ -153,7 +160,8 @@ function errorDetails(error: unknown): Record<string, unknown> {
 }
 
 function buildSummary(logs: GenerationLog[], omissions: Map<number, string>): string {
-  const hint = logs.every((log) => !log.content.ok && log.content.status === 404)
+  // OpenRouter can reflect one generation of a reply before another, so a single 404 is worth a retry.
+  const hint = logs.some((log) => !log.content.ok && log.content.status === 404)
     ? `\n${LOGGING_HINT}`
     : "";
   let text = "LLM 入出力ログ";
@@ -177,6 +185,7 @@ function buildSummary(logs: GenerationLog[], omissions: Map<number, string>): st
 function replyPayload(
   text: string,
   files: JsonFile[],
+  retryTriggerId?: string,
 ): {
   flags: typeof MessageFlags.IsComponentsV2;
   components: ContainerBuilder[];
@@ -186,6 +195,16 @@ function replyPayload(
   const container = new ContainerBuilder().addTextDisplayComponents((td) => td.setContent(text));
   for (const file of files) {
     container.addFileComponents((component) => component.setURL(`attachment://${file.name}`));
+  }
+  if (retryTriggerId) {
+    container.addActionRowComponents((row) =>
+      row.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${INSPECT_RETRY_PREFIX}${retryTriggerId}`)
+          .setLabel("再取得")
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
   }
   return {
     flags: MessageFlags.IsComponentsV2,
@@ -200,19 +219,31 @@ export function createInspectInputHandler(
   replyRecordService: IReplyRecordService,
   generationLogClient: IGenerationLogClient,
   timeoutMs = 60_000,
-): (interaction: MessageContextMenuCommandInteraction) => Promise<void> {
-  return async (interaction: MessageContextMenuCommandInteraction): Promise<void> => {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+): (interaction: InspectInputInteraction) => Promise<void> {
+  return async (interaction: InspectInputInteraction): Promise<void> => {
+    // The retry button lives on the ephemeral result, so a retry rewrites that message in place.
+    const retryTriggerId = interaction.isButton()
+      ? interaction.customId.slice(INSPECT_RETRY_PREFIX.length)
+      : null;
+    if (interaction.isButton()) await interaction.deferUpdate();
+    else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const deadline = Date.now() + timeoutMs;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
     let resultSent = false;
     let unsent: JsonFile[] = [];
+    // A refusal on a retry goes to a new message: editing would replace the result already shown.
+    const notify = async (text: string): Promise<void> => {
+      if (retryTriggerId === null) await interaction.editReply(replyPayload(text, []));
+      else
+        await interaction.followUp({
+          ...replyPayload(text, []),
+          flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
+        });
+    };
     try {
       if (!interaction.guildId) {
-        await interaction.editReply(
-          replyPayload("このコマンドはサーバー内でのみ使用できます。", []),
-        );
+        await notify("このコマンドはサーバー内でのみ使用できます。");
         return;
       }
       // interaction.channel reads only the cache, which lacks threads archived before the bot started.
@@ -220,16 +251,12 @@ export function createInspectInputHandler(
         interaction.channel ??
         (await interaction.client.channels.fetch(interaction.channelId).catch(() => null));
       if (!channel || channel.isDMBased() || !channel.isTextBased()) {
-        await interaction.editReply(
-          replyPayload("このチャンネルの情報を取得できませんでした。", []),
-        );
+        await notify("このチャンネルの情報を取得できませんでした。");
         return;
       }
       const settings = await settingsService.getGuildSettings(interaction.guildId);
       if (!canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
-        await interaction.editReply(
-          replyPayload("この操作には「サーバーの管理」権限か管理者ロールが必要です。", []),
-        );
+        await notify("この操作には「サーバーの管理」権限か管理者ロールが必要です。");
         return;
       }
       const access = await checkConversationAccess(
@@ -250,38 +277,37 @@ export function createInspectInputHandler(
         (needsConnect &&
           !channel.permissionsFor(interaction.user)?.has(PermissionFlagsBits.Connect))
       ) {
-        await interaction.editReply(
-          replyPayload(
-            "このチャンネルの履歴を読む権限を確認できません。ボイス・ステージチャンネルでは「接続」権限も必要です。",
-            [],
-          ),
+        await notify(
+          "このチャンネルの履歴を読む権限を確認できません。ボイス・ステージチャンネルでは「接続」権限も必要です。",
         );
         return;
       }
-      const target = interaction.targetMessage;
-      const record =
-        replyRecordService.findByPage(target.id) ??
-        (target.author.id === interaction.client.user.id && target.reference?.messageId
-          ? replyRecordService.findByTrigger(target.reference.messageId)
-          : null);
+      let record: ReplyRecord | null;
+      if (interaction.isButton()) record = replyRecordService.findByTrigger(retryTriggerId ?? "");
+      else {
+        const target = interaction.targetMessage;
+        record =
+          replyRecordService.findByPage(target.id) ??
+          (target.author.id === interaction.client.user.id && target.reference?.messageId
+            ? replyRecordService.findByTrigger(target.reference.messageId)
+            : null);
+      }
       if (
         !record ||
         record.guildId !== interaction.guildId ||
         record.channelId !== interaction.channelId
       ) {
-        await interaction.editReply(replyPayload(MISSING_RECORD, []));
+        await notify(MISSING_RECORD);
         return;
       }
       // Generation ids are saved once the reply is finalized, so a reply still in progress has none yet.
       if (record.status === "pending") {
-        await interaction.editReply(
-          replyPayload("この返答はまだ生成中です。生成が終わってから実行してください。", []),
-        );
+        await notify("この返答はまだ生成中です。生成が終わってから実行してください。");
         return;
       }
       const ids = replyRecordService.listGenerationIds(record.triggerMsgId);
       if (ids.length === 0) {
-        await interaction.editReply(replyPayload(MISSING_RECORD, []));
+        await notify(MISSING_RECORD);
         return;
       }
       const logs: GenerationLog[] = [];
@@ -301,7 +327,16 @@ export function createInspectInputHandler(
       const sizeLimit = Math.max(0, interaction.attachmentSizeLimit - REQUEST_OVERHEAD_BYTES);
       const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
-      await interaction.editReply(replyPayload(buildSummary(logs, omissions), first));
+      const failed = logs.some((log) => !log.generation.ok || !log.content.ok);
+      await interaction.editReply({
+        ...replyPayload(
+          buildSummary(logs, omissions),
+          first,
+          failed ? record.triggerMsgId : undefined,
+        ),
+        // A retry rewrites a message that already carries the earlier JSON files.
+        attachments: [],
+      });
       resultSent = true;
       unsent = rest.flat();
       for (const batch of rest) {
@@ -322,7 +357,7 @@ export function createInspectInputHandler(
       );
       try {
         // Editing the reply after the result went out would hide the summary and files already delivered.
-        if (resultSent)
+        if (resultSent || retryTriggerId !== null)
           await interaction.followUp({
             ...payload,
             flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,

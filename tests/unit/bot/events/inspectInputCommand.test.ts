@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ApplicationCommandType,
   type AttachmentBuilder,
@@ -18,6 +18,7 @@ import {
 import type { ReplyRecord } from "../../../../src/db/repositories/replyRecord";
 import type { GenerationLookup } from "../../../../src/llm/generationLog";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
+import { logger } from "../../../../src/utils/logger";
 import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
 
 const RECORD: ReplyRecord = {
@@ -70,6 +71,8 @@ interface HarnessOptions {
   uncachedChannel?: true | "fails";
   followUp?: () => Promise<unknown>;
   deferDelayMs?: number;
+  /** Run as a press of the retry button with this custom ID instead of the context menu. */
+  retryCustomId?: string;
 }
 
 interface Payload {
@@ -77,6 +80,7 @@ interface Payload {
   components: ContainerBuilder[];
   files: AttachmentBuilder[];
   allowedMentions: { parse: [] };
+  attachments?: [];
 }
 
 interface Harness {
@@ -84,6 +88,7 @@ interface Harness {
   editReply: ReturnType<typeof mock>;
   followUp: ReturnType<typeof mock>;
   deferReply: ReturnType<typeof mock>;
+  deferUpdate: ReturnType<typeof mock>;
   findByPage: ReturnType<typeof mock>;
   findByTrigger: ReturnType<typeof mock>;
   generation: ReturnType<typeof mock>;
@@ -96,6 +101,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const deferReply = mock(
     () => new Promise<void>((resolve) => setTimeout(resolve, options.deferDelayMs ?? 0)),
   );
+  const deferUpdate = mock(() => Promise.resolve());
   const editReply = mock(() => Promise.resolve());
   const followUp = mock(options.followUp ?? (() => Promise.resolve()));
   const threadFetch = mock(() =>
@@ -153,7 +159,10 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     // `sizeLimit` is the room left for attachments after the reserved request overhead.
     attachmentSizeLimit: (options.sizeLimit ?? 10_000_000) + REQUEST_OVERHEAD_BYTES,
+    customId: options.retryCustomId,
+    isButton: (): boolean => options.retryCustomId !== undefined,
     deferReply,
+    deferUpdate,
     editReply,
     followUp,
   } as unknown as MessageContextMenuCommandInteraction;
@@ -166,6 +175,7 @@ function harness(options: HarnessOptions = {}): Harness {
   return {
     run: () => handler(interaction),
     deferReply,
+    deferUpdate,
     editReply,
     followUp,
     findByPage,
@@ -533,21 +543,92 @@ describe("LLM 入力を見る", () => {
     expect(textOf(h.editReply)).toContain("bytes");
   });
 
-  test("shows the logging hint only when all content lookups return 404", async () => {
-    const h = harness({
-      ids: ["gen-1", "gen-2"],
-      content: async () => ({ ok: false, status: 404, reason: "not found" }),
-    });
-    await h.run();
-    expect(textOf(h.editReply)).toContain(
-      "少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください",
-    );
+  test("shows the logging hint when any content lookup returns 404", async () => {
     const mixed = harness({
       ids: ["gen-1", "gen-2"],
       content: async (id) =>
         id === "gen-1" ? { ok: false, status: 404, reason: "not found" } : CONTENT,
     });
     await mixed.run();
-    expect(textOf(mixed.editReply)).not.toContain("少し待ってから");
+    expect(textOf(mixed.editReply)).toContain("少し待ってから「再取得」を押し");
+    const forbidden = harness({
+      content: async () => ({ ok: false, status: 403, reason: "forbidden" }),
+    });
+    await forbidden.run();
+    expect(textOf(forbidden.editReply)).not.toContain("少し待ってから");
+  });
+});
+
+function buttonsOf(part: Payload): { custom_id?: string; label?: string }[] {
+  return part.components.flatMap((container) =>
+    container
+      .toJSON()
+      .components.flatMap((component) =>
+        component.type === ComponentType.ActionRow
+          ? (component.components as { custom_id?: string; label?: string }[])
+          : [],
+      ),
+  );
+}
+
+describe("LLM 入力を見る: 再取得", () => {
+  test("offers a retry button only when a lookup failed", async () => {
+    const ok = harness();
+    await ok.run();
+    expect(buttonsOf(payload(ok.editReply))).toEqual([]);
+    const failed = harness({
+      generation: async (id) =>
+        id === "gen-1" ? { ok: false, status: 404, reason: "not found" } : METADATA,
+    });
+    await failed.run();
+    expect(buttonsOf(payload(failed.editReply))).toEqual([
+      expect.objectContaining({ custom_id: "inspect:retry:trigger-1", label: "再取得" }),
+    ]);
+  });
+
+  test("rewrites the result in place from the trigger in the button and drops the old files", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    await h.run();
+    expect(h.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(h.deferReply).not.toHaveBeenCalled();
+    expect(h.findByPage).not.toHaveBeenCalled();
+    expect(h.findByTrigger).toHaveBeenCalledWith("trigger-1");
+    const result = payload(h.editReply);
+    expect(result.attachments).toEqual([]);
+    expect(fileJson(result.files[0]).generations).toEqual([
+      { id: "gen-1", generation: METADATA, content: CONTENT },
+    ]);
+    expect(buttonsOf(result)).toEqual([]);
+    expect(h.followUp).not.toHaveBeenCalled();
+  });
+
+  for (const refused of [
+    { manageGuild: false },
+    { readHistory: false },
+    { fallback: null },
+    { fallback: { ...RECORD, channelId: "other-channel" } },
+  ]) {
+    test(`keeps the shown result and replies separately when a retry is refused: ${JSON.stringify(refused)}`, async () => {
+      const h = harness({
+        retryCustomId: "inspect:retry:trigger-1",
+        record: null,
+        fallback: RECORD,
+        ...refused,
+      });
+      await h.run();
+      expect(h.editReply).not.toHaveBeenCalled();
+      expect(payload(h.followUp).flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+      expect(h.generation).not.toHaveBeenCalled();
+    });
+  }
+
+  test("reports a retry failure in a new message instead of replacing the result", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    h.editReply.mockImplementation(() => Promise.reject(new Error("Unknown Message")));
+    const errors = spyOn(logger, "error").mockImplementation(() => {});
+    await h.run();
+    errors.mockRestore();
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+    expect(textOf(h.followUp)).toContain("取得中にエラー");
   });
 });

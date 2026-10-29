@@ -2,10 +2,10 @@ import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ComponentType,
   type ContainerBuilder,
-  type MessageContextMenuCommandInteraction,
   MessageFlags,
   PermissionFlagsBits,
 } from "discord.js";
+import type { InspectInputInteraction } from "../../../../src/bot/events/inspectInputCommand";
 import type { CommandHandlers } from "../../../../src/bot/events/interactionCreate";
 import { createInteractionCreateHandler } from "../../../../src/bot/events/interactionCreate";
 import { SettingsConflictError, SettingsRuleError } from "../../../../src/errors";
@@ -70,7 +70,7 @@ function buttonInteraction(
 function createStatusHarness(
   defaultModel = "free/model:free",
   isFree = true,
-  inspectInput?: (interaction: MessageContextMenuCommandInteraction) => Promise<void>,
+  inspectInput?: (interaction: InspectInputInteraction) => Promise<void>,
 ) {
   const settingsService = createMockSettingsService();
   settingsService.getGuildSettings = mock(() =>
@@ -185,6 +185,14 @@ describe("interactionCreate: 停止ボタン", () => {
       expect.objectContaining({ commandName: "LLM 入力を見る" }),
     );
     errors.mockRestore();
+  });
+  test("routes the inspection retry button to the inspection handler", async () => {
+    const inspect = mock(async () => {});
+    const { handler, modelService } = createStatusHarness("free/model:free", true, inspect);
+    const interaction = buttonInteraction("inspect:retry:trigger-1");
+    await handler(interaction as never);
+    expect(inspect).toHaveBeenCalledWith(interaction);
+    expect(modelService.refreshCache).not.toHaveBeenCalled();
   });
   test("status refresh defers and redraws without changing settings", async () => {
     const { handler, modelService, settingsService } = createStatusHarness();
