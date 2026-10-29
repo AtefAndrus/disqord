@@ -98,7 +98,7 @@ workflow の手動実行で付くのは完全な SHA のタグだけで、Flux �
 StatefulSet は古い Pod を止めてから新しい Pod を起動するので、同じ Discord の token で 2 つのプロセスが同時に接続することはない。
 停止の猶予は Kubernetes の既定の 30 秒である。
 bot は SIGTERM を受けると応答中の返答を打ち切り、`🛑 Stopped by restart` を付けて閉じ終わるのを最大 8 秒待ってから終了する（`src/index.ts` の `CHAT_SHUTDOWN_TIMEOUT_MS`）。
-新しいバージョンが動き始めたかは、管理 API の `/health` が返す `version` で確認する。
+新しいバージョンが動き始めたかは、管理 API の `/health` が HTTP 200 と新しい `version` を返すかで確認する（Discord に接続する前は同じ `version` で 503 を返す）。
 管理 API は tailnet 上の `talos2-personal-disqord` に HTTPS で届く（[docs/admin-api.md](docs/admin-api.md)）。
 
 ## 環境変数

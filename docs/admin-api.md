@@ -96,7 +96,7 @@ SIG=$(printf 'GET\n%s\n\n%s' "$PATH_" "$TS" \
       | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
 curl -sS "$BASE$PATH_" \
   -H "X-Admin-Timestamp: $TS" \
-  -H "X-Admin-Signature: sha256=$SIG" | jq .
+  -H "X-Admin-Signature: sha256=$SIG"
 
 # 2. ログ取得（直近 200 行、warn 以上）
 PATH_=/admin/logs
