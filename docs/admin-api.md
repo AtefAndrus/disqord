@@ -143,9 +143,9 @@ LOG_DIR=data/logs
 コンテナは `bun` ユーザーで動き、書き込めるのは DB と同じ永続ボリュームの `/app/data` の下だけである（Dockerfile）。
 `LOG_DIR` が未設定のときも、書き込めないディレクトリのときも、ログは保存されず `/admin/logs` は空を返す。
 
-本番の HTTP サーバー（ポート 3000）は、talos2 の Tailscale Ingress を通して tailnet 上の `talos2-personal-disqord` に HTTPS で公開している。
+本番の HTTP サーバー（ポート 3000）は、talos2 の Tailscale Ingress を通して tailnet 上の `disqord` に HTTPS で公開している。
 インターネットには公開していないので、管理 API を呼ぶ端末は同じ tailnet に参加している必要がある。
-上の curl 例の `BASE` を `https://talos2-personal-disqord.<tailnet の名前>.ts.net` に変えて応答を確認する。
+上の curl 例の `BASE` を `https://disqord.<tailnet の名前>.ts.net` に変えて応答を確認する。
 
 ### Claude Code から呼ぶ
 
