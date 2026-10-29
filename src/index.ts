@@ -50,7 +50,7 @@ import { createLogFileWriter } from "./utils/logFile";
 import { logger, setLogFileWriter } from "./utils/logger";
 import { metrics } from "./utils/metrics";
 
-// Fit below Coolify's default 30s stop grace period and docker stop's default 10s.
+// Fit below Kubernetes' default 30s termination grace period and docker stop's default 10s.
 const CHAT_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 async function bootstrap(): Promise<void> {
