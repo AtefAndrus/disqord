@@ -21,6 +21,10 @@
  * by hand instead of a broken link. `CHANGELOG.md` is skipped because
  * git-cliff regenerates it from commit messages.
  *
+ * A design still marking something 要判断 (an open decision) stops the run
+ * before anything is changed: deleting the folder would leave the decision
+ * only in git history and out of the backlog in docs/progress.md.
+ *
  * Known gap, deliberately not handled: a link whose destination wraps onto
  * a blockquote continuation line (`> `) passes both the rewriter and the
  * check. Nothing in the repository's design docs is written that way.
@@ -176,6 +180,11 @@ export function findLeftoverReferences(text: string, prunedNames: readonly strin
   return [...lines].sort((a, b) => a - b);
 }
 
+/** Line numbers (1-based) of `text` that mark an open decision with 要判断. */
+export function findUndecided(text: string): number[] {
+  return text.split("\n").flatMap((line, index) => (line.includes("要判断") ? [index + 1] : []));
+}
+
 /** `https://github.com/<owner>/<repo>` from an HTTPS or SSH (including host-alias) remote URL. */
 export function githubUrlFromRemote(remote: string): string {
   const match = remote.trim().match(/[:/]([^/:]+)\/([^/]+?)(?:\.git)?$/);
@@ -213,6 +222,18 @@ function main(): void {
   if (pruned.length === 0) {
     console.log("No implemented change docs to prune.");
     return;
+  }
+
+  const undecided = pruned.flatMap((dir) => {
+    const design = resolve(dir, "design.md");
+    return findUndecided(readFileSync(design, "utf8")).map(
+      (line) => `${relative(repoRoot, design)}:${line}`,
+    );
+  });
+  if (undecided.length > 0) {
+    throw new Error(
+      `these lines of designs to delete still mark an open decision (要判断); move each into a design that stays, or settle it, and rerun. Nothing was changed.\n${undecided.join("\n")}`,
+    );
   }
 
   // A file HEAD does not have (untracked, ignored, or only staged) would get a

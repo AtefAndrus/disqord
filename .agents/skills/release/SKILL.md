@@ -48,6 +48,7 @@ bun scripts/prune-released-changes.ts
 The permalinks point at HEAD, so the script refuses to run when a folder to delete holds a file HEAD does not have (untracked, ignored, or only staged). Uncommitted edits to files already in HEAD, such as a manual check ticked in pre-flight, are fine: the link then shows the committed version.
 It rewrites Markdown anywhere in the repository except `CHANGELOG.md`, which git-cliff regenerates.
 If a line still names a folder to delete in a form it does not rewrite, it lists those lines and stops without changing anything; replace them with a permalink by hand and rerun.
+If a design to delete still marks an open decision with 要判断, it lists those lines and stops without changing anything; move each decision into a design that stays (a new `investigating` design when none fits) or settle it with the user, then rerun.
 `docs/progress.md` is generated from the remaining folders' frontmatter, so do not edit it by hand.
 Step 5 commits with `LEFTHOOK=0`, which skips the pre-commit generator, so regenerate it explicitly:
 
