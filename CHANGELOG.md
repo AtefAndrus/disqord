@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 
+## [1.19.0] - 2026-10-29
+
+
+### Added
+
+- 返答の LLM 入力を右クリックメニューで見られるようにする ([#247](https://github.com/AtefAndrus/disqord/pull/247))
+- LLM 入力を見るに再取得ボタンを付け、サーバーツール付きの生成を区別する ([#250](https://github.com/AtefAndrus/disqord/pull/250))
+
+
+### Dependencies
+
+- update zizmor
+- update all non-major dependencies
+
+
 ## [1.18.0] - 2026-10-28
 
 
@@ -412,6 +427,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - bump zod from 4.1.13 to 4.2.0
 - bump @biomejs/biome from 2.3.8 to 2.3.9
 <!-- ends the last list, so the link definitions below are not read as part of its final item -->
+[1.19.0]: https://github.com/AtefAndrus/disqord/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/AtefAndrus/disqord/compare/v1.17.1...v1.18.0
 [1.17.1]: https://github.com/AtefAndrus/disqord/compare/v1.17.0...v1.17.1
 [1.17.0]: https://github.com/AtefAndrus/disqord/compare/v1.16.0...v1.17.0
