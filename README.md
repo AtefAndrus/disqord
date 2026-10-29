@@ -66,8 +66,7 @@ docker run -d \
 ### コンテナイメージ (GHCR)
 
 GitHub Release を正式版として公開すると（prerelease を正式版に変えたときを含む）、`.github/workflows/publish-image.yml` がイメージをビルドして `ghcr.io/atefandrus/disqord` へ push する。
-Coolify へのデプロイは `.github/workflows/deploy.yml` がこれまでどおり Release の公開で行う。
-そのため、prerelease を正式版に変えたときはイメージの公開だけが動く。
+本番はこのイメージを取りに行って動く（下の「本番へのデプロイ」）。
 
 - イメージは GitHub-hosted runner の x64 上でビルドするので、`linux/amd64` だけである。
 - タグは Release のタグ名（`v1.10.0` など）とコミットの完全な SHA の 2 つで、`latest` は自動では付けない。workflow を手動実行したときは完全な SHA だけを付ける。
@@ -85,45 +84,22 @@ Coolify へのデプロイは `.github/workflows/deploy.yml` がこれまでど�
 この操作は「サーバーの管理」権限か `/config` の管理者ロールを持ち、対象チャンネルの履歴を読める人だけが使える。
 管理者ロールでメニューを使うには、サーバーの連携サービス設定でコマンドを許可する。
 
-### Coolify へのデプロイ
+### 本番へのデプロイ
 
-`.github/workflows/deploy.yml` は Release の公開時に Coolify の Deploy Webhook を呼び、新しい版が本番で動き始めるまで待つ。
-リポジトリの Secrets に `COOLIFY_WEBHOOK` (Deploy Webhook の URL) と `COOLIFY_TOKEN` (`deploy` 権限の API トークン) を、Variables に本番の `/health` の URL を `PRODUCTION_HEALTH_URL` として登録する。
-Coolify のアプリ設定の Health Check は無効のままにする。
-デプロイ後の確認の待ち時間はこれを前提にしている (下の「180 秒の根拠」)。
+本番は talos2 の Kubernetes クラスタの個人テナント（namespace `personal`）で、レプリカ 1 つの StatefulSet `disqord` として動く。
+マニフェストは private リポジトリ `AtefAndrus/k8s-tenant-personal` の `apps/disqord/` にあり、データは PVC `disqord-data` の `/app/data` に置く。
 
-デプロイ API の成功は Coolify がデプロイ要求を受け付けたことしか示さず、Coolify は新しいコンテナのヘルスチェックが通らないと旧コンテナへ戻す。
-そのため workflow は続けて `scripts/wait-for-deploy.sh` を実行する。
-待つ版は Coolify がビルドする `main` の `package.json` から読む。
-workflow はデプロイ要求の直前に `/health` の `now` (サーバーの時刻) を記録する。
-`/health` が、その版で、起動時刻 (`startedAt`) が記録した時刻より後のプロセスだけを返し続け、180 秒たった時点で 200 を返したら成功する。
-比べる時刻はどちらもサーバーの時計なので、ランナーとの時計のずれは判定に入らない。
-前のデプロイがまだ終わらずに同じ版の候補と元のプロセスが重なっていても、どちらも記録より前に起動しているので、ロールバックで残ったプロセスを成功としない。
-旧プロセスの応答や読めない応答を挟んだら待ち直し、ビルドを含めて 25 分以内に成功しなければ失敗する。
-デプロイ前の `/health` からサーバーの時刻を読めなかったときは、デプロイは起こすが、新旧のプロセスを見分けられないので確認は失敗にする。
-`now` を返さない応答を基準なしで進めるのは、`version` と `now` の欄を持たない旧版の `/health` の形をしている場合に限る。
-proxy のエラー本文などを旧版と取り違えないためである。
-待っている間に次のリリースの実行が始まったら、前の実行は取り消される (Coolify は main の先頭をビルドするので、前の版はデプロイされない)。
+このリポジトリから本番へ届く workflow はない。
+本番側の Flux が GHCR のタグから `v<major>.<minor>.<patch>` の形のものを選び、semver で最も新しいバージョンのタグと digest を `statefulset.yaml` の image 行へ書き戻して、Pod を新しいイメージで起動し直す。
+そのため、Release を正式版として公開すれば、`publish-image.yml` が push したイメージがそのまま本番に入る。
+GHCR のタグの確認と書き戻しはそれぞれ 30 分間隔で動くので、イメージの公開から起動し直すまでに数十分かかることがある。
+workflow の手動実行で付くのは完全な SHA のタグだけで、Flux が選ぶタグの形に合わないので、本番には入らない。
 
-次の場合は誤って成功または失敗とみなしうるが、許容している。
-
-- サーバーの時計が大きく戻された場合。旧プロセスの起動後に、その稼働時間を超えて時計が戻されてから記録すると旧プロセスを新しいとみなし、記録の後に戻されると新しいプロセスを見分けられずに失敗する。
-- 記録の後に前のデプロイ要求が起動した同じ版の候補が、こちらの要求の失敗後に残った場合。成功とみなすが、動いているのは待っている版である。
-- Coolify が戻すと決めた後、ログの取得などのリモートコマンドが長く止まって、戻すのが判定期間より大きく遅れた場合。戻される前に成功とみなしうるが、Coolify と同じホストへのコマンドが数分止まるのは障害時に限られる。
-
-180 秒の根拠は Coolify のロールバックの仕組みにある。
-Health Check が無効の間、Coolify はデプロイのたびに Dockerfile の `HEALTHCHECK` から自分のヘルスチェック設定 (start period、interval、retries) を取り込む。
-そのうえで start period だけ待ってから、interval ごとに retries 回、Docker の health 状態を見る。
-healthy を見たら旧コンテナを外すだけで戻さず、見られないまま回数を使い切ったら戻す。
-そのため戻すのは新しいコンテナの起動から start period + retries × interval 秒 (今の Dockerfile では 10 + 3 × 30 = 100 秒) までである。
-同じ計算で 105 秒になる ratatoskr では、2026-10-13 にデプロイログの上でちょうど 105 秒で戻された。
-180 秒との差は、Coolify が毎回 Docker の状態を読むのにかかる時間を吸収する。
-`HEALTHCHECK` を延ばして 180 秒を超えるとテストが失敗するので、そのときは `STABLE_SECONDS` の既定値も延ばす。
-Health Check を有効にすると、Coolify は画面に保存した値で判定し、Dockerfile から計算した期間とテストが当てはまらなくなる。
-
-確認の失敗はデプロイの失敗とは限らない (観測中に読めない応答が続いた、など)。
-失敗したときは、Coolify のデプロイログで、そのデプロイが完了したか (新しいコンテナがヘルスチェックを通り、旧コンテナが外されたか)、ヘルスチェックの失敗による戻しか、ビルドの失敗かを確かめる。
-`/health` を 1 回読んだだけでは、ロールバック判定の前の新しいコンテナを見ている場合があるので、切り替わったとはみなさない。
+StatefulSet は古い Pod を止めてから新しい Pod を起動するので、同じ Discord の token で 2 つのプロセスが同時に接続することはない。
+停止の猶予は Kubernetes の既定の 30 秒である。
+bot は SIGTERM を受けると応答中の返答を打ち切り、`🛑 Stopped by restart` を付けて閉じ終わるのを最大 8 秒待ってから終了する（`src/index.ts` の `CHAT_SHUTDOWN_TIMEOUT_MS`）。
+新しいバージョンが動き始めたかは、管理 API の `/health` が返す `version` で確認する。
+管理 API は tailnet 上の `talos2-personal-disqord` に HTTPS で届く（[docs/admin-api.md](docs/admin-api.md)）。
 
 ## 環境変数
 

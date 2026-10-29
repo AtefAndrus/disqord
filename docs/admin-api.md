@@ -138,38 +138,14 @@ LOG_DIR=data/logs
 
 ### 本番
 
-ホスト（Coolify など）の環境変数に `ADMIN_API_SECRET` と `LOG_DIR=/app/data/logs` を設定する。
+デプロイ先の環境変数に `ADMIN_API_SECRET` と `LOG_DIR=/app/data/logs` を設定する。
+本番では `AtefAndrus/k8s-tenant-personal` の `apps/disqord/` にある Secret `disqord-env` が環境変数になる。
 コンテナは `bun` ユーザーで動き、書き込めるのは DB と同じ永続ボリュームの `/app/data` の下だけである（Dockerfile）。
 `LOG_DIR` が未設定のときも、書き込めないディレクトリのときも、ログは保存されず `/admin/logs` は空を返す。
 
-既存の公開 HTTPS 経路がある場合、`/admin/*` はその経路を流用できる。
-Cloudflare Tunnel で新しく公開する場合は、次の手順で DisQord の HTTP サーバーへ接続する。
-
-#### Coolify のポートマッピング
-
-1. Coolify ダッシュボードで DisQord プロジェクトを開く
-2. DisQord の **Port Mappings** に `3000:3000` を設定する（左がホストポート、右がコンテナポート）
-3. **Deploy** を選択する
-
-#### Cloudflare Tunnel と公開ホスト名
-
-1. Cloudflare ダッシュボードの **Networking** → **Tunnels** を開く
-2. **Add a tunnel** から Cloudflared を選択し、トンネル名（例: `disqord-admin`）を設定する
-3. 表示された実行コマンドからトンネルトークンを取得して安全に保管する
-4. トンネルの **Routes** で **Add route** → **Published application** を選択する
-5. 管理 API 用のドメインまたはサブドメイン（例: `disqord.example.com`）を指定する
-6. Service type に **HTTP**、Service URL に `localhost:3000` を指定してルートを追加する
-
-トンネルトークンを取得した第三者はトンネルを実行できるため、リポジトリやログに記録しない。
-
-#### Coolify での Cloudflared デプロイ
-
-1. Coolify ダッシュボードで DisQord と同じプロジェクトを開く
-2. **+ New** から `Cloudflared` を検索して選択する
-3. Cloudflared の環境変数 `TUNNEL_TOKEN` に取得したトンネルトークンを設定する
-4. **Deploy** を選択し、Cloudflare Tunnel が接続済みになることを確認する
-
-公開後は、上の curl 例の `BASE` を公開 URL（例: `https://disqord.example.com`）へ変更して管理 API の応答を確認する。
+本番の HTTP サーバー（ポート 3000）は、talos2 の Tailscale Ingress を通して tailnet 上の `talos2-personal-disqord` に HTTPS で公開している。
+インターネットには公開していないので、管理 API を呼ぶ端末は同じ tailnet に参加している必要がある。
+上の curl 例の `BASE` を `https://talos2-personal-disqord.<tailnet の名前>.ts.net` に変えて応答を確認する。
 
 ### Claude Code から呼ぶ
 
@@ -179,8 +155,3 @@ Cloudflare Tunnel で新しく公開する場合は、次の手順で DisQord �
 あわせて、`/health` が返す稼働中のバージョンとその起動時刻、リンク先より前の最後の起動行を表示する。
 `bun scripts/admin.ts channel <チャンネル ID> --since <ISO 8601>` は、その時刻以降のチャンネルの発言をすべてと、同じ時刻以降のログを表示する。
 調査の手順は `.agents/skills/production-investigation/SKILL.md` にある。
-
-## 参考リンク
-
-- [Coolify: Access Single Resource via Cloudflare Tunnels](https://coolify.io/docs/integrations/cloudflare/tunnels/single-resource)
-- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/)
