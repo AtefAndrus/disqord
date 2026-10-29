@@ -221,6 +221,8 @@ export function createInspectInputHandler(
   timeoutMs = 60_000,
 ): (interaction: InspectInputInteraction) => Promise<void> {
   // The latest retry per result message; an earlier one still fetching must not overwrite it.
+  // The check runs before each send and does not order edits already in flight: an earlier retry's
+  // edit that passed the check was sent before the later retry started, so it reaches Discord first.
   const latestRetry = new Map<string, number>();
   let retryCount = 0;
   return async (interaction: InspectInputInteraction): Promise<void> => {
@@ -350,6 +352,7 @@ export function createInspectInputHandler(
       resultSent = true;
       unsent = rest.flat();
       for (const batch of rest) {
+        if (superseded()) return;
         await interaction.followUp({
           ...replyPayload("LLM 入出力ログ（続き）", batch),
           flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral,
