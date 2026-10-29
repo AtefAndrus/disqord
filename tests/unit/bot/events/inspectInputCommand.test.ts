@@ -160,6 +160,7 @@ function harness(options: HarnessOptions = {}): Harness {
     // `sizeLimit` is the room left for attachments after the reserved request overhead.
     attachmentSizeLimit: (options.sizeLimit ?? 10_000_000) + REQUEST_OVERHEAD_BYTES,
     customId: options.retryCustomId,
+    message: { id: "result-1" },
     isButton: (): boolean => options.retryCustomId !== undefined,
     deferReply,
     deferUpdate,
@@ -621,6 +622,29 @@ describe("LLM 入力を見る: 再取得", () => {
       expect(h.generation).not.toHaveBeenCalled();
     });
   }
+
+  test("lets a later retry win over an earlier one still fetching", async () => {
+    let release: (value: GenerationLookup) => void = () => {};
+    const stalled = new Promise<GenerationLookup>((resolve) => {
+      release = resolve;
+    });
+    const failure: GenerationLookup = { ok: false, status: 404, reason: "not found" };
+    let calls = 0;
+    const h = harness({
+      retryCustomId: "inspect:retry:trigger-1",
+      record: null,
+      fallback: RECORD,
+      generation: async () => (++calls === 1 ? stalled : METADATA),
+    });
+    const first = h.run();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.run();
+    release(failure);
+    await first;
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+    expect(buttonsOf(payload(h.editReply))).toEqual([]);
+    expect(h.followUp).not.toHaveBeenCalled();
+  });
 
   test("reports a retry failure in a new message instead of replacing the result", async () => {
     const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });

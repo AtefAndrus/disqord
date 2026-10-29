@@ -220,11 +220,20 @@ export function createInspectInputHandler(
   generationLogClient: IGenerationLogClient,
   timeoutMs = 60_000,
 ): (interaction: InspectInputInteraction) => Promise<void> {
+  // The latest retry per result message; an earlier one still fetching must not overwrite it.
+  const latestRetry = new Map<string, number>();
+  let retryCount = 0;
   return async (interaction: InspectInputInteraction): Promise<void> => {
     // The retry button lives on the ephemeral result, so a retry rewrites that message in place.
     const retryTriggerId = interaction.isButton()
       ? interaction.customId.slice(INSPECT_RETRY_PREFIX.length)
       : null;
+    const retry = interaction.isButton()
+      ? { messageId: interaction.message.id, seq: ++retryCount }
+      : null;
+    if (retry) latestRetry.set(retry.messageId, retry.seq);
+    const superseded = (): boolean =>
+      retry !== null && latestRetry.get(retry.messageId) !== retry.seq;
     if (interaction.isButton()) await interaction.deferUpdate();
     else await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     const deadline = Date.now() + timeoutMs;
@@ -327,6 +336,7 @@ export function createInspectInputHandler(
       const sizeLimit = Math.max(0, interaction.attachmentSizeLimit - REQUEST_OVERHEAD_BYTES);
       const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
+      if (superseded()) return;
       const failed = logs.some((log) => !log.generation.ok || !log.content.ok);
       await interaction.editReply({
         ...replyPayload(
@@ -368,6 +378,8 @@ export function createInspectInputHandler(
       }
     } finally {
       clearTimeout(timer);
+      // An earlier retry still running then finds no entry and treats itself as superseded.
+      if (retry && !superseded()) latestRetry.delete(retry.messageId);
     }
   };
 }
