@@ -1,4 +1,5 @@
 import type { CronJob } from "../db/repositories/cronRepository";
+import type { ReplyGeneration } from "../db/repositories/replyRecord";
 import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens, estimateToolResultTokens } from "../llm/contextBudget";
 import { type ILLMClient, toResponsesContentPart } from "../llm/openrouter";
@@ -66,7 +67,7 @@ export interface IChatService {
     requestId: MessageId,
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
-  ): Promise<ToolLoopResult & { generationIds: string[] }>;
+  ): Promise<ToolLoopResult & { generations: ReplyGeneration[] }>;
   cancelRequest(requestId: MessageId): boolean;
   cancelAll(): void;
   readonly isClosing: boolean;
@@ -359,24 +360,30 @@ export class ChatService implements IChatService {
     requestId: MessageId,
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
-  ): Promise<ToolLoopResult & { generationIds: string[] }> {
-    const generationIds: string[] = [];
+  ): Promise<ToolLoopResult & { generations: ReplyGeneration[] }> {
+    const generations: ReplyGeneration[] = [];
     const seenGenerationIds = new Set<string>();
-    const onGenerationId = (id: string): void => {
-      if (seenGenerationIds.has(id)) return;
-      seenGenerationIds.add(id);
-      generationIds.push(id);
-    };
+    const onGenerationId =
+      (request: ChatCompletionRequest) =>
+      (id: string): void => {
+        if (seenGenerationIds.has(id)) return;
+        seenGenerationIds.add(id);
+        generations.push({
+          id,
+          serverTools: request.tools?.some((tool) => tool.type !== "function") ?? false,
+        });
+      };
     const llmClient: ILLMClient = {
-      chat: (request, signal) => this.llmClient.chat(request, signal, onGenerationId),
-      chatStream: (request, signal) => this.llmClient.chatStream(request, signal, onGenerationId),
+      chat: (request, signal) => this.llmClient.chat(request, signal, onGenerationId(request)),
+      chatStream: (request, signal) =>
+        this.llmClient.chatStream(request, signal, onGenerationId(request)),
       listModels: () => this.llmClient.listModels(),
       listModelsWithPricing: () => this.llmClient.listModelsWithPricing(),
       getCredits: () => this.llmClient.getCredits(),
       isRateLimited: () => this.llmClient.isRateLimited(),
     };
     if (this.closing)
-      return { status: "cancelled", history: buildChatMessages(input), generationIds };
+      return { status: "cancelled", history: buildChatMessages(input), generations };
     const controller = new AbortController();
     this.activeRequests.set(requestId, controller);
     const initialMessages = buildChatMessages(input);
@@ -386,8 +393,7 @@ export class ChatService implements IChatService {
         this.settingsService.getGuildSettings(guildId),
         controller.signal,
       );
-      if (!settingsResult.ok)
-        return { status: "cancelled", history: initialMessages, generationIds };
+      if (!settingsResult.ok) return { status: "cancelled", history: initialMessages, generations };
       const settings = settingsResult.value;
       const conversation = settings.historyEnabled ? input.conversation : undefined;
       const replyTarget =
@@ -413,16 +419,16 @@ export class ChatService implements IChatService {
             controller.signal,
           );
           if (!expansionResult.ok || expansionResult.value.status === "cancelled") {
-            return { status: "cancelled", history: initialMessages, generationIds };
+            return { status: "cancelled", history: initialMessages, generations };
           }
           expansion = expansionResult.value;
         } catch {
           if (controller.signal.aborted)
-            return { status: "cancelled", history: initialMessages, generationIds };
+            return { status: "cancelled", history: initialMessages, generations };
         }
       }
       if (controller.signal.aborted)
-        return { status: "cancelled", history: initialMessages, generationIds };
+        return { status: "cancelled", history: initialMessages, generations };
 
       const discord = settings.discordToolsEnabled ? input.discord : undefined;
       const cron = settings.cronEnabled ? input.cron : undefined;
@@ -446,7 +452,7 @@ export class ChatService implements IChatService {
             controller.signal,
           );
           if (!detailsResult.ok)
-            return { status: "cancelled", history: initialMessages, generationIds };
+            return { status: "cancelled", history: initialMessages, generations };
           const details = detailsResult.value;
           if (conversation || settings.discordToolsEnabled || settings.cronEnabled)
             supportsTools = details?.supportsTools ?? false;
@@ -666,14 +672,14 @@ export class ChatService implements IChatService {
             continue;
           }
         }
-        const withUsage = { ...result, ...(usage && { usage }), generationIds };
+        const withUsage = { ...result, ...(usage && { usage }), generations };
         return withUsage.status === "final" && dropWebSearch
           ? { ...withUsage, webSearchSkipped: true }
           : withUsage;
       }
     } catch (error) {
       // Returned rather than rethrown so the generations already started still reach the reply record.
-      return { status: "error", error, history: initialMessages, generationIds };
+      return { status: "error", error, history: initialMessages, generations };
     } finally {
       this.activeRequests.delete(requestId);
     }

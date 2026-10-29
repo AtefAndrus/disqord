@@ -18,6 +18,13 @@ export interface ReplyPage {
   seq: number;
 }
 
+export interface ReplyGeneration {
+  id: string;
+  // OpenRouter keeps no input for a request that carried a server tool: its generation record
+  // stays empty, and no other generation id reaches the client.
+  serverTools: boolean;
+}
+
 export interface CreateReplyRecordInput {
   triggerMsgId: string;
   channelId: string;
@@ -39,8 +46,8 @@ export interface IReplyRecordRepository {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
-  appendGenerations(triggerMsgId: string, generationIds: readonly string[]): number;
-  listGenerations(triggerMsgId: string): string[];
+  appendGenerations(triggerMsgId: string, generations: readonly ReplyGeneration[]): number;
+  listGenerations(triggerMsgId: string): ReplyGeneration[];
   markPendingFailed(): number;
   deleteByGuild(guildId: string): number;
   deleteByChannel(channelId: string): number;
@@ -194,10 +201,10 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
   }
 
   // 記録の無いトリガーには書かない。返り値は書いた件数である。
-  appendGenerations(triggerMsgId: string, generationIds: readonly string[]): number {
-    if (generationIds.length === 0) return 0;
+  appendGenerations(triggerMsgId: string, generations: readonly ReplyGeneration[]): number {
+    if (generations.length === 0) return 0;
     return this.db
-      .transaction((triggerId: string, ids: readonly string[]): number => {
+      .transaction((triggerId: string, items: readonly ReplyGeneration[]): number => {
         if (!this.db.query("SELECT 1 FROM reply_records WHERE trigger_msg_id = ?").get(triggerId))
           return 0;
         const next =
@@ -207,22 +214,24 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
             )
             .get(triggerId)?.seq ?? 0;
         const insert = this.db.query(
-          "INSERT INTO reply_generations (trigger_msg_id, seq, generation_id) VALUES (?, ?, ?)",
+          `INSERT INTO reply_generations (trigger_msg_id, seq, generation_id, server_tools)
+           VALUES (?, ?, ?, ?)`,
         );
-        for (const [index, id] of ids.entries()) insert.run(triggerId, next + index, id);
-        return ids.length;
+        for (const [index, item] of items.entries())
+          insert.run(triggerId, next + index, item.id, item.serverTools ? 1 : 0);
+        return items.length;
       })
-      .immediate(triggerMsgId, generationIds);
+      .immediate(triggerMsgId, generations);
   }
 
-  listGenerations(triggerMsgId: string): string[] {
+  listGenerations(triggerMsgId: string): ReplyGeneration[] {
     return this.db
-      .query<{ generationId: string }, [string]>(
-        `SELECT generation_id as generationId FROM reply_generations
+      .query<{ id: string; serverTools: number }, [string]>(
+        `SELECT generation_id as id, server_tools as serverTools FROM reply_generations
          WHERE trigger_msg_id = ? ORDER BY seq ASC`,
       )
       .all(triggerMsgId)
-      .map((row) => row.generationId);
+      .map((row) => ({ id: row.id, serverTools: row.serverTools === 1 }));
   }
 
   markPendingFailed(): number {

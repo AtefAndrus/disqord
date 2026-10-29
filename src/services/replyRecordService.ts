@@ -1,6 +1,7 @@
 import type {
   CreateReplyRecordInput,
   IReplyRecordRepository,
+  ReplyGeneration,
   ReplyPage,
   ReplyRecord,
   ReplyRecordStatus,
@@ -24,9 +25,9 @@ export interface IReplyRecordService {
   findByTrigger(triggerMsgId: string): ReplyRecord | null;
   findByPage(pageMsgId: string): ReplyRecord | null;
   listPages(triggerMsgId: string): ReplyPage[];
-  /** Appends the OpenRouter generation IDs of a reply after the ones already saved, in the given order. */
-  saveGenerationIds(triggerMsgId: string, generationIds: readonly string[]): Promise<boolean>;
-  listGenerationIds(triggerMsgId: string): string[];
+  /** Appends the OpenRouter generations of a reply after the ones already saved, in the given order. */
+  saveGenerations(triggerMsgId: string, generations: readonly ReplyGeneration[]): Promise<boolean>;
+  listGenerations(triggerMsgId: string): ReplyGeneration[];
   markPendingFailed(): Promise<number>;
   deleteByGuild(guildId: string): Promise<number>;
   deleteByChannel(channelId: string): Promise<number>;
@@ -128,25 +129,23 @@ export class ReplyRecordService implements IReplyRecordService {
     }
   }
 
-  async saveGenerationIds(
+  async saveGenerations(
     triggerMsgId: string,
-    generationIds: readonly string[],
+    generations: readonly ReplyGeneration[],
   ): Promise<boolean> {
     try {
-      return (
-        this.repository.appendGenerations(triggerMsgId, generationIds) === generationIds.length
-      );
+      return this.repository.appendGenerations(triggerMsgId, generations) === generations.length;
     } catch (error) {
-      console.error("[replyRecord] saveGenerationIds failed", operationError(error));
+      console.error("[replyRecord] saveGenerations failed", operationError(error));
       return false;
     }
   }
 
-  listGenerationIds(triggerMsgId: string): string[] {
+  listGenerations(triggerMsgId: string): ReplyGeneration[] {
     try {
       return this.repository.listGenerations(triggerMsgId);
     } catch (error) {
-      console.error("[replyRecord] listGenerationIds failed", operationError(error));
+      console.error("[replyRecord] listGenerations failed", operationError(error));
       return [];
     }
   }

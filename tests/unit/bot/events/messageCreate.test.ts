@@ -13,7 +13,10 @@ import {
   createMessageCreateHandler,
   toRawDiscordMessage,
 } from "../../../../src/bot/events/messageCreate";
-import type { IReplyRecordRepository } from "../../../../src/db/repositories/replyRecord";
+import type {
+  IReplyRecordRepository,
+  ReplyGeneration,
+} from "../../../../src/db/repositories/replyRecord";
 import { AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
 import type {
@@ -162,7 +165,7 @@ type ChatResponseFn = (
   requestId: string,
   updater: IToolLoopUpdater,
   ctx: ChatRequestContext,
-) => Promise<ToolLoopResult & { generationIds: string[] }>;
+) => Promise<ToolLoopResult & { generations: ReplyGeneration[] }>;
 
 /**
  * chatService.generateChatResponse() のフェイク実装。runToolLoop() 自体は経由せず、
@@ -188,7 +191,7 @@ function createMockChatResponseFn(
     return {
       status: "final",
       text: fullText,
-      generationIds: [],
+      generations: [],
       finishReason,
       history: [],
       usage: undefined,
@@ -221,7 +224,7 @@ function createPreambleThenFinalChatResponseFn(
     return {
       status: "final",
       text: finalTurnText,
-      generationIds: [],
+      generations: [],
       finishReason,
       history: [],
       usage: undefined,
@@ -239,7 +242,7 @@ function createCancelledChatResponseFn(partialText = ""): ChatResponseFn {
       await updater.stageContent(partialText);
     }
     updater.abortTurn("cancelled (test)");
-    return { status: "cancelled", history: [], generationIds: [] };
+    return { status: "cancelled", history: [], generations: [] };
   };
 }
 
@@ -251,7 +254,7 @@ function createFatalErrorChatResponseFn(partialText: string, error: unknown): Ch
       await updater.stageContent(partialText);
     }
     updater.abortTurn("error (test)");
-    return { status: "error", error, history: [], generationIds: [] };
+    return { status: "error", error, history: [], generations: [] };
   };
 }
 
@@ -279,7 +282,7 @@ function createTimedChatResponseFn(
     return {
       status: "final",
       text: finalFullText,
-      generationIds: [],
+      generations: [],
       finishReason: "stop",
       history: [],
       usage: undefined,
@@ -452,8 +455,8 @@ describe("createMessageCreateHandler", () => {
       findByTrigger: mock(() => null),
       findByPage: mock(() => null),
       listPages: mock(() => []),
-      saveGenerationIds: mock(async () => true),
-      listGenerationIds: mock(() => []),
+      saveGenerations: mock(async () => true),
+      listGenerations: mock(() => []),
       markPendingFailed: mock(async () => 0),
       deleteByGuild: mock(async () => 0),
       deleteByChannel: mock(async () => 0),
@@ -1820,8 +1823,8 @@ describe("createMessageCreateHandler", () => {
       findByTrigger: mock(() => null),
       findByPage: mock(() => null),
       listPages: mock(() => []),
-      saveGenerationIds: mock(async () => true),
-      listGenerationIds: mock(() => []),
+      saveGenerations: mock(async () => true),
+      listGenerations: mock(() => []),
       markPendingFailed: mock(async () => 0),
       deleteByGuild: mock(async () => 0),
       deleteByChannel: mock(async () => 0),

@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ApplicationCommandType,
   type AttachmentBuilder,
@@ -18,6 +18,7 @@ import {
 import type { ReplyRecord } from "../../../../src/db/repositories/replyRecord";
 import type { GenerationLookup } from "../../../../src/llm/generationLog";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
+import { logger } from "../../../../src/utils/logger";
 import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
 
 const RECORD: ReplyRecord = {
@@ -61,6 +62,8 @@ interface HarnessOptions {
   targetAuthor?: string;
   reference?: string;
   ids?: string[];
+  /** Generations among `ids` recorded as made with a server tool. */
+  serverTools?: string[];
   sizeLimit?: number;
   timeoutMs?: number;
   generation?: (id: string, signal?: AbortSignal) => Promise<GenerationLookup>;
@@ -70,6 +73,8 @@ interface HarnessOptions {
   uncachedChannel?: true | "fails";
   followUp?: () => Promise<unknown>;
   deferDelayMs?: number;
+  /** Run as a press of the retry button with this custom ID instead of the context menu. */
+  retryCustomId?: string;
 }
 
 interface Payload {
@@ -77,6 +82,7 @@ interface Payload {
   components: ContainerBuilder[];
   files: AttachmentBuilder[];
   allowedMentions: { parse: [] };
+  attachments?: [];
 }
 
 interface Harness {
@@ -84,6 +90,7 @@ interface Harness {
   editReply: ReturnType<typeof mock>;
   followUp: ReturnType<typeof mock>;
   deferReply: ReturnType<typeof mock>;
+  deferUpdate: ReturnType<typeof mock>;
   findByPage: ReturnType<typeof mock>;
   findByTrigger: ReturnType<typeof mock>;
   generation: ReturnType<typeof mock>;
@@ -96,6 +103,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const deferReply = mock(
     () => new Promise<void>((resolve) => setTimeout(resolve, options.deferDelayMs ?? 0)),
   );
+  const deferUpdate = mock(() => Promise.resolve());
   const editReply = mock(() => Promise.resolve());
   const followUp = mock(options.followUp ?? (() => Promise.resolve()));
   const threadFetch = mock(() =>
@@ -108,7 +116,12 @@ function harness(options: HarnessOptions = {}): Harness {
   const records = {
     findByPage,
     findByTrigger,
-    listGenerationIds: mock(() => options.ids ?? ["gen-1"]),
+    listGenerations: mock(() =>
+      (options.ids ?? ["gen-1"]).map((id) => ({
+        id,
+        serverTools: options.serverTools?.includes(id) ?? false,
+      })),
+    ),
   } as unknown as IReplyRecordService;
   const settings = createMockSettingsService();
   settings.getGuildSettings = mock(async () =>
@@ -153,7 +166,11 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     // `sizeLimit` is the room left for attachments after the reserved request overhead.
     attachmentSizeLimit: (options.sizeLimit ?? 10_000_000) + REQUEST_OVERHEAD_BYTES,
+    customId: options.retryCustomId,
+    message: { id: "result-1" },
+    isButton: (): boolean => options.retryCustomId !== undefined,
     deferReply,
+    deferUpdate,
     editReply,
     followUp,
   } as unknown as MessageContextMenuCommandInteraction;
@@ -166,6 +183,7 @@ function harness(options: HarnessOptions = {}): Harness {
   return {
     run: () => handler(interaction),
     deferReply,
+    deferUpdate,
     editReply,
     followUp,
     findByPage,
@@ -195,7 +213,13 @@ function textOf(call: ReturnType<typeof mock>): string {
 
 function fileJson(file: AttachmentBuilder): {
   triggerMessageId: string;
-  generations: { id: string; generation: GenerationLookup; content: GenerationLookup }[];
+  generations: {
+    id: string;
+    serverTools: boolean;
+    // Absent for a server-tool generation, which is not looked up.
+    generation?: GenerationLookup;
+    content?: GenerationLookup;
+  }[];
 } {
   if (!Buffer.isBuffer(file.attachment)) throw new Error("Expected an in-memory JSON attachment");
   return JSON.parse(file.attachment.toString("utf8"));
@@ -220,7 +244,7 @@ describe("LLM 入力を見る", () => {
     expect(result.files[0].name).toBe("llm-input-trigger-1.json");
     expect(fileJson(result.files[0])).toEqual({
       triggerMessageId: "trigger-1",
-      generations: [{ id: "gen-1", generation: METADATA, content: CONTENT }],
+      generations: [{ id: "gen-1", serverTools: false, generation: METADATA, content: CONTENT }],
     });
     expect(result.components[0].toJSON().components).toContainEqual({
       type: ComponentType.File,
@@ -326,7 +350,12 @@ describe("LLM 入力を見る", () => {
     const h = harness({ ids: ["gen-1", "gen-2"], content: async () => failure });
     await h.run();
     expect(fileJson(payload(h.editReply).files[0]).generations).toEqual(
-      ["gen-1", "gen-2"].map((id) => ({ id, generation: METADATA, content: failure })),
+      ["gen-1", "gen-2"].map((id) => ({
+        id,
+        serverTools: false,
+        generation: METADATA,
+        content: failure,
+      })),
     );
     expect(textOf(h.editReply)).toContain("403 forbidden");
   });
@@ -395,6 +424,7 @@ describe("LLM 入力を見る", () => {
     expect(logs[1].content).toEqual({ ok: false, reason: "時間切れ" });
     expect(logs[2]).toEqual({
       id: "gen-3",
+      serverTools: false,
       generation: { ok: false, reason: "時間切れ" },
       content: { ok: false, reason: "時間切れ" },
     });
@@ -533,21 +563,145 @@ describe("LLM 入力を見る", () => {
     expect(textOf(h.editReply)).toContain("bytes");
   });
 
-  test("shows the logging hint only when all content lookups return 404", async () => {
-    const h = harness({
-      ids: ["gen-1", "gen-2"],
-      content: async () => ({ ok: false, status: 404, reason: "not found" }),
-    });
-    await h.run();
-    expect(textOf(h.editReply)).toContain(
-      "少し待ってから再実行し、それでも無ければ OpenRouter の入出力ログの設定を確かめてください",
-    );
+  test("shows the logging hint when any content lookup returns 404", async () => {
     const mixed = harness({
       ids: ["gen-1", "gen-2"],
       content: async (id) =>
         id === "gen-1" ? { ok: false, status: 404, reason: "not found" } : CONTENT,
     });
     await mixed.run();
-    expect(textOf(mixed.editReply)).not.toContain("少し待ってから");
+    expect(textOf(mixed.editReply)).toContain("少し待ってから「再取得」を押し");
+    const forbidden = harness({
+      content: async () => ({ ok: false, status: 403, reason: "forbidden" }),
+    });
+    await forbidden.run();
+    expect(textOf(forbidden.editReply)).not.toContain("少し待ってから");
+  });
+
+  test("explains a server-tool generation without looking it up, retry button, or 404 hint", async () => {
+    const h = harness({ ids: ["gen-1", "gen-2"], serverTools: ["gen-1"] });
+    await h.run();
+    expect(h.generation.mock.calls.map(([id]) => id)).toEqual(["gen-2"]);
+    expect(h.content.mock.calls.map(([id]) => id)).toEqual(["gen-2"]);
+    const result = payload(h.editReply);
+    expect(textOf(h.editReply)).toContain(
+      "1. gen-1: OpenRouter に入力が残っていません（Web 検索か日時取得のツールを渡した生成）",
+    );
+    expect(textOf(h.editReply)).not.toContain("少し待ってから");
+    expect(buttonsOf(result)).toEqual([]);
+    expect(fileJson(result.files[0]).generations).toEqual([
+      { id: "gen-1", serverTools: true },
+      { id: "gen-2", serverTools: false, generation: METADATA, content: CONTENT },
+    ]);
+  });
+});
+
+function buttonsOf(part: Payload): { custom_id?: string; label?: string }[] {
+  return part.components.flatMap((container) =>
+    container
+      .toJSON()
+      .components.flatMap((component) =>
+        component.type === ComponentType.ActionRow
+          ? (component.components as { custom_id?: string; label?: string }[])
+          : [],
+      ),
+  );
+}
+
+describe("LLM 入力を見る: 再取得", () => {
+  test("offers a retry button only when a lookup failed", async () => {
+    const ok = harness();
+    await ok.run();
+    expect(buttonsOf(payload(ok.editReply))).toEqual([]);
+    const failed = harness({
+      generation: async (id) =>
+        id === "gen-1" ? { ok: false, status: 404, reason: "not found" } : METADATA,
+    });
+    await failed.run();
+    expect(buttonsOf(payload(failed.editReply))).toEqual([
+      expect.objectContaining({ custom_id: "inspect:retry:trigger-1", label: "再取得" }),
+    ]);
+  });
+
+  test("rewrites the result in place from the trigger in the button and drops the old files", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    await h.run();
+    expect(h.deferUpdate).toHaveBeenCalledTimes(1);
+    expect(h.deferReply).not.toHaveBeenCalled();
+    expect(h.findByPage).not.toHaveBeenCalled();
+    expect(h.findByTrigger).toHaveBeenCalledWith("trigger-1");
+    const result = payload(h.editReply);
+    expect(result.attachments).toEqual([]);
+    expect(fileJson(result.files[0]).generations).toEqual([
+      { id: "gen-1", serverTools: false, generation: METADATA, content: CONTENT },
+    ]);
+    expect(buttonsOf(result)).toEqual([]);
+    expect(h.followUp).not.toHaveBeenCalled();
+  });
+
+  for (const refused of [
+    { manageGuild: false },
+    { readHistory: false },
+    { fallback: null },
+    { fallback: { ...RECORD, channelId: "other-channel" } },
+  ]) {
+    test(`keeps the shown result and replies separately when a retry is refused: ${JSON.stringify(refused)}`, async () => {
+      const h = harness({
+        retryCustomId: "inspect:retry:trigger-1",
+        record: null,
+        fallback: RECORD,
+        ...refused,
+      });
+      await h.run();
+      expect(h.editReply).not.toHaveBeenCalled();
+      expect(payload(h.followUp).flags).toBe(MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral);
+      expect(h.generation).not.toHaveBeenCalled();
+    });
+  }
+
+  test("only acknowledges a press while a retry runs on the same message", async () => {
+    let release: (value: GenerationLookup) => void = () => {};
+    const stalled = new Promise<GenerationLookup>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const h = harness({
+      retryCustomId: "inspect:retry:trigger-1",
+      record: null,
+      fallback: RECORD,
+      generation: async () => (++calls === 1 ? stalled : METADATA),
+    });
+    const first = h.run();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await h.run();
+    expect(h.deferUpdate).toHaveBeenCalledTimes(2);
+    expect(h.generation).toHaveBeenCalledTimes(1);
+    expect(h.editReply).not.toHaveBeenCalled();
+    release(METADATA);
+    await first;
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+    // Once the running retry finishes, the next press runs again.
+    await h.run();
+    expect(h.generation).toHaveBeenCalledTimes(2);
+    expect(h.editReply).toHaveBeenCalledTimes(2);
+  });
+
+  test("releases the message when the retry's acknowledgement fails", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    h.deferUpdate.mockImplementationOnce(() => Promise.reject(new Error("Unknown interaction")));
+    await expect(h.run()).rejects.toThrow("Unknown interaction");
+    await h.run();
+    expect(h.generation).toHaveBeenCalledTimes(1);
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+  });
+
+  test("reports a retry failure in a new message instead of replacing the result", async () => {
+    const h = harness({ retryCustomId: "inspect:retry:trigger-1", record: null, fallback: RECORD });
+    h.editReply.mockImplementation(() => Promise.reject(new Error("Unknown Message")));
+    const errors = spyOn(logger, "error").mockImplementation(() => {});
+    await h.run();
+    errors.mockRestore();
+    expect(h.editReply).toHaveBeenCalledTimes(1);
+    expect(textOf(h.followUp)).toContain("取得中にエラー");
   });
 });
