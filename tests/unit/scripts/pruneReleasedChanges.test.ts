@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   findLeftoverReferences,
+  findUndecided,
   githubUrlFromRemote,
   rewriteLinks,
 } from "../../../scripts/prune-released-changes";
@@ -191,5 +192,15 @@ describe("findLeftoverReferences", () => {
     expect(
       findLeftoverReferences(rewriteLinks(text, FILE, PRUNED, ROOT, BASE), ["old-feature"]),
     ).toEqual([]);
+  });
+});
+
+describe("findUndecided", () => {
+  test("要判断を含む行を行番号で返し、含まない design では空を返す", () => {
+    const text =
+      "## Decisions\n| 対象 | 最後の発言だけ（**要判断**） |\n## Open Questions / Risks\n- **有用性（要判断）**: 決める";
+
+    expect(findUndecided(text)).toEqual([2, 4]);
+    expect(findUndecided("## Open Questions / Risks\n- 判断済みの事項")).toEqual([]);
   });
 });
