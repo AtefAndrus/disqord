@@ -5,7 +5,7 @@
     "": {
       "name": "disqord",
       "dependencies": {
-        "croner": "10.0.1",
+        "croner": "11.0.0",
         "discord.js": "14.27.0",
         "zod": "4.6.7",
       },
@@ -150,7 +150,7 @@
 
     "commander": ["commander@8.3.0", "https://npm.flatt.tech/commander/-/commander-8.3.0.tgz", {}, "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww=="],
 
-    "croner": ["croner@10.0.1", "https://npm.flatt.tech/croner/-/croner-10.0.1.tgz", {}, "sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g=="],
+    "croner": ["croner@11.0.0", "https://npm.flatt.tech/croner/-/croner-11.0.0.tgz", {}, "sha512-T17ADjdttrVToyzLpLq9Xb9xzcMwpQ/M3Qs9szhh0MVNTbv6NWQ9OFYa2qlzPYXFMn+uoDlnW1IpIv6cAvFtyA=="],
 
     "debug": ["debug@4.4.3", "https://npm.flatt.tech/debug/-/debug-4.4.3.tgz", { "dependencies": { "ms": "^2.1.3" } }, "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA=="],
 
