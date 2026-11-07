@@ -19,6 +19,7 @@ OAuth PKCE でユーザーまたは Guild 管理者が自分の OpenRouter ア�
 - 連携: [設定階層化](../settings-hierarchy/design.md) — ユーザー → Guild → デフォルトという解決順序は似ているが、API キーは設定値ではなく秘密情報なので、テーブルも解決ロジックも分けたままにする
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — `/connect guild` と `/disconnect guild` の認可は同 change の共通認可関数 `canManageGuildSettings` で判定する
 - 関連: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — `/connect` と `/disconnect` は同 change のパネルに載せず、独立したコマンドのままにする
+- 連携: [ChatGPT プランでの応答](../chatgpt-plan-provider/design.md) — ホスティング者本人の発言を ChatGPT プランで答える。利用者ごとのプラン接続は、OpenAI の承認が下りた後に本 change のキー解決へ支払い元の種類として加える
 - 連携: [コード実行](../code-execution/design.md) — コンテナは API キーの workspace に scope されるので、生成ファイルの取得は、その生成に使ったのと同じキーで行う必要がある
 
 ## Goals / Non-Goals
