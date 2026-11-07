@@ -10,6 +10,7 @@
 | 機能 | 優先度 | ステータス | 概要 |
 | ---- | ------ | ---------- | ---- |
 | [OAuth BYOK（ユーザー別 OpenRouter キー）](changes/oauth-byok/design.md) | 高 | investigating | OAuth PKCE によるユーザー別 OpenRouter API キー（BYOK） |
+| [ChatGPT プランでの応答](changes/chatgpt-plan-provider/design.md) | 中 | investigating | ホスティング者本人の発言に、Sign in with ChatGPT で接続した本人の ChatGPT プランで答え、OpenRouter の従量課金を減らす |
 | [コード実行（OpenRouter shell server tool）](changes/code-execution/design.md) | 中 | investigating | OpenRouter の shell server tool による hosted サンドボックスでのコード実行と、その結果の Discord 表示 |
 | [会話の区切り](changes/conversation-boundary/design.md) | 中 | planned | チャンネルに区切りを置き、以後の応答にそれより前の会話を自動では渡さず、モデルには区切りの存在を助言として示して必要なときだけ遡らせる |
 | [回答の再生成と取り消し](changes/conversation-regeneration/design.md) | 中 | investigating | 返答のページを書き換えて同じ発言に答え直す再生成と、返答のページを消して会話から外す取り消し |
