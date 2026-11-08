@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, setSystemTime, test } from "bun:test";
 import type { Message } from "discord.js";
 import { DiscordStreamingUpdater } from "../../../../src/bot/events/streamingUpdater";
 import { linkMessageRefs } from "../../../../src/utils/messageRefLinks";
@@ -445,6 +445,22 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  test('空白だけの preamble は commitTurn("tool_calls") で描画されない', async () => {
+    const editMock = mock(() => Promise.resolve());
+    const initialMessage = { id: "bot-1", edit: editMock } as unknown as Message;
+    const originalMessage = {
+      id: "trigger-1",
+      channel: { id: "chan-1", send: mock() },
+    } as unknown as Message;
+
+    const updater = new DiscordStreamingUpdater(originalMessage, initialMessage, "Model", 0);
+    updater.beginTurn();
+    await updater.stageContent("\n");
+    await updater.commitTurn("tool_calls");
+
+    expect(editMock).not.toHaveBeenCalled();
+  });
+
   test(
     'スロットル間隔内で描画がスキップされた preamble は、commitTurn("tool_calls") で' +
       "スロットルを無視して 1 回描画される",
@@ -566,165 +582,4 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
       expect(JSON.stringify(calls[1]?.[0])).toContain("preamble");
     },
   );
-});
-
-describe("DiscordStreamingUpdater — deferred first page", () => {
-  function setup(options: { shouldSend?: () => boolean; delayMs?: number } = {}): {
-    updater: DiscordStreamingUpdater;
-    send: ReturnType<typeof mock>;
-    channelSend: ReturnType<typeof mock>;
-    registered: Message[];
-    page: { id: string; edit: ReturnType<typeof mock> };
-  } {
-    const page = { id: "first", edit: mock(async () => {}) };
-    const send = mock(async () => page as unknown as Message);
-    const channelSend = mock(async () => ({ id: "other", edit: mock(async () => {}) }));
-    const registered: Message[] = [];
-    const updater = new DiscordStreamingUpdater(
-      { id: "trigger", channel: { send: channelSend } } as unknown as Message,
-      null,
-      "Model",
-      0,
-      undefined,
-      async (message) => {
-        registered.push(message);
-      },
-    );
-    updater.deferInitialMessage({
-      send: send as unknown as () => Promise<Message>,
-      delayMs: options.delayMs ?? 60_000,
-      shouldSend: options.shouldSend ?? (() => true),
-    });
-    return { updater, send, channelSend, registered, page };
-  }
-
-  test("sends on the first text and registers the page", async () => {
-    const { updater, send, registered, page } = setup();
-    await updater.stageContent("こ");
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(updater.messages).toEqual([page as unknown as Message]);
-    expect(registered).toEqual([page as unknown as Message]);
-    await updater.stageContent("こん");
-    expect(send).toHaveBeenCalledTimes(1);
-    await updater.settleInitialMessage();
-  });
-
-  test("whitespace alone sends nothing, also when it is committed before a tool call", async () => {
-    const { updater, send, channelSend } = setup();
-    await updater.stageContent("\n ");
-    await updater.commitTurn("tool_calls");
-    await updater.beginToolBlock("reply_with_reaction");
-    await updater.settleInitialMessage();
-    expect(send).not.toHaveBeenCalled();
-    expect(channelSend).not.toHaveBeenCalled();
-    expect(updater.messages).toEqual([]);
-  });
-
-  test("a tool other than reply_with_reaction sends it", async () => {
-    const { updater, send } = setup();
-    await updater.beginToolBlock("reply_with_reaction");
-    expect(send).not.toHaveBeenCalled();
-    await updater.beginToolBlock("read_earlier_messages");
-    expect(send).toHaveBeenCalledTimes(1);
-    await updater.settleInitialMessage();
-  });
-
-  test("the delay sends it", async () => {
-    const { updater, send } = setup({ delayMs: 5 });
-    expect(send).not.toHaveBeenCalled();
-    await Bun.sleep(30);
-    expect(send).toHaveBeenCalledTimes(1);
-    await updater.settleInitialMessage();
-  });
-
-  test("the delay does not send it while reply_with_reaction runs, and is due again on the next turn", async () => {
-    const { updater, send } = setup({ delayMs: 5 });
-    await updater.beginToolBlock("reply_with_reaction");
-    await Bun.sleep(30);
-    expect(send).not.toHaveBeenCalled();
-    await updater.beginTurn();
-    await Bun.sleep(5);
-    expect(send).toHaveBeenCalledTimes(1);
-    await updater.settleInitialMessage();
-  });
-
-  test("beginning a turn does not put the deadline off", async () => {
-    const { updater, send } = setup({ delayMs: 20 });
-    await Bun.sleep(12);
-    await updater.beginTurn();
-    await Bun.sleep(12);
-    expect(send).toHaveBeenCalledTimes(1);
-    await updater.settleInitialMessage();
-  });
-
-  test("settling before the delay means it is never sent", async () => {
-    const { updater, send } = setup({ delayMs: 5 });
-    await updater.settleInitialMessage();
-    await Bun.sleep(30);
-    expect(send).not.toHaveBeenCalled();
-    expect(updater.messages).toEqual([]);
-  });
-
-  test("settling waits for a send in flight, and the page is registered by then", async () => {
-    const { updater, send, registered, page } = setup();
-    const gate = deferred<Message>();
-    send.mockImplementation(() => gate.promise);
-    void updater.beginToolBlock("read_earlier_messages");
-    let settled = false;
-    const settling = updater.settleInitialMessage().then(() => {
-      settled = true;
-    });
-    await Bun.sleep(5);
-    expect(settled).toBe(false);
-    gate.resolve(page as unknown as Message);
-    await settling;
-    expect(updater.messages).toHaveLength(1);
-    expect(registered).toHaveLength(1);
-  });
-
-  test("text that arrives during the send does not send a second page", async () => {
-    const { updater, send, channelSend, page } = setup();
-    const gate = deferred<Message>();
-    send.mockImplementation(() => gate.promise);
-    const first = updater.stageContent("あ");
-    const second = updater.stageContent("あい");
-    const committed = updater.commitTurn("tool_calls");
-    gate.resolve(page as unknown as Message);
-    await Promise.all([first, second, committed]);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(channelSend).not.toHaveBeenCalled();
-    expect(JSON.stringify(page.edit.mock.calls)).toContain("あい");
-  });
-
-  test("a failed send leaves no page, and the next render sends one", async () => {
-    setSystemTime(new Date(2020, 0, 1));
-    try {
-      const warn = spyOn(console, "warn").mockImplementation(() => {});
-      const { updater, send, channelSend } = setup();
-      send.mockImplementation(async () => {
-        throw new Error("rate limited");
-      });
-      await updater.stageContent("あ");
-      expect(updater.messages).toEqual([]);
-      expect(channelSend).not.toHaveBeenCalled();
-      setSystemTime(Date.now() + 2100);
-      await updater.stageContent("あい");
-      expect(channelSend).toHaveBeenCalledTimes(1);
-      expect(updater.messages).toHaveLength(1);
-      warn.mockRestore();
-    } finally {
-      setSystemTime();
-    }
-  });
-
-  test("nothing is sent once shutdown has begun, however the send is triggered", async () => {
-    const { updater, send, channelSend } = setup({ shouldSend: () => false });
-    await updater.stageContent("あ");
-    setSystemTime(Date.now() + 2100);
-    await updater.stageContent("あい");
-    setSystemTime();
-    await updater.settleInitialMessage();
-    expect(send).not.toHaveBeenCalled();
-    expect(channelSend).not.toHaveBeenCalled();
-  });
 });

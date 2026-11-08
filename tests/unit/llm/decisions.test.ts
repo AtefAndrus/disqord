@@ -13,6 +13,40 @@ const request: DecisionsRequest = {
   },
 };
 
+describe("OpenRouterClient.decide", () => {
+  test("returns every answer as sent, with the metadata", async () => {
+    globalThis.fetch = mock(async () =>
+      Response.json({
+        model: "typesafe/jev-1.14-20261014",
+        answers: {
+          needs_text: { type: "noul", noul: 0.1 },
+          emoji: { type: "choice", choice: "🙏" },
+        },
+        usage: { cost: 0.0001 },
+      }),
+    ) as unknown as typeof fetch;
+    expect(await new OpenRouterClient("key").decide(request)).toEqual({
+      answers: {
+        needs_text: { type: "noul", noul: 0.1 },
+        emoji: { type: "choice", choice: "🙏" },
+      },
+      model: "typesafe/jev-1.14-20261014",
+      cost: 0.0001,
+    });
+  });
+
+  test("a response without answers has none, and an error status throws with the status", async () => {
+    globalThis.fetch = mock(async () => Response.json({})) as unknown as typeof fetch;
+    expect((await new OpenRouterClient("key").decide(request)).answers).toEqual({});
+    globalThis.fetch = mock(
+      async () => new Response("nope", { status: 422 }),
+    ) as unknown as typeof fetch;
+    await expect(new OpenRouterClient("key").decide(request)).rejects.toMatchObject({
+      status: 422,
+    });
+  });
+});
+
 describe("OpenRouterClient.decideNoul", () => {
   test("posts the exact request to Decisions with attribution headers and parses metadata", async () => {
     const fetchMock = mock(async () =>

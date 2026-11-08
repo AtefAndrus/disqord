@@ -610,6 +610,14 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    // Paired with reaction-only, which must run right after it: the gate is asked only when the
+    // conversation holds a message of the bot's, and this one offers nothing to accept.
+    name: "reaction-only-answer",
+    manual: true,
+    prompt: "[e2e] 1 + 1 は？数字だけで答えて。",
+    check: (reply) => hasUsageFooter(reply),
+  },
+  {
     name: "reaction-only",
     manual: true,
     prompt: "[e2e] ありがとう、助かった！",
@@ -622,15 +630,22 @@ export const SCENARIOS: Scenario[] = [
       const db = new Database(env.databasePath, { readonly: true });
       try {
         const settings = db
-          .query<{ enabled: number }, [string]>(
-            "SELECT discord_tools_enabled AS enabled FROM guild_settings WHERE guild_id=?",
+          .query<{ tools: number; history: number }, [string]>(
+            "SELECT discord_tools_enabled AS tools, history_enabled AS history FROM guild_settings WHERE guild_id=?",
           )
           .get(guildId ?? "");
-        return settings?.enabled
-          ? []
-          : [
-              `Discord 操作 is off for guild ${guildId} in ${env.databasePath}: enable /config → 機能 → Discord 操作`,
-            ];
+        return [
+          ...(settings?.tools
+            ? []
+            : [
+                `Discord 操作 is off for guild ${guildId} in ${env.databasePath}: enable /config → 機能 → Discord 操作`,
+              ]),
+          ...(settings?.history
+            ? []
+            : [
+                `会話履歴 is off for guild ${guildId} in ${env.databasePath}: enable /config → 機能 → 会話履歴`,
+              ]),
+        ];
       } finally {
         db.close();
       }

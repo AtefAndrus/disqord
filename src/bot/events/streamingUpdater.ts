@@ -1,6 +1,5 @@
 import type { Message } from "discord.js";
 import type { IToolLoopUpdater } from "../../llm/toolLoop";
-import { REPLY_WITH_REACTION_TOOL } from "../../llm/tools/discord/replyWithReaction";
 import type { ToolRenderPayload } from "../../llm/tools/registry";
 import {
   badgeText,
@@ -15,15 +14,6 @@ import { logger } from "../../utils/logger";
 
 export type DeleteOwnMessage = (message: Message) => Promise<void>;
 export type OnBotMessageSent = (message: Message) => Promise<void>;
-
-/** The first page, held back so that a reply that is only a reaction shows no page at all. */
-export interface DeferredInitialMessage {
-  send: () => Promise<Message>;
-  /** Sent at this delay at the latest; text or a tool other than `reply_with_reaction` sends it earlier. */
-  delayMs: number;
-  /** Asked right before sending; false means shutdown has begun, and nothing is sent from then on. */
-  shouldSend: () => boolean;
-}
 
 const STREAM_UPDATE_INTERVAL = 2000; // 2秒
 
@@ -231,12 +221,6 @@ async function updateStreamingMessages(
  * `commitTurn("tool_calls")` はこのフィールドと `this.text` を比較し、未描画分があればスロットルを
  * 無視して 1 回 reconciliation を実行する（updateInFlight 中なら `dirty` を立てて既存の trailing
  * 機構に委ねる — 2 本の reconciliation を同時に走らせない直列化を崩さないため）。
- *
- * `initialState`: `deferInitialMessage()` で最初のページを遅らせている間の状態。`waiting` の間は
- * ページが無いので reconciliation を動かさない（動かすと `updateStreamingMessages()` が足りない
- * ページを送ってしまう）。`sending` の間も、送信中のページと二重にならないよう完了を待つ。送信に
- * 失敗したら `idle` に戻るので、次の reconciliation か最終描画が送り直す。終了の処理は
- * `settleInitialMessage()` で送信の完了を待ってから `messages` を読む。
  */
 export class DiscordStreamingUpdater implements IToolLoopUpdater {
   private readonly startTime = Date.now();
@@ -249,15 +233,10 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
   private dirty = false;
   /** `this.text` snapshot as of the most recent reconciliation attempt (see class doc). */
   private lastRenderedText = "";
-  private initialState: "idle" | "waiting" | "sending" = "idle";
-  private deferredInitial?: DeferredInitialMessage;
-  private initialTimer?: ReturnType<typeof setTimeout>;
-  private initialSend: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly originalMessage: Message,
-    /** null when the first page is sent through `deferInitialMessage()`. */
-    initialBotMessage: Message | null,
+    initialBotMessage: Message,
     private readonly modelName: string,
     private readonly color: number,
     private readonly deleteOwnMessage: DeleteOwnMessage = async (message) => {
@@ -266,62 +245,7 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
     private readonly onBotMessageSent: OnBotMessageSent = async () => {},
     private readonly transformText?: (text: string) => string,
   ) {
-    this.botMessages = initialBotMessage ? [initialBotMessage] : [];
-  }
-
-  deferInitialMessage(deferred: DeferredInitialMessage): void {
-    this.deferredInitial = deferred;
-    this.initialState = "waiting";
-    this.armInitialTimer();
-  }
-
-  /** The deadline counts from the start of the request, however often this re-arms it. */
-  private armInitialTimer(): void {
-    if (this.initialState !== "waiting" || !this.deferredInitial) return;
-    clearTimeout(this.initialTimer);
-    this.initialTimer = setTimeout(
-      () => void this.startInitialSend(),
-      Math.max(0, this.startTime + this.deferredInitial.delayMs - Date.now()),
-    );
-  }
-
-  /** Never rejects: a failed send leaves no page, and the next render sends one. */
-  private startInitialSend(): Promise<void> {
-    if (this.initialState !== "waiting" || !this.deferredInitial) return this.initialSend;
-    const deferred = this.deferredInitial;
-    clearTimeout(this.initialTimer);
-    if (!deferred.shouldSend()) {
-      this.initialState = "idle";
-      this.finalized = true;
-      return this.initialSend;
-    }
-    this.initialState = "sending";
-    this.lastUpdate = Date.now();
-    this.initialSend = (async () => {
-      try {
-        const message = await deferred.send();
-        this.botMessages.push(message);
-        await this.onBotMessageSent(message);
-      } catch (error) {
-        logger.warn("Failed to send the deferred first page; the next render sends it", { error });
-      } finally {
-        this.initialState = "idle";
-      }
-    })();
-    return this.initialSend;
-  }
-
-  /**
-   * Called once generation has ended, before anything reads `messages`: a send
-   * not yet started never starts, and one in flight has landed and registered
-   * its page by the time this resolves.
-   */
-  async settleInitialMessage(): Promise<void> {
-    if (this.initialState === "waiting") {
-      clearTimeout(this.initialTimer);
-      this.initialState = "idle";
-    }
-    await this.initialSend;
+    this.botMessages = [initialBotMessage];
   }
 
   /** 現在の bot message 群（最終描画・停止表示・エラークリーンアップのため messageCreate へ公開）。 */
@@ -349,9 +273,6 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
 
   beginTurn(): void {
     this.currentTurnText = "";
-    // A turn after reply_with_reaction means the reaction failed and the model is called again,
-    // so the page held back for it (see beginToolBlock) is due again.
-    this.armInitialTimer();
   }
 
   async stageContent(text: string): Promise<void> {
@@ -359,13 +280,6 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
     // 内容は失わず、次に開始される reconciliation が `this.text` 経由で最新分をまとめて反映する。
     this.currentTurnText = text;
     if (this.finalized) return;
-    // 空白だけでページを作らない: tool を呼ぶ前に改行だけを流すモデルで、リアクションだけの返答が
-    // 成り立たなくなる。
-    if (this.botMessages.length === 0 && this.text.trim().length === 0) return;
-    if (this.initialState !== "idle") {
-      await this.startInitialSend();
-      if (this.finalized) return;
-    }
     if (this.updateInFlight) {
       // 実行中の reconciliation は開始時点の `this.text` しか送信/編集内容に反映しない。
       // このまま return すると、この呼び出しの内容は「次に開始される reconciliation」に
@@ -450,32 +364,27 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
       this.committedText += this.currentTurnText;
       this.currentTurnText = "";
 
-      if (this.initialState === "sending")
-        return this.initialSend.then(() => this.renderCommitted());
-      return this.renderCommitted();
+      if (this.finalized) return;
+
+      if (this.updateInFlight) {
+        // 実行中の reconciliation が読んだスナップショットには、今 committed した preamble が
+        // 反映されていないかもしれない。ここで2本目の reconciliation を起動すると
+        // botMessages への同時書き込みで直列化が崩れるため、既存の trailing 機構（dirty）に委ねる。
+        this.dirty = true;
+        return;
+      }
+
+      if (this.text === this.lastRenderedText) return; // 既に描画済み: 何もしない
+      if (this.text.trim().length === 0) return; // 空白だけの preamble で「生成中...」を消さない
+
+      // スロットルで描画がスキップされたまま tool 実行フェーズへ入ると、preamble が
+      // tool 実行の間ずっと古い表示のまま残ってしまう。ここではスロットルを無視して
+      // 1 回だけ reconciliation を実行し、確実に反映する。
+      this.lastUpdate = Date.now();
+      return this.reconcile();
     }
     // "final": 最終描画は messageCreate 側が ToolLoopResult (status: "final") を見て行う。
     // ここで追加の Discord 書き込みをすると二重描画になるため何もしない。
-  }
-
-  private renderCommitted(): void | Promise<void> {
-    if (this.finalized) return;
-    if (this.updateInFlight) {
-      // 実行中の reconciliation が読んだスナップショットには、今 committed した preamble が
-      // 反映されていないかもしれない。ここで2本目の reconciliation を起動すると
-      // botMessages への同時書き込みで直列化が崩れるため、既存の trailing 機構（dirty）に委ねる。
-      this.dirty = true;
-      return;
-    }
-
-    if (this.text === this.lastRenderedText) return; // 既に描画済み: 何もしない
-    if (this.text.trim().length === 0) return; // 空白だけの preamble で「生成中...」を消さない
-
-    // スロットルで描画がスキップされたまま tool 実行フェーズへ入ると、preamble が
-    // tool 実行の間ずっと古い表示のまま残ってしまう。ここではスロットルを無視して
-    // 1 回だけ reconciliation を実行し、確実に反映する。
-    this.lastUpdate = Date.now();
-    return this.reconcile();
   }
 
   abortTurn(_reason: string): void {
@@ -484,16 +393,11 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
     // messageCreate 側が `this.text`（暫定分を含む）を読んで組み立てる。
   }
 
-  beginToolBlock(name: string): void | Promise<void> {
-    // tool の実行とその後のモデル呼び出しで返答が長引くので、遅らせていた最初のページを待たずに送る。
-    if (name !== REPLY_WITH_REACTION_TOOL) return this.startInitialSend();
-    // reply_with_reaction は返答がここで終わる見込みなので送らない。権限の確認で REST を数回呼び
-    // 1 秒以上かかることがあり、その間に時間切れで送ると、すぐ消すページが一瞬見えるので、実行中は
-    // タイマーも止める。失敗してモデルを呼び直すときは beginTurn が掛け直す。
-    clearTimeout(this.initialTimer);
+  beginToolBlock(_name: string): void {
+    // tool の実行中に描画するものは無い。
   }
 
   endToolBlock(_name: string, _render?: ToolRenderPayload): void {
-    // 同上。将来 tool 実行結果の描画フックをここに実装する。
+    // 同上。
   }
 }

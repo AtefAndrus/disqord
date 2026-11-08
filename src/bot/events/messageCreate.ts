@@ -11,9 +11,10 @@ import { formatSearchResultLinks, type WebSearchEngine } from "../../llm/tools/w
 import type { IApiKeyService } from "../../services/apiKeyService";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
-import type {
-  ConversationWindowContext,
-  ConversationWindowService,
+import {
+  type ConversationWindowContext,
+  type ConversationWindowService,
+  untilAborted,
 } from "../../services/conversationWindow";
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
@@ -25,7 +26,17 @@ import {
   reauthorizeConversationAccess,
 } from "../../services/messageAuthorization";
 import type { IModelService } from "../../services/modelService";
-import { buildReplyGateState, type IReplyGateService } from "../../services/replyGateService";
+import {
+  type IReactionGateService,
+  keepsLastBotMessage,
+  MAX_REACTION_GATE_CHARS,
+  withBotMessageEnd,
+} from "../../services/reactionGateService";
+import {
+  buildReplyGateState,
+  type IReplyGateService,
+  nameMentions,
+} from "../../services/replyGateService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
 import type { ISettingsService } from "../../services/settingsService";
 import type { ResolvedApiKey } from "../../types";
@@ -64,19 +75,11 @@ function operationError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
-/**
- * How long the first page is held back where `reply_with_reaction` can be
- * offered. Every reply in those guilds can show its first page this much
- * later, so it is a cap rather than the time a slow model needs: on 2026-11-08
- * the 90th percentile until the model called the tool was under 2.6 seconds on
- * anthropic/claude-haiku-5.5 and deepseek/deepseek-v4.1-flash, and over 4 seconds
- * on google/gemini-3.8-flash and z-ai/glm-5.3-flash. A slower reaction-only reply
- * shows the page and then removes it.
- */
-const INITIAL_MESSAGE_DELAY_MS = 3_000;
-
 /** As long as the reply gate remembers what it silenced, and for the same reason: the event can arrive again. */
 const REACTION_ONLY_REMEMBER_MS = 60 * 60 * 1000;
+/** The permission checks behind a reaction take over a second; past this the message gets text instead. */
+const REACTION_TIMEOUT_MS = 10_000;
+const CUSTOM_EMOJI_NAME = /^[a-zA-Z0-9_]{2,32}$/u;
 
 function shouldRespond(
   message: Message,
@@ -269,6 +272,7 @@ export function createMessageCreateHandler(
     replyRecordService?: IReplyRecordService;
     cronService?: ICronService;
     replyGate?: IReplyGateService;
+    reactionGate?: IReactionGateService;
   } = {},
 ) {
   // Deleting the reply record is what ends a reaction-only reply, and the record is also what stops
@@ -491,6 +495,37 @@ export function createMessageCreateHandler(
     }
 
     const botName = message.guild.members.me?.displayName ?? message.client.user.username;
+    const judgedConversation = conversation
+      ? {
+          messages: conversation.messages,
+          replyTarget:
+            conversation.replyTarget ??
+            (conversation.replyTargetRef === undefined
+              ? undefined
+              : conversation.messages.find((item) => item.ref === conversation.replyTargetRef)),
+        }
+      : undefined;
+    const judgmentState = (text: string): Record<string, unknown> =>
+      buildReplyGateState({
+        botName,
+        botUserId: botId,
+        current: {
+          author: authorNames(rawMessage.author).label,
+          text,
+          attachments: [...message.attachments.values()].map((attachment) => ({
+            kind: attachment.contentType?.startsWith("image/")
+              ? "image"
+              : attachment.contentType === "application/pdf"
+                ? "pdf"
+                : "other",
+            filename: attachment.name,
+          })),
+        },
+        ...(judgedConversation && { conversation: judgedConversation }),
+        isReplyToBot: message.mentions.repliedUser?.id === botId,
+        // A bot reply's exchange is the message it answered.
+        isAutoReply: (reply) => options.replyGate?.wasAnswered(reply.exchangeId) ?? false,
+      });
     if (gated && options.replyGate) {
       const decision = await options.replyGate.judge(
         {
@@ -498,37 +533,7 @@ export function createMessageCreateHandler(
           channelId: message.channel.id,
           messageId: message.id,
           botName,
-          state: buildReplyGateState({
-            botName,
-            botUserId: botId,
-            current: {
-              author: authorNames(rawMessage.author).label,
-              text: inputText,
-              attachments: [...message.attachments.values()].map((attachment) => ({
-                kind: attachment.contentType?.startsWith("image/")
-                  ? "image"
-                  : attachment.contentType === "application/pdf"
-                    ? "pdf"
-                    : "other",
-                filename: attachment.name,
-              })),
-            },
-            ...(conversation && {
-              conversation: {
-                messages: conversation.messages,
-                replyTarget:
-                  conversation.replyTarget ??
-                  (conversation.replyTargetRef === undefined
-                    ? undefined
-                    : conversation.messages.find(
-                        (item) => item.ref === conversation.replyTargetRef,
-                      )),
-              },
-            }),
-            isReplyToBot: message.mentions.repliedUser?.id === botId,
-            // A bot reply's exchange is the message it answered.
-            isAutoReply: (reply) => options.replyGate?.wasAnswered(reply.exchangeId) ?? false,
-          }),
+          state: judgmentState(inputText),
         },
         apiKeyService.clientFor(payer),
         payer.source,
@@ -562,6 +567,93 @@ export function createMessageCreateHandler(
     // 限られた待機時間の中で書き換えが間に合わなければ「生成中...」が残る。pending の記録は次の起動で failed になる。
     if (chatService.isClosing) return;
 
+    // Decided before the model is called and before anything is posted, so a reply that is only a
+    // reaction shows no page and pays for no answer. Any failure here falls through to a text reply.
+    // Free-only guilds are left out as the reply gate is: the judgment model is not free.
+    // The judgment is asked only with what it needs in its state. Without the conversation, without
+    // the message a reply answers, or without the bot's last message, "了解" to an offer and "了解" to
+    // a finished answer are the same input; text can at least ask what to continue, while a reaction
+    // ends the exchange there.
+    // The mention stays in the text: it is how the judgment sees the message is for the bot. The state
+    // cuts the text after naming the mention, so that is the length that has to fit.
+    const judgedText = isMention ? message.content : inputText;
+    if (
+      options.reactionGate &&
+      judgedConversation &&
+      (!rawMessage.message_reference?.message_id || judgedConversation.replyTarget) &&
+      settings.discordToolsEnabled &&
+      !settings.freeModelsOnly &&
+      message.attachments.size === 0 &&
+      !message.poll &&
+      Array.from(nameMentions(judgedText, botName, botId)).length <= MAX_REACTION_GATE_CHARS
+    ) {
+      const state = judgmentState(judgedText);
+      const emoji = keepsLastBotMessage(state, judgedConversation)
+        ? await options.reactionGate.judge(
+            {
+              guildId,
+              channelId: message.channel.id,
+              messageId: message.id,
+              botName,
+              state: withBotMessageEnd(state, judgedConversation),
+              customEmoji: [...(message.guild.emojis?.cache.values() ?? [])].flatMap((item) =>
+                item.available !== false && item.name && CUSTOM_EMOJI_NAME.test(item.name)
+                  ? [item.name]
+                  : [],
+              ),
+            },
+            apiKeyService.clientFor(payer),
+            payer.source,
+          )
+        : null;
+      if (emoji !== null && !chatService.isClosing) {
+        // The service does not abort a request in flight, so the wait is what the timeout ends. The
+        // reaction can still land after the text reply; a message left unanswered would be worse.
+        const reactionSignal = AbortSignal.timeout(REACTION_TIMEOUT_MS);
+        const added =
+          (await untilAborted(
+            new DiscordActionService(message as Message<true>, () => undefined).addReaction(
+              emoji,
+              undefined,
+              reactionSignal,
+            ),
+            reactionSignal,
+          ).catch(() => '{"ok":false,"reason":"threw"}')) ?? '{"ok":false,"reason":"timeout"}';
+        const parsed = JSON.parse(added) as { ok?: unknown; reason?: unknown };
+        if (parsed.ok === true) {
+          // Before the record goes, so that a repeated event always meets one or the other.
+          answeredWithReaction.add(message.id);
+          setTimeout(
+            () => answeredWithReaction.delete(message.id),
+            REACTION_ONLY_REMEMBER_MS,
+          ).unref();
+          // `completed` with no pages would read as a reply the window cannot confirm, and list_pins
+          // would skip the message; without a record, or `failed`, it reads as an unanswered message.
+          if (
+            replyRecordCreated &&
+            !(await options.replyRecordService?.deletePendingWithoutPages(message.id))
+          ) {
+            await options.replyRecordService?.finalize(message.id, "failed", 0);
+          }
+          logger.info("Reaction-only reply", {
+            guildId,
+            messageId: message.id,
+            emoji,
+            keySource: payer.source,
+          });
+          return;
+        }
+        logger.warn("Failed to add the reaction; answering in text", {
+          messageId: message.id,
+          emoji,
+          reason: parsed.reason,
+        });
+      }
+      // The judgment and the reaction both wait, and shutdown can begin during either. As above, a
+      // reply with no page leaves its pending record for the next start to fail.
+      if (chatService.isClosing) return;
+    }
+
     // Keep all reply-page writes behind this callback so sends from the initial,
     // streaming, final, stopped, and fatal-cleanup paths have identical ordering.
     const deleteMessage = createDeleteOwnMessage(
@@ -577,48 +669,26 @@ export function createMessageCreateHandler(
     };
     let generations: ReplyGeneration[] | undefined;
     try {
-      // 初期メッセージ（Components V2、停止ボタン付き Section）
-      const sendInitialMessage = (): Promise<Message> =>
-        (message.channel as Extract<typeof message.channel, { send: unknown }>).send(
-          toComponentsV2Payload(
-            buildStreamingContainer({
-              text: "生成中...",
-              modelName,
-              color,
-              isFirst: true,
-              isLast: true,
-              triggerMessageId: message.id,
-            }),
-          ),
-        );
-      if (settings.discordToolsEnabled) {
-        updater = new DiscordStreamingUpdater(
-          message,
-          null,
-          modelName,
-          color,
-          deleteMessage,
-          botMessageCreated,
-          transformText,
-        );
-        updater.deferInitialMessage({
-          send: sendInitialMessage,
-          delayMs: INITIAL_MESSAGE_DELAY_MS,
-          shouldSend: () => !chatService.isClosing,
-        });
-      } else {
-        const initialBotMessage = await sendInitialMessage();
-        updater = new DiscordStreamingUpdater(
-          message,
-          initialBotMessage,
-          modelName,
-          color,
-          deleteMessage,
-          botMessageCreated,
-          transformText,
-        );
-        await botMessageCreated(initialBotMessage);
-      }
+      // 初期メッセージ送信（Components V2、停止ボタン付き Section）
+      const initialContainer = buildStreamingContainer({
+        text: "生成中...",
+        modelName,
+        color,
+        isFirst: true,
+        isLast: true,
+        triggerMessageId: message.id,
+      });
+      const initialBotMessage = await message.channel.send(toComponentsV2Payload(initialContainer));
+      updater = new DiscordStreamingUpdater(
+        message,
+        initialBotMessage,
+        modelName,
+        color,
+        deleteMessage,
+        botMessageCreated,
+        transformText,
+      );
+      await botMessageCreated(initialBotMessage);
 
       const startTime = Date.now();
       const result = await chatService.generateChatResponse(
@@ -657,16 +727,8 @@ export function createMessageCreateHandler(
         { channelId: message.channel.id, userId: message.author.id, payer },
       );
       generations = result.generations;
-      await updater.settleInitialMessage();
 
       if (result.status === "cancelled") {
-        // ページが無いまま中断するのは、最初のページを送る前のシャットダウンだけである（停止ボタンは
-        // ページの上にしか無い）。updateStoppedMessages は「（応答なし）」のページを送るので呼ばず、
-        // 初期メッセージを送らずに終える経路と同じく、pending の記録は次の起動で failed になる。
-        if (updater.messages.length === 0) {
-          updater.markFinalized();
-          return;
-        }
         const reason = chatService.isClosing ? "shutdown" : "user";
         // 最終描画の直前に必ず finalize する: 放棄された（timeout/cancel で await が打ち切られた）
         // updater 呼び出しがこの後に遅れて解決しても、停止表示を stale な内容で上書きさせない。
@@ -700,36 +762,6 @@ export function createMessageCreateHandler(
 
       if (result.status === "error") {
         throw result.error;
-      }
-
-      if (result.reaction !== undefined && updater.text.trim().length === 0) {
-        updater.markFinalized();
-        for (const botMessage of updater.messages) await deleteMessage(botMessage);
-        // Before the record goes, so that a repeated event always meets one or the other.
-        answeredWithReaction.add(message.id);
-        setTimeout(
-          () => answeredWithReaction.delete(message.id),
-          REACTION_ONLY_REMEMBER_MS,
-        ).unref();
-        if (replyRecordCreated) {
-          // `completed` with no pages would read as a reply the window cannot confirm, and list_pins
-          // would skip the message; without a record, or `failed`, it reads as an unanswered message.
-          const deleted = await options.replyRecordService?.deletePendingWithoutPages(message.id);
-          if (!deleted) {
-            await options.replyRecordService?.finalize(message.id, "failed", 0);
-            if (generations?.length)
-              await options.replyRecordService?.saveGenerations(message.id, generations);
-          }
-        }
-        logger.info("Reaction-only reply", {
-          guildId: message.guild.id,
-          messageId: message.id,
-          model: result.model,
-          emoji: result.reaction,
-          keySource: payer.source,
-          usage: result.usage,
-        });
-        return;
       }
 
       // A router model (openrouter/auto, a preset router) answers through
@@ -863,7 +895,6 @@ export function createMessageCreateHandler(
         guildId: message.guild.id,
       });
 
-      await updater?.settleInitialMessage();
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから行うクリーンアップ表示を停止ボタン付きの stale な内容で上書きさせない。
       updater?.markFinalized();

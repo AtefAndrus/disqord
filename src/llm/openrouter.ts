@@ -52,10 +52,25 @@ export type DecisionsNoulQuestion = {
   criteria: { true: string; false: string };
 };
 
+export type DecisionsChoiceQuestion = {
+  type: "choice";
+  instructions: string;
+  /** Null means the option's name says what it is. */
+  criteria: Record<string, string | null>;
+};
+
 export type DecisionsRequest = {
   model: string;
   state: Record<string, unknown>;
-  questions: Record<string, DecisionsNoulQuestion>;
+  questions: Record<string, DecisionsNoulQuestion | DecisionsChoiceQuestion>;
+};
+
+/** The answers as the API sent them, for the caller to check against its own questions. */
+export type DecisionsResult = {
+  answers: Record<string, unknown>;
+  model?: string;
+  provider?: string;
+  cost?: number;
 };
 
 export type DecisionsNoulResult = {
@@ -71,6 +86,10 @@ export interface IDecisionsClient {
     questionKey: string,
     signal?: AbortSignal,
   ): Promise<DecisionsNoulResult>;
+}
+
+export interface IDecisionsAnswersClient {
+  decide(request: DecisionsRequest, signal?: AbortSignal): Promise<DecisionsResult>;
 }
 
 /**
@@ -675,7 +694,7 @@ function readMaxCompletionTokens(
   return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : null;
 }
 
-export class OpenRouterClient implements ILLMClient, IDecisionsClient {
+export class OpenRouterClient implements ILLMClient, IDecisionsClient, IDecisionsAnswersClient {
   private rateLimitResetAt: number | null = null;
 
   constructor(
@@ -688,6 +707,21 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
     questionKey: string,
     signal?: AbortSignal,
   ): Promise<DecisionsNoulResult> {
+    const { answers, ...rest } = await this.decide(request, signal);
+    const answer = answers[questionKey];
+    if (
+      !isPlainObject(answer) ||
+      typeof answer.noul !== "number" ||
+      !Number.isFinite(answer.noul) ||
+      answer.noul < 0 ||
+      answer.noul > 1
+    ) {
+      throw new Error("Decisions API returned an invalid noul");
+    }
+    return { noul: answer.noul, ...rest };
+  }
+
+  async decide(request: DecisionsRequest, signal?: AbortSignal): Promise<DecisionsResult> {
     const response = await fetch("https://openrouter.ai/api/alpha/decisions", {
       method: "POST",
       headers: {
@@ -706,19 +740,8 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
       });
     }
     const data: unknown = await response.json();
-    const answer =
-      isPlainObject(data) && isPlainObject(data.answers) ? data.answers[questionKey] : undefined;
-    if (
-      !isPlainObject(answer) ||
-      typeof answer.noul !== "number" ||
-      !Number.isFinite(answer.noul) ||
-      answer.noul < 0 ||
-      answer.noul > 1
-    ) {
-      throw new Error("Decisions API returned an invalid noul");
-    }
     return {
-      noul: answer.noul,
+      answers: isPlainObject(data) && isPlainObject(data.answers) ? data.answers : {},
       ...(isPlainObject(data) && typeof data.model === "string" && { model: data.model }),
       ...(isPlainObject(data) && typeof data.provider === "string" && { provider: data.provider }),
       ...(isPlainObject(data) &&

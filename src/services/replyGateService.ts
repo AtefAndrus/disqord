@@ -37,7 +37,14 @@ interface ReplyGateMessage {
  * scored "<@id> この英文訳せる？" as one for the bot. Names are not looked up,
  * since the window keeps no member data and a lookup per mention would delay
  * every judged message.
- *
+ */
+export function nameMentions(text: string, botName: string, botUserId: string): string {
+  return text.replace(/<@!?(\d+)>/g, (_, id: string) =>
+    id === botUserId ? `@${botName}` : "@メンバー",
+  );
+}
+
+/**
  * A reply the gate chose is marked `（自動応答）`. Without the mark, every
  * reply reads as one the bot was asked for, so after a run of unasked replies
  * the next person's message reads as a follow-up to the bot.
@@ -47,11 +54,8 @@ function formatMessage(message: ReplyGateMessage, botName: string, botUserId: st
     message.kind === "assistant"
       ? `${botName}${message.autoReply ? AUTO_REPLY_MARK : ""}`
       : message.author;
-  const body = [message.text, message.poll]
-    .filter(Boolean)
-    .join("\n")
-    .replace(/<@!?(\d+)>/g, (_, id: string) => (id === botUserId ? `@${botName}` : "@メンバー"));
-  const text = Array.from(body);
+  const body = [message.text, message.poll].filter(Boolean).join("\n");
+  const text = Array.from(nameMentions(body, botName, botUserId));
   const labels = { image: "画像", pdf: "PDF", other: "ファイル" };
   return `${author}: ${text.slice(0, 400).join("")}${text.length > 400 ? "…" : ""}${message.attachments.map((attachment) => ` [${labels[attachment.kind]} ${attachment.filename}]`).join("")}`;
 }
