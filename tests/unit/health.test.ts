@@ -15,7 +15,6 @@ function createMockClient(isReady: boolean, ping: number): Client {
 
 describe("Health Server", () => {
   let server: ReturnType<typeof startHealthServer>;
-  const TEST_PORT = 13000 + Math.floor(Math.random() * 1000);
 
   afterEach(() => {
     if (server) {
@@ -34,12 +33,12 @@ describe("Health Server", () => {
       return { stop: () => {}, timeout } as unknown as ReturnType<typeof Bun.serve>;
     });
     try {
-      startHttpServer({ client: createMockClient(true, 42), port: TEST_PORT });
+      startHttpServer({ client: createMockClient(true, 42), port: 0 });
       expect(routes["/auth/callback"]).toBeUndefined();
       const callback = mock(async (_request: Request) => new Response("fixture"));
       startHttpServer({
         client: createMockClient(true, 42),
-        port: TEST_PORT,
+        port: 0,
         oauthCallback: callback,
       });
       const req = new Request("http://localhost/auth/callback");
@@ -74,9 +73,9 @@ describe("Health Server", () => {
   describe("GET /health", () => {
     test("returns 200 OK when Discord client is connected", async () => {
       const mockClient = createMockClient(true, 42);
-      server = startHealthServer(mockClient, TEST_PORT);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT}/health`);
+      const response = await fetch(`http://localhost:${server.port}/health`);
       const body = (await response.json()) as HealthStatus;
 
       expect(response.status).toBe(200);
@@ -91,9 +90,9 @@ describe("Health Server", () => {
 
     test("returns 503 Service Unavailable when Discord client is not connected", async () => {
       const mockClient = createMockClient(false, -1);
-      server = startHealthServer(mockClient, TEST_PORT + 1);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT + 1}/health`);
+      const response = await fetch(`http://localhost:${server.port}/health`);
       const body = (await response.json()) as HealthStatus;
 
       expect(response.status).toBe(503);
@@ -104,9 +103,9 @@ describe("Health Server", () => {
 
     test("returns null ping when ping is negative", async () => {
       const mockClient = createMockClient(true, -1);
-      server = startHealthServer(mockClient, TEST_PORT + 2);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT + 2}/health`);
+      const response = await fetch(`http://localhost:${server.port}/health`);
       const body = (await response.json()) as HealthStatus;
 
       expect(response.status).toBe(200);
@@ -117,9 +116,9 @@ describe("Health Server", () => {
   describe("Other endpoints", () => {
     test("returns 404 Not Found for unknown paths", async () => {
       const mockClient = createMockClient(true, 42);
-      server = startHealthServer(mockClient, TEST_PORT + 3);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT + 3}/unknown`);
+      const response = await fetch(`http://localhost:${server.port}/unknown`);
 
       expect(response.status).toBe(404);
       expect(await response.text()).toBe("Not Found");
@@ -127,18 +126,18 @@ describe("Health Server", () => {
 
     test("returns 404 for root path", async () => {
       const mockClient = createMockClient(true, 42);
-      server = startHealthServer(mockClient, TEST_PORT + 4);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT + 4}/`);
+      const response = await fetch(`http://localhost:${server.port}/`);
 
       expect(response.status).toBe(404);
     });
 
     test("POST /webhook/github returns 404 after the release endpoint is removed", async () => {
       const mockClient = createMockClient(true, 42);
-      server = startHealthServer(mockClient, TEST_PORT + 10);
+      server = startHealthServer(mockClient, 0);
 
-      const response = await fetch(`http://localhost:${TEST_PORT + 10}/webhook/github`, {
+      const response = await fetch(`http://localhost:${server.port}/webhook/github`, {
         method: "POST",
       });
 
@@ -150,9 +149,9 @@ describe("Health Server", () => {
   describe("Admin endpoints (integrated through Bun.serve)", () => {
     const ADMIN_SECRET = "integration-test-secret";
 
-    async function signed(method: string, port: number, path: string): Promise<Request> {
+    async function signed(method: string, path: string): Promise<Request> {
       const ts = Date.now();
-      const u = new URL(`http://localhost:${port}${path}`);
+      const u = new URL(`http://localhost:${server.port}${path}`);
       const message = `${method}\n${u.pathname}\n${canonicalizeQuery(u.searchParams)}\n${ts}`;
       const sig = await hmacSha256Hex(ADMIN_SECRET, message);
       return new Request(u.toString(), {
@@ -165,56 +164,51 @@ describe("Health Server", () => {
     }
 
     test("GET /admin/metrics returns 200 JSON when secret matches", async () => {
-      const port = TEST_PORT + 5;
       server = startHttpServer({
         client: createMockClient(true, 42),
-        port,
+        port: 0,
         adminApiSecret: ADMIN_SECRET,
       });
-      const res = await fetch(await signed("GET", port, "/admin/metrics"));
+      const res = await fetch(await signed("GET", "/admin/metrics"));
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toBe("application/json");
     });
 
     test("GET /admin/metrics returns 503 when secret is not configured", async () => {
-      const port = TEST_PORT + 6;
-      server = startHttpServer({ client: createMockClient(true, 42), port });
-      const res = await fetch(await signed("GET", port, "/admin/metrics"));
+      server = startHttpServer({ client: createMockClient(true, 42), port: 0 });
+      const res = await fetch(await signed("GET", "/admin/metrics"));
       expect(res.status).toBe(503);
     });
 
     test("POST /admin/metrics returns 405 with Allow: GET", async () => {
-      const port = TEST_PORT + 7;
       server = startHttpServer({
         client: createMockClient(true, 42),
-        port,
+        port: 0,
         adminApiSecret: ADMIN_SECRET,
       });
-      const res = await fetch(`http://localhost:${port}/admin/metrics`, { method: "POST" });
+      const res = await fetch(`http://localhost:${server.port}/admin/metrics`, { method: "POST" });
       expect(res.status).toBe(405);
       expect(res.headers.get("Allow")).toBe("GET");
     });
 
     test("DELETE /admin/logs returns 405 with Allow: GET", async () => {
-      const port = TEST_PORT + 8;
       server = startHttpServer({
         client: createMockClient(true, 42),
-        port,
+        port: 0,
         adminApiSecret: ADMIN_SECRET,
       });
-      const res = await fetch(`http://localhost:${port}/admin/logs`, { method: "DELETE" });
+      const res = await fetch(`http://localhost:${server.port}/admin/logs`, { method: "DELETE" });
       expect(res.status).toBe(405);
       expect(res.headers.get("Allow")).toBe("GET");
     });
 
     test("PUT /admin/metrics never falls through to the 404 fetch fallback", async () => {
-      const port = TEST_PORT + 9;
       server = startHttpServer({
         client: createMockClient(true, 42),
-        port,
+        port: 0,
         adminApiSecret: ADMIN_SECRET,
       });
-      const res = await fetch(`http://localhost:${port}/admin/metrics`, { method: "PUT" });
+      const res = await fetch(`http://localhost:${server.port}/admin/metrics`, { method: "PUT" });
       expect(res.status).not.toBe(404);
       expect(res.status).toBe(405);
     });
