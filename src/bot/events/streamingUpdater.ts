@@ -393,11 +393,10 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
   }
 
   beginToolBlock(_name: string): void {
-    // 現段階では tool が登録されていないため到達しない。将来 tool 実行中インジケータ等の
-    // 描画フックをここに実装する。
+    // tool の実行中に描画するものは無い。
   }
 
   endToolBlock(_name: string, _render?: ToolRenderPayload): void {
-    // 同上。将来 tool 実行結果の描画フックをここに実装する。
+    // 同上。
   }
 }

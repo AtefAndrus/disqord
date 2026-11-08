@@ -128,7 +128,7 @@ Jev は 6 並列、通常モデルは各モデル 12 並列で 4 モデルを同
 - [x] 判定の組み込み（単体テスト: リアクションだけで終える流れ、記録を消せないとき、再送の競合 2 通り、本文へ倒す各場合、聞かない発言の各場合、シャットダウン）
 - [x] 評価スクリプトと発言の一覧、通常モデルとの比較
 - [x] E2E の完了条件と `reaction-only` シナリオ
-- [ ] `bun run e2e` の既定シナリオに加えて、`reaction-only-answer reaction-only`、`shutdown`、`discord-tools`、`discord-info`、`message-ref`、会話履歴の名前付きシナリオ（`history-set history-recall history-window read-earlier view-attachment view-image`）を通す。`message-ref` は `buildConversationSafetyMessage()` の変更で、`discord-info` は `list_pins` が読むリアクションの表記の変更で要る
+- [x] `bun run e2e` の既定シナリオに加えて、`reaction-only-answer reaction-only`、`shutdown`、`discord-tools`、`discord-info`、`message-ref`、会話履歴の名前付きシナリオ（`history-set history-recall history-window read-earlier view-attachment view-image`）を通す。`message-ref` は `buildConversationSafetyMessage()` の変更で、`discord-info` は `list_pins` が読むリアクションの表記の変更で要る
 - [ ] 手動確認: 実クライアントで、「機能 → Discord 操作」と「機能 → 会話履歴」を有効にしたギルドで bot にメンションして礼を言い、リアクションだけが付いて「生成中...」が表示されないこと
 - [ ] `docs/changes/reaction-only-reply/` 削除（リリース完了時、git 履歴がアーカイブ）
 
