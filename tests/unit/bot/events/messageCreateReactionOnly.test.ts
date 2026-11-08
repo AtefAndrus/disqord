@@ -43,8 +43,9 @@ function setup(
     message?: Record<string, unknown>;
     closing?: () => boolean;
     addReaction?: () => Promise<string>;
-    /** The bot's last message in the conversation window, which also turns history on. */
+    /** The bot's last message in the conversation window. */
     botMessage?: string;
+    windowUnavailable?: boolean;
   } = {},
 ) {
   const page = { id: "page", edit: mock(async () => {}), delete: mock(async () => {}) };
@@ -85,15 +86,35 @@ function setup(
   const judge = mock<IReactionGateService["judge"]>(async () =>
     options.emoji === undefined ? "👍" : options.emoji,
   );
+  const conversationWindow = {
+    build: mock(async () => ({
+      messages: [
+        {
+          id: "1",
+          channelId: "channel",
+          kind: "assistant",
+          author: "assistant",
+          time: "",
+          timestampMs: 0,
+          text: options.botMessage ?? "回答です。",
+          attachments: [],
+          exchangeId: "0",
+          ref: "m1",
+        },
+      ],
+      sessionId: "session",
+      windowStartMessageId: "1",
+      toolContext: { resolveMessageRef: () => undefined },
+    })),
+  } as unknown as ConversationWindowService;
   const handler = createMessageCreateHandler(
     chatService,
     {
       getGuildSettings: mock(async () =>
         createMockGuildSettings({
-          historyEnabled: false,
+          historyEnabled: true,
           discordToolsEnabled: true,
           ...options.settings,
-          ...(options.botMessage !== undefined && { historyEnabled: true }),
         }),
       ),
     } as unknown as ISettingsService,
@@ -105,29 +126,7 @@ function setup(
     {
       replyRecordService,
       reactionGate: { judge },
-      ...(options.botMessage !== undefined && {
-        conversationWindow: {
-          build: mock(async () => ({
-            messages: [
-              {
-                id: "1",
-                channelId: "channel",
-                kind: "assistant",
-                author: "assistant",
-                time: "",
-                timestampMs: 0,
-                text: options.botMessage,
-                attachments: [],
-                exchangeId: "0",
-                ref: "m1",
-              },
-            ],
-            sessionId: "session",
-            windowStartMessageId: "1",
-            toolContext: { resolveMessageRef: () => undefined },
-          })),
-        } as unknown as ConversationWindowService,
-      }),
+      ...(!options.windowUnavailable && { conversationWindow }),
     },
   );
   return { handler, message, send, page, generateChatResponse, replyRecordService, judge, react };
@@ -317,8 +316,15 @@ describe("messages the gate is not asked about", () => {
     expect(fixture.judge).not.toHaveBeenCalled();
   });
 
+  test("with history off, the gate is not asked: an offer it answers cannot be told apart", async () => {
+    const fixture = setup({ settings: { historyEnabled: false } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
   test("with the window on but unavailable, the gate is not asked", async () => {
-    const fixture = setup({ settings: { historyEnabled: true } });
+    const fixture = setup({ windowUnavailable: true });
     await fixture.handler(fixture.message);
     expect(fixture.judge).not.toHaveBeenCalled();
     expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
@@ -332,35 +338,13 @@ describe("messages the gate is not asked about", () => {
 
   test("once shutdown has begun, a chosen emoji is not added", async () => {
     let closing = false;
-    const fixture = setup();
+    const fixture = setup({ closing: () => closing });
     fixture.judge.mockImplementation(async () => {
       closing = true;
       return "👍";
     });
-    const handler = createMessageCreateHandler(
-      {
-        get isClosing() {
-          return closing;
-        },
-        generateChatResponse: mock(async () => ({
-          status: "cancelled",
-          history: [],
-          generations: [],
-        })),
-      } as unknown as IChatService,
-      {
-        getGuildSettings: mock(async () =>
-          createMockGuildSettings({ historyEnabled: false, discordToolsEnabled: true }),
-        ),
-      } as unknown as ISettingsService,
-      {
-        getModelName: mock(async () => "model"),
-        isMultimodalCapable: mock(async () => true),
-      } as unknown as IModelService,
-      createMockApiKeyService(),
-      { replyRecordService: fixture.replyRecordService, reactionGate: { judge: fixture.judge } },
-    );
-    await withReaction(fixture.react, () => handler(fixture.message));
+    await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
     expect(fixture.react).not.toHaveBeenCalled();
   });
 });

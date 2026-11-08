@@ -564,14 +564,13 @@ export function createMessageCreateHandler(
     // Decided before the model is called and before anything is posted, so a reply that is only a
     // reaction shows no page and pays for no answer. Any failure here falls through to a text reply.
     // Free-only guilds are left out as the reply gate is: the judgment model is not free.
-    // With the window on but unavailable, an offer the message answers would be invisible here while
-    // the model might still reach it through its tools. With history off it is left in: the model
-    // cannot see the offer either, so text would not continue the work.
+    // Without the conversation, "了解" to an offer and "了解" to a finished answer are the same input;
+    // text can at least ask what to continue, while a reaction ends the exchange there.
     if (
       options.reactionGate &&
+      conversation &&
       settings.discordToolsEnabled &&
       !settings.freeModelsOnly &&
-      (!settings.historyEnabled || conversation) &&
       message.attachments.size === 0 &&
       !message.poll &&
       Array.from(inputText).length <= MAX_REACTION_GATE_CHARS
