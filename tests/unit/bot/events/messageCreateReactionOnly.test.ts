@@ -204,6 +204,30 @@ describe("a reply that is only a reaction", () => {
     expect(generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
+  test("the first one ending while the repeated event waits on createPending stops it too", async () => {
+    let finish = (): void => {};
+    const generating = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const fixture = setup(async () => {
+      await generating;
+      return reactionOnly;
+    });
+    const { handler, message, generateChatResponse, replyRecordService } = fixture;
+    const first = handler(message);
+    await Bun.sleep(1);
+    // createPending saw the first one's record; by the time it returns, the record is gone.
+    let firstDone: Promise<void> = Promise.resolve();
+    replyRecordService.createPending = mock(async () => {
+      finish();
+      await firstDone;
+      return false;
+    });
+    firstDone = first;
+    await handler(message);
+    expect(generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
   test("whitespace written before the tool still counts as no text", async () => {
     const { handler, message, send, replyRecordService } = setup(async (updater) => {
       await updater.stageContent("\n");

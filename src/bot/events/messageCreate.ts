@@ -440,8 +440,9 @@ export function createMessageCreateHandler(
     const guildId = message.guild.id;
     const rawMessage = toRawDiscordMessage(message);
     let replyRecordCreated = false;
-    // Next to createPending, with no await in between: a repeated event can already be past any
-    // earlier check when the first one ends and deletes its record.
+    // Checked on both sides of createPending: a repeated event can already be past any earlier check
+    // when the first one ends and deletes its record, and that can also land while this awaits, after
+    // createPending saw the record and before findByTrigger looks for it.
     if (answeredWithReaction.has(message.id)) return;
     if (options.replyRecordService) {
       replyRecordCreated = await options.replyRecordService.createPending({
@@ -450,7 +451,12 @@ export function createMessageCreateHandler(
         guildId,
         createdAt: messageCreatedAt(message),
       });
-      if (!replyRecordCreated && options.replyRecordService.findByTrigger(message.id)) return;
+      if (
+        !replyRecordCreated &&
+        (answeredWithReaction.has(message.id) ||
+          options.replyRecordService.findByTrigger(message.id))
+      )
+        return;
     }
 
     const authorizationMessage: AuthorizationMessageLike = {
