@@ -6,6 +6,7 @@ import type {
 import packageJson from "../../../package.json";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
+import type { IApiKeyService } from "../../services/apiKeyService";
 import type { IModelService } from "../../services/modelService";
 import {
   buildReleaseNotePages,
@@ -27,6 +28,7 @@ import {
   getOpenRouterModelUrl,
 } from "../../utils/modelDetailsContainer";
 import { buildStatusMessage } from "../../utils/statusMessage";
+import { guildBalanceText } from "../events/connectHandler";
 import type { CommandHandlers } from "../events/interactionCreate";
 
 function successNotice(message: string, title?: string): InteractionReplyOptions {
@@ -45,6 +47,7 @@ export function createCommandHandlers(
   countCronJobs: (guildId: string) => number,
   /** Undefined when CHANGELOG.md could not be read at startup. */
   releaseNotes?: ReleaseNotes,
+  apiKeyService?: IApiKeyService,
 ): CommandHandlers {
   return {
     async help(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -62,6 +65,8 @@ export function createCommandHandlers(
 - \`/release-note [version]\` - リリースノート（変更点）を表示
 - \`/config\` - 設定パネルを開く
 - \`/cron\` - 定期実行のパネルを開く
+- \`/connect user|guild|status\` - OpenRouter アカウントの接続と確認
+- \`/disconnect user|guild\` - OpenRouter アカウントの接続解除
 - 返答を右クリック → アプリ → LLM 入力を見る - 管理者向けに入出力ログを本人だけに表示
 
 設定の変更には「サーバーの管理」権限または管理ロールが必要です。管理ロールの変更は「サーバーの管理」権限の持ち主だけが行えます。`;
@@ -179,7 +184,11 @@ export function createCommandHandlers(
     async status(interaction: ChatInputCommandInteraction): Promise<void> {
       await interaction.deferReply();
 
-      const credits = await llmClient.getCredits();
+      const guildKeyBalance = apiKeyService
+        ? await guildBalanceText(apiKeyService, interaction.guildId)
+        : undefined;
+      const credits =
+        guildKeyBalance === undefined ? await llmClient.getCredits() : { remaining: 0 };
       const cacheStatus = modelService.getCacheStatus();
 
       const settings = interaction.guildId
@@ -187,6 +196,7 @@ export function createCommandHandlers(
         : undefined;
 
       const message = buildStatusMessage({
+        guildKeyBalance,
         credits,
         cacheStatus,
         settings,

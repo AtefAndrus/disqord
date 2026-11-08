@@ -1,6 +1,6 @@
 import type { CronJob } from "../db/repositories/cronRepository";
 import type { ReplyGeneration } from "../db/repositories/replyRecord";
-import { AppError, BadRequestError, WebSearchFailedError } from "../errors";
+import { ApiKeyRequiredError, AppError, BadRequestError, WebSearchFailedError } from "../errors";
 import { computeMaxOutputTokens, estimateToolResultTokens } from "../llm/contextBudget";
 import { type ILLMClient, toResponsesContentPart } from "../llm/openrouter";
 import type { IToolLoopUpdater, ToolLoopResult } from "../llm/toolLoop";
@@ -24,11 +24,13 @@ import type {
   ChatMessageContent,
   GuildId,
   MessageId,
+  ResolvedApiKey,
   ResponsesInputContentPart,
   ServerTool,
   WebSearchTrace,
 } from "../types";
 import { messageBody } from "../utils/discordMessageNormalizer";
+import type { IApiKeyService } from "./apiKeyService";
 import { PDF_PARSER_PLUGIN } from "./attachmentParser";
 import type { ConversationWindowContext } from "./conversationWindow";
 import type { IModelService } from "./modelService";
@@ -54,13 +56,10 @@ export interface ChatUserInput {
 export interface ChatRequestContext {
   channelId: string;
   userId: string;
+  payer: ResolvedApiKey;
 }
 
 export interface IChatService {
-  generateResponse(
-    guildId: GuildId,
-    input: ChatUserInput,
-  ): Promise<{ text: string; metadata?: ChatCompletionResponse & { latency: number } }>;
   generateChatResponse(
     guildId: GuildId,
     input: ChatUserInput,
@@ -227,6 +226,7 @@ export class ChatService implements IChatService {
     private readonly webSearchEngine: WebSearchEngine,
     private readonly tweetService: ITweetService,
     private readonly modelService: IModelService,
+    private readonly apiKeyService: IApiKeyService,
   ) {}
 
   async assertScheduledModel(guildId: string): Promise<string> {
@@ -250,7 +250,9 @@ export class ChatService implements IChatService {
     signal?: AbortSignal,
   ): Promise<string> {
     const model = await this.assertScheduledModel(guildId);
-    const response = await this.llmClient.chat(
+    const payer = this.apiKeyService.resolveForGuild(guildId);
+    if (!payer) throw new ApiKeyRequiredError();
+    const response = await this.apiKeyService.clientFor(payer).chat(
       {
         model,
         messages: [
@@ -302,6 +304,9 @@ export class ChatService implements IChatService {
     webSearchSkipped?: true;
   }> {
     const model = await this.assertScheduledModel(job.guildId);
+    const payer = this.apiKeyService.resolveForGuild(job.guildId);
+    if (!payer) throw new ApiKeyRequiredError();
+    const client = this.apiKeyService.clientFor(payer);
     const settings = await this.settingsService.getGuildSettings(job.guildId);
     const search = job.webSearch && settings.webSearchEnabled;
     const now = new Date();
@@ -326,11 +331,11 @@ export class ChatService implements IChatService {
     let response: ChatCompletionResponse;
     let webSearchSkipped: true | undefined;
     try {
-      response = await this.llmClient.chat(request(search), signal);
+      response = await client.chat(request(search), signal);
     } catch (error) {
       if (!search || !(error instanceof WebSearchFailedError)) throw error;
       webSearchSkipped = true;
-      response = await this.llmClient.chat(request(false), signal);
+      response = await client.chat(request(false), signal);
     }
     return {
       text: response.choices[0]?.message.content ?? "",
@@ -341,19 +346,6 @@ export class ChatService implements IChatService {
     };
   }
 
-  async generateResponse(
-    guildId: GuildId,
-    input: ChatUserInput,
-  ): Promise<{ text: string; metadata?: ChatCompletionResponse & { latency: number } }> {
-    const settings = await this.settingsService.getGuildSettings(guildId);
-    const startTime = Date.now();
-    const response = await this.llmClient.chat(buildChatRequest(settings.defaultModel, input));
-    return {
-      text: response.choices[0]?.message.content ?? "",
-      metadata: { ...response, latency: Date.now() - startTime },
-    };
-  }
-
   async generateChatResponse(
     guildId: GuildId,
     input: ChatUserInput,
@@ -361,6 +353,7 @@ export class ChatService implements IChatService {
     updater: IToolLoopUpdater,
     ctx: ChatRequestContext,
   ): Promise<ToolLoopResult & { generations: ReplyGeneration[] }> {
+    const payerClient = this.apiKeyService.clientFor(ctx.payer);
     const generations: ReplyGeneration[] = [];
     const seenGenerationIds = new Set<string>();
     const onGenerationId =
@@ -370,17 +363,18 @@ export class ChatService implements IChatService {
         seenGenerationIds.add(id);
         generations.push({
           id,
+          keySource: ctx.payer.source,
           serverTools: request.tools?.some((tool) => tool.type !== "function") ?? false,
         });
       };
     const llmClient: ILLMClient = {
-      chat: (request, signal) => this.llmClient.chat(request, signal, onGenerationId(request)),
+      chat: (request, signal) => payerClient.chat(request, signal, onGenerationId(request)),
       chatStream: (request, signal) =>
-        this.llmClient.chatStream(request, signal, onGenerationId(request)),
+        payerClient.chatStream(request, signal, onGenerationId(request)),
       listModels: () => this.llmClient.listModels(),
       listModelsWithPricing: () => this.llmClient.listModelsWithPricing(),
       getCredits: () => this.llmClient.getCredits(),
-      isRateLimited: () => this.llmClient.isRateLimited(),
+      isRateLimited: () => payerClient.isRateLimited(),
     };
     if (this.closing)
       return { status: "cancelled", history: buildChatMessages(input), generations };

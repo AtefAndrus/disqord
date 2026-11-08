@@ -324,3 +324,24 @@ describe("parseToolCallLine", () => {
     ).toBeUndefined();
   });
 });
+
+test("BYOK invalid-key scenario requires a user authentication error rather than a fallback answer or decryption error", () => {
+  const scenario = SCENARIOS.find((item) => item.name === "byok-invalid-key");
+  if (!scenario) throw new Error("missing BYOK scenario");
+  const reply = {
+    messages: [],
+    footers: [],
+    isError: true,
+    body: "接続した OpenRouter キーが使えなくなっています。`/connect user` で接続し直してください。",
+  };
+  expect(scenario.check(reply)).toEqual([]);
+  expect(scenario.check({ ...reply, isError: false, body: "こんにちは" }).length).toBeGreaterThan(
+    0,
+  );
+  expect(
+    scenario.check({
+      ...reply,
+      body: "保存した OpenRouter キーを読み取れません。`/connect user` で接続し直してください。",
+    }).length,
+  ).toBeGreaterThan(0);
+});

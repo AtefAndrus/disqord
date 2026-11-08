@@ -1,5 +1,7 @@
 import { Database } from "bun:sqlite";
+import { ApiKeyRepository } from "../../src/db/repositories/apiKey";
 import { WINDOW_RAW_MESSAGE_LIMIT } from "../../src/services/conversationWindow";
+import { CryptoService } from "../../src/services/cryptoService";
 import { EmbedColors } from "../../src/types/embed";
 import { REASONING_COMPONENT_ID } from "../../src/utils/chatContainerBuilder";
 import {
@@ -429,8 +431,69 @@ const BOT_DECOYS: ScenarioPost[] = [
 ];
 const BOT_EXCLUDED = [BOT_DECOY_TOKEN, BOT_DECOY_V2_TOKEN];
 const FIRST_TWEET = { id: "20", text: "just setting up my twttr" };
+let byokFixtureInserted = false;
 
 export const SCENARIOS: Scenario[] = [
+  {
+    name: "byok-invalid-key",
+    manual: true,
+    prompt: "[e2e] 無効な接続キーの確認です。こんにちはと答えてください。",
+    before: async (channelId, request, env) => {
+      const encryptionKey = process.env.ENCRYPTION_KEY;
+      if (!encryptionKey || !/^[a-fA-F0-9]{64}$/.test(encryptionKey))
+        return ["ENCRYPTION_KEY must match the running bot's encryption key"];
+      const response = await request(`/channels/${channelId}`);
+      if (!response.ok) return [`cannot read the channel for BYOK: HTTP ${response.status}`];
+      if (!((await response.json()) as { guild_id?: string }).guild_id)
+        return ["E2E_CHANNEL_ID is not a guild channel"];
+      const db = new Database(env.databasePath);
+      try {
+        const repository = new ApiKeyRepository(db);
+        if (repository.find(env.testerBotId, "user"))
+          return [
+            "tester bot already has a connected user key; disconnect it before byok-invalid-key",
+          ];
+        if (env.interrupted?.aborted) return ["BYOK scenario interrupted"];
+        const encrypted = new CryptoService(encryptionKey).encrypt(
+          "invalid-e2e-credential",
+          `user:${env.testerBotId}`,
+        );
+        repository.upsert({
+          ownerId: env.testerBotId,
+          scope: "user",
+          encryptedKey: encrypted.ciphertext,
+          iv: encrypted.iv,
+          authTag: encrypted.authTag,
+        });
+        byokFixtureInserted = true;
+        return [];
+      } finally {
+        db.close();
+      }
+    },
+    check: (reply) => [
+      ...(!reply.isError
+        ? ["expected an authentication error rather than a generated answer"]
+        : []),
+      ...(!reply.body.includes("/connect user")
+        ? ["missing reconnect guidance for the user key"]
+        : []),
+      ...(!reply.body.includes("接続した OpenRouter キーが使えなくなっています")
+        ? ["expected the connected user's authentication error, not a decryption or fallback error"]
+        : []),
+    ],
+    cleanup: async (_triggerId, _channelId, _request, env) => {
+      if (!byokFixtureInserted) return [];
+      const db = new Database(env.databasePath);
+      try {
+        new ApiKeyRepository(db).delete(env.testerBotId, "user");
+        byokFixtureInserted = false;
+        return [];
+      } finally {
+        db.close();
+      }
+    },
+  },
   {
     name: "cron-search",
     manual: true,

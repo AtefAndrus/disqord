@@ -16,6 +16,7 @@ import {
   WebSearchFailedError,
 } from "../errors";
 import type {
+  ApiKeySource,
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatMessage,
@@ -41,8 +42,8 @@ import { logger } from "../utils/logger";
 import { metrics } from "../utils/metrics";
 
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-const OPENROUTER_APP_URL = "https://github.com/AtefAndrus/disqord";
-const OPENROUTER_APP_TITLE = "DisQord";
+export const OPENROUTER_APP_URL = "https://github.com/AtefAndrus/disqord";
+export const OPENROUTER_APP_TITLE = "DisQord";
 const OPENROUTER_APP_CATEGORIES = "general-chat";
 
 export type DecisionsNoulQuestion = {
@@ -677,7 +678,10 @@ function readMaxCompletionTokens(
 export class OpenRouterClient implements ILLMClient, IDecisionsClient {
   private rateLimitResetAt: number | null = null;
 
-  constructor(private readonly apiKey: string) {}
+  constructor(
+    private readonly apiKey: string,
+    private readonly source: ApiKeySource = "default",
+  ) {}
 
   async decideNoul(
     request: DecisionsRequest,
@@ -1565,13 +1569,34 @@ export class OpenRouterClient implements ILLMClient, IDecisionsClient {
         return new BadRequestError(message);
 
       case 401:
-        return new AuthenticationError(message);
+        return new AuthenticationError(
+          message,
+          this.source === "user"
+            ? "接続した OpenRouter キーが使えなくなっています。`/connect user` で接続し直すか、`/disconnect user` で解除してください。"
+            : this.source === "guild"
+              ? "このサーバーの OpenRouter キーが使えなくなっています。管理者が `/connect guild` で接続し直すか、`/disconnect guild` で解除してください。"
+              : undefined,
+        );
 
       case 402:
-        return new InsufficientCreditsError(message);
+        return new InsufficientCreditsError(
+          message,
+          this.source === "user"
+            ? "接続した OpenRouter アカウントのクレジットかキーの上限が不足しています。"
+            : this.source === "guild"
+              ? "このサーバーの OpenRouter アカウントのクレジットかキーの上限が不足しています。管理者にお問い合わせください。"
+              : undefined,
+        );
 
       case 403:
-        return new ModerationError(message);
+        return new ModerationError(
+          message,
+          this.source === "user"
+            ? "接続した OpenRouter の制限（入力の検査、workspace の予算、モデルの許可）で拒否されました。OpenRouter の設定を確認するか、表現を変えてお試しください。"
+            : this.source === "guild"
+              ? "このサーバーの OpenRouter の制限（入力の検査、workspace の予算、モデルの許可）で拒否されました。管理者にお問い合わせいただくか、表現を変えてお試しください。"
+              : undefined,
+        );
 
       case 408:
         return new TimeoutError(message);

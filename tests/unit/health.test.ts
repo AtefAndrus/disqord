@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import type { Client } from "discord.js";
 import { type HealthStatus, startHealthServer, startHttpServer } from "../../src/health";
 import { canonicalizeQuery } from "../../src/http/adminAuth";
@@ -18,6 +18,35 @@ describe("Health Server", () => {
   afterEach(() => {
     if (server) {
       server.stop();
+    }
+  });
+
+  test("registers only the configured GET callback and extends that request's timeout", async () => {
+    const timeout = mock((_req: Request, _seconds: number) => {});
+    let routes: Record<
+      string,
+      { GET?: (request: Request, server: { timeout: typeof timeout }) => Promise<Response> }
+    > = {};
+    const serve = spyOn(Bun, "serve").mockImplementation((options) => {
+      routes = options.routes as unknown as typeof routes;
+      return { stop: () => {}, timeout } as unknown as ReturnType<typeof Bun.serve>;
+    });
+    try {
+      startHttpServer({ client: createMockClient(true, 42), port: TEST_PORT });
+      expect(routes["/auth/callback"]).toBeUndefined();
+      const callback = mock(async (_request: Request) => new Response("fixture"));
+      startHttpServer({
+        client: createMockClient(true, 42),
+        port: TEST_PORT,
+        oauthCallback: callback,
+      });
+      const req = new Request("http://localhost/auth/callback");
+      expect(Object.keys(routes["/auth/callback"])).toEqual(["GET"]);
+      const response = await routes["/auth/callback"].GET?.(req, { timeout });
+      expect(await response?.text()).toBe("fixture");
+      expect(timeout).toHaveBeenCalledWith(req, 30);
+    } finally {
+      serve.mockRestore();
     }
   });
 

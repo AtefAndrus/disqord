@@ -1,6 +1,19 @@
 import type { Database } from "bun:sqlite";
 
+export function assertEncryptionKeyConfigured(
+  db: Database,
+  encryptionKey: string | undefined,
+): void {
+  if (!encryptionKey && db.query("SELECT 1 FROM api_keys LIMIT 1").get())
+    throw new Error("ENCRYPTION_KEY is required while api_keys contains saved keys");
+}
+
 export function applyMigrations(db: Database): void {
+  db.run(`CREATE TABLE IF NOT EXISTS api_keys (
+    owner_id TEXT NOT NULL, scope TEXT NOT NULL CHECK (scope IN ('user', 'guild')),
+    encrypted_key TEXT NOT NULL, iv TEXT NOT NULL, auth_tag TEXT NOT NULL,
+    connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (owner_id, scope))`);
   db.run(`
     CREATE TABLE IF NOT EXISTS guild_settings (
       guild_id TEXT PRIMARY KEY,
@@ -193,6 +206,13 @@ export function applyMigrations(db: Database): void {
       PRIMARY KEY (trigger_msg_id, seq)
     )
   `);
+  const generationColumns = db
+    .query<{ name: string }, []>("PRAGMA table_info(reply_generations)")
+    .all();
+  if (!generationColumns.some((column) => column.name === "key_source"))
+    db.run(
+      "ALTER TABLE reply_generations ADD COLUMN key_source TEXT NOT NULL DEFAULT 'default' CHECK (key_source IN ('user','guild','default'))",
+    );
   db.run("CREATE INDEX IF NOT EXISTS idx_reply_records_finalized ON reply_records(finalized_at)");
   db.run(`CREATE TABLE IF NOT EXISTS cron_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT NOT NULL, channel_id TEXT NOT NULL,

@@ -432,7 +432,7 @@ interface IApiKeyRepository {
 
 - すべて本人にだけ見える Ephemeral で返す。
 - `/connect guild` と `/disconnect guild` は Guild の外では使えない旨を返す。`/connect user`、`/disconnect user`、`/connect status` は DM でも動く。
-- `/connect` の案内には次を書く。キーは Bot の運営者のサーバーに暗号化して保存すること、利用額は OpenRouter 側のキー上限で抑えられること。`/connect user` には、メンションした返答がそのサーバーの管理者が選んだモデルで自分のクレジットから支払われること、自動応答と定期実行には使われないことを添える。`/connect guild` には、OpenRouter の入出力ログを有効にしているとそのアカウントで会話を読めることを添える。認可ページのリンクを他人に渡さないことも書く（Risks を参照）。
+- `/connect` の案内には次を書く。キーは Bot の運営者のサーバーに暗号化して保存すること、利用額は OpenRouter 側のキー上限で抑えられること。`/connect user` には、メンションした返答がそのサーバーの管理者が選んだモデルで自分のクレジットから支払われること、自動応答と定期実行には使われないことを添える。`/connect user` と `/connect guild` のどちらにも、OpenRouter の入出力ログを有効にしていると、そのアカウントの持ち主（組織の workspace なら組織の管理者も）が入力と出力を読めることを添える。認可ページのリンクを他人に渡さないことも書く（Risks を参照）。
 - 公開コールバックのときは「コードを入力」ボタンを出さず、認可ページのリンクだけを出す。
 - `/disconnect` の返答には、Bot の保存分を消したことと、OpenRouter 上のキーは残るので不要なら設定ページ（`https://openrouter.ai/keys/<hash>`、復号できなかった行ではキー一覧の `https://openrouter.ai/keys`）で削除することを書く。接続し直すと古いキーも同じく OpenRouter に残る。
 
@@ -455,22 +455,22 @@ Modal の送信時にも判定し直すのは、pending の寿命の間に権限
 
 ## Tasks
 
-- [ ] DB: `api_keys` テーブルと `reply_generations.key_source` のマイグレーション追加
-- [ ] 環境変数: `ENCRYPTION_KEY`, `ALLOW_UNAUTHENTICATED`, `OAUTH_CALLBACK_URL` と起動時の検証
-- [ ] `CryptoService`: AES-256-GCM 暗号化と復号の実装 + テスト
-- [ ] `ApiKeyRepository`: CRUD 実装 + テスト
-- [ ] `openrouterAuth`: 認可 URL、キー交換、キー情報の取得 + テスト
-- [ ] `ApiKeyService`: PKCE 生成、pending 管理、接続と解除、キー解決、クライアント生成 + テスト
-- [ ] `OpenRouterClient` の `source` と、エラー文の出し分け + テスト
-- [ ] `ChatService`、`ReplyGateService`、`messageCreate` の支払い元の適用 + テスト
-- [ ] 定期実行とスケジュールの解釈の支払い元 + テスト
-- [ ] `/connect`, `/disconnect` のコマンド定義とハンドラー、コード入力ボタンと Modal の処理 + テスト
-- [ ] `GET /auth/callback`: `state` の突合と確保、権限の再確認、結果のページと Ephemeral の編集 + テスト
-- [ ] `/status` の残額のキー選択、`/connect status` の表示
-- [ ] 「LLM 入力を見る」の `key_source` による分岐 + テスト
-- [ ] Guild から外れたときの `api_keys` の削除 + テスト
-- [ ] DI 配線: `index.ts` に新規サービスを追加
-- [ ] e2e シナリオ `byok-invalid-key`: テスト bot の無効なキーを DB に入れて bot にメンションし、接続し直しを促すエラーが返ること（デフォルトキーで答えないこと）を確認する
+- [x] DB: `api_keys` テーブルと `reply_generations.key_source` のマイグレーション追加
+- [x] 環境変数: `ENCRYPTION_KEY`, `ALLOW_UNAUTHENTICATED`, `OAUTH_CALLBACK_URL` と起動時の検証
+- [x] `CryptoService`: AES-256-GCM 暗号化と復号の実装 + テスト
+- [x] `ApiKeyRepository`: CRUD 実装 + テスト
+- [x] `openrouterAuth`: 認可 URL、キー交換、キー情報の取得 + テスト
+- [x] `ApiKeyService`: PKCE 生成、pending 管理、接続と解除、キー解決、クライアント生成 + テスト
+- [x] `OpenRouterClient` の `source` と、エラー文の出し分け + テスト
+- [x] `ChatService`、`ReplyGateService`、`messageCreate` の支払い元の適用 + テスト
+- [x] 定期実行とスケジュールの解釈の支払い元 + テスト
+- [x] `/connect`, `/disconnect` のコマンド定義とハンドラー、コード入力ボタンと Modal の処理 + テスト
+- [x] `GET /auth/callback`: `state` の突合と確保、権限の再確認、結果のページと Ephemeral の編集 + テスト
+- [x] `/status` の残額のキー選択、`/connect status` の表示
+- [x] 「LLM 入力を見る」の `key_source` による分岐 + テスト
+- [x] Guild から外れたときの `api_keys` の削除 + テスト
+- [x] DI 配線: `index.ts` に新規サービスを追加
+- [x] e2e シナリオ `byok-invalid-key`: テスト bot の無効なキーを DB に入れて bot にメンションし、接続し直しを促すエラーが返ること（デフォルトキーで答えないこと）を確認する
 - [ ] 手動確認: 開発 bot で `/connect user` から認可ページを開き、表示されたコードを貼り付けて接続できること、メンションへの返答がそのキーの利用として OpenRouter に記録されること、`/connect status` に上限までの残額か「上限なし」が出ること、`/disconnect user` の後はデフォルトキーに戻ること、認可ページの表示と作られたキーのアプリ名
 - [ ] 手動確認: 開発 bot で `/connect guild` から接続し、別のユーザーのメンションが Guild キーで支払われること、`/status` の残額が Guild キーのものになること
 - [ ] 手動確認: 開発 bot に `OAUTH_CALLBACK_URL=http://localhost:3000/auth/callback` を設定し、`/connect user` の認可ページで承認すると、ブラウザに結果のページが出て、`/connect` の返信が接続完了に変わること、`state` がそのまま返ること
@@ -479,7 +479,7 @@ Modal の送信時にも判定し直すのは、pending の寿命の間に権限
 ## Open Questions / Risks
 
 - ユーザーが接続時に選んだ workspace の guardrail によって、そのキーで使えるモデルが Bot のモデル一覧キャッシュ（デフォルトキーで取得）と食い違うことがある。`/models/user` はキーごとの結果を返すが、返答のたびに引き直すと応答が遅れるので使わない。使えないモデルは生成時に OpenRouter のエラーとして表示される。
-- OpenRouter の入出力ログを有効にしたアカウントのキーを接続すると、そのアカウントの持ち主は支払った生成の入力を OpenRouter 上で読める。ユーザーキーの入力は本人が読める範囲の会話に限られる（会話履歴は投稿者の権限で確認している）が、Guild キーを接続した管理者は、自分が閲覧権限を持たないチャンネルの会話も読めることになる。`/connect guild` の案内に書くにとどめ、機能としては制限しない。管理ロールの持ち主も接続できるので、Guild の設定を任せる相手を決めるときの判断材料になる。
+- OpenRouter の入出力ログを有効にしたアカウントのキーを接続すると、そのアカウントの持ち主は支払った生成の入力を OpenRouter 上で読める。組織の workspace のキーなら組織の管理者も読める。Bot が送る会話は投稿者の権限で確認した範囲（ユーザーキー）に限られるが、それを読む人の権限は Discord では確認していない。Guild キーを接続した管理者は、自分が閲覧権限を持たないチャンネルの会話も読めることになる。`/connect` の案内に書くにとどめ、機能としては制限しない（`organization_id` で組織のキーを拒否すると、組織のクレジットで払いたい Guild を締め出すことになる）。管理ロールの持ち主も接続できるので、Guild の設定を任せる相手を決めるときの判断材料になる。
 - 定期実行には Guild → デフォルトの支払いだけを適用するので、`ALLOW_UNAUTHENTICATED=false` で Guild キーが無い Guild ではすべてのジョブが失敗し、3 回連続で停止する。
 - `ENCRYPTION_KEY` を失うと全員が接続し直しになる。バックアップから DB を戻すときは同じキーが要る。
 - 認可ページのリンクを他人に開かせると、開いた人のキーが `/connect` を実行した人の接続として保存される。`state` と PKCE はブラウザと Discord のユーザーを結びつけないので、この経路は防げない。公開コールバックでは相手が承認するだけで成立し、貼り付けでは相手がコードを渡す必要がある。リンクは本人にだけ見える Ephemeral で出し、`/connect` の案内に他人に渡さないことを書く。

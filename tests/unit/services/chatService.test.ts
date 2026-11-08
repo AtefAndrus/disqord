@@ -16,7 +16,6 @@ import { ModelService } from "../../../src/services/modelService";
 import { TWEET_FETCH_DEADLINE_MS, TweetService } from "../../../src/services/tweetService";
 import type {
   ChatCompletionRequest,
-  ChatCompletionResponse,
   GuildSettings,
   StreamChunk,
   StreamFinalResult,
@@ -24,6 +23,7 @@ import type {
   StreamToolCallChunk,
 } from "../../../src/types";
 import {
+  createMockApiKeyService,
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
@@ -77,6 +77,7 @@ function createFixture(overrides: Partial<GuildSettings> = {}): ChatFixture {
     "perplexity",
     tweetService,
     new ModelService(llmClient),
+    createMockApiKeyService(llmClient),
   );
   return { chatService, llmClient, settingsService, tweetService, toolRegistry };
 }
@@ -389,7 +390,7 @@ describe("ChatService", () => {
       { text: "react", discord },
       "tool-generations",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     expect(result.status).toBe("final");
     expect(addReaction).toHaveBeenCalledTimes(1);
@@ -424,7 +425,7 @@ describe("ChatService", () => {
       { text: "request" },
       "loop-throws",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     expect(result.status).toBe("error");
     expect(result.status === "error" && result.error).toBe(thrown);
@@ -474,14 +475,14 @@ describe("ChatService", () => {
         { text: "request" },
         `retry-${retry}`,
         createUpdater(),
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       );
       expect(result.status).toBe("final");
       expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
       // Only the web search request carried a server tool; its retry runs without one.
       expect(result.generations).toEqual([
-        { id: "first", serverTools: retry === "web search" },
-        { id: "retry", serverTools: false },
+        { id: "first", serverTools: retry === "web search", keySource: "default" },
+        { id: "retry", serverTools: false, keySource: "default" as const },
       ]);
       const firstRequest = fixture.llmClient.chatStream.mock.calls[0]?.[0] as ChatCompletionRequest;
       const retryRequest = fixture.llmClient.chatStream.mock.calls[1]?.[0] as ChatCompletionRequest;
@@ -528,7 +529,7 @@ describe("ChatService", () => {
         { text, conversation, authorLabel: "Current" },
         "reply-x",
         createUpdater(),
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       );
       expect(fixture.tweetService.extractTweetIds).toHaveBeenCalledWith(`${text}\n${target.text}`);
       expect(fixture.tweetService.expandTweets).toHaveBeenCalledTimes(1);
@@ -591,7 +592,7 @@ describe("ChatService", () => {
         { text: "explain", ...(reason !== "no-conversation" && { conversation }) },
         "reply-off",
         createUpdater(),
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       );
       expect(fixture.tweetService.expandTweets).not.toHaveBeenCalled();
       if (reason === "twitter-off")
@@ -609,7 +610,7 @@ describe("ChatService", () => {
       { text: "explain", conversation },
       "reply-text",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
     expect(request.messages.at(-1)?.content).toBe("[current] user (reply to [m1]): explain");
@@ -634,7 +635,7 @@ describe("ChatService", () => {
       { text: "explain", conversation },
       "reply-cancel",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     for (
       let attempt = 0;
@@ -704,6 +705,7 @@ describe("ChatService", () => {
       "perplexity",
       new TweetService("https://api.fxtwitter.test", "1.11.0"),
       new ModelService(fixture.llmClient),
+      createMockApiKeyService(fixture.llmClient),
     );
     try {
       await service.generateChatResponse(
@@ -711,7 +713,7 @@ describe("ChatService", () => {
         { text: "https://x.com/a/status/20 https://x.com/a/status/21", conversation },
         "reply-limits",
         createUpdater(),
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       );
       expect(fetchedIds).toEqual(["20", "21", "22"]);
       const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
@@ -755,7 +757,7 @@ describe("ChatService", () => {
       { text: "react", discord },
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
     expect(JSON.stringify(request.tools)).toContain('"name":"add_reaction"');
@@ -793,172 +795,13 @@ describe("ChatService", () => {
         { text: "毎朝挨拶して", cron },
         "request",
         createUpdater(),
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       );
       const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
       return JSON.stringify(request.tools ?? []);
     };
     expect(await toolsFor(true)).toContain('"name":"propose_cron_job"');
     expect(await toolsFor(false)).not.toContain("propose_cron_job");
-  });
-
-  test("SettingsServiceからギルド設定を取得する", async () => {
-    const fixture = createFixture();
-
-    await fixture.chatService.generateResponse("guild-123", { text: "Hello" });
-
-    expect(fixture.settingsService.getGuildSettings).toHaveBeenCalledWith("guild-123");
-  });
-
-  test("LLMClientにギルドのデフォルトモデルを使用してリクエスト (text-only)", async () => {
-    const fixture = createFixture({ defaultModel: "custom-model" });
-
-    await fixture.chatService.generateResponse("guild-123", { text: "Hello" });
-
-    expect(fixture.llmClient.chat).toHaveBeenCalledWith({
-      model: "custom-model",
-      messages: [{ role: "user", content: "Hello" }],
-    });
-  });
-
-  test("parts ありの場合は content を配列で送る (text + 画像)", async () => {
-    const fixture = createFixture();
-    const parts = [{ type: "image_url" as const, image_url: { url: "https://cdn.example/a.png" } }];
-
-    await fixture.chatService.generateResponse("guild-123", { text: "Describe", parts });
-
-    expect(fixture.llmClient.chat).toHaveBeenCalledWith({
-      model: "test-model:fixture",
-      messages: [{ role: "user", content: [{ type: "text", text: "Describe" }, ...parts] }],
-    });
-  });
-
-  test("text が空 + 画像 parts → default prompt (画像) を text part として補う", async () => {
-    const fixture = createFixture();
-    const parts = [{ type: "image_url" as const, image_url: { url: "https://cdn.example/a.png" } }];
-
-    await fixture.chatService.generateResponse("guild-123", { text: "", parts });
-
-    expect(fixture.llmClient.chat).toHaveBeenCalledWith({
-      model: "test-model:fixture",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "添付された画像について説明してください。" }, ...parts],
-        },
-      ],
-    });
-  });
-
-  test("text が空 + file parts → default prompt (PDF) を text part として補う", async () => {
-    const fixture = createFixture();
-    const parts = [{ type: "file" as const, file: { filename: "spec.pdf", file_data: "data" } }];
-
-    await fixture.chatService.generateResponse("guild-123", { text: "", parts });
-
-    expect(fixture.llmClient.chat).toHaveBeenCalledWith({
-      model: "test-model:fixture",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "添付された文書を要約してください。" }, ...parts],
-        },
-      ],
-      plugins: [PDF_PARSER_PLUGIN],
-    });
-  });
-
-  test("text が空 + 画像 + file 混在 → default prompt (混在) を text part として補う", async () => {
-    const fixture = createFixture();
-    const parts = [
-      { type: "image_url" as const, image_url: { url: "https://cdn.example/a.png" } },
-      { type: "file" as const, file: { filename: "spec.pdf", file_data: "data" } },
-    ];
-
-    await fixture.chatService.generateResponse("guild-123", { text: "", parts });
-
-    const call = fixture.llmClient.chat.mock.calls[0]?.[0] as ChatCompletionRequest;
-    expect(call.messages[0]?.content).toEqual([
-      { type: "text", text: "添付ファイルについて説明してください。" },
-      ...parts,
-    ]);
-  });
-
-  test("file パートを含む場合のみ plugins が付与される", async () => {
-    const fixture = createFixture();
-
-    await fixture.chatService.generateResponse("guild-123", {
-      text: "Summarize",
-      parts: [{ type: "file", file: { filename: "spec.pdf", file_data: "data" } }],
-    });
-
-    const call = fixture.llmClient.chat.mock.calls[0]?.[0] as ChatCompletionRequest;
-    expect(call.plugins).toEqual([PDF_PARSER_PLUGIN]);
-  });
-
-  test("画像のみの場合は plugins を付与しない", async () => {
-    const fixture = createFixture();
-
-    await fixture.chatService.generateResponse("guild-123", {
-      text: "Look",
-      parts: [{ type: "image_url", image_url: { url: "https://cdn.example/a.png" } }],
-    });
-
-    const call = fixture.llmClient.chat.mock.calls[0]?.[0] as ChatCompletionRequest;
-    expect(call.plugins).toBeUndefined();
-  });
-
-  test("LLMClientからのレスポンスを返す", async () => {
-    const fixture = createFixture();
-    const response: ChatCompletionResponse = {
-      id: "resp-1",
-      choices: [{ message: { role: "assistant", content: "Hello, user!" } }],
-    };
-    fixture.llmClient.chat.mockResolvedValueOnce(response);
-
-    const result = await fixture.chatService.generateResponse("guild-123", { text: "Hi" });
-
-    expect(result.text).toBe("Hello, user!");
-    expect(result.metadata).toBeDefined();
-    expect(result.metadata?.latency).toBeGreaterThanOrEqual(0);
-  });
-
-  test("choicesが空の場合は空文字を返す", async () => {
-    const fixture = createFixture();
-    fixture.llmClient.chat.mockResolvedValueOnce({ choices: [] });
-
-    const result = await fixture.chatService.generateResponse("guild-123", { text: "Hi" });
-
-    expect(result.text).toBe("");
-  });
-
-  test("messageのcontentがundefinedの場合は空文字を返す", async () => {
-    const fixture = createFixture();
-    fixture.llmClient.chat.mockResolvedValueOnce({
-      choices: [{ message: { role: "assistant", content: undefined } }],
-    } as unknown as ChatCompletionResponse);
-
-    const result = await fixture.chatService.generateResponse("guild-123", { text: "Hi" });
-
-    expect(result.text).toBe("");
-  });
-
-  test("LLMClientがエラーをスローした場合はそのまま伝播", async () => {
-    const fixture = createFixture();
-    fixture.llmClient.chat.mockRejectedValueOnce(new Error("LLM error"));
-
-    await expect(fixture.chatService.generateResponse("guild-123", { text: "Hi" })).rejects.toThrow(
-      "LLM error",
-    );
-  });
-
-  test("SettingsServiceがエラーをスローした場合はそのまま伝播", async () => {
-    const fixture = createFixture();
-    fixture.settingsService.getGuildSettings.mockRejectedValueOnce(new Error("Settings error"));
-
-    await expect(fixture.chatService.generateResponse("guild-123", { text: "Hi" })).rejects.toThrow(
-      "Settings error",
-    );
   });
 
   test("history places static systems first, prefixes authors, and sends session_id", async () => {
@@ -971,7 +814,11 @@ describe("ChatService", () => {
       { text: "now", authorLabel: "Current", conversation: conversationContext() },
       "req-history",
       updater,
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
@@ -1025,7 +872,11 @@ describe("ChatService", () => {
         { text: "Hello" },
         `req-reasoning-${_label}`,
         createUpdater(),
-        { channelId: "channel-1", userId: "user-1" },
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+          payer: { key: "test-default", source: "default" },
+        },
       );
 
       const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
@@ -1046,7 +897,11 @@ describe("ChatService", () => {
       { text: "now", conversation: conversationContext() },
       "req-model-details-cancel",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     for (
@@ -1076,7 +931,11 @@ describe("ChatService", () => {
       },
       "req-file",
       updater,
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.llmClient.chatStream).toHaveBeenCalledWith(
@@ -1112,7 +971,11 @@ describe("ChatService", () => {
       { text: "Hello" },
       "req-equivalent",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(1);
@@ -1132,6 +995,7 @@ describe("ChatService", () => {
       "exa",
       fixture.tweetService,
       new ModelService(fixture.llmClient),
+      createMockApiKeyService(fixture.llmClient),
     );
 
     await chatService.generateChatResponse(
@@ -1139,7 +1003,11 @@ describe("ChatService", () => {
       { text: "Hello" },
       "req-web-search",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
@@ -1176,7 +1044,11 @@ describe("ChatService", () => {
       { text: "調べて" },
       "req-web-search-failed",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
@@ -1207,7 +1079,11 @@ describe("ChatService", () => {
       { text: "調べて" },
       "req-web-search-failed-late",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(1);
@@ -1231,7 +1107,11 @@ describe("ChatService", () => {
       { text: "read this" },
       "req-tweet",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
@@ -1258,7 +1138,11 @@ describe("ChatService", () => {
       { text: "https://x.com/example/status/20" },
       "req-tweet-off",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.tweetService.extractTweetIds).not.toHaveBeenCalled();
@@ -1323,6 +1207,7 @@ describe("ChatService", () => {
       "perplexity",
       new TweetService("https://api.fxtwitter.test", "1.5.0"),
       new ModelService(fixture.llmClient),
+      createMockApiKeyService(fixture.llmClient),
     );
 
     try {
@@ -1331,7 +1216,11 @@ describe("ChatService", () => {
         { text: "https://x.com/a/status/20" },
         "req-real-tweet",
         createUpdater(),
-        { channelId: "channel-1", userId: "user-1" },
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+          payer: { key: "test-default", source: "default" },
+        },
       );
 
       expect(result.status).toBe("final");
@@ -1388,6 +1277,7 @@ describe("ChatService", () => {
       "perplexity",
       new TweetService("https://api.fxtwitter.test", "1.5.0"),
       new ModelService(fixture.llmClient),
+      createMockApiKeyService(fixture.llmClient),
     );
 
     try {
@@ -1396,7 +1286,11 @@ describe("ChatService", () => {
         { text: "これ何? https://x.com/jack/status/20" },
         "req-real-tweet-content",
         createUpdater(),
-        { channelId: "channel-1", userId: "user-1" },
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+          payer: { key: "test-default", source: "default" },
+        },
       );
 
       expect(result.status).toBe("final");
@@ -1427,7 +1321,11 @@ describe("ChatService", () => {
       { text: "通常の質問" },
       "req-no-tweet",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(fixture.tweetService.extractTweetIds).toHaveBeenCalledWith("通常の質問");
@@ -1471,7 +1369,11 @@ describe("ChatService", () => {
       { text: "read" },
       "req-no-retry",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(result.status).toBe("error");
@@ -1487,7 +1389,11 @@ describe("ChatService", () => {
       { text: "Hello" },
       "req-stream",
       updater,
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(updater.stageContent).toHaveBeenCalledWith("Mock ");
@@ -1514,7 +1420,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "req-final",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(result).toMatchObject({
@@ -1554,7 +1464,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "req-cancel",
       updater,
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     await partialStaged;
@@ -1592,7 +1506,11 @@ describe("ChatService", () => {
         { text: "Hi" },
         requestId,
         createUpdater(),
-        { channelId: "channel-1", userId: "user-1" },
+        {
+          channelId: "channel-1",
+          userId: "user-1",
+          payer: { key: "test-default", source: "default" },
+        },
       ),
     );
     await started.promise;
@@ -1615,7 +1533,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "late",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
     expect(reply).toEqual({
       status: "cancelled",
@@ -1648,7 +1570,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "req-settings-cancel",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     await Promise.resolve();
@@ -1668,7 +1594,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "req-settings-never",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     await Promise.resolve();
@@ -1686,7 +1616,11 @@ describe("ChatService", () => {
       { text: "Hi there" },
       "req-history-cancel",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     await Promise.resolve();
@@ -1711,7 +1645,11 @@ describe("ChatService", () => {
       { text: "Hi" },
       "req-settings-reject",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     await Promise.resolve();
@@ -1748,7 +1686,11 @@ describe("ChatService", () => {
       { text: "https://x.com/example/status/20" },
       "req-retry-usage",
       createUpdater(),
-      { channelId: "channel-1", userId: "user-1" },
+      {
+        channelId: "channel-1",
+        userId: "user-1",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     expect(result.status).toBe("final");

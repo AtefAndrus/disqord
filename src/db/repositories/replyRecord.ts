@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { ApiKeySource } from "../../types";
 
 export type ReplyRecordStatus = "pending" | "completed" | "stopped" | "failed";
 
@@ -20,6 +21,7 @@ export interface ReplyPage {
 
 export interface ReplyGeneration {
   id: string;
+  keySource: ApiKeySource;
   // OpenRouter keeps no input for a request that carried a server tool: its generation record
   // stays empty, and no other generation id reaches the client.
   serverTools: boolean;
@@ -214,11 +216,11 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
             )
             .get(triggerId)?.seq ?? 0;
         const insert = this.db.query(
-          `INSERT INTO reply_generations (trigger_msg_id, seq, generation_id, server_tools)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT INTO reply_generations (trigger_msg_id, seq, generation_id, server_tools, key_source)
+           VALUES (?, ?, ?, ?, ?)`,
         );
         for (const [index, item] of items.entries())
-          insert.run(triggerId, next + index, item.id, item.serverTools ? 1 : 0);
+          insert.run(triggerId, next + index, item.id, item.serverTools ? 1 : 0, item.keySource);
         return items.length;
       })
       .immediate(triggerMsgId, generations);
@@ -226,12 +228,12 @@ export class ReplyRecordRepository implements IReplyRecordRepository {
 
   listGenerations(triggerMsgId: string): ReplyGeneration[] {
     return this.db
-      .query<{ id: string; serverTools: number }, [string]>(
-        `SELECT generation_id as id, server_tools as serverTools FROM reply_generations
+      .query<{ id: string; serverTools: number; keySource: ApiKeySource }, [string]>(
+        `SELECT generation_id as id, server_tools as serverTools, key_source as keySource FROM reply_generations
          WHERE trigger_msg_id = ? ORDER BY seq ASC`,
       )
       .all(triggerMsgId)
-      .map((row) => ({ id: row.id, serverTools: row.serverTools === 1 }));
+      .map((row) => ({ id: row.id, serverTools: row.serverTools === 1, keySource: row.keySource }));
   }
 
   markPendingFailed(): number {

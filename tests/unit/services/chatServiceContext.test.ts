@@ -16,6 +16,7 @@ import { buildChatRequest, ChatService } from "../../../src/services/chatService
 import { ModelService } from "../../../src/services/modelService";
 import type { ChatCompletionRequest, FunctionTool } from "../../../src/types";
 import {
+  createMockApiKeyService,
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
@@ -140,6 +141,7 @@ function createRetryFixture(
     "perplexity",
     tweetService,
     new ModelService(llmClient),
+    createMockApiKeyService(llmClient),
   );
   return { chatService, llmClient, requests, readEarlier, registry, settingsService };
 }
@@ -198,7 +200,7 @@ describe("conversation-context request construction", () => {
       },
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     expect(
       fixture.requests[0]?.tools?.some(
@@ -229,7 +231,7 @@ describe("conversation-context request construction", () => {
       { ...retryInput(fixture.readEarlier), text: "question", autoReply },
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     const system = (fixture.requests[0]?.messages ?? []).filter((m) => m.role === "system");
     expect(system.some((m) => String(m.content).includes("自動応答の判定"))).toBe(sent);
@@ -244,13 +246,14 @@ describe("conversation-context request construction", () => {
       "perplexity",
       createMockTweetService(),
       new ModelService(llmClient),
+      createMockApiKeyService(llmClient),
     );
     await chatService.generateChatResponse(
       "guild",
       { text: "question", autoReply: true },
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     const [request] = (llmClient.chatStream as ReturnType<typeof mock>).mock.calls[0] as [
       ChatCompletionRequest,
@@ -278,6 +281,7 @@ describe("conversation-context request construction", () => {
       "perplexity",
       createMockTweetService(),
       new ModelService(llmClient),
+      createMockApiKeyService(llmClient),
     );
     const updater = {
       beginTurn: mock(() => {}),
@@ -307,7 +311,7 @@ describe("conversation-context request construction", () => {
       },
       "request",
       updater,
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(llmClient.chatStream).toHaveBeenCalledTimes(1);
@@ -340,7 +344,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(fixture.readEarlier).toHaveBeenCalledTimes(1);
@@ -364,7 +368,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(fixture.requests).toHaveLength(3);
@@ -408,7 +412,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(fixture.requests).toHaveLength(3);
@@ -451,7 +455,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     const names = fixture.requests[0]?.tools?.map((tool) =>
@@ -474,7 +478,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(result.status).toBe("error");
@@ -529,7 +533,7 @@ describe("conversation-context request construction", () => {
       },
       "discord-side-effect",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     expect(result.status).toBe("error");
     expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
@@ -550,7 +554,7 @@ describe("conversation-context request construction", () => {
       retryInput(fixture.readEarlier),
       "request",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
 
     expect(result.status).toBe("final");
@@ -596,7 +600,7 @@ test.each([
     { ...retryInput(fixture.readEarlier), discordInfo: info },
     "info-request",
     createUpdater(),
-    { channelId: "channel", userId: "user" },
+    { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
   );
   expect(result.status).toBe("error");
   expect(fixture.llmClient.chatStream).toHaveBeenCalledTimes(2);
@@ -646,7 +650,7 @@ test.each(["history-off", "tools-unsupported", "voice"])(
       },
       "info-off",
       createUpdater(),
-      { channelId: "channel", userId: "user" },
+      { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
     );
     const names =
       fixture.requests[0]?.tools?.map((tool) =>

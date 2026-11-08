@@ -9,6 +9,7 @@ import packageJson from "../../../package.json";
 import { isSettingsRejection } from "../../errors";
 import type { ILLMClient } from "../../llm/openrouter";
 import type { WebSearchEngine } from "../../llm/tools/webSearch";
+import type { IApiKeyService } from "../../services/apiKeyService";
 import type { IChatService } from "../../services/chatService";
 import type { ICronService } from "../../services/cronService";
 import type { IModelService } from "../../services/modelService";
@@ -25,6 +26,7 @@ import { buildStatusMessage } from "../../utils/statusMessage";
 import { handleAutocomplete } from "../commands/handlers";
 import { INSPECT_INPUT_COMMAND_NAME } from "../commands/inspectInput";
 import { handleConfigPanelInteraction } from "./configPanelHandler";
+import { createConnectHandler, guildBalanceText } from "./connectHandler";
 import { handleCronPanelInteraction, openCronPanel } from "./cronPanelHandler";
 import { INSPECT_RETRY_PREFIX, type InspectInputInteraction } from "./inspectInputCommand";
 
@@ -61,8 +63,19 @@ export function createInteractionCreateHandler(
   webSearchEngine: WebSearchEngine,
   cronService: ICronService,
   inspectInput?: (interaction: InspectInputInteraction) => Promise<void>,
+  apiKeyService?: IApiKeyService,
 ): (interaction: Interaction) => Promise<void> {
   return async function onInteractionCreate(interaction: Interaction): Promise<void> {
+    if (
+      apiKeyService &&
+      ((interaction.isChatInputCommand() &&
+        ["connect", "disconnect"].includes(interaction.commandName)) ||
+        ((interaction.isButton() || interaction.isModalSubmit()) &&
+          interaction.customId.startsWith("connect:")))
+    ) {
+      await createConnectHandler(apiKeyService, settingsService)(interaction);
+      return;
+    }
     if (interaction.isAutocomplete()) {
       if (interaction.commandName === "release-note") {
         await handlers.releaseNoteAutocomplete(interaction);
@@ -116,6 +129,7 @@ export function createInteractionCreateHandler(
         chatService,
         webSearchEngine,
         cronService,
+        apiKeyService,
       );
       return;
     }
@@ -220,6 +234,7 @@ async function handleButtonInteraction(
   chatService: IChatService,
   webSearchEngine: WebSearchEngine,
   cronService: ICronService,
+  apiKeyService?: IApiKeyService,
 ): Promise<void> {
   if (!interaction.guildId) {
     await interaction.reply(
@@ -297,11 +312,15 @@ async function handleButtonInteraction(
     }
 
     // メッセージ再構築
-    const credits = await llmClient.getCredits();
+    const guildKeyBalance = apiKeyService
+      ? await guildBalanceText(apiKeyService, interaction.guildId)
+      : undefined;
+    const credits = guildKeyBalance === undefined ? await llmClient.getCredits() : { remaining: 0 };
     const cacheStatus = modelService.getCacheStatus();
     const updatedSettings = await settingsService.getGuildSettings(interaction.guildId);
 
     const message = buildStatusMessage({
+      guildKeyBalance,
       credits,
       cacheStatus,
       settings: updatedSettings,

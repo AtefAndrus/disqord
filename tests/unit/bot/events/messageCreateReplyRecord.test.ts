@@ -8,7 +8,7 @@ import type { IChatService } from "../../../../src/services/chatService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
-import { createMockGuildSettings } from "../../../helpers/mockFactories";
+import { createMockApiKeyService, createMockGuildSettings } from "../../../helpers/mockFactories";
 
 function createReplyRecordService(events: string[]): IReplyRecordService {
   return {
@@ -66,8 +66,8 @@ describe("message create reply-record funnel", () => {
           outcome === "empty"
             ? []
             : [
-                { id: "generation-1", serverTools: false },
-                { id: "generation-2", serverTools: true },
+                { id: "generation-1", serverTools: false, keySource: "default" as const },
+                { id: "generation-2", serverTools: true, keySource: "default" as const },
               ];
         if (outcome === "stopped")
           return { status: "cancelled" as const, history: [], generations };
@@ -111,9 +111,15 @@ describe("message create reply-record funnel", () => {
         })) as IReplyRecordService["findByTrigger"];
       }
 
-      await createMessageCreateHandler(chatService, settingsService, modelService, {
-        replyRecordService,
-      })(message);
+      await createMessageCreateHandler(
+        chatService,
+        settingsService,
+        modelService,
+        createMockApiKeyService(),
+        {
+          replyRecordService,
+        },
+      )(message);
 
       expect(replyRecordService.createPending).toHaveBeenCalledWith(
         expect.objectContaining({ triggerMsgId: "trigger" }),
@@ -132,8 +138,8 @@ describe("message create reply-record funnel", () => {
           expect(replyRecordService.saveGenerations).not.toHaveBeenCalled();
         } else {
           expect(replyRecordService.saveGenerations).toHaveBeenCalledWith("trigger", [
-            { id: "generation-1", serverTools: false },
-            { id: "generation-2", serverTools: true },
+            { id: "generation-1", serverTools: false, keySource: "default" as const },
+            { id: "generation-2", serverTools: true, keySource: "default" as const },
           ]);
           expect(events.slice(-2)).toEqual(["finalize", "save"]);
         }
@@ -265,9 +271,15 @@ describe("message create reply-record funnel", () => {
       finalize: mock(async () => true),
     } satisfies IReplyRecordService;
 
-    await createMessageCreateHandler(chatService, settingsService, modelService, {
-      replyRecordService,
-    })(message);
+    await createMessageCreateHandler(
+      chatService,
+      settingsService,
+      modelService,
+      createMockApiKeyService(),
+      {
+        replyRecordService,
+      },
+    )(message);
 
     expect(replyRecordService.finalize).toHaveBeenCalledWith("trigger", "completed", 3);
   });
@@ -344,7 +356,13 @@ describe("message create reply-record funnel", () => {
         ),
       } as unknown as IChatService;
 
-      await createMessageCreateHandler(chatService, settingsService, modelService, {})(message);
+      await createMessageCreateHandler(
+        chatService,
+        settingsService,
+        modelService,
+        createMockApiKeyService(),
+        {},
+      )(message);
 
       const combined = warnLines.join("\n");
       expect(combined).toContain("Failed to clean up a bot message");

@@ -80,6 +80,25 @@ function loadEnvFile(): void {
 loadEnvFile();
 
 const configSchema = z.object({
+  encryptionKey: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/)
+    .optional(),
+  allowUnauthenticated: z.enum(["true", "false"]).transform((value) => value === "true"),
+  oauthCallbackUrl: z
+    .string()
+    .url()
+    .refine((value) => {
+      const url = new URL(value);
+      return (
+        (url.protocol === "https:" ||
+          (url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) &&
+        !url.username &&
+        !url.password &&
+        !/[?#]/u.test(value)
+      );
+    }, "OAUTH_CALLBACK_URL must use https or localhost http without userinfo, query, or fragment")
+    .optional(),
   discordToken: z.string().min(1),
   openRouterApiKey: z.string().min(1),
   nodeEnv: z.enum(["development", "production"]).default("development"),
@@ -112,6 +131,9 @@ export type AppConfig = z.infer<typeof configSchema>;
 
 export function loadConfig(): AppConfig {
   const parsed = configSchema.parse({
+    encryptionKey: process.env.ENCRYPTION_KEY || undefined,
+    allowUnauthenticated: process.env.ALLOW_UNAUTHENTICATED ?? "true",
+    oauthCallbackUrl: process.env.OAUTH_CALLBACK_URL || undefined,
     discordToken: process.env.DISCORD_TOKEN,
     openRouterApiKey: process.env.OPENROUTER_API_KEY,
     nodeEnv: process.env.NODE_ENV ?? "development",
@@ -134,5 +156,9 @@ export function loadConfig(): AppConfig {
         : process.env.E2E_TESTER_BOT_ID || undefined,
   });
 
+  if (!parsed.encryptionKey && (!parsed.allowUnauthenticated || parsed.oauthCallbackUrl))
+    throw new Error(
+      "ENCRYPTION_KEY is required for ALLOW_UNAUTHENTICATED=false or OAUTH_CALLBACK_URL",
+    );
   return parsed;
 }

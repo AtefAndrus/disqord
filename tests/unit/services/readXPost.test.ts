@@ -13,6 +13,7 @@ import { ModelService } from "../../../src/services/modelService";
 import { buildTweetSystemMessage, TweetService } from "../../../src/services/tweetService";
 import type { ChatCompletionRequest, ResponsesInputContentPart } from "../../../src/types";
 import {
+  createMockApiKeyService,
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
@@ -148,7 +149,15 @@ function fixture(
   service.fetchPost = fetchPost;
   const modelService = new ModelService(llmClient);
   if (options.images === null) modelService.isMultimodalCapable = mock(async () => null);
-  const chat = new ChatService(llmClient, settings, registry, "perplexity", service, modelService);
+  const chat = new ChatService(
+    llmClient,
+    settings,
+    registry,
+    "perplexity",
+    service,
+    modelService,
+    createMockApiKeyService(llmClient),
+  );
   return {
     shown,
     deleted,
@@ -177,7 +186,7 @@ function fixture(
           beginToolBlock: mock(),
           endToolBlock: mock(),
         },
-        { channelId: "channel", userId: "user" },
+        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
       ),
   };
 }
