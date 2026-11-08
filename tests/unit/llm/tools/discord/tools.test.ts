@@ -5,7 +5,6 @@ import { createCreateEventTool } from "../../../../../src/llm/tools/discord/crea
 import { createCreatePollTool } from "../../../../../src/llm/tools/discord/createPoll";
 import { createCreateThreadTool } from "../../../../../src/llm/tools/discord/createThread";
 import { createPinMessageTool } from "../../../../../src/llm/tools/discord/pinMessage";
-import { createReplyWithReactionTool } from "../../../../../src/llm/tools/discord/replyWithReaction";
 import type {
   DiscordToolContext,
   IClientTool,
@@ -216,44 +215,5 @@ describe("Discord client tools", () => {
     expect(outcome.toolMessage.content).toBe(urlResult);
     expect(outcome.resultTooLarge).toBeUndefined();
     expect(registry.buildTools(context({ discord: undefined }))).toEqual([]);
-  });
-});
-
-describe("reply_with_reaction", () => {
-  const tool = createReplyWithReactionTool();
-  const meta: IToolInvocationMeta = { requestId: "r", toolCallId: "c", invocationId: "i" };
-  const signal = new AbortController().signal;
-  const withResult = (result: string): IToolContext => ({
-    guildId: "guild",
-    channelId: "channel",
-    userId: "user",
-    discord: { ...discord, addReaction: mock(async () => result) },
-  });
-
-  test("reacts to the current message and ends the response when it succeeds", async () => {
-    const ctx = withResult('{"ok":true}');
-    const result = await tool.handler({ emoji: "👍" }, ctx, signal, meta);
-    expect(ctx.discord?.addReaction).toHaveBeenCalledWith("👍", undefined, signal);
-    expect(result.endResponse).toEqual({ reaction: "👍" });
-  });
-
-  test("hands a failure back to the model without ending the response", async () => {
-    const failure = '{"ok":false,"reason":"missing_permission","who":"bot"}';
-    const result = await tool.handler({ emoji: "👍" }, withResult(failure), signal, meta);
-    expect(result.llmResult).toBe(failure);
-    expect(result.endResponse).toBeUndefined();
-  });
-
-  test("takes no message_ref, so it can only answer the current message", () => {
-    expect(tool.parameters.properties).toEqual({ emoji: { type: "string", minLength: 1 } });
-    expect(tool.validate({ emoji: "👍", message_ref: "m1" })).toEqual({
-      ok: true,
-      value: { emoji: "👍" },
-    });
-  });
-
-  test("rejects an emoji with an ID, as add_reaction does", () => {
-    expect(tool.validate({ emoji: "<:a:1>" }).ok).toBe(false);
-    expect(tool.validate({}).ok).toBe(false);
   });
 });

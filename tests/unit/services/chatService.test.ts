@@ -6,7 +6,6 @@ import type { ILLMClient } from "../../../src/llm/openrouter";
 import type { IToolLoopUpdater } from "../../../src/llm/toolLoop";
 import { createAddReactionTool } from "../../../src/llm/tools/discord/addReaction";
 import { createCreateEventTool } from "../../../src/llm/tools/discord/createEvent";
-import { createReplyWithReactionTool } from "../../../src/llm/tools/discord/replyWithReaction";
 import { createProposeCronJobTool } from "../../../src/llm/tools/proposeCronJob";
 import type { CronToolContext, DiscordToolContext } from "../../../src/llm/tools/registry";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
@@ -765,54 +764,6 @@ describe("ChatService", () => {
     expect(JSON.stringify(request.tools)).toContain('"name":"create_event"');
     expect(request.messages.at(-1)?.content).toBe("react");
   });
-
-  test.each([
-    { name: "supported", tools: ["tools"], channelType: 0, offered: true },
-    { name: "a model without tools", tools: [], channelType: 0, offered: false },
-    { name: "an unsupported channel", tools: ["tools"], channelType: -1, offered: false },
-  ])(
-    "the auto-reply instruction names reply_with_reaction only when it is offered: $name",
-    async ({ tools, channelType, offered }) => {
-      const fixture = createFixture({ historyEnabled: false, discordToolsEnabled: true });
-      fixture.toolRegistry.register(createReplyWithReactionTool());
-      fixture.llmClient.listModelsWithPricing = mock(async () => [
-        {
-          id: "test-model:fixture",
-          name: "Fixture",
-          created: 0,
-          contextLength: 128_000,
-          pricing: { prompt: "0", completion: "0" },
-          inputModalities: ["text"],
-          outputModalities: ["text"],
-          supportedParameters: [...tools],
-        },
-      ]);
-      const discord: DiscordToolContext = {
-        channelType,
-        addReaction: async () => '{"ok":true}',
-        createPoll: async () => '{"ok":true}',
-        createThread: async () => '{"ok":true}',
-        pinMessage: async () => '{"ok":true}',
-        createEvent: async () => '{"ok":true}',
-      };
-      await fixture.chatService.generateChatResponse(
-        "guild",
-        { text: "なるほど", discord, autoReply: true },
-        "request",
-        createUpdater(),
-        { channelId: "channel", userId: "user", payer: { key: "test-default", source: "default" } },
-      );
-      const [request] = fixture.llmClient.chatStream.mock.calls[0] as [ChatCompletionRequest];
-      const instruction = request.messages.find(
-        (message) =>
-          message.role === "system" && String(message.content).includes("自動応答の判定"),
-      );
-      expect(String(instruction?.content).includes("reply_with_reaction")).toBe(offered);
-      expect(JSON.stringify(request.tools ?? []).includes('"name":"reply_with_reaction"')).toBe(
-        offered,
-      );
-    },
-  );
 
   test("offers propose_cron_job only when scheduled jobs are enabled", async () => {
     const models = mock(async () => [

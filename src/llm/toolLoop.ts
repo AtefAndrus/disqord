@@ -97,12 +97,6 @@ export type ToolLoopResult =
       reasoningText?: ReasoningDisplayText;
       /** Set by the chat service when it answered again without web search after the search failed. */
       webSearchSkipped?: true;
-      /**
-       * A tool ended the response by adding this reaction, so `text` can be
-       * empty. Earlier turns may have written text; only the caller's updater
-       * holds all of it, so the caller decides whether this was a reaction alone.
-       */
-      reaction?: string;
     }
   | { status: "cancelled"; history: ChatMessage[]; usage?: AggregatedUsage }
   | { status: "error"; error: unknown; history: ChatMessage[]; usage?: AggregatedUsage };
@@ -977,7 +971,7 @@ interface DispatchCallsParams {
  */
 async function dispatchCalls(
   params: DispatchCallsParams,
-): Promise<{ cancelled: boolean; stopped: boolean; reaction?: string }> {
+): Promise<{ cancelled: boolean; stopped: boolean }> {
   const {
     budget,
     normalizedCalls,
@@ -991,7 +985,6 @@ async function dispatchCalls(
     updaterCallMs,
   } = params;
   let stopped = false;
-  let reaction: string | undefined;
 
   for (let i = 0; i < normalizedCalls.length; i++) {
     const call = normalizedCalls[i];
@@ -1029,7 +1022,6 @@ async function dispatchCalls(
     history.push(outcome.toolMessage);
     budget.charge(outcome.toolMessage);
     if (outcome.resultTooLarge) stopped = true;
-    if (outcome.endResponse) reaction = outcome.endResponse.reaction;
     await invokeUpdater(
       () => updater.endToolBlock(call.name, outcome.render),
       requestSignal,
@@ -1048,7 +1040,7 @@ async function dispatchCalls(
     }
   }
 
-  return { cancelled: false, stopped, ...(reaction !== undefined && { reaction }) };
+  return { cancelled: false, stopped };
 }
 
 /**
@@ -1468,25 +1460,6 @@ export async function runToolLoop(params: IToolLoopParams): Promise<ToolLoopResu
 
       if (dispatchOutcome.cancelled) {
         return { status: "cancelled", history, usage: aggregatedUsage };
-      }
-      if (dispatchOutcome.reaction !== undefined) {
-        // The turn is already closed by commitTurn("tool_calls") above, so it
-        // is not committed again; the same-turn calls have all finished here.
-        if (requestSignal?.aborted) {
-          return { status: "cancelled", history, usage: aggregatedUsage };
-        }
-        return {
-          status: "final",
-          text: content,
-          finishReason: "stop",
-          history,
-          usage: aggregatedUsage,
-          model: lastObservedModel,
-          provider: lastObservedProvider,
-          ...(webSearch && { webSearch }),
-          ...(reasoningText !== undefined && { reasoningText }),
-          reaction: dispatchOutcome.reaction,
-        };
       }
       if (dispatchOutcome.stopped) clientToolsStopped = true;
       lastToolResultsStart = resultsStart;

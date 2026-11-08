@@ -52,8 +52,6 @@ export interface IToolDispatchOutcome {
    * that state, so the loop runs no client tool for the rest of the response.
    */
   resultTooLarge?: true;
-  /** See `IToolHandlerResult.endResponse`; only on a result that reached the model unchanged. */
-  endResponse?: { reaction: string };
 }
 
 export interface IToolDispatchOptions {
@@ -532,7 +530,6 @@ export class ToolDispatcher {
           content: llmResult,
         },
         ...(settlement.value.render !== undefined && { render: settlement.value.render }),
-        ...(settlement.value.endResponse && { endResponse: settlement.value.endResponse }),
       };
     } finally {
       cleanup();

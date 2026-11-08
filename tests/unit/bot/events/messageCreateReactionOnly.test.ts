@@ -1,14 +1,13 @@
 import { describe, expect, mock, spyOn, test } from "bun:test";
 import { type Message, MessageType } from "discord.js";
 import { createMessageCreateHandler } from "../../../../src/bot/events/messageCreate";
-import type { IToolLoopUpdater } from "../../../../src/llm/toolLoop";
 import type { IChatService } from "../../../../src/services/chatService";
+import type { ConversationWindowService } from "../../../../src/services/conversationWindow";
 import type { IModelService } from "../../../../src/services/modelService";
+import type { IReactionGateService } from "../../../../src/services/reactionGateService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 import { createMockApiKeyService, createMockGuildSettings } from "../../../helpers/mockFactories";
-
-const GENERATIONS = [{ id: "generation", serverTools: false, keySource: "default" as const }];
 
 function records(): IReplyRecordService {
   return {
@@ -29,283 +28,339 @@ function records(): IReplyRecordService {
   };
 }
 
-type Generate = (updater: IToolLoopUpdater) => Promise<Record<string, unknown>>;
+const GENERATION = {
+  status: "final",
+  text: "答え",
+  finishReason: "stop",
+  history: [],
+  generations: [],
+};
 
-function setup(generate: Generate, options: { isClosing?: () => boolean } = {}) {
+function setup(
+  options: {
+    emoji?: string | null;
+    settings?: Record<string, unknown>;
+    message?: Record<string, unknown>;
+    closing?: () => boolean;
+    addReaction?: () => Promise<string>;
+    /** The bot's last message in the conversation window, which also turns history on. */
+    botMessage?: string;
+  } = {},
+) {
   const page = { id: "page", edit: mock(async () => {}), delete: mock(async () => {}) };
   const send = mock(async () => page);
+  const react = mock(options.addReaction ?? (async () => '{"ok":true}'));
   const message = {
     id: "trigger",
-    content: "<@bot> ありがとう",
+    content: "<@123> ありがとう",
     type: MessageType.Default,
     channel: { id: "channel", send, isThread: () => false },
-    mentions: { has: mock(() => true) },
+    mentions: { has: mock(() => true), repliedUser: null },
     author: { id: "user", username: "user", bot: false },
     member: null,
-    client: { user: { id: "bot" } },
-    guild: { id: "guild", members: { me: null } },
+    client: { user: { id: "123", username: "bot" } },
+    guild: {
+      id: "guild",
+      members: { me: null },
+      emojis: {
+        cache: new Map([
+          ["1", { name: "kusa", available: true }],
+          ["2", { name: "gone", available: false }],
+        ]),
+      },
+    },
     attachments: { values: () => [], size: 0 },
+    poll: null,
     reply: mock(async () => {}),
+    ...options.message,
   } as unknown as Message;
-  const generateChatResponse = mock(
-    async (_guild: string, _input: unknown, _id: string, updater: IToolLoopUpdater) => ({
-      history: [],
-      generations: GENERATIONS,
-      ...(await generate(updater)),
-    }),
-  );
+  const generateChatResponse = mock(async () => GENERATION);
   const chatService = {
     get isClosing() {
-      return options.isClosing?.() ?? false;
+      return options.closing?.() ?? false;
     },
     generateChatResponse,
   } as unknown as IChatService;
   const replyRecordService = records();
-  const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
+  const judge = mock<IReactionGateService["judge"]>(async () =>
+    options.emoji === undefined ? "👍" : options.emoji,
+  );
   const handler = createMessageCreateHandler(
     chatService,
     {
       getGuildSettings: mock(async () =>
-        createMockGuildSettings({ historyEnabled: false, discordToolsEnabled: true }),
+        createMockGuildSettings({
+          historyEnabled: false,
+          discordToolsEnabled: true,
+          ...options.settings,
+          ...(options.botMessage !== undefined && { historyEnabled: true }),
+        }),
       ),
     } as unknown as ISettingsService,
-    modelService,
+    {
+      getModelName: mock(async () => "model"),
+      isMultimodalCapable: mock(async () => true),
+    } as unknown as IModelService,
     createMockApiKeyService(),
-    { replyRecordService },
+    {
+      replyRecordService,
+      reactionGate: { judge },
+      ...(options.botMessage !== undefined && {
+        conversationWindow: {
+          build: mock(async () => ({
+            messages: [
+              {
+                id: "1",
+                channelId: "channel",
+                kind: "assistant",
+                author: "assistant",
+                time: "",
+                timestampMs: 0,
+                text: options.botMessage,
+                attachments: [],
+                exchangeId: "0",
+                ref: "m1",
+              },
+            ],
+            sessionId: "session",
+            windowStartMessageId: "1",
+            toolContext: { resolveMessageRef: () => undefined },
+          })),
+        } as unknown as ConversationWindowService,
+      }),
+    },
   );
-  return { handler, message, send, page, generateChatResponse, replyRecordService, modelService };
+  return { handler, message, send, page, generateChatResponse, replyRecordService, judge, react };
 }
 
-const reactionOnly = {
-  status: "final",
-  text: "",
-  finishReason: "stop",
-  reaction: "👍",
-  model: "m",
-  usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, cost: 0.001 },
-};
+// DiscordActionService talks to Discord, so the reaction is stubbed where it is called.
+async function withReaction<T>(react: () => Promise<string>, run: () => Promise<T>): Promise<T> {
+  const module = await import("../../../../src/services/discordActionService");
+  const spy = spyOn(module.DiscordActionService.prototype, "addReaction").mockImplementation(react);
+  try {
+    return await run();
+  } finally {
+    spy.mockRestore();
+  }
+}
 
-describe("a reply that is only a reaction", () => {
-  test("sends nothing, deletes the record, and logs usage and who paid", async () => {
+describe("a message the reaction gate answers with an emoji", () => {
+  test("reacts, posts nothing, calls no model, deletes the record, and logs who paid", async () => {
     const info = spyOn(console, "info").mockImplementation(() => {});
-    const { handler, message, send, replyRecordService } = setup(async () => reactionOnly);
-    await handler(message);
-    expect(send).not.toHaveBeenCalled();
-    expect(message.reply).not.toHaveBeenCalled();
-    expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith("trigger");
-    expect(replyRecordService.finalize).not.toHaveBeenCalled();
+    const fixture = setup();
+    await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    expect(fixture.react).toHaveBeenCalledTimes(1);
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
+    expect(fixture.replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith("trigger");
+    expect(fixture.replyRecordService.finalize).not.toHaveBeenCalled();
     const line = info.mock.calls
       .map((call) => String(call[0]))
-      .find((l) => l.includes("Reaction-only reply"));
+      .find((text) => text.includes("Reaction-only reply"));
     expect(line).toContain('"emoji":"👍"');
     expect(line).toContain('"keySource":"default"');
-    expect(line).toContain('"cost":0.001');
     info.mockRestore();
   });
 
-  test("removes a page it had already sent, then deletes the record", async () => {
-    const events: string[] = [];
-    const { handler, message, send, page, replyRecordService } = setup(async (updater) => {
-      await updater.beginToolBlock("read_earlier_messages");
-      return reactionOnly;
-    });
-    page.delete.mockImplementation(async () => {
-      events.push("delete-page");
-    });
-    replyRecordService.deletePendingWithoutPages = mock(async () => {
-      events.push("delete-record");
-      return true;
-    });
-    await handler(message);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(replyRecordService.appendPage).toHaveBeenCalledWith("trigger", "page");
-    expect(replyRecordService.removePage).toHaveBeenCalledWith("page");
-    expect(events).toEqual(["delete-page", "delete-record"]);
+  test("passes the mention in the state and the guild's usable custom emoji", async () => {
+    const fixture = setup({ emoji: null });
+    await fixture.handler(fixture.message);
+    const [input] = fixture.judge.mock.calls[0] as Parameters<IReactionGateService["judge"]>;
+    expect(JSON.stringify(input.state)).toContain("@bot ありがとう");
+    expect(input.customEmoji).toEqual(["kusa"]);
   });
 
-  test("waits for a page still being sent, so that it does not stay behind", async () => {
-    let resolveSend = (): void => {};
-    const { handler, message, send, page, replyRecordService } = setup(async (updater) => {
-      void updater.beginToolBlock("read_earlier_messages");
-      return reactionOnly;
-    });
-    send.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveSend = () => resolve(page);
-        }),
-    );
-    const handling = handler(message);
-    await Bun.sleep(5);
-    expect(replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
-    resolveSend();
-    await handling;
-    expect(replyRecordService.appendPage).toHaveBeenCalledWith("trigger", "page");
-    expect(page.delete).toHaveBeenCalledTimes(1);
-    expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledTimes(1);
+  test("hands over the end of a long bot message, which the judgment state would cut off", async () => {
+    const fixture = setup({ emoji: null, botMessage: `${"あ".repeat(500)}書きましょうか？` });
+    await fixture.handler(fixture.message);
+    const [input] = fixture.judge.mock.calls[0] as Parameters<IReactionGateService["judge"]>;
+    expect(String(input.state.last_bot_message_end).endsWith("書きましょうか？")).toBe(true);
   });
 
-  test("a record that cannot be deleted is finalized as failed with its generations", async () => {
-    const { handler, message, replyRecordService } = setup(async () => reactionOnly);
-    replyRecordService.deletePendingWithoutPages = mock(async () => false);
-    await handler(message);
-    expect(replyRecordService.finalize).toHaveBeenCalledWith("trigger", "failed", 0);
-    expect(replyRecordService.saveGenerations).toHaveBeenCalledWith("trigger", GENERATIONS);
+  test("a record that cannot be deleted is finalized as failed", async () => {
+    const fixture = setup();
+    fixture.replyRecordService.deletePendingWithoutPages = mock(async () => false);
+    await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    expect(fixture.replyRecordService.finalize).toHaveBeenCalledWith("trigger", "failed", 0);
   });
 
   test("the same message arriving again is not processed", async () => {
-    const { handler, message, generateChatResponse } = setup(async () => reactionOnly);
-    await handler(message);
-    await handler(message);
-    expect(generateChatResponse).toHaveBeenCalledTimes(1);
-  });
-
-  test("the same message arriving during the first one's generation is not processed either", async () => {
-    let finish = (): void => {};
-    const generating = new Promise<void>((resolve) => {
-      finish = resolve;
+    const fixture = setup();
+    await withReaction(fixture.react, async () => {
+      await fixture.handler(fixture.message);
+      await fixture.handler(fixture.message);
     });
-    const fixture = setup(async () => {
-      await generating;
-      return reactionOnly;
-    });
-    const { handler, message, generateChatResponse, replyRecordService } = fixture;
-    let exists = false;
-    replyRecordService.createPending = mock(async () => {
-      if (exists) return false;
-      exists = true;
-      return true;
-    });
-    replyRecordService.findByTrigger = mock(() =>
-      exists ? ({ triggerMsgId: "trigger" } as never) : null,
-    );
-    replyRecordService.deletePendingWithoutPages = mock(async () => {
-      exists = false;
-      return true;
-    });
-    let releaseSecond = (): void => {};
-    const heldBack = new Promise<void>((resolve) => {
-      releaseSecond = resolve;
-    });
-    const first = handler(message);
-    await Bun.sleep(1);
-    // The second event is past the handler's first checks when the first one ends and deletes
-    // its record, so only the check next to createPending can stop it.
-    fixture.modelService.getModelName = mock(async () => {
-      await heldBack;
-      return "model";
-    });
-    const second = handler(message);
-    await Bun.sleep(1);
-    finish();
-    await first;
-    releaseSecond();
-    await second;
-    expect(generateChatResponse).toHaveBeenCalledTimes(1);
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
   });
 
   test("the first one ending while the repeated event waits on createPending stops it too", async () => {
     let finish = (): void => {};
-    const generating = new Promise<void>((resolve) => {
+    const reacting = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const fixture = setup(async () => {
-      await generating;
-      return reactionOnly;
-    });
-    const { handler, message, generateChatResponse, replyRecordService } = fixture;
-    const first = handler(message);
-    await Bun.sleep(1);
-    // createPending saw the first one's record; by the time it returns, the record is gone.
-    let firstDone: Promise<void> = Promise.resolve();
-    replyRecordService.createPending = mock(async () => {
-      finish();
-      await firstDone;
-      return false;
-    });
-    firstDone = first;
-    await handler(message);
-    expect(generateChatResponse).toHaveBeenCalledTimes(1);
-  });
-
-  test("whitespace written before the tool still counts as no text", async () => {
-    const { handler, message, send, replyRecordService } = setup(async (updater) => {
-      await updater.stageContent("\n");
-      await updater.commitTurn("tool_calls");
-      return reactionOnly;
-    });
-    await handler(message);
-    expect(send).not.toHaveBeenCalled();
-    expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalled();
-  });
-});
-
-describe("a reaction with text", () => {
-  test("is drawn as a normal reply and keeps the record", async () => {
-    const { handler, message, page, replyRecordService } = setup(async (updater) => {
-      await updater.stageContent("調べます");
-      await updater.commitTurn("tool_calls");
-      return { ...reactionOnly, reasoningText: "考えた" };
-    });
-    await handler(message);
-    expect(JSON.stringify(page.edit.mock.calls)).toContain("調べます");
-    expect(replyRecordService.finalize).toHaveBeenCalledWith("trigger", "completed", 1);
-    expect(replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
-  });
-});
-
-describe("generation that ends before the first page", () => {
-  test("shutdown sends nothing and leaves the record pending for the next start", async () => {
-    let closing = false;
-    const { handler, message, send, replyRecordService } = setup(
-      async (updater) => {
-        closing = true;
-        await updater.stageContent("あ");
-        return { status: "cancelled" };
+    const fixture = setup({
+      addReaction: async () => {
+        await reacting;
+        return '{"ok":true}';
       },
-      { isClosing: () => closing },
+    });
+    await withReaction(fixture.react, async () => {
+      const first = fixture.handler(fixture.message);
+      await Bun.sleep(1);
+      // createPending saw the first one's record; by the time it returns, the record is gone.
+      fixture.replyRecordService.createPending = mock(async () => {
+        finish();
+        await first;
+        return false;
+      });
+      await fixture.handler(fixture.message);
+    });
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
+    expect(fixture.react).toHaveBeenCalledTimes(1);
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+
+  test("a repeated event past the first checks when the first one ends is stopped next to createPending", async () => {
+    const fixture = setup();
+    let exists = false;
+    fixture.replyRecordService.createPending = mock(async () => {
+      if (exists) return false;
+      exists = true;
+      return true;
+    });
+    fixture.replyRecordService.findByTrigger = mock(() =>
+      exists ? ({ triggerMsgId: "trigger" } as never) : null,
     );
-    await handler(message);
-    expect(send).not.toHaveBeenCalled();
-    expect(replyRecordService.finalize).not.toHaveBeenCalled();
-    expect(replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
+    fixture.replyRecordService.deletePendingWithoutPages = mock(async () => {
+      exists = false;
+      return true;
+    });
+    await withReaction(fixture.react, async () => {
+      const settings = fixture.handler(fixture.message);
+      const second = fixture.handler(fixture.message);
+      await Promise.all([settings, second]);
+      await fixture.handler(fixture.message);
+    });
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
+    expect(fixture.react).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("falling back to a text reply", () => {
+  test("when the gate says text", async () => {
+    const fixture = setup({ emoji: null });
+    await fixture.handler(fixture.message);
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+    expect(fixture.replyRecordService.finalize).toHaveBeenCalledWith("trigger", "completed", 1);
+    expect(fixture.replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
   });
 
-  test("an error still gets the error reply", async () => {
-    const { handler, message, send, replyRecordService } = setup(async () => ({
-      status: "error",
-      error: new Error("failed"),
-    }));
-    await handler(message);
-    expect(send).not.toHaveBeenCalled();
-    expect(message.reply).toHaveBeenCalledTimes(1);
-    expect(replyRecordService.finalize).toHaveBeenCalledWith("trigger", "failed", 0);
+  test.each([
+    ["a refused reaction", async () => '{"ok":false,"reason":"missing_permission","who":"bot"}'],
+    [
+      "a reaction that throws",
+      async () => {
+        throw new Error("network");
+      },
+    ],
+  ])("after %s", async (_name, addReaction) => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const fixture = setup({ addReaction });
+    await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+    expect(fixture.replyRecordService.deletePendingWithoutPages).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+});
+
+describe("messages the gate is not asked about", () => {
+  test.each([
+    ["Discord tools off", { settings: { discordToolsEnabled: false } }],
+    ["a free-only guild", { settings: { freeModelsOnly: true } }],
+    [
+      "a poll",
+      {
+        message: {
+          poll: {
+            question: { text: "q" },
+            answers: new Map(),
+            expiresTimestamp: null,
+            allowMultiselect: false,
+          },
+        },
+      },
+    ],
+    ["more than the judgment state keeps", { message: { content: `<@123> ${"あ".repeat(401)}` } }],
+  ])("%s", async (_name, options) => {
+    const fixture = setup(options);
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
-  test("with Discord tools off, the first page is sent before generation as before", async () => {
-    const order: string[] = [];
-    const { message, send } = setup(async () => reactionOnly);
-    send.mockImplementation(async () => {
-      order.push("send");
-      return { id: "page", edit: mock(async () => {}), delete: mock(async () => {}) };
+  test("an attachment", async () => {
+    const fixture = setup({
+      message: {
+        content: "<@123> これ",
+        attachments: {
+          size: 1,
+          values: () => [{ id: "a", name: "a.png", url: "u", contentType: "image/png", size: 1 }],
+        },
+      },
+    });
+    await fixture.handler(fixture.message);
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+    expect(fixture.judge).not.toHaveBeenCalled();
+  });
+
+  test("with the window on but unavailable, the gate is not asked", async () => {
+    const fixture = setup({ settings: { historyEnabled: true } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
+  test("a message of exactly the limit is asked about", async () => {
+    const fixture = setup({ emoji: null, message: { content: `<@123> ${"あ".repeat(400)}` } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
+  });
+
+  test("once shutdown has begun, a chosen emoji is not added", async () => {
+    let closing = false;
+    const fixture = setup();
+    fixture.judge.mockImplementation(async () => {
+      closing = true;
+      return "👍";
     });
     const handler = createMessageCreateHandler(
       {
-        isClosing: false,
-        generateChatResponse: mock(async () => {
-          order.push("generate");
-          return { status: "final", text: "a", finishReason: "stop", history: [], generations: [] };
-        }),
+        get isClosing() {
+          return closing;
+        },
+        generateChatResponse: mock(async () => ({
+          status: "cancelled",
+          history: [],
+          generations: [],
+        })),
       } as unknown as IChatService,
       {
         getGuildSettings: mock(async () =>
-          createMockGuildSettings({ historyEnabled: false, discordToolsEnabled: false }),
+          createMockGuildSettings({ historyEnabled: false, discordToolsEnabled: true }),
         ),
       } as unknown as ISettingsService,
-      { getModelName: mock(async () => "model") } as unknown as IModelService,
+      {
+        getModelName: mock(async () => "model"),
+        isMultimodalCapable: mock(async () => true),
+      } as unknown as IModelService,
       createMockApiKeyService(),
+      { replyRecordService: fixture.replyRecordService, reactionGate: { judge: fixture.judge } },
     );
-    await handler(message);
-    expect(order).toEqual(["send", "generate"]);
+    await withReaction(fixture.react, () => handler(fixture.message));
+    expect(fixture.react).not.toHaveBeenCalled();
   });
 });
