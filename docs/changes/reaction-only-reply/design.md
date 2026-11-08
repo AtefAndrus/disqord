@@ -162,7 +162,7 @@ updater をスタブにして、次の時点で測定を打ち切る（モデル
 - [x] 最初のメッセージの遅延（単体テスト: 本文の最初の文字で送る、空白だけでは送らない、他の tool の呼び出しで送る、T の経過で送る、`reply_with_reaction` の実行中は時間切れにせず次のターンで掛け直す、T までにリアクションだけで終われば送らない、送信中に終了した場合に終了の処理が送信の完了を待つ、遅らせた送信の失敗を次の描画が送り直す、送信前のシャットダウンで何も送らず記録を保留中のまま残す、送信前のエラー）
 - [x] リアクションだけで終えたときの片付け（単体テスト: ページなしで記録を消す、送ったページを片付けてから記録を消す、ページの記録が外せないときは `failed` で確定して generation の ID を保存する、二重処理の記憶、ログ）
 - [x] E2E の完了条件と `reaction-only` シナリオ。数回動かして、リアクションを付け終えるまでの時間を測る
-- [ ] `bun run e2e` の既定シナリオに加えて、`reaction-only`、`shutdown`、`discord-tools`、`discord-info`、`message-ref`、会話履歴の名前付きシナリオ（`history-set history-recall history-window read-earlier view-attachment view-image`）を通す。`message-ref` は `buildConversationSafetyMessage()` の変更で、`discord-info` は `list_pins` が読むリアクションの表記の変更で要る
+- [x] `bun run e2e` の既定シナリオに加えて、`reaction-only`、`shutdown`、`discord-tools`、`discord-info`、`message-ref`、会話履歴の名前付きシナリオ（`history-set history-recall history-window read-earlier view-attachment view-image`）を通す。`message-ref` は `buildConversationSafetyMessage()` の変更で、`discord-info` は `list_pins` が読むリアクションの表記の変更で要る
 - [ ] 手動確認: 実クライアントで、メンションして礼を言い、T のうちにリアクションだけで終わった返答で「生成中...」が表示されないこと
 - [ ] `docs/changes/reaction-only-reply/` 削除（リリース完了時、git 履歴がアーカイブ）
 
