@@ -30,7 +30,11 @@ import {
   MAX_REACTION_GATE_CHARS,
   withBotMessageEnd,
 } from "../../services/reactionGateService";
-import { buildReplyGateState, type IReplyGateService } from "../../services/replyGateService";
+import {
+  buildReplyGateState,
+  type IReplyGateService,
+  nameMentions,
+} from "../../services/replyGateService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
 import type { ISettingsService } from "../../services/settingsService";
 import type { ResolvedApiKey } from "../../types";
@@ -564,16 +568,21 @@ export function createMessageCreateHandler(
     // Decided before the model is called and before anything is posted, so a reply that is only a
     // reaction shows no page and pays for no answer. Any failure here falls through to a text reply.
     // Free-only guilds are left out as the reply gate is: the judgment model is not free.
-    // Without the conversation, "了解" to an offer and "了解" to a finished answer are the same input;
-    // text can at least ask what to continue, while a reaction ends the exchange there.
+    // Without the conversation, or without the message a reply answers, "了解" to an offer and "了解"
+    // to a finished answer are the same input; text can at least ask what to continue, while a
+    // reaction ends the exchange there.
+    // The mention stays in the text: it is how the judgment sees the message is for the bot. The state
+    // cuts the text after naming the mention, so that is the length that has to fit.
+    const judgedText = isMention ? message.content : inputText;
     if (
       options.reactionGate &&
       conversation &&
+      (!rawMessage.message_reference?.message_id || judgedConversation?.replyTarget) &&
       settings.discordToolsEnabled &&
       !settings.freeModelsOnly &&
       message.attachments.size === 0 &&
       !message.poll &&
-      Array.from(inputText).length <= MAX_REACTION_GATE_CHARS
+      Array.from(nameMentions(judgedText, botName, botId)).length <= MAX_REACTION_GATE_CHARS
     ) {
       const emoji = await options.reactionGate.judge(
         {
@@ -581,11 +590,7 @@ export function createMessageCreateHandler(
           channelId: message.channel.id,
           messageId: message.id,
           botName,
-          // The mention stays in the text: it is how the judgment sees the message is for the bot.
-          state: withBotMessageEnd(
-            judgmentState(isMention ? message.content : inputText),
-            judgedConversation,
-          ),
+          state: withBotMessageEnd(judgmentState(judgedText), judgedConversation),
           customEmoji: [...(message.guild.emojis?.cache.values() ?? [])].flatMap((item) =>
             item.available !== false && item.name && CUSTOM_EMOJI_NAME.test(item.name)
               ? [item.name]

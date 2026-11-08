@@ -46,6 +46,8 @@ function setup(
     /** The bot's last message in the conversation window. */
     botMessage?: string;
     windowUnavailable?: boolean;
+    /** Extra fields of the conversation window, such as how it found the reply target. */
+    window?: Record<string, unknown>;
   } = {},
 ) {
   const page = { id: "page", edit: mock(async () => {}), delete: mock(async () => {}) };
@@ -105,6 +107,7 @@ function setup(
       sessionId: "session",
       windowStartMessageId: "1",
       toolContext: { resolveMessageRef: () => undefined },
+      ...options.window,
     })),
   } as unknown as ConversationWindowService;
   const handler = createMessageCreateHandler(
@@ -294,6 +297,14 @@ describe("messages the gate is not asked about", () => {
       },
     ],
     ["more than the judgment state keeps", { message: { content: `<@123> ${"あ".repeat(401)}` } }],
+    [
+      "under the limit until the mention reads as the bot's name",
+      { message: { content: `<@123> ${"あ".repeat(396)}` } },
+    ],
+    [
+      "a reply whose target the window could not read",
+      { message: { reference: { messageId: "gone", channelId: "channel" } } },
+    ],
   ])("%s", async (_name, options) => {
     const fixture = setup(options);
     await fixture.handler(fixture.message);
@@ -330,8 +341,35 @@ describe("messages the gate is not asked about", () => {
     expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
-  test("a message of exactly the limit is asked about", async () => {
-    const fixture = setup({ emoji: null, message: { content: `<@123> ${"あ".repeat(400)}` } });
+  test("a message the judgment state keeps whole is asked about", async () => {
+    // "@bot " and 395 characters are exactly the 400 the state keeps.
+    const fixture = setup({ emoji: null, message: { content: `<@123> ${"あ".repeat(395)}` } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
+    const [input] = fixture.judge.mock.calls[0] as Parameters<IReactionGateService["judge"]>;
+    expect(String(input.state.new_message)).not.toContain("…");
+  });
+
+  test.each([
+    ["in the window", { replyTargetRef: "m1" }],
+    [
+      "outside it",
+      {
+        replyTarget: {
+          id: "2",
+          kind: "assistant",
+          author: "assistant",
+          text: "書きましょうか？",
+          attachments: [],
+        },
+      },
+    ],
+  ])("a reply whose target was read %s is asked about", async (_name, window) => {
+    const fixture = setup({
+      emoji: null,
+      window,
+      message: { reference: { messageId: "2", channelId: "channel" } },
+    });
     await fixture.handler(fixture.message);
     expect(fixture.judge).toHaveBeenCalledTimes(1);
   });
