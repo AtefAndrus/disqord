@@ -107,7 +107,9 @@ describe("ReplyRecordRepository", () => {
       repository.createPending({ triggerMsgId: trigger, channelId, guildId, createdAt: 1 });
       repository.appendPage(trigger, `${trigger}-page`);
       repository.finalize(trigger, "completed", 1, 2);
-      repository.appendGenerations(trigger, [{ id: `gen-${trigger}`, serverTools: false }]);
+      repository.appendGenerations(trigger, [
+        { id: `gen-${trigger}`, serverTools: false, keySource: "default" },
+      ]);
     };
     add("a1", "channel-a", "guild-a");
     add("a2", "thread-a", "guild-a");
@@ -143,7 +145,11 @@ describe("ReplyRecordRepository", () => {
   });
 
   test("appends generations in order after the saved ones, only for an existing record", () => {
-    const gen = (id: string, serverTools = false) => ({ id, serverTools });
+    const gen = (id: string, serverTools = false) => ({
+      id,
+      serverTools,
+      keySource: "default" as const,
+    });
     repository.createPending({ triggerMsgId: "trigger", channelId: "channel", guildId: "guild" });
     expect(repository.listGenerations("trigger")).toEqual([]);
     expect(repository.appendGenerations("trigger", [])).toBe(0);

@@ -3,6 +3,13 @@ export type ChannelId = string;
 export type UserId = string;
 export type MessageId = string;
 
+export type ApiKeyScope = "user" | "guild";
+export type ApiKeySource = ApiKeyScope | "default";
+export interface ResolvedApiKey {
+  key: string;
+  source: ApiKeySource;
+}
+
 export interface GuildSettings {
   guildId: GuildId;
   adminRoleId: string | null;

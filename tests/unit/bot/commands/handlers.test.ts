@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   type ChatInputCommandInteraction,
   ComponentType,
@@ -15,10 +15,16 @@ import { SettingsRuleError } from "../../../../src/errors";
 import { ModelService } from "../../../../src/services/modelService";
 import { SettingsService } from "../../../../src/services/settingsService";
 import {
+  createMockApiKeyService,
   createMockGuildSettings,
   createMockLLMClient,
   createMockSettingsService,
 } from "../../../helpers/mockFactories";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 function createInteraction(model?: string): {
   interaction: ChatInputCommandInteraction;
@@ -131,6 +137,36 @@ describe("Components V2 command replies", () => {
     const payload = status.editReply.mock.calls[0]?.[0] as { flags: number; embeds: [] };
     expect(payload.flags & MessageFlags.IsComponentsV2).toBe(MessageFlags.IsComponentsV2);
     expect(payload.embeds).toEqual([]);
+  });
+  test("/status shows guild key balance without querying default credits", async () => {
+    const llmClient = createMockLLMClient();
+    const keys = createMockApiKeyService();
+    keys.getConnection = mock(() => ({ status: "connected" as const, keyHash: "guild-hash" }));
+    keys.resolveForGuild = mock(() => ({ key: "guild-fixture", source: "guild" as const }));
+    const fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer guild-fixture",
+      );
+      return Response.json({ data: { limit_remaining: 12.5 } });
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    const handlers = createCommandHandlers(
+      llmClient,
+      createMockSettingsService(),
+      new ModelService(llmClient),
+      "perplexity",
+      () => 0,
+      undefined,
+      keys,
+    );
+    const status = createInteraction();
+    await handlers.status(status.interaction);
+    const payload = JSON.stringify(status.editReply.mock.calls);
+    expect(payload).toContain("サーバーの OpenRouter キー");
+    expect(payload).toContain("キーの上限までの残額 $12.50");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(keys.resolveForGuild).toHaveBeenCalledWith("guild-1");
+    expect(llmClient.getCredits).not.toHaveBeenCalled();
   });
 
   test("/model refresh はV2フラグとembeds空配列で編集する", async () => {

@@ -83,6 +83,37 @@ GitHub Release を正式版として公開すると（prerelease を正式版に
 有効にする前の generation には、入出力ログが保存されない。
 この操作は「サーバーの管理」権限か `/config` の管理者ロールを持ち、対象チャンネルの履歴を読める人だけが使える。
 管理者ロールでメニューを使うには、サーバーの連携サービス設定でコマンドを許可する。
+ユーザー接続キーの生成は本人のアカウントに属するため、この操作ではログを取得しない。
+サーバー接続キーの生成は、現在のサーバー接続キーで取得する。
+
+### OpenRouter アカウントの接続
+
+運営者が `ENCRYPTION_KEY` に `openssl rand -hex 32` で生成した値を設定すると、利用者が `/connect user` で自分の OpenRouter アカウントを接続できる。
+認可ページを開き、表示されたコードを Discord の「コードを入力」に貼り付ける。
+接続キーは運営者のサーバーに暗号化して保存されるため、DB のバックアップには同じ `ENCRYPTION_KEY` を保持する。
+認可ページのリンクは他人に渡さない。
+
+Bot への直接のメンションと Bot の発言への返信では、ユーザー、サーバー、デフォルトの順に支払い元を選ぶ。
+自動応答、ロールだけへのメンション、自動応答の判定、定期実行はサーバー、デフォルトの順で支払い、ユーザーキーは使わない。
+サーバーの管理権限か管理ロールを持つ人は `/connect guild` でサーバー用アカウントを接続できる。
+入出力ログを有効にしたサーバー用アカウントの持ち主は、そのキーで支払った会話を OpenRouter 上で読める。
+自動応答の取捨選択を使う場合は、判定モデル `typesafe/jev-1.14` も接続先 workspace で許可する。
+接続キーが無効になった場合や復号できない場合は、別の支払い元へ切り替えずエラーにする。
+
+`/connect status` は本人だけに接続状態と自分のキーの上限までの残額を表示する。
+上限なしのキーではアカウント残高を表示できないため、OpenRouter で確認する。
+`/status` はサーバー接続キーの残額を表示し、接続が無ければデフォルトキーの残高を表示する。
+`/disconnect user|guild` は Bot の保存分だけを消し、OpenRouter 上のキーは残すため、不要なキーは返答に示される設定ページで削除する。
+接続し直す前のキーも OpenRouter に残る。
+
+未接続時にデフォルトキーを使わせない運用では、`ALLOW_UNAUTHENTICATED=false` と `ENCRYPTION_KEY` を設定する。
+`ENCRYPTION_KEY` が無い場合は接続機能を無効にするが、保存済みの接続キーがある状態では起動に失敗する。
+
+`OAUTH_CALLBACK_URL` を設定するとコードの貼り付けが不要になり、ブラウザで承認すると接続が完了する。
+URL は HTTPS、または `localhost` / `127.0.0.1` の HTTP とし、ユーザー情報、クエリ、フラグメントを含めない。
+リバースプロキシでは `GET /auth/callback` だけを公開し、同じ HTTP サーバーの `/health` と `/admin/*` は公開しない。
+コールバック URL に認可コードが含まれるため、プロキシのアクセスログにもクエリを保存しない。
+Bot に届くパスは `/auth/callback` とし、必要ならプロキシで書き換える。
 
 ### 本番へのデプロイ
 
@@ -111,6 +142,9 @@ bot は Discord との接続が切れている間 `/health` に 503 を返し、
 | DISCORD_TOKEN | Yes | Discord Bot Token |
 | DISCORD_APPLICATION_ID | Yes | Discord Application ID |
 | OPENROUTER_API_KEY | Yes | OpenRouter API Key |
+| ENCRYPTION_KEY | No | OpenRouter 接続キーの暗号化用キー（hex 64 文字）。未設定なら接続機能を無効化 |
+| ALLOW_UNAUTHENTICATED | No | 未接続時にデフォルトキーを使わせる（false には ENCRYPTION_KEY が必要）（デフォルト: `true`） |
+| OAUTH_CALLBACK_URL | No | OpenRouter 接続の公開コールバック URL。未設定ならコードを貼り付けて接続 |
 | NODE_ENV | No | アプリ動作モード（development または production）（デフォルト: `development`） |
 | DATABASE_PATH | No | SQLiteパス（デフォルト: `data/disqord.db`） |
 | DEFAULT_MODEL | No | デフォルトモデル（デフォルト: `google/gemma-4-26b-a4b-it:free`） |
@@ -153,6 +187,11 @@ Discord上で既にLLMへ送られた内容は、後から発言や添付ファ�
 | コマンド | 説明 |
 | -------- | ---- |
 | `/help` | DisQordの使い方を表示 |
+| `/connect user` | 自分の OpenRouter アカウントを接続する |
+| `/connect guild` | サーバー用の OpenRouter アカウントを接続する |
+| `/connect status` | 接続状態と自分のキーの残額を確認する |
+| `/disconnect user` | 自分の接続を解除する |
+| `/disconnect guild` | サーバーの接続を解除する |
 | `/status` | Botのステータス（OpenRouter残高等）を表示 |
 | `/model current` | 現在のデフォルトモデルを表示 |
 | `/model set <model>` | デフォルトモデルを変更 |

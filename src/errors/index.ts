@@ -29,14 +29,20 @@ export class RateLimitError extends AppError {
 }
 
 export class InsufficientCreditsError extends AppError {
-  constructor(message: string) {
-    super(message, "API残高が不足しています。管理者にお問い合わせください。", 402);
+  constructor(
+    message: string,
+    userMessage = "API残高が不足しています。管理者にお問い合わせください。",
+  ) {
+    super(message, userMessage, 402);
   }
 }
 
 export class ModerationError extends AppError {
-  constructor(message: string) {
-    super(message, "入力内容が制限されました。表現を変えてお試しください。", 403);
+  constructor(
+    message: string,
+    userMessage = "入力内容が制限されました。表現を変えてお試しください。",
+  ) {
+    super(message, userMessage, 403);
   }
 }
 
@@ -61,8 +67,29 @@ export class ModelUnavailableError extends AppError {
 }
 
 export class AuthenticationError extends AppError {
-  constructor(message: string) {
-    super(message, "Botの設定に問題があります。管理者にお問い合わせください。", 401);
+  constructor(
+    message: string,
+    userMessage = "Botの設定に問題があります。管理者にお問い合わせください。",
+  ) {
+    super(message, userMessage, 401);
+  }
+}
+
+export class ApiKeyRequiredError extends AppError {
+  constructor() {
+    super(
+      "OpenRouter connection required",
+      "`/connect guild` でこのサーバーの OpenRouter アカウントを接続してください。",
+    );
+  }
+}
+
+export class ApiKeyUnreadableError extends AppError {
+  constructor(scope: "user" | "guild") {
+    super(
+      "Stored OpenRouter key cannot be decrypted",
+      `保存した OpenRouter キーを読み取れません。${scope === "guild" ? "管理者が " : ""}\`/connect ${scope}\` で接続し直してください。`,
+    );
   }
 }
 

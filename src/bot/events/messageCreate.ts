@@ -6,8 +6,9 @@ import {
   type ThreadChannel,
 } from "discord.js";
 import type { ReplyGeneration } from "../../db/repositories/replyRecord";
-import { AppError } from "../../errors";
+import { ApiKeyUnreadableError, AppError } from "../../errors";
 import { formatSearchResultLinks, type WebSearchEngine } from "../../llm/tools/webSearch";
+import type { IApiKeyService } from "../../services/apiKeyService";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
 import type {
@@ -27,6 +28,7 @@ import type { IModelService } from "../../services/modelService";
 import { buildReplyGateState, type IReplyGateService } from "../../services/replyGateService";
 import type { IReplyRecordService } from "../../services/replyRecordService";
 import type { ISettingsService } from "../../services/settingsService";
+import type { ResolvedApiKey } from "../../types";
 import {
   badgeText,
   buildErrorContainer,
@@ -244,6 +246,7 @@ export function createMessageCreateHandler(
   chatService: IChatService,
   settingsService: ISettingsService,
   modelService: IModelService,
+  apiKeyService: IApiKeyService,
   options: {
     e2eTesterBotId?: string;
     webSearchEngine?: WebSearchEngine;
@@ -292,6 +295,29 @@ export function createMessageCreateHandler(
     const { respond, isMention } = shouldRespond(message, botId, settings.autoReplyChannels);
 
     if (!respond) {
+      return;
+    }
+
+    const directMention = message.mentions.has(botId, { ignoreEveryone: true, ignoreRoles: true });
+    let payer: ResolvedApiKey | null;
+    try {
+      payer = directMention
+        ? apiKeyService.resolveForMention(message.author.id, message.guild.id)
+        : apiKeyService.resolveForGuild(message.guild.id);
+    } catch (error) {
+      if (!(error instanceof ApiKeyUnreadableError)) throw error;
+      logger.warn("OpenRouter key unreadable", { guildId: message.guild.id });
+      if (directMention)
+        await message.reply(toComponentsV2ReplyPayload(buildErrorContainer(error.userMessage)));
+      return;
+    }
+    if (!payer) {
+      if (directMention)
+        await message.reply(
+          toComponentsV2ReplyPayload(
+            buildErrorContainer("`/connect user` で OpenRouter アカウントを接続してください。"),
+          ),
+        );
       return;
     }
 
@@ -438,41 +464,47 @@ export function createMessageCreateHandler(
 
     const botName = message.guild.members.me?.displayName ?? message.client.user.username;
     if (gated && options.replyGate) {
-      const decision = await options.replyGate.judge({
-        guildId,
-        channelId: message.channel.id,
-        messageId: message.id,
-        botName,
-        state: buildReplyGateState({
+      const decision = await options.replyGate.judge(
+        {
+          guildId,
+          channelId: message.channel.id,
+          messageId: message.id,
           botName,
-          botUserId: botId,
-          current: {
-            author: authorNames(rawMessage.author).label,
-            text: inputText,
-            attachments: [...message.attachments.values()].map((attachment) => ({
-              kind: attachment.contentType?.startsWith("image/")
-                ? "image"
-                : attachment.contentType === "application/pdf"
-                  ? "pdf"
-                  : "other",
-              filename: attachment.name,
-            })),
-          },
-          ...(conversation && {
-            conversation: {
-              messages: conversation.messages,
-              replyTarget:
-                conversation.replyTarget ??
-                (conversation.replyTargetRef === undefined
-                  ? undefined
-                  : conversation.messages.find((item) => item.ref === conversation.replyTargetRef)),
+          state: buildReplyGateState({
+            botName,
+            botUserId: botId,
+            current: {
+              author: authorNames(rawMessage.author).label,
+              text: inputText,
+              attachments: [...message.attachments.values()].map((attachment) => ({
+                kind: attachment.contentType?.startsWith("image/")
+                  ? "image"
+                  : attachment.contentType === "application/pdf"
+                    ? "pdf"
+                    : "other",
+                filename: attachment.name,
+              })),
             },
+            ...(conversation && {
+              conversation: {
+                messages: conversation.messages,
+                replyTarget:
+                  conversation.replyTarget ??
+                  (conversation.replyTargetRef === undefined
+                    ? undefined
+                    : conversation.messages.find(
+                        (item) => item.ref === conversation.replyTargetRef,
+                      )),
+              },
+            }),
+            isReplyToBot: message.mentions.repliedUser?.id === botId,
+            // A bot reply's exchange is the message it answered.
+            isAutoReply: (reply) => options.replyGate?.wasAnswered(reply.exchangeId) ?? false,
           }),
-          isReplyToBot: message.mentions.repliedUser?.id === botId,
-          // A bot reply's exchange is the message it answered.
-          isAutoReply: (reply) => options.replyGate?.wasAnswered(reply.exchangeId) ?? false,
-        }),
-      });
+        },
+        apiKeyService.clientFor(payer),
+        payer.source,
+      );
       if (decision === "silent") {
         if (replyRecordCreated)
           await options.replyRecordService?.deletePendingWithoutPages(message.id);
@@ -572,7 +604,7 @@ export function createMessageCreateHandler(
         },
         message.id,
         updater,
-        { channelId: message.channel.id, userId: message.author.id },
+        { channelId: message.channel.id, userId: message.author.id, payer },
       );
       generations = result.generations;
 

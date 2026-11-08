@@ -1,4 +1,4 @@
-import { describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   ComponentType,
   type ContainerBuilder,
@@ -10,12 +10,22 @@ import type { CommandHandlers } from "../../../../src/bot/events/interactionCrea
 import { createInteractionCreateHandler } from "../../../../src/bot/events/interactionCreate";
 import { SettingsConflictError, SettingsRuleError } from "../../../../src/errors";
 import type { ILLMClient } from "../../../../src/llm/openrouter";
+import type { IApiKeyService } from "../../../../src/services/apiKeyService";
 import type { IChatService } from "../../../../src/services/chatService";
 import type { ICronService } from "../../../../src/services/cronService";
 import type { IModelService } from "../../../../src/services/modelService";
 import type { ISettingsService } from "../../../../src/services/settingsService";
 import { logger } from "../../../../src/utils/logger";
-import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
+import {
+  createMockApiKeyService,
+  createMockGuildSettings,
+  createMockSettingsService,
+} from "../../../helpers/mockFactories";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 interface ButtonInteractionFixture {
   customId: string;
@@ -71,6 +81,7 @@ function createStatusHarness(
   defaultModel = "free/model:free",
   isFree = true,
   inspectInput?: (interaction: InspectInputInteraction) => Promise<void>,
+  apiKeyService?: IApiKeyService,
 ) {
   const settingsService = createMockSettingsService();
   settingsService.getGuildSettings = mock(() =>
@@ -93,6 +104,7 @@ function createStatusHarness(
     "perplexity",
     { countJobs: mock(() => 2) } as unknown as ICronService,
     inspectInput,
+    apiKeyService,
   );
   return { handler, settingsService, modelService, llmClient };
 }
@@ -205,6 +217,27 @@ describe("interactionCreate: 停止ボタン", () => {
       "定期実行の登録数**\\n2 件",
     );
     expect(settingsService.setShowLlmDetails).not.toHaveBeenCalled();
+  });
+  test("status button redraw shows guild key balance without querying default credits", async () => {
+    const keys = createMockApiKeyService();
+    keys.getConnection = mock(() => ({ status: "connected" as const, keyHash: "guild-hash" }));
+    keys.resolveForGuild = mock(() => ({ key: "guild-fixture", source: "guild" as const }));
+    const fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer guild-fixture",
+      );
+      return Response.json({ data: { limit_remaining: 23.75 } });
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    const { handler, llmClient } = createStatusHarness("free/model:free", true, undefined, keys);
+    const interaction = buttonInteraction("status_model_refresh");
+    await handler(interaction as never);
+    const text = responseText(interaction.editReply);
+    expect(text).toContain("サーバーの OpenRouter キー");
+    expect(text).toContain("キーの上限までの残額 $23.75");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(keys.resolveForGuild).toHaveBeenCalledWith("guild-1");
+    expect(llmClient.getCredits).not.toHaveBeenCalled();
   });
   test("old auto-reply list button still returns the list", async () => {
     const { handler, settingsService } = createStatusHarness();

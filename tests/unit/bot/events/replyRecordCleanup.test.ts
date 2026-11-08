@@ -15,6 +15,21 @@ function service(): {
 }
 
 describe("reply record cleanup handlers", () => {
+  test("deletes departed guild keys even if reply cleanup fails and never deletes user keys for a channel", async () => {
+    const records = service();
+    const apiKeys = {
+      removeGuild: mock((_id: string) => {}),
+      removeGuildsNotIn: mock((_ids: readonly string[]) => {}),
+    };
+    const handlers = createReplyRecordCleanupHandlers(records, undefined, apiKeys);
+    records.deleteByGuild.mockRejectedValueOnce(new Error("fixture"));
+    await expect(handlers.guildDelete({ id: "left" })).rejects.toThrow("fixture");
+    expect(apiKeys.removeGuild).toHaveBeenCalledWith("left");
+    await handlers.channelDelete({ id: "channel" });
+    await handlers.reconcileGuilds(["kept"]);
+    expect(apiKeys.removeGuild).toHaveBeenCalledTimes(1);
+    expect(apiKeys.removeGuildsNotIn).toHaveBeenCalledWith(["kept"]);
+  });
   test("deletes cron jobs and proposals for removed guilds, channels and threads", async () => {
     const cron = {
       deleteByGuild: mock((_id: string) => 1),

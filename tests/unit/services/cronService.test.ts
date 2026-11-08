@@ -20,7 +20,11 @@ import {
   MAX_TOTAL_BYTES_PER_MESSAGE,
   MAX_TOTAL_CHARS_PER_MESSAGE,
 } from "../../../src/utils/chatContainerBuilder";
-import { createMockLLMClient, createMockTweetService } from "../../helpers/mockFactories";
+import {
+  createMockApiKeyService,
+  createMockLLMClient,
+  createMockTweetService,
+} from "../../helpers/mockFactories";
 
 const START = Date.parse("2026-09-29T00:00:00Z");
 const actor = {
@@ -293,6 +297,7 @@ describe("cron service", () => {
       "perplexity",
       createMockTweetService(),
       new ModelService(llm),
+      createMockApiKeyService(llm),
     );
     const modelCall = spyOn(llm, "chat").mockImplementation(async (request) => {
       expect(request.tools).toBeUndefined();
@@ -344,6 +349,7 @@ describe("cron service", () => {
       "perplexity",
       createMockTweetService(),
       new ModelService(llm),
+      createMockApiKeyService(llm),
     );
     service = new CronService(
       repo,

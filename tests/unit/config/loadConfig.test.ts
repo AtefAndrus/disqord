@@ -162,3 +162,74 @@ describe("loadConfig: FXTWITTER_API_BASE", () => {
     expect(() => loadConfig()).toThrow();
   });
 });
+
+describe("loadConfig: OAuth BYOK", () => {
+  const names = [
+    "DISCORD_TOKEN",
+    "DISCORD_APPLICATION_ID",
+    "OPENROUTER_API_KEY",
+    "NODE_ENV",
+    "ENCRYPTION_KEY",
+    "ALLOW_UNAUTHENTICATED",
+    "OAUTH_CALLBACK_URL",
+  ] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    process.env.DISCORD_TOKEN = "fixture";
+    process.env.DISCORD_APPLICATION_ID = "1";
+    process.env.OPENROUTER_API_KEY = "fixture";
+    process.env.NODE_ENV = "development";
+    delete process.env.ENCRYPTION_KEY;
+    delete process.env.ALLOW_UNAUTHENTICATED;
+    delete process.env.OAUTH_CALLBACK_URL;
+  });
+  afterEach(() => {
+    for (const name of names) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+  test("defaults to the existing default-key behavior", () => {
+    expect(loadConfig()).toMatchObject({
+      allowUnauthenticated: true,
+      encryptionKey: undefined,
+      oauthCallbackUrl: undefined,
+    });
+  });
+  test("strict boolean and encryption-key validation", () => {
+    for (const value of ["", "yes", "0"]) {
+      process.env.ALLOW_UNAUTHENTICATED = value;
+      expect(() => loadConfig()).toThrow();
+    }
+    process.env.ALLOW_UNAUTHENTICATED = "false";
+    expect(() => loadConfig()).toThrow("ENCRYPTION_KEY");
+    process.env.ENCRYPTION_KEY = "12".repeat(32);
+    expect(loadConfig().allowUnauthenticated).toBe(false);
+    process.env.ENCRYPTION_KEY = "wrong";
+    expect(() => loadConfig()).toThrow();
+  });
+  test.each([
+    "https://callback.example/other-path",
+    "http://localhost:3000/auth/callback",
+    "http://127.0.0.1:3000/auth/callback",
+  ])("accepts callback %s with encryption", (url) => {
+    process.env.OAUTH_CALLBACK_URL = url;
+    expect(() => loadConfig()).toThrow("ENCRYPTION_KEY");
+    process.env.ENCRYPTION_KEY = "12".repeat(32);
+    expect(loadConfig().oauthCallbackUrl).toBe(url);
+  });
+  test.each([
+    "http://callback.example/auth/callback",
+    "https://callback.example/?a=b",
+    "https://callback.example/#hash",
+    "https://actor@callback.example/",
+    "https://callback.example/?",
+    "https://callback.example/#",
+    "file:///callback",
+  ])("rejects callback %s", (url) => {
+    process.env.OAUTH_CALLBACK_URL = url;
+    process.env.ENCRYPTION_KEY = "12".repeat(32);
+    expect(() => loadConfig()).toThrow();
+  });
+});

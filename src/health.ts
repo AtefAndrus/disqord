@@ -23,6 +23,7 @@ export interface HealthStatus {
 }
 
 export interface HttpServerOptions {
+  oauthCallback?: (request: Request) => Promise<Response>;
   client: Client;
   port: number;
   adminApiSecret?: string;
@@ -34,13 +35,22 @@ export function startHttpServer(options: HttpServerOptions): ReturnType<typeof B
   const startTime = Date.now();
 
   const adminHandlers = createAdminHandlers({ adminApiSecret, logFileWriter });
+  const routes: Bun.Serve.Routes<unknown, string> = {
+    "/admin/metrics": (req) => adminHandlers.handleAdminMetrics(req),
+    "/admin/logs": (req) => adminHandlers.handleAdminLogs(req),
+  };
+  const callback = options.oauthCallback;
+  if (callback)
+    routes["/auth/callback"] = (req, server) => {
+      if (req.method !== "GET")
+        return new Response("Method Not Allowed", { status: 405, headers: { Allow: "GET" } });
+      server.timeout(req, 30);
+      return callback(req);
+    };
 
   const server = Bun.serve({
     port,
-    routes: {
-      "/admin/metrics": (req) => adminHandlers.handleAdminMetrics(req),
-      "/admin/logs": (req) => adminHandlers.handleAdminLogs(req),
-    },
+    routes,
     async fetch(req) {
       const url = new URL(req.url);
 

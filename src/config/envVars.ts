@@ -10,6 +10,22 @@ export const envVarDefinitions: EnvVarDefinition[] = [
   { name: "DISCORD_APPLICATION_ID", required: true, description: "Discord Application ID" },
   { name: "OPENROUTER_API_KEY", required: true, description: "OpenRouter API Key" },
   {
+    name: "ENCRYPTION_KEY",
+    required: false,
+    description: "OpenRouter 接続キーの暗号化用キー（hex 64 文字）。未設定なら接続機能を無効化",
+  },
+  {
+    name: "ALLOW_UNAUTHENTICATED",
+    required: false,
+    description: "未接続時にデフォルトキーを使わせる（false には ENCRYPTION_KEY が必要）",
+    default: "true",
+  },
+  {
+    name: "OAUTH_CALLBACK_URL",
+    required: false,
+    description: "OpenRouter 接続の公開コールバック URL。未設定ならコードを貼り付けて接続",
+  },
+  {
     name: "NODE_ENV",
     required: false,
     description: "アプリ動作モード（development または production）",

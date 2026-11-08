@@ -17,9 +17,14 @@ import {
 } from "../../../../src/bot/events/inspectInputCommand";
 import type { ReplyRecord } from "../../../../src/db/repositories/replyRecord";
 import type { GenerationLookup } from "../../../../src/llm/generationLog";
+import type { IApiKeyService } from "../../../../src/services/apiKeyService";
 import type { IReplyRecordService } from "../../../../src/services/replyRecordService";
 import { logger } from "../../../../src/utils/logger";
-import { createMockGuildSettings, createMockSettingsService } from "../../../helpers/mockFactories";
+import {
+  createMockApiKeyService,
+  createMockGuildSettings,
+  createMockSettingsService,
+} from "../../../helpers/mockFactories";
 
 const RECORD: ReplyRecord = {
   triggerMsgId: "trigger-1",
@@ -50,6 +55,8 @@ const CONTENT: GenerationLookup = {
 };
 
 interface HarnessOptions {
+  apiKeys?: IApiKeyService;
+  keySource?: "user" | "guild" | "default";
   manageGuild?: boolean;
   adminRole?: boolean;
   readHistory?: boolean;
@@ -119,6 +126,7 @@ function harness(options: HarnessOptions = {}): Harness {
     listGenerations: mock(() =>
       (options.ids ?? ["gen-1"]).map((id) => ({
         id,
+        keySource: options.keySource ?? "default",
         serverTools: options.serverTools?.includes(id) ?? false,
       })),
     ),
@@ -179,6 +187,7 @@ function harness(options: HarnessOptions = {}): Harness {
     records,
     { getGeneration: generation, getGenerationContent: content },
     options.timeoutMs,
+    options.apiKeys,
   );
   return {
     run: () => handler(interaction),
@@ -593,6 +602,45 @@ describe("LLM 入力を見る", () => {
       { id: "gen-1", serverTools: true },
       { id: "gen-2", serverTools: false, generation: METADATA, content: CONTENT },
     ]);
+  });
+
+  test("user-key generation never fetches another person's input logs", async () => {
+    const h = harness({ keySource: "user" });
+    await h.run();
+    expect(h.generation).not.toHaveBeenCalled();
+    expect(h.content).not.toHaveBeenCalled();
+    expect(textOf(h.editReply)).toContain("本人の OpenRouter アカウントの生成なので表示しない");
+  });
+
+  test("disconnected guild-key generation never uses default credentials", async () => {
+    const h = harness({ keySource: "guild" });
+    await h.run();
+    expect(h.generation).not.toHaveBeenCalled();
+    expect(h.content).not.toHaveBeenCalled();
+    expect(textOf(h.editReply)).toContain("サーバーの OpenRouter 接続が解除");
+  });
+
+  test("guild generation fetches both logs with the current guild connection", async () => {
+    const keys = createMockApiKeyService();
+    keys.resolveForGuild = mock(() => ({ key: "guild-fixture", source: "guild" as const }));
+    const originalFetch = globalThis.fetch;
+    const fetch = mock(async (_input: unknown, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+        "Bearer guild-fixture",
+      );
+      return Response.json({ data: {} });
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      const h = harness({ keySource: "guild", apiKeys: keys });
+      await h.run();
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(keys.resolveForGuild).toHaveBeenCalledWith("guild-1");
+      expect(h.generation).not.toHaveBeenCalled();
+      expect(h.content).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

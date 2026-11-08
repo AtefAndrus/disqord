@@ -146,3 +146,23 @@ export function createMockGuildSettings(overrides?: Partial<GuildSettings>): Gui
     ...overrides,
   };
 }
+
+export function createMockApiKeyService(
+  client: ILLMClient = createMockLLMClient(),
+): import("../../src/services/apiKeyService").IApiKeyService {
+  return {
+    enabled: true,
+    connectionMode: "paste",
+    resolveForMention: mock(() => ({ key: "test-default", source: "default" as const })),
+    resolveForGuild: mock(() => ({ key: "test-default", source: "default" as const })),
+    clientFor: mock(() => client as import("../../src/llm/openrouter").OpenRouterClient),
+    startConnection: mock(() => "https://openrouter.ai/auth"),
+    hasPendingConnection: mock(() => false),
+    completeConnection: mock(async () => "connected" as const),
+    completeCallback: mock(async () => "invalid" as const),
+    disconnect: mock(() => ({ removed: false, keyHash: null })),
+    getConnection: mock(() => ({ status: "disconnected" as const })),
+    removeGuild: mock(() => {}),
+    removeGuildsNotIn: mock(() => {}),
+  };
+}

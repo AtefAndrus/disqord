@@ -19,7 +19,7 @@ temperature などの LLM パラメータや、システムプロンプトを変
 - 連携: [reasoning-output](https://github.com/AtefAndrus/disqord/blob/5f1bfa49759e1d5ee74e97718d61adff81f2b601/docs/changes/reasoning-output/design.md) — reasoning の effort と token 上限は本 change の LLM パラメータで解決し、推論本文を表示するかどうかは同 change が入れた Guild 設定 `reasoning_display_enabled` で扱う
 - 先行: [ギルド設定変更の共通認可](https://github.com/AtefAndrus/disqord/blob/72517eb35f9d3e8928a954f83e12da2f445d9424/docs/changes/permissions/design.md) — guild スコープと channel スコープへの書き込みは同 change の共通認可関数 `canManageGuildSettings` で認可する
 - 先行: [設定パネル（/config の再構成）](https://github.com/AtefAndrus/disqord/blob/67291dde3d1ca40f9243d10430e98c3600341dbf/docs/changes/config-panel/design.md) — プロンプトと LLM パラメータの編集は、同 change の「プロンプトとパラメータ」ページと本人にだけ見える「自分の設定」のパネルに載せる。`/config` はサブコマンドを持たないので、本 change はサブコマンドや別のスラッシュコマンドを足さない
-- 連携: [OAuth BYOK](../oauth-byok/design.md) — ユーザーが自分のキーで払う場合に `free_models_only` を課すかは、両 change のどちらかで決める必要がある
+- 連携: [OAuth BYOK](../oauth-byok/design.md) — 利用者ごとのモデルを入れると、利用者が自分のキーで払うときにも `free_models_only` を課すかを本 change で決める必要がある
 
 ## Goals / Non-Goals
 
@@ -256,7 +256,7 @@ OpenRouter が `instructions` と `input` 内の system 項目を、OpenAI 以�
 - このフォルダは、設定階層化、LLM パラメータ、カスタムプロンプトの 3 機能を束ねている。LLM パラメータとカスタムプロンプトは、階層化なしでも Guild スコープだけで先に出荷できる。一方、両者の scope 指定と解決ロジックは階層化に依存するので、先に Guild だけで出すと、後から scope を足すときにコマンドと保存先をもう一度変えることになる。3 機能を同じリリースで出すならこのフォルダのままでよく、LLM パラメータやカスタムプロンプトを Guild スコープだけで先に出すなら、そのリリース単位でフォルダを分けることを勧める。
 - スレッドでの解決: スレッドのメッセージの `channelId` はスレッドの ID である。スレッドに channel スコープの設定が無いとき、親チャンネルの設定を継承するかを決める必要がある。
 - `default_parameters` を明示的に送ることと、送らずにプロバイダーの既定に任せることで結果が変わるかは未検証である。変わらないなら、モデル既定値のマージは設定パネルの表示のためだけに使い、送信からは外せる。
-- [OAuth BYOK](../oauth-byok/design.md) で、ユーザーが自分のキーで支払うときにも `free_models_only` を適用するか。適用しないなら、Guild 制約を当てる条件に「解決したキーが Guild またはデフォルトのキーであること」を加える。
+- ユーザーが [OAuth BYOK](../oauth-byok/design.md) の自分のキーで支払うときにも `free_models_only` を適用するか。適用しないなら、Guild 制約を当てる条件に「解決したキーが Guild またはデフォルトのキーであること」を加える。Guild に 1 つのモデルだけがある現状では、支払い元によって結果が変わる箇所がないので、利用者ごとのモデルを入れる本 change で決める。
 
 ## 参照
 

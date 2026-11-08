@@ -28,6 +28,10 @@ export function createReplyRecordCleanupHandlers(
     deleteByChannel(channelId: string): number;
     deleteGuildsNotIn(guildIds: readonly string[]): number;
   },
+  apiKeys?: {
+    removeGuild(guildId: string): void;
+    removeGuildsNotIn(guildIds: readonly string[]): void;
+  },
 ): ReplyRecordCleanupHandlers {
   const log = (scope: string, id: string, removed: number): void => {
     if (removed > 0)
@@ -40,11 +44,14 @@ export function createReplyRecordCleanupHandlers(
     id: string,
     replyDelete: () => Promise<number>,
     cronDelete: () => number | undefined,
+    apiKeyDelete: () => void = () => {},
   ): Promise<void> => {
-    const [reply, cronResult] = await Promise.allSettled([
+    const [reply, cronResult, apiKeyResult] = await Promise.allSettled([
       Promise.resolve().then(replyDelete),
       Promise.resolve().then(cronDelete),
+      Promise.resolve().then(apiKeyDelete),
     ]);
+    if (apiKeyResult.status === "rejected") logger.error("API key cleanup failed", { scope, id });
     if (reply.status === "fulfilled") log(scope, id, reply.value);
     if (cronResult.status === "fulfilled" && cronResult.value !== undefined && cronResult.value > 0)
       console.info(
@@ -57,6 +64,7 @@ export function createReplyRecordCleanupHandlers(
       throw reply.reason;
     }
     if (cronResult.status === "rejected") throw cronResult.reason;
+    if (apiKeyResult.status === "rejected") throw apiKeyResult.reason;
   };
   return {
     guildDelete: async (guild) => {
@@ -65,6 +73,7 @@ export function createReplyRecordCleanupHandlers(
         guild.id,
         () => service.deleteByGuild(guild.id),
         () => cron?.deleteByGuild(guild.id),
+        () => apiKeys?.removeGuild(guild.id),
       );
     },
     channelDelete: async (channel) => {
@@ -90,6 +99,7 @@ export function createReplyRecordCleanupHandlers(
         "",
         () => service.deleteGuildsNotIn(ids),
         () => cron?.deleteGuildsNotIn(ids),
+        () => apiKeys?.removeGuildsNotIn(ids),
       );
     },
   };

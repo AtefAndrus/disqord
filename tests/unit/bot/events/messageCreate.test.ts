@@ -17,7 +17,7 @@ import type {
   IReplyRecordRepository,
   ReplyGeneration,
 } from "../../../../src/db/repositories/replyRecord";
-import { AppError, RateLimitError } from "../../../../src/errors";
+import { ApiKeyUnreadableError, AppError, RateLimitError } from "../../../../src/errors";
 import type { IToolLoopUpdater, ToolLoopResult } from "../../../../src/llm/toolLoop";
 import type {
   ChatRequestContext,
@@ -40,6 +40,7 @@ import {
   REASONING_COMPONENT_ID,
 } from "../../../../src/utils/chatContainerBuilder";
 import type { RawDiscordMessage } from "../../../../src/utils/discordMessageNormalizer";
+import { createMockApiKeyService } from "../../../helpers/mockFactories";
 
 interface MockBotMessage {
   id: string;
@@ -323,7 +324,6 @@ describe("createMessageCreateHandler", () => {
     mockBotMessage = createMockBotMessage("bot-msg-123");
 
     mockChatService = {
-      generateResponse: mock(() => Promise.resolve({ text: "Mock response", metadata: undefined })),
       generateChatResponse: mock(createMockChatResponseFn("Mock response")),
       cancelRequest: mock(() => false),
       cancelAll: mock(() => {}),
@@ -472,6 +472,110 @@ describe("createMessageCreateHandler", () => {
     mockMessage.content = "hello";
   }
 
+  test.each(["direct", "role", "auto"])("BYOK payer for %s mention", async (kind) => {
+    await enableGate();
+    mockMessage.mentions.has = mock(
+      (_id: string, options: { ignoreRoles?: boolean }) =>
+        kind === "direct" || (kind === "role" && !options.ignoreRoles),
+    );
+    const apiKeys = createMockApiKeyService();
+    apiKeys.resolveForMention = mock(() => ({ key: "user-fixture", source: "user" as const }));
+    apiKeys.resolveForGuild = mock(() => ({ key: "guild-fixture", source: "guild" as const }));
+    const gate = {
+      judge: mock(async () => "reply" as const),
+      wasSilenced: mock(() => false),
+      wasAnswered: mock(() => false),
+    };
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      apiKeys,
+      { replyGate: gate },
+    )(mockMessage as never);
+    const payer = {
+      key: kind === "direct" ? "user-fixture" : "guild-fixture",
+      source: kind === "direct" ? "user" : "guild",
+    };
+    expect(
+      kind === "direct" ? apiKeys.resolveForMention : apiKeys.resolveForGuild,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      kind === "direct" ? apiKeys.resolveForGuild : apiKeys.resolveForMention,
+    ).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
+      "guild-123",
+      expect.anything(),
+      mockMessage.id,
+      expect.anything(),
+      { channelId: mockMessage.channel.id, userId: mockMessage.author.id, payer },
+    );
+    if (kind === "auto")
+      expect(gate.judge).toHaveBeenCalledWith(expect.anything(), expect.anything(), "guild");
+    else expect(gate.judge).not.toHaveBeenCalled();
+  });
+
+  test.each(["direct", "role", "auto"])("BYOK missing payer for %s mention", async (kind) => {
+    await enableGate();
+    mockMessage.mentions.has = mock(
+      (_id: string, options: { ignoreRoles?: boolean }) =>
+        kind === "direct" || (kind === "role" && !options.ignoreRoles),
+    );
+    const apiKeys = createMockApiKeyService();
+    apiKeys.resolveForMention = mock(() => null);
+    apiKeys.resolveForGuild = mock(() => null);
+    const gate = {
+      judge: mock(async () => "reply" as const),
+      wasSilenced: mock(() => false),
+      wasAnswered: mock(() => false),
+    };
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      apiKeys,
+      { replyGate: gate },
+    )(mockMessage as never);
+    expect(gate.judge).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockReply).toHaveBeenCalledTimes(kind === "direct" ? 1 : 0);
+    if (kind === "direct")
+      expect(extractTextContents(toContainerJSON(lastCallArg(mockReply))).join("\n")).toContain(
+        "/connect user",
+      );
+  });
+
+  test.each(["direct", "role", "auto"])("BYOK unreadable payer for %s mention", async (kind) => {
+    await enableGate();
+    mockMessage.mentions.has = mock(
+      (_id: string, options: { ignoreRoles?: boolean }) =>
+        kind === "direct" || (kind === "role" && !options.ignoreRoles),
+    );
+    const apiKeys = createMockApiKeyService();
+    const fail = (): never => {
+      throw new ApiKeyUnreadableError("user");
+    };
+    apiKeys.resolveForMention = mock(fail);
+    apiKeys.resolveForGuild = mock(fail);
+    const gate = {
+      judge: mock(async () => "reply" as const),
+      wasSilenced: mock(() => false),
+      wasAnswered: mock(() => false),
+    };
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      apiKeys,
+      { replyGate: gate },
+    )(mockMessage as never);
+    expect(gate.judge).not.toHaveBeenCalled();
+    expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockReply).toHaveBeenCalledTimes(kind === "direct" ? 1 : 0);
+  });
+
   test.each(["mention", "free-only", "off", "outside-auto"])(
     "reply gate bypass: %s",
     async (kind) => {
@@ -486,9 +590,15 @@ describe("createMessageCreateHandler", () => {
         wasSilenced: mock(() => false),
         wasAnswered: mock(() => false),
       };
-      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-        replyGate,
-      })(mockMessage as never);
+      await createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        createMockApiKeyService(),
+        {
+          replyGate,
+        },
+      )(mockMessage as never);
       expect(replyGate.judge).not.toHaveBeenCalled();
       expect(replyGate.wasSilenced).not.toHaveBeenCalled();
       if (kind !== "outside-auto") expect(mockSend).toHaveBeenCalled();
@@ -499,7 +609,15 @@ describe("createMessageCreateHandler", () => {
   test("silent judgment sends nothing, deletes the empty pending record and skips duplicate delivery", async () => {
     await enableGate();
     const decideNoul = mock(async () => ({ noul: 0 }));
-    const gate = new ReplyGateService({ decideNoul }, 0.3);
+    const defaultDecideNoul = mock(async () => ({ noul: 1 }));
+    const apiKeys = createMockApiKeyService();
+    const payer = { key: "guild-fixture", source: "guild" as const };
+    apiKeys.resolveForGuild = mock(() => payer);
+    apiKeys.clientFor = mock(
+      () =>
+        ({ decideNoul }) as unknown as import("../../../../src/llm/openrouter").OpenRouterClient,
+    );
+    const gate = new ReplyGateService({ decideNoul: defaultDecideNoul }, 0.3);
     const replyGate = {
       judge: mock(gate.judge.bind(gate)),
       wasSilenced: gate.wasSilenced.bind(gate),
@@ -510,11 +628,15 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      apiKeys,
       { replyGate, replyRecordService },
     );
     await handler(mockMessage as never);
     await handler(mockMessage as never);
     expect(replyGate.judge).toHaveBeenCalledTimes(1);
+    expect(apiKeys.clientFor).toHaveBeenCalledWith(payer);
+    expect(decideNoul).toHaveBeenCalledTimes(1);
+    expect(defaultDecideNoul).not.toHaveBeenCalled();
     expect(replyRecordService.createPending).toHaveBeenCalledTimes(1);
     expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith(mockMessage.id);
     expect(mockSend).not.toHaveBeenCalled();
@@ -546,13 +668,19 @@ describe("createMessageCreateHandler", () => {
     ],
   ])("%s answers with the auto-reply instruction", async (_label, judge) => {
     await enableGate();
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate: {
-        judge: mock(judge),
-        wasSilenced: mock(() => false),
-        wasAnswered: mock(() => false),
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        replyGate: {
+          judge: mock(judge),
+          wasSilenced: mock(() => false),
+          wasAnswered: mock(() => false),
+        },
       },
-    })(mockMessage as never);
+    )(mockMessage as never);
     expect(mockChatService.generateChatResponse).toHaveBeenCalledWith(
       "guild-123",
       expect.objectContaining({ autoReply: true }),
@@ -567,6 +695,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
     const input = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
@@ -584,9 +713,15 @@ describe("createMessageCreateHandler", () => {
       wasSilenced: mock(() => false),
       wasAnswered: mock(() => false),
     };
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        replyGate,
+      },
+    )(mockMessage as never);
     expect(replyGate.judge).toHaveBeenCalledTimes(1);
     expect(mockFetch).not.toHaveBeenCalled();
     expect(mockReply).not.toHaveBeenCalled();
@@ -606,6 +741,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
       {
         replyGate: {
           judge: mock(async () => "reply" as const),
@@ -629,10 +765,16 @@ describe("createMessageCreateHandler", () => {
       wasAnswered: mock(() => false),
     };
     const replyRecordService = gateRecords();
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate,
-      replyRecordService,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        replyGate,
+        replyRecordService,
+      },
+    )(mockMessage as never);
     expect(replyGate.judge).not.toHaveBeenCalled();
     expect(replyRecordService.createPending).not.toHaveBeenCalled();
     expect(mockReply).not.toHaveBeenCalled();
@@ -659,10 +801,16 @@ describe("createMessageCreateHandler", () => {
         wasAnswered: mock(() => false),
       };
       const replyRecordService = gateRecords();
-      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-        replyGate,
-        replyRecordService,
-      })(mockMessage as never);
+      await createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        createMockApiKeyService(),
+        {
+          replyGate,
+          replyRecordService,
+        },
+      )(mockMessage as never);
       expect(replyGate.judge).toHaveBeenCalledTimes(1);
       if (kind === "text") {
         expect(mockSend).toHaveBeenCalled();
@@ -720,11 +868,17 @@ describe("createMessageCreateHandler", () => {
       });
       // The bot's reply is looked up by the message it answered.
       const wasAnswered = mock((id: string) => answered && id === "old");
-      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-        replyGate: { judge, wasSilenced: mock(() => false), wasAnswered },
-        replyRecordService,
-        conversationWindow: { build } as unknown as ConversationWindowService,
-      })(mockMessage as never);
+      await createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        createMockApiKeyService(),
+        {
+          replyGate: { judge, wasSilenced: mock(() => false), wasAnswered },
+          replyRecordService,
+          conversationWindow: { build } as unknown as ConversationWindowService,
+        },
+      )(mockMessage as never);
       expect(judge).toHaveBeenCalledTimes(1);
     },
   );
@@ -747,10 +901,16 @@ describe("createMessageCreateHandler", () => {
       });
       return "silent" as const;
     });
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyGate: { judge, wasSilenced: mock(() => false), wasAnswered: mock(() => false) },
-      conversationWindow: { build } as unknown as ConversationWindowService,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        replyGate: { judge, wasSilenced: mock(() => false), wasAnswered: mock(() => false) },
+        conversationWindow: { build } as unknown as ConversationWindowService,
+      },
+    )(mockMessage as never);
     expect(judge).toHaveBeenCalledTimes(1);
     expect(build.mock.calls.length).toBe(kind === "history-off" ? 0 : 1);
   });
@@ -794,9 +954,15 @@ describe("createMessageCreateHandler", () => {
       guild: { id: "guild-123", members: { fetch: members }, channels: { fetch: channels } },
     });
     const build = mock(async (_input: BuildConversationWindowInput) => null);
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      conversationWindow: { build } as unknown as ConversationWindowService,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        conversationWindow: { build } as unknown as ConversationWindowService,
+      },
+    )(mockMessage as never);
     const input = build.mock.calls[0]?.[0];
     if (!input) throw new Error("missing conversation input");
     const attachment: RawDiscordMessage = {
@@ -916,6 +1082,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -935,6 +1102,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
     const disabledInput = (mockChatService.generateChatResponse as ReturnType<typeof mock>).mock
@@ -972,6 +1140,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
       { conversationWindow: { build } as unknown as ConversationWindowService },
     );
     await handler(mockMessage as never);
@@ -988,6 +1157,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1002,6 +1172,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
         { e2eTesterBotId: "tester-bot" },
       );
 
@@ -1016,6 +1187,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
         { e2eTesterBotId: "tester-bot" },
       );
 
@@ -1060,6 +1232,7 @@ describe("createMessageCreateHandler", () => {
           mockChatService,
           mockSettingsService,
           mockModelService,
+          createMockApiKeyService(),
           { e2eTesterBotId: "tester-bot" },
         );
 
@@ -1076,6 +1249,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
         { e2eTesterBotId: "123456789" },
       );
 
@@ -1091,6 +1265,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1104,6 +1279,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1123,6 +1299,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -1139,6 +1316,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -1155,6 +1333,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1186,6 +1365,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1203,6 +1383,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1221,7 +1402,11 @@ describe("createMessageCreateHandler", () => {
       { text: "Hello", parts: [], authorLabel: "author-123 (@author-123)" },
       "msg-123",
       expect.anything(),
-      { channelId: "channel-123", userId: "author-123" },
+      {
+        channelId: "channel-123",
+        userId: "author-123",
+        payer: { key: "test-default", source: "default" },
+      },
     );
 
     // 最終更新でComponents V2 Containerが設定され、Section（停止ボタン）は付かない
@@ -1240,6 +1425,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1263,6 +1449,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1288,6 +1475,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -1319,6 +1507,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1361,6 +1550,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1380,6 +1570,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     )(mockMessage as never);
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
     expect(mockReply).not.toHaveBeenCalled();
@@ -1399,6 +1590,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     )(mockMessage as never);
     expect(mockChatService.generateChatResponse).toHaveBeenCalledTimes(1);
   });
@@ -1413,6 +1605,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1436,6 +1629,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -1473,6 +1667,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -1519,6 +1714,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1532,7 +1728,11 @@ describe("createMessageCreateHandler", () => {
         },
         "msg-123",
         expect.anything(),
-        { channelId: "channel-123", userId: "author-123" },
+        {
+          channelId: "channel-123",
+          userId: "author-123",
+          payer: { key: "test-default", source: "default" },
+        },
       );
     });
 
@@ -1553,6 +1753,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1579,6 +1780,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1605,6 +1807,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1625,7 +1828,11 @@ describe("createMessageCreateHandler", () => {
         },
         "msg-123",
         expect.anything(),
-        { channelId: "channel-123", userId: "author-123" },
+        {
+          channelId: "channel-123",
+          userId: "author-123",
+          payer: { key: "test-default", source: "default" },
+        },
       );
     });
 
@@ -1644,6 +1851,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1677,6 +1885,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1707,6 +1916,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1729,6 +1939,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1753,6 +1964,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -1768,7 +1980,11 @@ describe("createMessageCreateHandler", () => {
         },
         "msg-123",
         expect.anything(),
-        { channelId: "channel-123", userId: "author-123" },
+        {
+          channelId: "channel-123",
+          userId: "author-123",
+          payer: { key: "test-default", source: "default" },
+        },
       );
     });
   });
@@ -1782,6 +1998,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -1830,9 +2047,15 @@ describe("createMessageCreateHandler", () => {
       deleteByChannel: mock(async () => 0),
       deleteGuildsNotIn: mock(async () => 0),
     } satisfies IReplyRecordService;
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      replyRecordService,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        replyRecordService,
+      },
+    )(mockMessage as never);
     expect(finalize).toHaveBeenCalledWith("msg-123", "stopped", 1);
   });
 
@@ -1842,6 +2065,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     )(mockMessage as never);
     expect(mockMessage.channel.send).not.toHaveBeenCalled();
     expect(mockChatService.generateChatResponse).not.toHaveBeenCalled();
@@ -1862,6 +2086,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -1909,9 +2134,15 @@ describe("createMessageCreateHandler", () => {
       (mockChatService.generateChatResponse as ReturnType<typeof mock>).mockImplementation(
         response,
       );
-      await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-        conversationWindow: messageRefWindow(),
-      })(mockMessage as never);
+      await createMessageCreateHandler(
+        mockChatService,
+        mockSettingsService,
+        mockModelService,
+        createMockApiKeyService(),
+        {
+          conversationWindow: messageRefWindow(),
+        },
+      )(mockMessage as never);
       const pages = [mockBotMessage, ...extraBotMessages].map((message) =>
         extractTextContents(toContainerJSON(lastCallArg(message.edit))).join("\n"),
       );
@@ -1939,9 +2170,15 @@ describe("createMessageCreateHandler", () => {
         return { status: "final", text: raw, history: [] };
       },
     );
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      conversationWindow: messageRefWindow(),
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        conversationWindow: messageRefWindow(),
+      },
+    )(mockMessage as never);
     expect(mockChatService.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
@@ -1952,9 +2189,15 @@ describe("createMessageCreateHandler", () => {
       createMockChatResponseFn("[m12]"),
     );
     const window = messageRefWindow();
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      conversationWindow: window,
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        conversationWindow: window,
+      },
+    )(mockMessage as never);
     expect(window.build).not.toHaveBeenCalled();
     expect(
       extractTextContents(toContainerJSON(lastCallArg(mockBotMessage.edit))).join("\n"),
@@ -1972,9 +2215,15 @@ describe("createMessageCreateHandler", () => {
         reasoningText: rawReasoning,
       }),
     );
-    await createMessageCreateHandler(mockChatService, mockSettingsService, mockModelService, {
-      conversationWindow: messageRefWindow(),
-    })(mockMessage as never);
+    await createMessageCreateHandler(
+      mockChatService,
+      mockSettingsService,
+      mockModelService,
+      createMockApiKeyService(),
+      {
+        conversationWindow: messageRefWindow(),
+      },
+    )(mockMessage as never);
     const payload = lastCallArg(mockBotMessage.edit);
     const reasoning = toContainerJSON(payload).components.find(
       (component) => component.id === REASONING_COMPONENT_ID,
@@ -2005,6 +2254,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2033,6 +2283,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2062,6 +2313,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2090,6 +2342,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2119,6 +2372,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2156,6 +2410,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2183,6 +2438,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2218,6 +2474,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
       { webSearchEngine: "perplexity" },
     );
 
@@ -2247,6 +2504,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     await handler(mockMessage as never);
@@ -2267,6 +2525,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2289,6 +2548,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
     await handler(mockMessage as never);
 
@@ -2311,6 +2571,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2327,6 +2588,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2343,6 +2605,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2362,6 +2625,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2379,6 +2643,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2401,6 +2666,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2434,6 +2700,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2478,6 +2745,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2512,6 +2780,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
       await handler(mockMessage as never);
 
@@ -2542,6 +2811,7 @@ describe("createMessageCreateHandler", () => {
       mockChatService,
       mockSettingsService,
       mockModelService,
+      createMockApiKeyService(),
     );
 
     // 例外が投げられず正常完了すること自体もこのawaitが検証する
@@ -2567,6 +2837,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -2601,6 +2872,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -2656,6 +2928,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -2686,6 +2959,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -2712,6 +2986,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       await handler(mockMessage as never);
@@ -2736,6 +3011,7 @@ describe("createMessageCreateHandler", () => {
         mockChatService,
         mockSettingsService,
         mockModelService,
+        createMockApiKeyService(),
       );
 
       // streamingサイクルで生成される2番目のmessageのidを狙ってdelete失敗させる

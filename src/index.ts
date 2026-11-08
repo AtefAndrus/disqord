@@ -10,11 +10,14 @@ import { onReady } from "./bot/events/ready";
 import { createReplyRecordCleanupHandlers } from "./bot/events/replyRecordCleanup";
 import { loadConfig } from "./config";
 import { getDatabase } from "./db";
+import { ApiKeyRepository } from "./db/repositories/apiKey";
 import { BotStateRepository } from "./db/repositories/botState";
 import { CronRepository } from "./db/repositories/cronRepository";
 import { GuildSettingsRepository } from "./db/repositories/guildSettings";
 import { ReplyRecordRepository } from "./db/repositories/replyRecord";
+import { assertEncryptionKeyConfigured } from "./db/schema";
 import { startHttpServer } from "./health";
+import { createOAuthCallbackHandler } from "./http/oauthCallback";
 import { OpenRouterGenerationLogClient } from "./llm/generationLog";
 import { OpenRouterClient } from "./llm/openrouter";
 import { createAddReactionTool } from "./llm/tools/discord/addReaction";
@@ -30,9 +33,11 @@ import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
 import { createReadXPostTool } from "./llm/tools/readXPost";
 import { ToolRegistry } from "./llm/tools/registry";
 import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
+import { ApiKeyService } from "./services/apiKeyService";
 import { ChatService } from "./services/chatService";
 import { ConversationWindowService, WINDOW_REBUILD_AFTER_MS } from "./services/conversationWindow";
 import { CronService, startCronService } from "./services/cronService";
+import { CryptoService } from "./services/cryptoService";
 import { DiscordMessageReader, type DiscordRestClient } from "./services/discordMessageReader";
 import { ModelService } from "./services/modelService";
 import {
@@ -70,6 +75,7 @@ async function bootstrap(): Promise<void> {
   logger.info("Configuration loaded", { nodeEnv: config.nodeEnv, version: packageJson.version });
 
   const db = getDatabase();
+  assertEncryptionKeyConfigured(db, config.encryptionKey);
   logger.info("Database initialized");
 
   const guildSettingsRepo = new GuildSettingsRepository(db, config.defaultModel);
@@ -79,6 +85,14 @@ async function bootstrap(): Promise<void> {
   await replyRecordService.markPendingFailed();
 
   const llmClient = OpenRouterClient.fromConfig(config);
+  const apiKeyService = new ApiKeyService(
+    new ApiKeyRepository(db),
+    config.encryptionKey ? new CryptoService(config.encryptionKey) : null,
+    llmClient,
+    config.openRouterApiKey,
+    config.allowUnauthenticated,
+    config.oauthCallbackUrl,
+  );
   const settingsService = new SettingsService(guildSettingsRepo);
   const modelService = new ModelService(llmClient);
   const tweetService = new TweetService(config.fxtwitterApiBase, packageJson.version);
@@ -102,6 +116,7 @@ async function bootstrap(): Promise<void> {
     config.webSearchEngine,
     tweetService,
     modelService,
+    apiKeyService,
   );
 
   const releaseNotes = await loadReleaseNotes();
@@ -112,6 +127,7 @@ async function bootstrap(): Promise<void> {
     config.webSearchEngine,
     (guildId) => cronRepository.countJobs(guildId),
     releaseNotes,
+    apiKeyService,
   );
 
   const client = await createBotClient();
@@ -162,6 +178,7 @@ async function bootstrap(): Promise<void> {
     chatService,
     settingsService,
     modelService,
+    apiKeyService,
     {
       e2eTesterBotId: config.e2eTesterBotId,
       webSearchEngine: config.webSearchEngine,
@@ -183,7 +200,10 @@ async function bootstrap(): Promise<void> {
       settingsService,
       replyRecordService,
       new OpenRouterGenerationLogClient(config.openRouterApiKey),
+      60_000,
+      apiKeyService,
     ),
+    apiKeyService,
   );
 
   const releaseAnnouncer = new ReleaseAnnouncer(
@@ -192,7 +212,11 @@ async function bootstrap(): Promise<void> {
     () => client.guilds.cache.keys(),
     createReleaseSender(client),
   );
-  const replyRecordCleanup = createReplyRecordCleanupHandlers(replyRecordService, cronRepository);
+  const replyRecordCleanup = createReplyRecordCleanupHandlers(
+    replyRecordService,
+    cronRepository,
+    apiKeyService,
+  );
   client.once(Events.ClientReady, () => {
     onReady(client);
     void startCronService(cronService, () =>
@@ -229,6 +253,7 @@ async function bootstrap(): Promise<void> {
     port: config.healthPort,
     adminApiSecret: config.adminApiSecret,
     logFileWriter,
+    ...(config.oauthCallbackUrl && { oauthCallback: createOAuthCallbackHandler(apiKeyService) }),
   });
   const windowSweepTimer = setInterval(
     () => conversationWindow.sweepStaleChannels(),

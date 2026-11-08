@@ -11,7 +11,12 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import type { ReplyRecord } from "../../db/repositories/replyRecord";
-import type { GenerationLookup, IGenerationLogClient } from "../../llm/generationLog";
+import {
+  type GenerationLookup,
+  type IGenerationLogClient,
+  OpenRouterGenerationLogClient,
+} from "../../llm/generationLog";
+import type { IApiKeyService } from "../../services/apiKeyService";
 import { DiscordRestBudget } from "../../services/discordMessageReader";
 import {
   type AuthorizationChannelLike,
@@ -27,6 +32,7 @@ import { logger } from "../../utils/logger";
 
 // A generation made with a server tool is not looked up: OpenRouter has no input for it to return.
 type GenerationLog =
+  | { id: string; serverTools: boolean; skipped: string }
   | { id: string; serverTools: true }
   | { id: string; serverTools: false; generation: GenerationLookup; content: GenerationLookup };
 
@@ -87,6 +93,7 @@ function lookupFailure(endpoint: string, lookup: GenerationLookup): string {
 }
 
 function generationSummary(log: GenerationLog, index: number): string {
+  if ("skipped" in log) return `${index + 1}. ${summaryValue(log.id)}: ${log.skipped}`;
   if (log.serverTools) {
     return `${index + 1}. ${summaryValue(log.id)}: OpenRouter に入力が残っていません（Web 検索か日時取得のツールを渡した生成）`;
   }
@@ -163,7 +170,10 @@ function errorDetails(error: unknown): Record<string, unknown> {
 
 function buildSummary(logs: GenerationLog[], omissions: Map<number, string>): string {
   // OpenRouter can reflect one generation of a reply before another, so a single 404 is worth a retry.
-  const hint = logs.some((log) => !log.serverTools && !log.content.ok && log.content.status === 404)
+  const hint = logs.some(
+    (log) =>
+      !("skipped" in log) && !log.serverTools && !log.content.ok && log.content.status === 404,
+  )
     ? `\n${LOGGING_HINT}`
     : "";
   let text = "LLM 入出力ログ";
@@ -221,6 +231,7 @@ export function createInspectInputHandler(
   replyRecordService: IReplyRecordService,
   generationLogClient: IGenerationLogClient,
   timeoutMs = 60_000,
+  apiKeyService?: IApiKeyService,
 ): (interaction: InspectInputInteraction) => Promise<void> {
   // Result messages with a retry running. A press while one runs is only acknowledged, so a single
   // retry writes to a message at a time. Letting the later press win instead would need the edits
@@ -318,18 +329,48 @@ export function createInspectInputHandler(
         return;
       }
       const logs: GenerationLog[] = [];
-      for (const { id, serverTools } of generations) {
+      for (const { id, serverTools, keySource } of generations) {
+        if (keySource === "user") {
+          logs.push({
+            id,
+            serverTools,
+            skipped: "本人の OpenRouter アカウントの生成なので表示しない",
+          });
+          continue;
+        }
         if (serverTools) {
           logs.push({ id, serverTools });
           continue;
         }
+        let client = generationLogClient;
+        if (keySource === "guild") {
+          try {
+            const payer = apiKeyService?.resolveForGuild(interaction.guildId);
+            if (payer?.source !== "guild") {
+              logs.push({
+                id,
+                serverTools,
+                skipped: "サーバーの OpenRouter 接続が解除されているため取得できません",
+              });
+              continue;
+            }
+            client = new OpenRouterGenerationLogClient(payer.key);
+          } catch {
+            logs.push({
+              id,
+              serverTools,
+              skipped: "サーバーの OpenRouter キーを読み取れないため取得できません",
+            });
+            continue;
+          }
+        }
         const [generation, content] = await Promise.all([
           lookupBeforeDeadline(
-            () => generationLogClient.getGeneration(id, controller.signal),
+            () => client.getGeneration(id, controller.signal),
             controller.signal,
           ),
           lookupBeforeDeadline(
-            () => generationLogClient.getGenerationContent(id, controller.signal),
+            () => client.getGenerationContent(id, controller.signal),
             controller.signal,
           ),
         ]);
@@ -339,7 +380,7 @@ export function createInspectInputHandler(
       const { files, omissions } = prepareFiles(record.triggerMsgId, logs, sizeLimit);
       const [first = [], ...rest] = batchFiles(files, sizeLimit);
       const failed = logs.some(
-        (log) => !log.serverTools && (!log.generation.ok || !log.content.ok),
+        (log) => !("skipped" in log) && !log.serverTools && (!log.generation.ok || !log.content.ok),
       );
       await interaction.editReply({
         ...replyPayload(

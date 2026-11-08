@@ -1,4 +1,5 @@
 import type { DecisionsNoulQuestion, IDecisionsClient } from "../llm/openrouter";
+import type { ApiKeySource } from "../types";
 import type { NormalizedMessage } from "../utils/discordMessageNormalizer";
 import { logger } from "../utils/logger";
 import { estimateTextTokens } from "../utils/tokenEstimate";
@@ -114,7 +115,11 @@ interface ReplyGateInput {
 }
 
 export interface IReplyGateService {
-  judge(input: ReplyGateInput): Promise<"reply" | "silent">;
+  judge(
+    input: ReplyGateInput,
+    client: IDecisionsClient,
+    source: ApiKeySource,
+  ): Promise<"reply" | "silent">;
   wasSilenced(messageId: string): boolean;
   /** Whether this message was answered because the gate chose it (or failed and fell back to replying). */
   wasAnswered(messageId: string): boolean;
@@ -133,7 +138,11 @@ export class ReplyGateService implements IReplyGateService {
     private readonly now: () => number = Date.now,
   ) {}
 
-  async judge(input: ReplyGateInput): Promise<"reply" | "silent"> {
+  async judge(
+    input: ReplyGateInput,
+    client: IDecisionsClient = this.client,
+    source: ApiKeySource = "default",
+  ): Promise<"reply" | "silent"> {
     this.prune();
     const startedAt = this.now();
     const meta = {
@@ -143,7 +152,7 @@ export class ReplyGateService implements IReplyGateService {
       threshold: this.threshold,
     };
     try {
-      const result = await this.client.decideNoul(
+      const result = await client.decideNoul(
         {
           model: REPLY_GATE_MODEL,
           state: input.state,
@@ -169,16 +178,23 @@ export class ReplyGateService implements IReplyGateService {
     } catch (error) {
       const status =
         typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
+      const silent =
+        source !== "default" &&
+        typeof status === "number" &&
+        status >= 400 &&
+        status < 500 &&
+        status !== 408 &&
+        status !== 429;
       logger.info("Reply gate", {
         ...meta,
-        decision: "error",
+        decision: silent ? "silent" : "error",
         elapsed: this.now() - startedAt,
         model: REPLY_GATE_MODEL,
         error:
           typeof status === "number" ? status : error instanceof Error ? error.name : typeof error,
       });
-      this.answered.set(input.messageId, this.now() + REMEMBER_MS);
-      return "reply";
+      (silent ? this.silenced : this.answered).set(input.messageId, this.now() + REMEMBER_MS);
+      return silent ? "silent" : "reply";
     }
   }
 

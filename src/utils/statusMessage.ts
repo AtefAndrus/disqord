@@ -10,6 +10,7 @@ import type { GuildSettings } from "../types";
 import { EmbedColors } from "../types/embed";
 
 interface StatusMessageData {
+  guildKeyBalance?: string;
   credits: { remaining: number };
   cacheStatus: { lastUpdatedAt: Date | null; modelCount: number };
   settings?: GuildSettings;
@@ -68,7 +69,9 @@ export function buildStatusMessage(data: StatusMessageData): {
   for (const content of [
     "## ステータス",
     `**バージョン**\nv${data.version}`,
-    `**OpenRouter残高**\n${remainingText}`,
+    data.guildKeyBalance === undefined
+      ? `**OpenRouter残高**\n${remainingText}`
+      : `**サーバーの OpenRouter キー**\n${data.guildKeyBalance}`,
     `**モデルキャッシュ**\n${formatCache(data.cacheStatus)}`,
   ]) {
     container.addTextDisplayComponents((td) => td.setContent(content));
