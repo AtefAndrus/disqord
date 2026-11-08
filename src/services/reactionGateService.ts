@@ -86,6 +86,24 @@ export function withBotMessageEnd(
   return { ...state, last_bot_message_end: chars.slice(-MAX_REACTION_GATE_CHARS).join("") };
 }
 
+/**
+ * The state gives up its oldest messages to stay within its limits, and with the
+ * bot's last message gone, "了解" to an offer and to a finished answer are the
+ * same input. A reply target is its own field and always stays.
+ */
+export function keepsLastBotMessage(
+  state: Record<string, unknown>,
+  conversation: { messages: NormalizedMessage[]; replyTarget?: NormalizedMessage },
+): boolean {
+  const target = conversation.replyTarget;
+  if (target?.kind === "assistant") return true;
+  const others = conversation.messages.filter((message) => message.id !== target?.id);
+  const last = others.findLastIndex((message) => message.kind === "assistant");
+  if (last === -1) return true;
+  const kept = Array.isArray(state.recent_messages) ? state.recent_messages.length : 0;
+  return others.length - last <= kept;
+}
+
 export interface ReactionGateInput {
   guildId: string;
   channelId: string;

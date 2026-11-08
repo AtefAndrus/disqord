@@ -4,6 +4,7 @@ import { REACTION_EMOJI } from "../../../src/services/reactionEmoji";
 import {
   ACCEPTS_THRESHOLD,
   buildReactionGateQuestions,
+  keepsLastBotMessage,
   MAX_EMOJI_CHOICES,
   MAX_REACTION_GATE_CHARS,
   NEEDS_TEXT_THRESHOLD,
@@ -92,20 +93,21 @@ describe("ReactionGateService.judge", () => {
   });
 });
 
+const bot = (text: string, id = "2"): NormalizedMessage => ({
+  id,
+  channelId: "c",
+  kind: "assistant",
+  author: "assistant",
+  time: "",
+  timestampMs: 0,
+  text,
+  attachments: [],
+  exchangeId: "1",
+});
+const user: NormalizedMessage = { ...bot("ユーザー"), id: "3", kind: "user", author: "佐藤" };
+
 describe("withBotMessageEnd", () => {
   const state = { new_message: "了解" };
-  const bot = (text: string, id = "2"): NormalizedMessage => ({
-    id,
-    channelId: "c",
-    kind: "assistant",
-    author: "assistant",
-    time: "",
-    timestampMs: 0,
-    text,
-    attachments: [],
-    exchangeId: "1",
-  });
-  const user: NormalizedMessage = { ...bot("ユーザー"), id: "3", kind: "user", author: "佐藤" };
   const long = `${"あ".repeat(MAX_REACTION_GATE_CHARS)}書きましょうか？`;
 
   test("adds the end of a bot message longer than the state keeps", () => {
@@ -139,6 +141,36 @@ describe("withBotMessageEnd", () => {
           .last_bot_message_end,
       ),
     ).toContain("新しい回答");
+  });
+});
+
+describe("keepsLastBotMessage", () => {
+  const answer = bot("回答です。", "1");
+  const kept = (count: number): Record<string, unknown> => ({
+    recent_messages: Array.from({ length: count }, () => "line"),
+  });
+
+  test("counts from the newest message, as the state gives up the oldest", () => {
+    const messages = [answer, user];
+    expect(keepsLastBotMessage(kept(2), { messages })).toBe(true);
+    expect(keepsLastBotMessage(kept(1), { messages })).toBe(false);
+  });
+
+  test("the reply target has its own field in the state", () => {
+    const target = bot("書きましょうか？", "5");
+    expect(keepsLastBotMessage(kept(0), { messages: [answer, target], replyTarget: target })).toBe(
+      true,
+    );
+  });
+
+  test("a person's reply target takes no place among the kept messages", () => {
+    expect(keepsLastBotMessage(kept(1), { messages: [answer, user], replyTarget: user })).toBe(
+      true,
+    );
+  });
+
+  test("with no bot message in the conversation, nothing was lost", () => {
+    expect(keepsLastBotMessage(kept(1), { messages: [user] })).toBe(true);
   });
 });
 

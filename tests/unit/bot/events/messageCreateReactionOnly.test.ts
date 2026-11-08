@@ -341,6 +341,50 @@ describe("messages the gate is not asked about", () => {
     expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
+  const chatter = (count: number, text: string): unknown[] =>
+    Array.from({ length: count }, (_, index) => ({
+      id: String(index + 2),
+      channelId: "channel",
+      kind: "user",
+      author: "someone",
+      time: "",
+      timestampMs: index + 1,
+      text,
+      attachments: [],
+      exchangeId: String(index + 2),
+    }));
+  const botMessage = {
+    id: "1",
+    channelId: "channel",
+    kind: "assistant",
+    author: "assistant",
+    time: "",
+    timestampMs: 0,
+    text: "回答です。",
+    attachments: [],
+    exchangeId: "0",
+    ref: "m1",
+  };
+
+  test.each([
+    ["more messages than the state keeps", chatter(20, "雑談")],
+    ["more text than the state keeps", chatter(8, "あ".repeat(400))],
+  ])("the bot's last message pushed out of the state by %s", async (_name, others) => {
+    const fixture = setup({ window: { messages: [botMessage, ...others] } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
+  test("the bot's last message still in the state is asked about", async () => {
+    const fixture = setup({
+      emoji: null,
+      window: { messages: [botMessage, ...chatter(19, "雑談")] },
+    });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).toHaveBeenCalledTimes(1);
+  });
+
   test("a message the judgment state keeps whole is asked about", async () => {
     // "@bot " and 395 characters are exactly the 400 the state keeps.
     const fixture = setup({ emoji: null, message: { content: `<@123> ${"あ".repeat(395)}` } });

@@ -27,6 +27,7 @@ import {
 import type { IModelService } from "../../services/modelService";
 import {
   type IReactionGateService,
+  keepsLastBotMessage,
   MAX_REACTION_GATE_CHARS,
   withBotMessageEnd,
 } from "../../services/reactionGateService";
@@ -568,38 +569,42 @@ export function createMessageCreateHandler(
     // Decided before the model is called and before anything is posted, so a reply that is only a
     // reaction shows no page and pays for no answer. Any failure here falls through to a text reply.
     // Free-only guilds are left out as the reply gate is: the judgment model is not free.
-    // Without the conversation, or without the message a reply answers, "了解" to an offer and "了解"
-    // to a finished answer are the same input; text can at least ask what to continue, while a
-    // reaction ends the exchange there.
+    // The judgment is asked only with what it needs in its state. Without the conversation, without
+    // the message a reply answers, or without the bot's last message, "了解" to an offer and "了解" to
+    // a finished answer are the same input; text can at least ask what to continue, while a reaction
+    // ends the exchange there.
     // The mention stays in the text: it is how the judgment sees the message is for the bot. The state
     // cuts the text after naming the mention, so that is the length that has to fit.
     const judgedText = isMention ? message.content : inputText;
     if (
       options.reactionGate &&
-      conversation &&
-      (!rawMessage.message_reference?.message_id || judgedConversation?.replyTarget) &&
+      judgedConversation &&
+      (!rawMessage.message_reference?.message_id || judgedConversation.replyTarget) &&
       settings.discordToolsEnabled &&
       !settings.freeModelsOnly &&
       message.attachments.size === 0 &&
       !message.poll &&
       Array.from(nameMentions(judgedText, botName, botId)).length <= MAX_REACTION_GATE_CHARS
     ) {
-      const emoji = await options.reactionGate.judge(
-        {
-          guildId,
-          channelId: message.channel.id,
-          messageId: message.id,
-          botName,
-          state: withBotMessageEnd(judgmentState(judgedText), judgedConversation),
-          customEmoji: [...(message.guild.emojis?.cache.values() ?? [])].flatMap((item) =>
-            item.available !== false && item.name && CUSTOM_EMOJI_NAME.test(item.name)
-              ? [item.name]
-              : [],
-          ),
-        },
-        apiKeyService.clientFor(payer),
-        payer.source,
-      );
+      const state = judgmentState(judgedText);
+      const emoji = keepsLastBotMessage(state, judgedConversation)
+        ? await options.reactionGate.judge(
+            {
+              guildId,
+              channelId: message.channel.id,
+              messageId: message.id,
+              botName,
+              state: withBotMessageEnd(state, judgedConversation),
+              customEmoji: [...(message.guild.emojis?.cache.values() ?? [])].flatMap((item) =>
+                item.available !== false && item.name && CUSTOM_EMOJI_NAME.test(item.name)
+                  ? [item.name]
+                  : [],
+              ),
+            },
+            apiKeyService.clientFor(payer),
+            payer.source,
+          )
+        : null;
       if (emoji !== null && !chatService.isClosing) {
         const added = await new DiscordActionService(message as Message<true>, () => undefined)
           .addReaction(emoji, undefined, AbortSignal.timeout(REACTION_TIMEOUT_MS))
