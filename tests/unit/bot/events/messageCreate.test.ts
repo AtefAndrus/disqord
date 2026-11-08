@@ -609,12 +609,15 @@ describe("createMessageCreateHandler", () => {
   test("silent judgment sends nothing, deletes the empty pending record and skips duplicate delivery", async () => {
     await enableGate();
     const decideNoul = mock(async () => ({ noul: 0 }));
+    const defaultDecideNoul = mock(async () => ({ noul: 1 }));
     const apiKeys = createMockApiKeyService();
+    const payer = { key: "guild-fixture", source: "guild" as const };
+    apiKeys.resolveForGuild = mock(() => payer);
     apiKeys.clientFor = mock(
       () =>
         ({ decideNoul }) as unknown as import("../../../../src/llm/openrouter").OpenRouterClient,
     );
-    const gate = new ReplyGateService({ decideNoul }, 0.3);
+    const gate = new ReplyGateService({ decideNoul: defaultDecideNoul }, 0.3);
     const replyGate = {
       judge: mock(gate.judge.bind(gate)),
       wasSilenced: gate.wasSilenced.bind(gate),
@@ -631,6 +634,9 @@ describe("createMessageCreateHandler", () => {
     await handler(mockMessage as never);
     await handler(mockMessage as never);
     expect(replyGate.judge).toHaveBeenCalledTimes(1);
+    expect(apiKeys.clientFor).toHaveBeenCalledWith(payer);
+    expect(decideNoul).toHaveBeenCalledTimes(1);
+    expect(defaultDecideNoul).not.toHaveBeenCalled();
     expect(replyRecordService.createPending).toHaveBeenCalledTimes(1);
     expect(replyRecordService.deletePendingWithoutPages).toHaveBeenCalledWith(mockMessage.id);
     expect(mockSend).not.toHaveBeenCalled();

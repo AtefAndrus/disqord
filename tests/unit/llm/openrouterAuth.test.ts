@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
   buildAuthorizationUrl,
   exchangeCode,
@@ -6,12 +6,47 @@ import {
   getKeyInfo,
   OAuthError,
 } from "../../../src/llm/openrouterAuth";
+import { logger } from "../../../src/utils/logger";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 describe("OpenRouter OAuth", () => {
+  test.each(["exchange", "verify"] as const)(
+    "%s failures log stage, status and safe error type only",
+    async (stage) => {
+      const logs = spyOn(logger, "warn").mockImplementation(() => {});
+      try {
+        for (const status of [403, undefined]) {
+          globalThis.fetch = mock(async () => {
+            if (status) return new Response("secret-response", { status });
+            throw Object.assign(
+              new Error("secret-message secret-key secret-code secret-state secret-verifier"),
+              { name: "secret-name" },
+            );
+          }) as unknown as typeof globalThis.fetch;
+          const request =
+            stage === "exchange"
+              ? exchangeCode("secret-code", "secret-verifier")
+              : getKeyInfo("secret-key");
+          await expect(request).rejects.toBeInstanceOf(OAuthError);
+          expect(logs.mock.calls.at(-1)).toEqual([
+            "OpenRouter connection request failed",
+            {
+              stage,
+              status,
+              errorType: status ? "OAuthError" : "Error",
+            },
+          ]);
+        }
+        expect(logs).toHaveBeenCalledTimes(2);
+        expect(JSON.stringify(logs.mock.calls)).not.toContain("secret");
+      } finally {
+        logs.mockRestore();
+      }
+    },
+  );
   test("authorization URL uses S256, callback and state only when configured", () => {
     const url = new URL(
       buildAuthorizationUrl("challenge-fixture", "https://callback.example/", "state-fixture"),

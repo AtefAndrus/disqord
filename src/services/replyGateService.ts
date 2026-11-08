@@ -183,6 +183,7 @@ export class ReplyGateService implements IReplyGateService {
         typeof status === "number" &&
         status >= 400 &&
         status < 500 &&
+        status !== 408 &&
         status !== 429;
       logger.info("Reply gate", {
         ...meta,

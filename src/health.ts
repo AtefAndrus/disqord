@@ -41,11 +41,11 @@ export function startHttpServer(options: HttpServerOptions): ReturnType<typeof B
   };
   const callback = options.oauthCallback;
   if (callback)
-    routes["/auth/callback"] = {
-      GET: (req, server) => {
-        server.timeout(req, 30);
-        return callback(req);
-      },
+    routes["/auth/callback"] = (req, server) => {
+      if (req.method !== "GET")
+        return new Response("Method Not Allowed", { status: 405, headers: { Allow: "GET" } });
+      server.timeout(req, 30);
+      return callback(req);
     };
 
   const server = Bun.serve({

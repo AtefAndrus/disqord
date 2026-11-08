@@ -18,7 +18,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 describe("BYOK payment", () => {
-  test.each([401, 402, 403, 404, 429, 500, 503, "timeout"])(
+  test.each([401, 402, 403, 404, 408, 429, 500, 503, "timeout"])(
     "reply gate connected-key status %s",
     async (status) => {
       const client: IDecisionsClient = {
@@ -39,7 +39,11 @@ describe("BYOK payment", () => {
           botName: "bot",
         };
         const silent =
-          source !== "default" && typeof status === "number" && status < 500 && status !== 429;
+          source !== "default" &&
+          typeof status === "number" &&
+          status < 500 &&
+          status !== 408 &&
+          status !== 429;
         expect(await gate.judge(input, client, source)).toBe(silent ? "silent" : "reply");
         expect(gate.wasSilenced(source)).toBe(silent);
         expect(gate.wasAnswered(source)).toBe(!silent);

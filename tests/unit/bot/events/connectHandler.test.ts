@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { MessageFlags, PermissionFlagsBits, PermissionsBitField } from "discord.js";
 import { connectCommand, disconnectCommand } from "../../../../src/bot/commands/connect";
 import {
@@ -7,6 +7,9 @@ import {
   guildBalanceText,
 } from "../../../../src/bot/events/connectHandler";
 import type { ConnectionHooks } from "../../../../src/services/apiKeyService";
+import { REPLY_GATE_MODEL } from "../../../../src/services/replyGateService";
+import { buildErrorContainer } from "../../../../src/utils/chatContainerBuilder";
+import { metrics } from "../../../../src/utils/metrics";
 import {
   createMockApiKeyService,
   createMockGuildSettings,
@@ -24,6 +27,7 @@ function harness(
     command?: string;
     dm?: boolean;
     authorized?: boolean;
+    callbackAuthorized?: boolean;
   } = {},
 ): {
   keys: ReturnType<typeof createMockApiKeyService>;
@@ -53,7 +57,9 @@ function harness(
         fetch: mock(async () => ({
           members: {
             fetch: mock(async () => ({
-              permissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild),
+              permissions: new PermissionsBitField(
+                options.callbackAuthorized === false ? 0n : PermissionFlagsBits.ManageGuild,
+              ),
               roles: { cache: new Map() },
             })),
           },
@@ -156,7 +162,78 @@ describe("OpenRouter connection UI", () => {
     expect(output(h.edit)).toContain(
       "アカウントの持ち主（組織の workspace では組織の管理者も）が入力と出力を読めます",
     );
-    expect(output(h.edit)).toContain("typesafe/jev-1.14");
+    expect(output(h.edit)).toContain(REPLY_GATE_MODEL);
+  });
+  test("guild callback refuses a member who lost management permission", async () => {
+    const h = harness("guild", { authorized: true, callbackAuthorized: false });
+    Object.assign(h.keys, { connectionMode: "callback" });
+    await h.run();
+    const hooks = (h.keys.startConnection as ReturnType<typeof mock>).mock
+      .calls[0]?.[2] as ConnectionHooks;
+    expect(await hooks.authorize()).toBe(false);
+  });
+  test.each(["connected", "disconnected", "unreadable"] as const)(
+    "status exposes only the guild %s label",
+    async (status) => {
+      const h = harness("status");
+      h.keys.getConnection = mock((target) =>
+        target.scope === "user"
+          ? { status: "disconnected" as const }
+          : status === "connected"
+            ? { status, keyHash: "guild-secret-hash" }
+            : { status },
+      );
+      await h.run();
+      const text = output(h.edit);
+      expect(text).toContain(
+        `サーバー: ${{ connected: "接続済み", disconnected: "未接続", unreadable: "取得できません" }[status]}`,
+      );
+      expect(text).not.toContain("guild-secret-hash");
+      expect(text).not.toContain("https://openrouter.ai/");
+      expect(text).not.toContain("接続し直してください");
+    },
+  );
+  test("permission denial and connection failure use the error container", async () => {
+    const denied = harness("guild");
+    await denied.run();
+    const expectedColor = buildErrorContainer("fixture").toJSON().accent_color;
+    expect(
+      (
+        denied.reply.mock.calls[0][0] as {
+          components: { toJSON(): { accent_color?: number | null } }[];
+        }
+      ).components[0]?.toJSON().accent_color,
+    ).toBe(expectedColor);
+    const failed = harness("user", { kind: "modal" });
+    failed.keys.completeConnection = mock(async () => {
+      throw new Error("fixture");
+    });
+    await failed.run();
+    expect(
+      (
+        failed.edit.mock.calls[0][0] as {
+          components: { toJSON(): { accent_color?: number | null } }[];
+        }
+      ).components[0]?.toJSON().accent_color,
+    ).toBe(expectedColor);
+  });
+  test.each(["connect", "disconnect"])("%s counts executions and failures", async (command) => {
+    const counts = spyOn(metrics, "increment");
+    try {
+      const h = harness("user", { command });
+      await h.run();
+      expect(counts).toHaveBeenCalledWith(`command.${command}`);
+      expect(counts).not.toHaveBeenCalledWith("command.errors");
+      const failure = (): never => {
+        throw new Error("fixture");
+      };
+      h.keys.startConnection = mock(failure);
+      h.keys.disconnect = mock(failure);
+      await h.run();
+      expect(counts).toHaveBeenCalledWith("command.errors");
+    } finally {
+      counts.mockRestore();
+    }
   });
   test("code-entry button requires current pending request and contains only scope", async () => {
     const h = harness("user", { kind: "button" });

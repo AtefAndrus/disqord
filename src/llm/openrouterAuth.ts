@@ -39,7 +39,6 @@ export async function exchangeCode(code: string, verifier: string): Promise<stri
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
-      logger.warn("OpenRouter key exchange failed", { status: response.status });
       throw new OAuthError(response.status);
     }
     const body: unknown = await response.json();
@@ -53,6 +52,16 @@ export async function exchangeCode(code: string, verifier: string): Promise<stri
       throw new OAuthError();
     return body.key;
   } catch (error) {
+    logger.warn("OpenRouter connection request failed", {
+      stage: "exchange",
+      status: error instanceof OAuthError ? error.statusCode : undefined,
+      errorType:
+        error instanceof OAuthError
+          ? "OAuthError"
+          : error instanceof Error
+            ? "Error"
+            : typeof error,
+    });
     throw error instanceof OAuthError ? error : new OAuthError();
   }
 }
@@ -76,6 +85,16 @@ export async function getKeyInfo(key: string): Promise<KeyInfo> {
       throw new OAuthError();
     return body.data as KeyInfo;
   } catch (error) {
+    logger.warn("OpenRouter connection request failed", {
+      stage: "verify",
+      status: error instanceof OAuthError ? error.statusCode : undefined,
+      errorType:
+        error instanceof OAuthError
+          ? "OAuthError"
+          : error instanceof Error
+            ? "Error"
+            : typeof error,
+    });
     throw error instanceof OAuthError ? error : new OAuthError();
   }
 }

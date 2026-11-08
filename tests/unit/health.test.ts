@@ -3,6 +3,8 @@ import type { Client } from "discord.js";
 import { type HealthStatus, startHealthServer, startHttpServer } from "../../src/health";
 import { canonicalizeQuery } from "../../src/http/adminAuth";
 import { hmacSha256Hex } from "../../src/http/hmac";
+import { createOAuthCallbackHandler } from "../../src/http/oauthCallback";
+import { createMockApiKeyService } from "../helpers/mockFactories";
 
 function createMockClient(isReady: boolean, ping: number): Client {
   return {
@@ -21,11 +23,11 @@ describe("Health Server", () => {
     }
   });
 
-  test("registers only the configured GET callback and extends that request's timeout", async () => {
+  test("registers only the configured callback and extends GET request's timeout", async () => {
     const timeout = mock((_req: Request, _seconds: number) => {});
     let routes: Record<
       string,
-      { GET?: (request: Request, server: { timeout: typeof timeout }) => Promise<Response> }
+      (request: Request, server: { timeout: typeof timeout }) => Promise<Response> | Response
     > = {};
     const serve = spyOn(Bun, "serve").mockImplementation((options) => {
       routes = options.routes as unknown as typeof routes;
@@ -41,13 +43,32 @@ describe("Health Server", () => {
         oauthCallback: callback,
       });
       const req = new Request("http://localhost/auth/callback");
-      expect(Object.keys(routes["/auth/callback"])).toEqual(["GET"]);
-      const response = await routes["/auth/callback"].GET?.(req, { timeout });
+      const response = await routes["/auth/callback"]?.(req, { timeout });
       expect(await response?.text()).toBe("fixture");
       expect(timeout).toHaveBeenCalledWith(req, 30);
     } finally {
       serve.mockRestore();
     }
+  });
+
+  test("real server rejects HEAD and other non-GET callbacks before completing a connection", async () => {
+    const keys = createMockApiKeyService();
+    server = startHttpServer({
+      client: createMockClient(true, 42),
+      port: 0,
+      oauthCallback: createOAuthCallbackHandler(keys),
+    });
+    const url = `http://127.0.0.1:${server.port}/auth/callback?state=fixture-state&code=fixture-code`;
+    for (const method of ["HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
+      const response = await fetch(url, { method });
+      expect(response.status).toBe(405);
+      expect(response.headers.get("Allow")).toBe("GET");
+      expect(keys.completeCallback).not.toHaveBeenCalled();
+      await response.text();
+    }
+    expect((await fetch(url)).status).toBe(200);
+    expect(keys.completeCallback).toHaveBeenCalledTimes(1);
+    expect(keys.completeCallback).toHaveBeenCalledWith("fixture-state", "fixture-code");
   });
 
   describe("GET /health", () => {

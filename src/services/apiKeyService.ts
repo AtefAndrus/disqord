@@ -149,12 +149,17 @@ export class ApiKeyService implements IApiKeyService {
   }
   private async complete(pending: PendingConnection, code: string): Promise<void> {
     const id = targetId(pending.target);
+    let stage = "exchange";
     try {
       const key = await exchangeCode(code, pending.verifier);
+      stage = "verify";
       await getKeyInfo(key);
+      stage = "validate_pending";
       if (this.pending.get(id) !== pending || pending.expiresAt <= this.now() || !this.crypto)
         throw new OAuthError();
+      stage = "encrypt";
       const encrypted = this.crypto.encrypt(key, id);
+      stage = "save";
       this.repository.upsert({
         ownerId: owner(pending.target),
         scope: pending.target.scope,
@@ -162,10 +167,20 @@ export class ApiKeyService implements IApiKeyService {
         iv: encrypted.iv,
         authTag: encrypted.authTag,
       });
-    } catch {
+      this.pending.delete(id);
+    } catch (error) {
+      logger.warn("OAuth connection failed", {
+        stage,
+        status: error instanceof OAuthError ? error.statusCode : undefined,
+        errorType:
+          error instanceof OAuthError
+            ? "OAuthError"
+            : error instanceof Error
+              ? "Error"
+              : typeof error,
+      });
+      if (this.pending.get(id) === pending) pending.processing = false;
       throw new OAuthError();
-    } finally {
-      if (this.pending.get(id) === pending) this.pending.delete(id);
     }
   }
   async completeCallback(state: string | null, code: string | null): Promise<CallbackOutcome> {
@@ -178,6 +193,7 @@ export class ApiKeyService implements IApiKeyService {
     pending.processing = true;
     this.usedStates.set(state, pending.expiresAt);
     let outcome: "connected" | "failed" = "failed";
+    let stage = "authorize";
     try {
       if (pending.target.scope === "guild") {
         const authorized = await new Promise<boolean>((resolve, reject) => {
@@ -189,16 +205,34 @@ export class ApiKeyService implements IApiKeyService {
         });
         if (!authorized) throw new OAuthError();
       }
+      stage = "validate_pending";
       if (this.pending.get(targetId(pending.target)) !== pending) throw new OAuthError();
+      stage = "complete";
       await this.complete(pending, code);
       outcome = "connected";
-    } catch {
+    } catch (error) {
+      if (stage !== "complete")
+        logger.warn("OAuth connection failed", {
+          stage,
+          status: error instanceof OAuthError ? error.statusCode : undefined,
+          errorType:
+            error instanceof OAuthError
+              ? "OAuthError"
+              : error instanceof Error
+                ? "Error"
+                : typeof error,
+        });
       if (this.pending.get(targetId(pending.target)) === pending)
         this.pending.delete(targetId(pending.target));
     }
     void Promise.resolve()
       .then(() => pending.hooks.report(outcome))
-      .catch(() => logger.warn("OAuth connection report failed"));
+      .catch((error: unknown) =>
+        logger.warn("OAuth connection failed", {
+          stage: "report",
+          errorType: error instanceof Error ? "Error" : typeof error,
+        }),
+      );
     return outcome;
   }
   disconnect(target: ConnectionTarget): { removed: boolean; keyHash: string | null } {

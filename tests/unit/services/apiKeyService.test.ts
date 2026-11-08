@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { ApiKeyRepository } from "../../../src/db/repositories/apiKey";
 import { applyMigrations } from "../../../src/db/schema";
@@ -7,6 +7,7 @@ import { ApiKeyUnreadableError } from "../../../src/errors";
 import { OpenRouterClient } from "../../../src/llm/openrouter";
 import { ApiKeyService, type ConnectionTarget } from "../../../src/services/apiKeyService";
 import { CryptoService } from "../../../src/services/cryptoService";
+import { logger } from "../../../src/utils/logger";
 
 const hooks = (): {
   authorize: ReturnType<typeof mock<() => Promise<boolean>>>;
@@ -119,7 +120,7 @@ describe("ApiKeyService", () => {
     expect(service.hasPendingConnection("u", user)).toBe(false);
     expect(repo.find("u", "user")?.encryptedKey).not.toContain("connected-fixture");
   });
-  test("pending expires with injected time, rejects another actor, and consumes failures", async () => {
+  test("pending expires with injected time and rejects another actor", async () => {
     const fetch = mockExchange();
     service.startConnection("u", user, hooks());
     await expect(service.completeConnection("other", user, "code-fixture")).rejects.toThrow();
@@ -127,12 +128,59 @@ describe("ApiKeyService", () => {
     now += 15 * 60_000;
     expect(service.hasPendingConnection("u", user)).toBe(false);
     await expect(service.completeConnection("u", user, "code-fixture")).rejects.toThrow();
+  });
+  test.each(["exchange", "verify"])(
+    "paste retains the same pending request after %s failure",
+    async (stage) => {
+      service.startConnection("u", user, hooks());
+      let verifier: string | undefined;
+      const failed = mock(async (input: string | URL | Request, init?: RequestInit) => {
+        if (String(input).endsWith("/auth/keys")) {
+          verifier = (JSON.parse(String(init?.body)) as { code_verifier: string }).code_verifier;
+          if (stage === "verify") return Response.json({ key: "connected-fixture" });
+        }
+        return new Response("", { status: 403 });
+      });
+      globalThis.fetch = failed as unknown as typeof globalThis.fetch;
+      await expect(service.completeConnection("u", user, "typo-fixture")).rejects.toThrow();
+      expect(service.hasPendingConnection("u", user)).toBe(true);
+      expect(repo.find("u", "user")).toBeNull();
+      const retried = mockExchange();
+      await service.completeConnection("u", user, "corrected-fixture");
+      expect(JSON.parse(String((retried.mock.calls[0][1] as RequestInit).body))).toMatchObject({
+        code: "corrected-fixture",
+        code_verifier: verifier,
+      });
+      expect(service.hasPendingConnection("u", user)).toBe(false);
+      expect(service.resolveForMention("u", "g")?.key).toBe("connected-fixture");
+    },
+  );
+  test.each(["encrypt", "save"])("logs only safe failure metadata at %s", async (stage) => {
+    mockExchange();
     service.startConnection("u", user, hooks());
-    globalThis.fetch = mock(
-      async () => new Response("", { status: 403 }),
-    ) as unknown as typeof globalThis.fetch;
-    await expect(service.completeConnection("u", user, "code-fixture")).rejects.toThrow();
-    expect(service.hasPendingConnection("u", user)).toBe(false);
+    const failure = Object.assign(new Error("secret-key code state verifier"), {
+      name: "secret-name",
+    });
+    const broken =
+      stage === "encrypt"
+        ? spyOn(crypto, "encrypt").mockImplementation(() => {
+            throw failure;
+          })
+        : spyOn(repo, "upsert").mockImplementation(() => {
+            throw failure;
+          });
+    const logs = spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      await expect(service.completeConnection("u", user, "secret-code")).rejects.toThrow();
+      expect(logs.mock.calls).toEqual([
+        ["OAuth connection failed", { stage, status: undefined, errorType: "Error" }],
+      ]);
+      expect(JSON.stringify(logs.mock.calls)).not.toContain("secret");
+      expect(repo.find("u", "user")).toBeNull();
+    } finally {
+      logs.mockRestore();
+      broken.mockRestore();
+    }
   });
   test.each(["disconnect", "replace", "removeGuild", "reconcile"])(
     "does not save when %s occurs during exchange",

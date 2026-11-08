@@ -17,25 +17,30 @@ import type {
   ConnectionTarget,
   IApiKeyService,
 } from "../../services/apiKeyService";
+import { REPLY_GATE_MODEL } from "../../services/replyGateService";
 import {
   canManageGuildSettings,
   settingsActorFromInteraction,
 } from "../../services/settingsAuthorization";
 import type { ISettingsService } from "../../services/settingsService";
 import {
+  buildErrorContainer,
   buildSuccessNoticeContainer,
   toNoticeEditPayload,
   toNoticePayload,
 } from "../../utils/chatContainerBuilder";
 import { logger } from "../../utils/logger";
+import { metrics } from "../../utils/metrics";
 
 export type ConnectInteraction =
   | ChatInputCommandInteraction
   | ButtonInteraction
   | ModalSubmitInteraction;
-function statusText(status: ConnectionStatus): string {
+function statusText(status: ConnectionStatus, includeLinks = true): string {
   if (status.status === "disconnected") return "未接続";
-  if (status.status === "unreadable") return "取得できません（接続し直してください）";
+  if (status.status === "unreadable")
+    return includeLinks ? "取得できません（接続し直してください）" : "取得できません";
+  if (!includeLinks) return "接続済み";
   return `接続済み / [キー設定](https://openrouter.ai/keys/${status.keyHash}) / [利用ログ](https://openrouter.ai/logs?api_key_hash=${status.keyHash})`;
 }
 export async function guildBalanceText(
@@ -56,15 +61,20 @@ export function createConnectHandler(
   settingsService: ISettingsService,
 ): (interaction: ConnectInteraction) => Promise<void> {
   return async (interaction): Promise<void> => {
-    const notice = async (text: string): Promise<void> => {
-      const container = buildSuccessNoticeContainer(text, "OpenRouter 接続");
+    const isCommand = interaction.isChatInputCommand();
+    if (isCommand) metrics.increment(`command.${interaction.commandName}`);
+    const notice = async (text: string, failed = false): Promise<void> => {
+      const container = (failed ? buildErrorContainer : buildSuccessNoticeContainer)(
+        text,
+        "OpenRouter 接続",
+      );
       if (interaction.deferred || interaction.replied)
         await interaction.editReply(toNoticeEditPayload(container));
       else await interaction.reply(toNoticePayload(container, true));
     };
     try {
       if (!apiKeys.enabled) {
-        await notice("この Bot では OpenRouter アカウントの接続機能が無効です。");
+        await notice("この Bot では OpenRouter アカウントの接続機能が無効です。", true);
         return;
       }
       const action = interaction.isChatInputCommand()
@@ -83,16 +93,16 @@ export function createConnectHandler(
           }
         }
         await notice(
-          `自分: ${statusText(user)}${user.status === "disconnected" ? "" : `\n${balance}`}\nサーバー: ${interaction.guildId ? statusText(apiKeys.getConnection({ scope: "guild", guildId: interaction.guildId })) : "サーバー外"}`,
+          `自分: ${statusText(user)}${user.status === "disconnected" ? "" : `\n${balance}`}\nサーバー: ${interaction.guildId ? statusText(apiKeys.getConnection({ scope: "guild", guildId: interaction.guildId }), false) : "サーバー外"}`,
         );
         return;
       }
       if (action !== "user" && action !== "guild") {
-        await notice("接続の操作を確認できません。");
+        await notice("接続の操作を確認できません。", true);
         return;
       }
       if (action === "guild" && !interaction.guildId) {
-        await notice("サーバーの接続はサーバー内でのみ操作できます。");
+        await notice("サーバーの接続はサーバー内でのみ操作できます。", true);
         return;
       }
       const target: ConnectionTarget =
@@ -102,7 +112,7 @@ export function createConnectHandler(
       if (target.scope === "guild") {
         const settings = await settingsService.getGuildSettings(target.guildId);
         if (!canManageGuildSettings(settingsActorFromInteraction(interaction), settings)) {
-          await notice("この操作には「サーバーの管理」権限か管理者ロールが必要です。");
+          await notice("この操作には「サーバーの管理」権限か管理者ロールが必要です。", true);
           return;
         }
       }
@@ -113,6 +123,7 @@ export function createConnectHandler(
         ) {
           await notice(
             "接続の要求が期限切れか更新されています。`/connect` からやり直してください。",
+            true,
           );
           return;
         }
@@ -170,6 +181,7 @@ export function createConnectHandler(
             result === "connected"
               ? "OpenRouter アカウントを接続しました。古いキーは OpenRouter に残るので、不要なら [キー設定](https://openrouter.ai/keys) で削除してください。"
               : "接続できませんでした。`/connect` からやり直してください。",
+            result !== "connected",
           );
         },
       });
@@ -179,7 +191,7 @@ export function createConnectHandler(
         "OpenRouter の入出力ログを有効にしていると、そのアカウントの持ち主（組織の workspace では組織の管理者も）が入力と出力を読めます。",
         action === "user"
           ? "メンションへの返答は、このサーバーの管理者が選んだモデルで自分のクレジットから支払われます。自動応答と定期実行には使われません。"
-          : "自動応答の取捨選択を使う場合は typesafe/jev-1.14 も workspace で許可してください。",
+          : `自動応答の取捨選択を使う場合は ${REPLY_GATE_MODEL} も workspace で許可してください。`,
         "接続し直すと古いキーは OpenRouter に残ります。不要なら OpenRouter のキー設定で削除してください。",
         apiKeys.connectionMode === "paste"
           ? "認可後に表示されるコードを「コードを入力」から貼り付けてください。"
@@ -199,13 +211,16 @@ export function createConnectHandler(
       container.addActionRowComponents(row);
       await interaction.editReply(toNoticeEditPayload(container));
     } catch (error) {
+      if (isCommand) metrics.increment("command.errors");
       logger.warn("OpenRouter connection operation failed", {
-        errorType: error instanceof Error ? error.name : typeof error,
+        stage: "interaction",
+        errorType: error instanceof Error ? "Error" : typeof error,
       });
       await notice(
         error instanceof AppError
           ? error.userMessage
           : "接続の操作に失敗しました。`/connect` からやり直してください。",
+        true,
       );
     }
   };

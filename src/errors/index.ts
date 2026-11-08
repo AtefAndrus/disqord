@@ -88,7 +88,7 @@ export class ApiKeyUnreadableError extends AppError {
   constructor(scope: "user" | "guild") {
     super(
       "Stored OpenRouter key cannot be decrypted",
-      `保存した OpenRouter キーを読み取れません。\`/connect ${scope}\` で接続し直してください。`,
+      `保存した OpenRouter キーを読み取れません。${scope === "guild" ? "管理者が " : ""}\`/connect ${scope}\` で接続し直してください。`,
     );
   }
 }

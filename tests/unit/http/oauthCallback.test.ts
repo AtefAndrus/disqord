@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { ApiKeyRepository } from "../../../src/db/repositories/apiKey";
 import { applyMigrations } from "../../../src/db/schema";
 import { createOAuthCallbackHandler } from "../../../src/http/oauthCallback";
@@ -10,6 +10,7 @@ import {
   type ConnectionTarget,
 } from "../../../src/services/apiKeyService";
 import { CryptoService } from "../../../src/services/cryptoService";
+import { logger } from "../../../src/utils/logger";
 
 describe("OAuth callback", () => {
   let db: Database;
@@ -119,6 +120,25 @@ describe("OAuth callback", () => {
     expect(await service.completeCallback(state, "fixture")).toBe("failed");
     expect(await service.completeCallback(state, "fixture")).toBe("already_used");
     expect(service.getConnection(user).status).toBe("disconnected");
+    expect(service.hasPendingConnection("actor", user)).toBe(false);
+  });
+  test("callback authorization logs no exception, state or code", async () => {
+    const hooks = makeHooks();
+    hooks.authorize = mock(async () => {
+      throw Object.assign(new Error("secret-message"), { name: "secret-name" });
+    });
+    const state = begin(guild, hooks);
+    const logs = spyOn(logger, "warn").mockImplementation(() => {});
+    try {
+      expect(await service.completeCallback(state, "secret-code")).toBe("failed");
+      expect(logs.mock.calls).toEqual([
+        ["OAuth connection failed", { stage: "authorize", status: undefined, errorType: "Error" }],
+      ]);
+      expect(JSON.stringify(logs.mock.calls)).not.toContain("secret");
+      expect(JSON.stringify(logs.mock.calls)).not.toContain(state);
+    } finally {
+      logs.mockRestore();
+    }
   });
   test("HTML has security headers and never echoes query values on any outcome", async () => {
     const handler = createOAuthCallbackHandler(service);
