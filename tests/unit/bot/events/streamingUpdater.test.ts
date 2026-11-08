@@ -445,6 +445,22 @@ describe("DiscordStreamingUpdater — markFinalized", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  test('空白だけの preamble は commitTurn("tool_calls") で描画されない', async () => {
+    const editMock = mock(() => Promise.resolve());
+    const initialMessage = { id: "bot-1", edit: editMock } as unknown as Message;
+    const originalMessage = {
+      id: "trigger-1",
+      channel: { id: "chan-1", send: mock() },
+    } as unknown as Message;
+
+    const updater = new DiscordStreamingUpdater(originalMessage, initialMessage, "Model", 0);
+    updater.beginTurn();
+    await updater.stageContent("\n");
+    await updater.commitTurn("tool_calls");
+
+    expect(editMock).not.toHaveBeenCalled();
+  });
+
   test(
     'スロットル間隔内で描画がスキップされた preamble は、commitTurn("tool_calls") で' +
       "スロットルを無視して 1 回描画される",

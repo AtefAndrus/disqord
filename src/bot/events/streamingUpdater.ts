@@ -375,6 +375,7 @@ export class DiscordStreamingUpdater implements IToolLoopUpdater {
       }
 
       if (this.text === this.lastRenderedText) return; // 既に描画済み: 何もしない
+      if (this.text.trim().length === 0) return; // 空白だけの preamble で「生成中...」を消さない
 
       // スロットルで描画がスキップされたまま tool 実行フェーズへ入ると、preamble が
       // tool 実行の間ずっと古い表示のまま残ってしまう。ここではスロットルを無視して
