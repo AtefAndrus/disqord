@@ -40,7 +40,13 @@ import {
   parseToolCallLine,
   selectInput,
 } from "./input";
-import { createStopper, DeadlineError, waitForReply, waitForStreaming } from "./runner";
+import {
+  createStopper,
+  DeadlineError,
+  waitForLogOrReply,
+  waitForReply,
+  waitForStreaming,
+} from "./runner";
 import {
   costOf,
   type DiscordMessage,
@@ -233,6 +239,8 @@ interface RunningBot {
   toolCalls: Set<string>;
   inputs: InputObservation[];
   botContextMarkers: Set<string>;
+  /** The output lines of the running scenario that a scenario waits on (`finishedByLog`). */
+  lines: string[];
 }
 
 async function startBot(): Promise<RunningBot> {
@@ -250,12 +258,14 @@ async function startBot(): Promise<RunningBot> {
   const toolCalls = new Set<string>();
   const inputs: InputObservation[] = [];
   const botContextMarkers = new Set<string>();
+  const observedLines: string[] = [];
   let pending = "";
   let output = "";
   const inspect = (chunk: string): void => {
     const lines = (pending + chunk).split("\n");
     pending = lines.pop() ?? "";
     for (const line of lines) {
+      observedLines.push(line);
       const input = parseInputLine(line);
       if (input) inputs.push(input);
       if (line.startsWith(BOT_CONTEXT_PREFIX))
@@ -299,6 +309,7 @@ async function startBot(): Promise<RunningBot> {
     toolCalls,
     inputs,
     botContextMarkers,
+    lines: observedLines,
   };
 }
 
@@ -334,6 +345,7 @@ async function main(): Promise<number> {
       bot?.toolCalls.clear();
       if (bot) bot.inputs.length = 0;
       bot?.botContextMarkers.clear();
+      if (bot) bot.lines.length = 0;
       const evidence: InputEvidence = {
         marker: "",
         observations: bot?.inputs,
@@ -348,6 +360,14 @@ async function main(): Promise<number> {
           costs.push({ name: scenario.name, cost: undefined });
           console.log(
             `FAIL ${scenario.name}: cannot verify LLM input under --no-spawn; run with the E2E child preload`,
+          );
+          continue;
+        }
+        if (scenario.finishedByLog && !bot) {
+          failures++;
+          costs.push({ name: scenario.name, cost: undefined });
+          console.log(
+            `FAIL ${scenario.name}: reads the bot's log, so it cannot run under --no-spawn`,
           );
           continue;
         }
@@ -434,11 +454,23 @@ async function main(): Promise<number> {
                 );
               }
             }
-            const reply = await waitForReply({
+            const waiting = {
               read: () => repliesAfter(messageId, deadline, scenario.excludeFromReply),
               pause: () => Bun.sleep(Math.min(POLL_INTERVAL_MS, remaining(deadline))),
               log: console.log,
-            });
+            };
+            const { finishedByLog } = scenario;
+            const reply = finishedByLog
+              ? await waitForLogOrReply({
+                  ...waiting,
+                  logged: () => bot?.lines.some((line) => line.includes(finishedByLog)) ?? false,
+                })
+              : await waitForReply(waiting);
+            // No footer shows what this reply took or cost, so the bot's own lines are printed instead.
+            if (finishedByLog)
+              for (const line of bot?.lines ?? [])
+                if (line.includes(finishedByLog) || line.includes("Tool call"))
+                  console.log(`     log: ${line}`);
             const toolWasInvoked = scenario.toolName
               ? spawn && bot?.toolCalls.has(scenario.toolName) === true
               : true;

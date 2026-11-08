@@ -70,6 +70,31 @@ export async function waitForReply(deps: WaitDeps): Promise<Reply> {
   }
 }
 
+/**
+ * For a reply that may post nothing: done when the bot's log says so, or when
+ * a page turns up finished, which is the model answering in text instead.
+ */
+export async function waitForLogOrReply(
+  deps: WaitDeps & { logged: () => boolean },
+): Promise<Reply> {
+  try {
+    while (true) {
+      await deps.pause();
+      const logged = deps.logged();
+      try {
+        const reply = await deps.read();
+        if (logged || isFinished(reply)) return reply;
+      } catch (error) {
+        if (error instanceof DeadlineError) throw error;
+        deps.log?.(`  read failed, retrying: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof DeadlineError)) throw error;
+    throw new DeadlineError("the bot neither logged the expected line nor finished a reply");
+  }
+}
+
 export interface StoppableChild {
   kill: (signal?: NodeJS.Signals) => void;
   exited: Promise<unknown>;

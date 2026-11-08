@@ -18,7 +18,7 @@
 | [画像生成](changes/image-generation/design.md) | 中 | investigating | OpenRouter で画像を生成し、生成画像と生成ファイルを Discord の MediaGallery / File で表示する |
 | [数式を画像で表示する](changes/math-rendering/design.md) | 中 | investigating | 返答の別行立ての数式を PNG にして本文の該当位置に差し込み、文中の数式はコードの表記にする |
 | [メッセージの解説（コンテキストメニュー）](changes/message-explain/design.md) | 中 | planned | メッセージの右クリックメニュー「アプリ → 解説する」で、そのメッセージの専門用語や背景を本人にだけ見える返信で解説する |
-| [リアクションだけで応える返答](changes/reaction-only-reply/design.md) | 中 | planned | 礼や相づちのように答えを求めていない発言に、bot が本文を書かずリアクションだけで応えられるようにする |
+| [リアクションだけで応える返答](changes/reaction-only-reply/design.md) | 中 | in-progress | 礼や相づちのように答えを求めていない発言に、bot が本文を書かずリアクションだけで応えられるようにする |
 | [設定階層化 + LLMパラメータ + カスタムプロンプト](changes/settings-hierarchy/design.md) | 中 | investigating | guild/channel/user 設定階層 + LLM パラメータ + カスタムプロンプト |
 | [会話の分岐 (fork)](changes/fork/design.md) | 低 | investigating | 指定した発言からスレッドを作り、そのスレッドの会話が親チャンネルの発言以前まで遡って読めるようにする |
 | [サーバーツール付きの返答の LLM 入力を見る](changes/llm-input-server-tools/design.md) | 低 | investigating | Web 検索や会話履歴を有効にしたギルドでは、OpenRouter のサーバーツールを渡すので「LLM 入力を見る」で入力を見られない。見られるようにする方法を決める |

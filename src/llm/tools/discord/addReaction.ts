@@ -11,6 +11,25 @@ interface Arguments {
   message_ref?: string;
 }
 
+export function isReactionToolEnabled(ctx: IToolContext): boolean {
+  return (
+    ctx.guildId !== null &&
+    ctx.toolsAllowed !== false &&
+    !!ctx.discord &&
+    [ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread].includes(
+      ctx.discord.channelType,
+    )
+  );
+}
+
+export function validateReactionEmoji(value: unknown): string | { ok: false; error: string } {
+  if (typeof value !== "string" || value.length === 0 || value.length > 100)
+    return { ok: false, error: "emoji is required" };
+  if (/[<>:%]/u.test(value))
+    return { ok: false, error: "emoji must be Unicode or a guild emoji name" };
+  return value;
+}
+
 export class AddReactionTool implements IClientTool<Arguments> {
   readonly name = "add_reaction";
   readonly description =
@@ -26,24 +45,15 @@ export class AddReactionTool implements IClientTool<Arguments> {
   };
 
   isEnabled(ctx: IToolContext): boolean {
-    return (
-      ctx.guildId !== null &&
-      ctx.toolsAllowed !== false &&
-      !!ctx.discord &&
-      [ChannelType.GuildText, ChannelType.PublicThread, ChannelType.PrivateThread].includes(
-        ctx.discord.channelType,
-      )
-    );
+    return isReactionToolEnabled(ctx);
   }
 
   validate(value: unknown): { ok: true; value: Arguments } | { ok: false; error: string } {
     if (!value || typeof value !== "object" || Array.isArray(value))
       return { ok: false, error: "arguments must be an object" };
     const args = value as Record<string, unknown>;
-    if (typeof args.emoji !== "string" || args.emoji.length === 0 || args.emoji.length > 100)
-      return { ok: false, error: "emoji is required" };
-    if (/[<>:%]/u.test(args.emoji))
-      return { ok: false, error: "emoji must be Unicode or a guild emoji name" };
+    const emoji = validateReactionEmoji(args.emoji);
+    if (typeof emoji !== "string") return emoji;
     if (
       args.message_ref !== undefined &&
       (typeof args.message_ref !== "string" || !/^m[0-9]+$/u.test(args.message_ref))
@@ -52,7 +62,7 @@ export class AddReactionTool implements IClientTool<Arguments> {
     return {
       ok: true,
       value: {
-        emoji: args.emoji,
+        emoji,
         ...(typeof args.message_ref === "string" && { message_ref: args.message_ref }),
       },
     };

@@ -66,6 +66,8 @@ export interface RawDiscordMessage {
 export interface RawDiscordReaction {
   count: number;
   emoji: { id?: string | null; name?: string | null };
+  /** Whether the account that read the message reacted with this emoji; the window reads as the bot. */
+  me?: boolean;
 }
 
 export type NormalizedMessageKind = "user" | "assistant";
@@ -256,17 +258,18 @@ function pollMediaText(media: RawDiscordPollMedia): string {
 
 /**
  * The reactions on one message, or on all pages of one bot reply, as
- * `[リアクション 👍 2、:kusa: 1]`, summed per emoji in the order Discord lists
- * them. The bot's own reactions are counted like anyone's. REST data is not
- * typed at runtime, so malformed entries are skipped.
+ * `[リアクション 👍 2（Bot も付けた）、:kusa: 1]`, summed per emoji in the order
+ * Discord lists them. The bot's own reactions are counted like anyone's and
+ * marked, so that the model can tell what it already reacted with. REST data
+ * is not typed at runtime, so malformed entries are skipped.
  */
 export function formatReactions(messages: readonly RawDiscordMessage[]): string | undefined {
-  const counts = new Map<string, { label: string; count: number }>();
+  const counts = new Map<string, { label: string; count: number; me: boolean }>();
   for (const message of messages) {
     if (!Array.isArray(message.reactions)) continue;
     for (const reaction of message.reactions as unknown[]) {
       if (typeof reaction !== "object" || reaction === null) continue;
-      const { count, emoji } = reaction as Partial<RawDiscordReaction>;
+      const { count, emoji, me } = reaction as Partial<RawDiscordReaction>;
       if (typeof count !== "number" || count <= 0 || typeof emoji !== "object" || emoji === null) {
         continue;
       }
@@ -282,13 +285,14 @@ export function formatReactions(messages: readonly RawDiscordMessage[]): string 
         ? `:${name ? oneLine(name) : "名前の分からない絵文字"}:`
         : (name ?? "").replace(/\p{Cc}+/gu, " ").trim();
       if (label.length === 0) continue;
-      const entry = counts.get(key) ?? { label, count: 0 };
+      const entry = counts.get(key) ?? { label, count: 0, me: false };
       entry.count += count;
+      entry.me ||= me === true;
       counts.set(key, entry);
     }
   }
   if (counts.size === 0) return undefined;
-  return `[リアクション ${[...counts.values()].map(({ label, count }) => `${label} ${count}`).join("、")}]`;
+  return `[リアクション ${[...counts.values()].map(({ label, count, me }) => `${label} ${count}${me ? "（Bot も付けた）" : ""}`).join("、")}]`;
 }
 
 const JST_OFFSET_MS = 9 * 3_600_000;

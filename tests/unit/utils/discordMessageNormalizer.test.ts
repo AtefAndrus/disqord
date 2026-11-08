@@ -326,6 +326,26 @@ describe("reactions", () => {
     expect(reply.reactions).toBe("[リアクション 👍 3、😢 1]");
   });
 
+  test("marks the emoji the reading account reacted with, also when only one page of a reply has it", () => {
+    expect(
+      formatReactions([
+        {
+          ...base,
+          reactions: [
+            { count: 2, emoji: { name: "👍" }, me: true },
+            { count: 1, emoji: { name: "😢" }, me: false },
+          ],
+        },
+      ]),
+    ).toBe("[リアクション 👍 2（Bot も付けた）、😢 1]");
+    expect(
+      formatReactions([
+        { ...base, reactions: [{ count: 1, emoji: { name: "👍" }, me: false }] },
+        { ...base, reactions: [{ count: 1, emoji: { name: "👍" }, me: true }] },
+      ]),
+    ).toBe("[リアクション 👍 2（Bot も付けた）]");
+  });
+
   test("custom emoji with the same name but different IDs are counted apart", () => {
     expect(
       formatReactions([

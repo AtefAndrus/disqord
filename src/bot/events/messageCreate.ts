@@ -64,6 +64,20 @@ function operationError(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
+/**
+ * How long the first page is held back where `reply_with_reaction` can be
+ * offered. Every reply in those guilds can show its first page this much
+ * later, so it is a cap rather than the time a slow model needs: on 2026-11-08
+ * the 90th percentile until the model called the tool was under 2.6 seconds on
+ * anthropic/claude-haiku-5.5 and deepseek/deepseek-v4.1-flash, and over 4 seconds
+ * on google/gemini-3.8-flash and z-ai/glm-5.3-flash. A slower reaction-only reply
+ * shows the page and then removes it.
+ */
+const INITIAL_MESSAGE_DELAY_MS = 3_000;
+
+/** As long as the reply gate remembers what it silenced, and for the same reason: the event can arrive again. */
+const REACTION_ONLY_REMEMBER_MS = 60 * 60 * 1000;
+
 function shouldRespond(
   message: Message,
   botId: string,
@@ -187,6 +201,7 @@ export function toRawDiscordMessage(message: Message): RawDiscordMessage {
     reactions: [...(message.reactions?.cache.values() ?? [])].map((reaction) => ({
       count: reaction.count,
       emoji: { id: reaction.emoji.id, name: reaction.emoji.name },
+      me: reaction.me,
     })),
   };
 }
@@ -256,7 +271,13 @@ export function createMessageCreateHandler(
     replyGate?: IReplyGateService;
   } = {},
 ) {
+  // Deleting the reply record is what ends a reaction-only reply, and the record is also what stops
+  // a repeated event; these take its place.
+  const answeredWithReaction = new Set<string>();
+
   return async function onMessageCreate(message: Message): Promise<void> {
+    if (answeredWithReaction.has(message.id)) return;
+
     // Bots are ignored, with one exception: the e2e tester bot, so that
     // `bun run e2e` can drive the real message path. This bot's own messages
     // stay ignored even if the tester id is misconfigured to its own id,
@@ -549,26 +570,48 @@ export function createMessageCreateHandler(
     };
     let generations: ReplyGeneration[] | undefined;
     try {
-      // 初期メッセージ送信（Components V2、停止ボタン付き Section）
-      const initialContainer = buildStreamingContainer({
-        text: "生成中...",
-        modelName,
-        color,
-        isFirst: true,
-        isLast: true,
-        triggerMessageId: message.id,
-      });
-      const initialBotMessage = await message.channel.send(toComponentsV2Payload(initialContainer));
-      updater = new DiscordStreamingUpdater(
-        message,
-        initialBotMessage,
-        modelName,
-        color,
-        deleteMessage,
-        botMessageCreated,
-        transformText,
-      );
-      await botMessageCreated(initialBotMessage);
+      // 初期メッセージ（Components V2、停止ボタン付き Section）
+      const sendInitialMessage = (): Promise<Message> =>
+        (message.channel as Extract<typeof message.channel, { send: unknown }>).send(
+          toComponentsV2Payload(
+            buildStreamingContainer({
+              text: "生成中...",
+              modelName,
+              color,
+              isFirst: true,
+              isLast: true,
+              triggerMessageId: message.id,
+            }),
+          ),
+        );
+      if (settings.discordToolsEnabled) {
+        updater = new DiscordStreamingUpdater(
+          message,
+          null,
+          modelName,
+          color,
+          deleteMessage,
+          botMessageCreated,
+          transformText,
+        );
+        updater.deferInitialMessage({
+          send: sendInitialMessage,
+          delayMs: INITIAL_MESSAGE_DELAY_MS,
+          shouldSend: () => !chatService.isClosing,
+        });
+      } else {
+        const initialBotMessage = await sendInitialMessage();
+        updater = new DiscordStreamingUpdater(
+          message,
+          initialBotMessage,
+          modelName,
+          color,
+          deleteMessage,
+          botMessageCreated,
+          transformText,
+        );
+        await botMessageCreated(initialBotMessage);
+      }
 
       const startTime = Date.now();
       const result = await chatService.generateChatResponse(
@@ -607,8 +650,16 @@ export function createMessageCreateHandler(
         { channelId: message.channel.id, userId: message.author.id, payer },
       );
       generations = result.generations;
+      await updater.settleInitialMessage();
 
       if (result.status === "cancelled") {
+        // ページが無いまま中断するのは、最初のページを送る前のシャットダウンだけである（停止ボタンは
+        // ページの上にしか無い）。updateStoppedMessages は「（応答なし）」のページを送るので呼ばず、
+        // 初期メッセージを送らずに終える経路と同じく、pending の記録は次の起動で failed になる。
+        if (updater.messages.length === 0) {
+          updater.markFinalized();
+          return;
+        }
         const reason = chatService.isClosing ? "shutdown" : "user";
         // 最終描画の直前に必ず finalize する: 放棄された（timeout/cancel で await が打ち切られた）
         // updater 呼び出しがこの後に遅れて解決しても、停止表示を stale な内容で上書きさせない。
@@ -642,6 +693,35 @@ export function createMessageCreateHandler(
 
       if (result.status === "error") {
         throw result.error;
+      }
+
+      if (result.reaction !== undefined && updater.text.trim().length === 0) {
+        updater.markFinalized();
+        for (const botMessage of updater.messages) await deleteMessage(botMessage);
+        if (replyRecordCreated) {
+          // `completed` with no pages would read as a reply the window cannot confirm, and list_pins
+          // would skip the message; without a record, or `failed`, it reads as an unanswered message.
+          const deleted = await options.replyRecordService?.deletePendingWithoutPages(message.id);
+          if (!deleted) {
+            await options.replyRecordService?.finalize(message.id, "failed", 0);
+            if (generations?.length)
+              await options.replyRecordService?.saveGenerations(message.id, generations);
+          }
+        }
+        answeredWithReaction.add(message.id);
+        setTimeout(
+          () => answeredWithReaction.delete(message.id),
+          REACTION_ONLY_REMEMBER_MS,
+        ).unref();
+        logger.info("Reaction-only reply", {
+          guildId: message.guild.id,
+          messageId: message.id,
+          model: result.model,
+          emoji: result.reaction,
+          keySource: payer.source,
+          usage: result.usage,
+        });
+        return;
       }
 
       // A router model (openrouter/auto, a preset router) answers through
@@ -775,6 +855,7 @@ export function createMessageCreateHandler(
         guildId: message.guild.id,
       });
 
+      await updater?.settleInitialMessage();
       // 最終描画の直前に必ず finalize する: 放棄された updater 呼び出しがこの後に遅れて解決しても、
       // これから行うクリーンアップ表示を停止ボタン付きの stale な内容で上書きさせない。
       updater?.markFinalized();

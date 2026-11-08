@@ -140,6 +140,12 @@ export interface IToolHandlerResult {
    * `FIXED_RESULT_TOKENS`.
    */
   terminal?: boolean;
+  /**
+   * The tool answered the request by adding this reaction, so the model is
+   * not called again. Unrelated to `terminal`, which is about the result's
+   * length: `add_reaction` is `terminal` and the loop goes on after it.
+   */
+  endResponse?: { reaction: string };
 }
 
 export interface IClientTool<Args = unknown> {
