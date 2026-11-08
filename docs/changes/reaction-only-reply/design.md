@@ -127,7 +127,7 @@ Jev は 6 並列、通常モデルは各モデル 12 並列で 4 モデルを同
 - [x] 評価スクリプトと発言の一覧、通常モデルとの比較
 - [x] E2E の完了条件と `reaction-only` シナリオ
 - [ ] `bun run e2e` の既定シナリオに加えて、`reaction-only`、`shutdown`、`discord-tools`、`discord-info`、`message-ref`、会話履歴の名前付きシナリオ（`history-set history-recall history-window read-earlier view-attachment view-image`）を通す。`message-ref` は `buildConversationSafetyMessage()` の変更で、`discord-info` は `list_pins` が読むリアクションの表記の変更で要る
-- [ ] 手動確認: 実クライアントで、「機能 → Discord 操作」を有効にしたギルドで bot にメンションして礼を言い、リアクションだけが付いて「生成中...」が表示されないこと
+- [ ] 手動確認: 実クライアントで、「機能 → Discord 操作」と「機能 → 会話履歴」を有効にしたギルドで bot にメンションして礼を言い、リアクションだけが付いて「生成中...」が表示されないこと
 - [ ] `docs/changes/reaction-only-reply/` 削除（リリース完了時、git 履歴がアーカイブ）
 
 ## Open Questions / Risks
@@ -137,5 +137,5 @@ Jev は 6 並列、通常モデルは各モデル 12 並列で 4 モデルを同
 - 取りこぼしが全体で約 13% ある。Bot の説明への「助かりました」「なるほどねー」が `accepts` で本文に回る。
 - 文脈に合わせた表現は通常モデルより狭い。名前が意味を表さないカスタム絵文字は選ばれにくい見込みである（未検証）。
 - `/api/alpha/decisions` は alpha であり、形が変わる可能性がある。回答を読めなければ本文になる。
-- 無料モデル限定のギルドでは機能が使えない。
+- 無料モデル限定のギルドと、会話履歴が無効なギルドでは機能が使えない。
 - メンションの発言のうち対象のものは、最初のページが判定の分（約 0.3 秒）遅れ、Jev の費用（1 回 $0.0001）が加わる。
