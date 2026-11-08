@@ -3052,15 +3052,15 @@ describe("toRawDiscordMessage", () => {
       poll: null,
       reactions: {
         cache: new Collection([
-          ["👍", { count: 2, emoji: { id: null, name: "👍" } }],
-          ["1", { count: 1, emoji: { id: "1", name: "kusa" } }],
+          ["👍", { count: 2, emoji: { id: null, name: "👍" }, me: true }],
+          ["1", { count: 1, emoji: { id: "1", name: "kusa" }, me: false }],
         ]),
       },
     };
 
     expect(toRawDiscordMessage(message as never).reactions).toEqual([
-      { count: 2, emoji: { id: null, name: "👍" } },
-      { count: 1, emoji: { id: "1", name: "kusa" } },
+      { count: 2, emoji: { id: null, name: "👍" }, me: true },
+      { count: 1, emoji: { id: "1", name: "kusa" }, me: false },
     ]);
   });
 });

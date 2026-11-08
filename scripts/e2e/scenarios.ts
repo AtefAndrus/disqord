@@ -58,6 +58,8 @@ export interface Scenario extends ScenarioPost {
   /** Run only when named on the command line. */
   manual?: boolean;
   stopBotWhileStreaming?: boolean;
+  /** The reply may post nothing, so the scenario ends at this line of the bot's log (or at a finished page). */
+  finishedByLog?: string;
   /** What the person running the script has to do in Discord, printed once the prompt is sent. */
   userAction?: string;
   setup?: ScenarioPost & {
@@ -605,6 +607,54 @@ export const SCENARIOS: Scenario[] = [
         }
       }
       return problems;
+    },
+  },
+  {
+    name: "reaction-only",
+    manual: true,
+    prompt: "[e2e] ありがとう、助かった！",
+    finishedByLog: "Reaction-only reply",
+    timeoutMs: 60_000,
+    before: async (channelId, request, env) => {
+      const channel = await request(`/channels/${channelId}`);
+      if (!channel.ok) return [`cannot read the channel: HTTP ${channel.status}`];
+      const { guild_id: guildId } = (await channel.json()) as { guild_id?: string };
+      const db = new Database(env.databasePath, { readonly: true });
+      try {
+        const settings = db
+          .query<{ enabled: number }, [string]>(
+            "SELECT discord_tools_enabled AS enabled FROM guild_settings WHERE guild_id=?",
+          )
+          .get(guildId ?? "");
+        return settings?.enabled
+          ? []
+          : [
+              `Discord 操作 is off for guild ${guildId} in ${env.databasePath}: enable /config → 機能 → Discord 操作`,
+            ];
+      } finally {
+        db.close();
+      }
+    },
+    check: (reply) =>
+      reply.messages.length === 0
+        ? []
+        : ["the bot posted a page, which a model that answers in text also does"],
+    verify: async (triggerId, channelId, request, botId) => {
+      const response = await request(`/channels/${channelId}/messages/${triggerId}`);
+      if (!response.ok) return [`cannot read the trigger: HTTP ${response.status}`];
+      const { reactions } = (await response.json()) as {
+        reactions?: { emoji: { id: string | null; name: string | null } }[];
+      };
+      // `me` on the trigger means the tester here, who reads it, so the bot is looked for by emoji.
+      for (const { emoji } of reactions ?? []) {
+        const name = emoji.id ? `${emoji.name}:${emoji.id}` : (emoji.name ?? "");
+        const users = await request(
+          `/channels/${channelId}/messages/${triggerId}/reactions/${encodeURIComponent(name)}`,
+        );
+        if (!users.ok) return [`cannot read the reaction's users: HTTP ${users.status}`];
+        if (((await users.json()) as { id: string }[]).some((user) => user.id === botId)) return [];
+      }
+      return ["the trigger has no reaction from the bot"];
     },
   },
   {

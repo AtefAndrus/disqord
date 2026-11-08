@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createStopper,
   DeadlineError,
+  waitForLogOrReply,
   waitForReply,
   waitForStreaming,
 } from "../../../scripts/e2e/runner";
@@ -177,5 +178,38 @@ describe("createStopper", () => {
     await stopping;
 
     expect(child.kill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("waitForLogOrReply", () => {
+  const none: Reply = { messages: [], body: "", footers: [], isError: false };
+
+  test("returns the reply read once the log line appears", async () => {
+    let logged = false;
+    const reply = await waitForLogOrReply({
+      logged: () => logged,
+      pause: async () => {
+        logged = true;
+      },
+      read: async () => none,
+    });
+    expect(reply.messages).toEqual([]);
+  });
+
+  test("returns a finished reply without waiting for a log line that will not come", async () => {
+    const finished = toReply([page("1", "答え", USAGE)]);
+    const reply = await waitForLogOrReply({
+      logged: () => false,
+      pause: async () => {},
+      read: async () => finished,
+    });
+    expect(reply.body).toContain("答え");
+  });
+
+  test("keeps polling through a failed read and reports the deadline", async () => {
+    const reads = scripted([new Error("network")]);
+    await expect(waitForLogOrReply({ ...reads, logged: () => false })).rejects.toBeInstanceOf(
+      DeadlineError,
+    );
   });
 });

@@ -3233,3 +3233,126 @@ describe("runToolLoop + real OpenRouterClient: response.incomplete never dispatc
     expect(handler).not.toHaveBeenCalled();
   }, 2_000);
 });
+
+describe("runToolLoop — a tool that ends the response", () => {
+  function endingTool(overrides: Partial<IClientTool> = {}): IClientTool {
+    return makeEchoTool({
+      name: "end_tool",
+      handler: async () => ({ llmResult: '{"ok":true}', endResponse: { reaction: "👍" } }),
+      ...overrides,
+    });
+  }
+
+  function callOf(name: string, index = 0, id = `call-${index}`): StreamYield {
+    return toolCall({ index, id, name, argumentsDelta: "{}" });
+  }
+
+  const toolCallsEnd = final({ finishReason: "tool_calls" });
+
+  function run(
+    scripts: TurnScript[],
+    tools: IClientTool[],
+    updater: IToolLoopUpdater = new RecordedUpdater(),
+  ): { result: Promise<ToolLoopResult>; callCount: () => number } {
+    const { client, callCount } = makeClient(scripts);
+    const registry = new ToolRegistry();
+    for (const tool of tools) registry.register(tool);
+    return {
+      result: runToolLoop(baseParams({ llmClient: client, registry, updater })),
+      callCount,
+    };
+  }
+
+  test("ends without another model call when the turn wrote nothing", async () => {
+    const { result, callCount } = run([scripted(callOf("end_tool"), toolCallsEnd)], [endingTool()]);
+    const outcome = await result;
+    expect(outcome).toMatchObject({ status: "final", text: "", reaction: "👍" });
+    expect(callCount()).toBe(1);
+  });
+
+  test("keeps text written in the same turn", async () => {
+    const { result } = run(
+      [scripted(content("どうぞ"), callOf("end_tool"), toolCallsEnd)],
+      [endingTool()],
+    );
+    expect(await result).toMatchObject({ status: "final", text: "どうぞ", reaction: "👍" });
+  });
+
+  test("the preamble of an earlier turn stays in the updater's text", async () => {
+    const updater = new RecordedUpdater();
+    const { result, callCount } = run(
+      [
+        scripted(content("調べます"), callOf("echo_tool"), toolCallsEnd),
+        scripted(callOf("end_tool"), toolCallsEnd),
+      ],
+      [makeEchoTool(), endingTool()],
+      updater,
+    );
+    expect(await result).toMatchObject({ status: "final", text: "", reaction: "👍" });
+    expect(callCount()).toBe(2);
+    expect(updater.events).toContain("stageContent:調べます");
+  });
+
+  test("a tool that did not end the response lets the model answer", async () => {
+    const { result, callCount } = run(
+      [
+        scripted(callOf("end_tool"), toolCallsEnd),
+        scripted(content("答え"), final({ fullText: "答え", finishReason: "stop" })),
+      ],
+      [endingTool({ handler: async () => ({ llmResult: '{"ok":false}' }) })],
+    );
+    const outcome = await result;
+    expect(outcome).toMatchObject({ status: "final", text: "答え" });
+    expect(outcome).not.toHaveProperty("reaction");
+    expect(callCount()).toBe(2);
+  });
+
+  test("waits for the other tools of the turn, in either order", async () => {
+    const finished: string[] = [];
+    const echo = makeEchoTool({
+      handler: async () => {
+        await Bun.sleep(5);
+        finished.push("echo");
+        return { llmResult: "done" };
+      },
+    });
+    const { result } = run(
+      [scripted(callOf("end_tool", 0), callOf("echo_tool", 1), toolCallsEnd)],
+      [endingTool(), echo],
+    );
+    const outcome = await result;
+    expect(finished).toEqual(["echo"]);
+    expect(outcome.history.filter((message) => message.role === "tool")).toHaveLength(2);
+  });
+
+  test("keeps reasoning, which the caller leaves out when there is no text", async () => {
+    const { result } = run(
+      [
+        scripted(
+          reasoningItem({
+            type: "reasoning",
+            id: "r1",
+            summary: [{ type: "summary_text", text: "考えた" }],
+          }),
+          callOf("end_tool"),
+          toolCallsEnd,
+        ),
+      ],
+      [endingTool()],
+    );
+    expect(await result).toMatchObject({ reasoningText: "考えた", reaction: "👍" });
+  });
+
+  test("a cancel right after the tool wins over the reaction", async () => {
+    const controller = new AbortController();
+    const { client } = makeClient([scripted(callOf("end_tool"), toolCallsEnd)]);
+    const registry = new ToolRegistry();
+    registry.register(endingTool());
+    const updater = new RecordedUpdater();
+    updater.endToolBlock = () => controller.abort();
+    const outcome = await runToolLoop(
+      baseParams({ llmClient: client, registry, signal: controller.signal, updater }),
+    );
+    expect(outcome.status).toBe("cancelled");
+  });
+});

@@ -20,19 +20,7 @@ import { startHttpServer } from "./health";
 import { createOAuthCallbackHandler } from "./http/oauthCallback";
 import { OpenRouterGenerationLogClient } from "./llm/generationLog";
 import { OpenRouterClient } from "./llm/openrouter";
-import { createAddReactionTool } from "./llm/tools/discord/addReaction";
-import { createCreateEventTool } from "./llm/tools/discord/createEvent";
-import { createCreatePollTool } from "./llm/tools/discord/createPoll";
-import { createCreateThreadTool } from "./llm/tools/discord/createThread";
-import { createGetChannelInfoTool } from "./llm/tools/discord/getChannelInfo";
-import { createListEventsTool } from "./llm/tools/discord/listEvents";
-import { createListPinsTool } from "./llm/tools/discord/listPins";
-import { createPinMessageTool } from "./llm/tools/discord/pinMessage";
-import { createProposeCronJobTool } from "./llm/tools/proposeCronJob";
-import { createReadEarlierMessagesTool } from "./llm/tools/readEarlierMessages";
-import { createReadXPostTool } from "./llm/tools/readXPost";
-import { ToolRegistry } from "./llm/tools/registry";
-import { createViewAttachmentTool } from "./llm/tools/viewAttachment";
+import { createDefaultToolRegistry } from "./llm/tools/defaultRegistry";
 import { ApiKeyService } from "./services/apiKeyService";
 import { ChatService } from "./services/chatService";
 import { ConversationWindowService, WINDOW_REBUILD_AFTER_MS } from "./services/conversationWindow";
@@ -96,23 +84,10 @@ async function bootstrap(): Promise<void> {
   const settingsService = new SettingsService(guildSettingsRepo);
   const modelService = new ModelService(llmClient);
   const tweetService = new TweetService(config.fxtwitterApiBase, packageJson.version);
-  const toolRegistry = new ToolRegistry();
-  toolRegistry.register(createReadEarlierMessagesTool());
-  toolRegistry.register(createViewAttachmentTool());
-  toolRegistry.register(createReadXPostTool());
-  toolRegistry.register(createAddReactionTool());
-  toolRegistry.register(createCreatePollTool());
-  toolRegistry.register(createCreateEventTool());
-  toolRegistry.register(createCreateThreadTool());
-  toolRegistry.register(createPinMessageTool());
-  toolRegistry.register(createListPinsTool());
-  toolRegistry.register(createGetChannelInfoTool());
-  toolRegistry.register(createListEventsTool());
-  toolRegistry.register(createProposeCronJobTool());
   const chatService = new ChatService(
     llmClient,
     settingsService,
-    toolRegistry,
+    createDefaultToolRegistry(),
     config.webSearchEngine,
     tweetService,
     modelService,
