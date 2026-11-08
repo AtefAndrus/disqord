@@ -11,9 +11,10 @@ import { formatSearchResultLinks, type WebSearchEngine } from "../../llm/tools/w
 import type { IApiKeyService } from "../../services/apiKeyService";
 import { parseAttachments } from "../../services/attachmentParser";
 import type { IChatService } from "../../services/chatService";
-import type {
-  ConversationWindowContext,
-  ConversationWindowService,
+import {
+  type ConversationWindowContext,
+  type ConversationWindowService,
+  untilAborted,
 } from "../../services/conversationWindow";
 import type { ICronService } from "../../services/cronService";
 import { CronToolSession } from "../../services/cronToolContext";
@@ -606,9 +607,18 @@ export function createMessageCreateHandler(
           )
         : null;
       if (emoji !== null && !chatService.isClosing) {
-        const added = await new DiscordActionService(message as Message<true>, () => undefined)
-          .addReaction(emoji, undefined, AbortSignal.timeout(REACTION_TIMEOUT_MS))
-          .catch(() => '{"ok":false,"reason":"threw"}');
+        // The service does not abort a request in flight, so the wait is what the timeout ends. The
+        // reaction can still land after the text reply; a message left unanswered would be worse.
+        const reactionSignal = AbortSignal.timeout(REACTION_TIMEOUT_MS);
+        const added =
+          (await untilAborted(
+            new DiscordActionService(message as Message<true>, () => undefined).addReaction(
+              emoji,
+              undefined,
+              reactionSignal,
+            ),
+            reactionSignal,
+          ).catch(() => '{"ok":false,"reason":"threw"}')) ?? '{"ok":false,"reason":"timeout"}';
         const parsed = JSON.parse(added) as { ok?: unknown; reason?: unknown };
         if (parsed.ok === true) {
           // Before the record goes, so that a repeated event always meets one or the other.
@@ -639,6 +649,9 @@ export function createMessageCreateHandler(
           reason: parsed.reason,
         });
       }
+      // The judgment and the reaction both wait, and shutdown can begin during either. As above, a
+      // reply with no page leaves its pending record for the next start to fail.
+      if (chatService.isClosing) return;
     }
 
     // Keep all reply-page writes behind this callback so sends from the initial,

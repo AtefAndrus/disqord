@@ -126,7 +126,9 @@ export interface IReactionGateService {
 
 function noulOf(answer: unknown): number | undefined {
   if (typeof answer !== "object" || answer === null || !("noul" in answer)) return undefined;
-  return typeof answer.noul === "number" && Number.isFinite(answer.noul) ? answer.noul : undefined;
+  return typeof answer.noul === "number" && answer.noul >= 0 && answer.noul <= 1
+    ? answer.noul
+    : undefined;
 }
 
 function choiceOf(answer: unknown): string | undefined {
@@ -159,7 +161,7 @@ export class ReactionGateService implements IReactionGateService {
         needsText < NEEDS_TEXT_THRESHOLD &&
         accepts < ACCEPTS_THRESHOLD &&
         choice !== undefined &&
-        choice in questions.emoji.criteria
+        Object.hasOwn(questions.emoji.criteria, choice)
           ? choice
           : null;
       logger.info("Reaction gate", {

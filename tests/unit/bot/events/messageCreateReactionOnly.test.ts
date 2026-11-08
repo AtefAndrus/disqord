@@ -435,5 +435,38 @@ describe("messages the gate is not asked about", () => {
     await withReaction(fixture.react, () => fixture.handler(fixture.message));
     expect(fixture.judge).toHaveBeenCalledTimes(1);
     expect(fixture.react).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
+  });
+
+  test("shutdown beginning while a reaction fails posts no page", async () => {
+    let closing = false;
+    const fixture = setup({
+      closing: () => closing,
+      addReaction: async () => {
+        closing = true;
+        return '{"ok":false,"reason":"failed"}';
+      },
+    });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    warn.mockRestore();
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).not.toHaveBeenCalled();
+  });
+
+  test("a reaction that outlasts its timeout falls back to text", async () => {
+    const fixture = setup({ addReaction: () => new Promise<string>(() => {}) });
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(() =>
+      AbortSignal.abort(new Error("timeout")),
+    );
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await withReaction(fixture.react, () => fixture.handler(fixture.message));
+    } finally {
+      timeout.mockRestore();
+      warn.mockRestore();
+    }
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 });

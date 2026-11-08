@@ -54,6 +54,12 @@ async function judged(result: DecisionsResult | Error): Promise<string | null> {
 }
 
 describe("ReactionGateService.judge", () => {
+  test("an answer outside what was asked is text", async () => {
+    expect(await judged(answers(-1, 0.1, "🙏"))).toBeNull();
+    expect(await judged(answers(0.05, -1, "🙏"))).toBeNull();
+    expect(await judged(answers(0.05, 0.1, "toString"))).toBeNull();
+  });
+
   test("returns the emoji only below both thresholds", async () => {
     expect(await judged(answers(0.05, 0.1, "🙏"))).toBe("🙏");
     expect(await judged(answers(NEEDS_TEXT_THRESHOLD, 0.1, "🙏"))).toBeNull();
