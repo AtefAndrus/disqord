@@ -87,9 +87,11 @@ export function withBotMessageEnd(
 }
 
 /**
- * The state gives up its oldest messages to stay within its limits, and with the
- * bot's last message gone, "了解" to an offer and to a finished answer are the
- * same input. A reply target is its own field and always stays.
+ * Both the conversation window and the state give up their oldest messages to
+ * stay within their limits, and with the bot's last message gone, "了解" to an
+ * offer and to a finished answer are the same input. A conversation with no bot
+ * message cannot tell that loss from a bot that never spoke, so it counts as
+ * lost too. A reply target is its own field and always stays.
  */
 export function keepsLastBotMessage(
   state: Record<string, unknown>,
@@ -99,7 +101,7 @@ export function keepsLastBotMessage(
   if (target?.kind === "assistant") return true;
   const others = conversation.messages.filter((message) => message.id !== target?.id);
   const last = others.findLastIndex((message) => message.kind === "assistant");
-  if (last === -1) return true;
+  if (last === -1) return false;
   const kept = Array.isArray(state.recent_messages) ? state.recent_messages.length : 0;
   return others.length - last <= kept;
 }

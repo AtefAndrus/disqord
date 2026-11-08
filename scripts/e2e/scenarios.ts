@@ -610,6 +610,14 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    // Paired with reaction-only, which must run right after it: the gate is asked only when the
+    // conversation holds a message of the bot's, and this one offers nothing to accept.
+    name: "reaction-only-answer",
+    manual: true,
+    prompt: "[e2e] 1 + 1 は？数字だけで答えて。",
+    check: (reply) => hasUsageFooter(reply),
+  },
+  {
     name: "reaction-only",
     manual: true,
     prompt: "[e2e] ありがとう、助かった！",

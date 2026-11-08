@@ -376,6 +376,13 @@ describe("messages the gate is not asked about", () => {
     expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
   });
 
+  test("no bot message in the conversation", async () => {
+    const fixture = setup({ window: { messages: chatter(3, "雑談") } });
+    await fixture.handler(fixture.message);
+    expect(fixture.judge).not.toHaveBeenCalled();
+    expect(fixture.generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
   test("the bot's last message still in the state is asked about", async () => {
     const fixture = setup({
       emoji: null,

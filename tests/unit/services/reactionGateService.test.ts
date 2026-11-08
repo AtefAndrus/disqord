@@ -169,8 +169,9 @@ describe("keepsLastBotMessage", () => {
     );
   });
 
-  test("with no bot message in the conversation, nothing was lost", () => {
-    expect(keepsLastBotMessage(kept(1), { messages: [user] })).toBe(true);
+  test("a conversation with no bot message may have lost one outside the window", () => {
+    expect(keepsLastBotMessage(kept(1), { messages: [user] })).toBe(false);
+    expect(keepsLastBotMessage(kept(1), { messages: [user], replyTarget: user })).toBe(false);
   });
 });
 
