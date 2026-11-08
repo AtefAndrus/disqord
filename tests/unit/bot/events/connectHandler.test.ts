@@ -6,9 +6,11 @@ import {
   createConnectHandler,
   guildBalanceText,
 } from "../../../../src/bot/events/connectHandler";
+import { OAuthError } from "../../../../src/llm/openrouterAuth";
 import type { ConnectionHooks } from "../../../../src/services/apiKeyService";
 import { REPLY_GATE_MODEL } from "../../../../src/services/replyGateService";
 import { buildErrorContainer } from "../../../../src/utils/chatContainerBuilder";
+import { logger } from "../../../../src/utils/logger";
 import { metrics } from "../../../../src/utils/metrics";
 import {
   createMockApiKeyService,
@@ -28,6 +30,7 @@ function harness(
     dm?: boolean;
     authorized?: boolean;
     callbackAuthorized?: boolean;
+    adminRoleId?: string;
   } = {},
 ): {
   keys: ReturnType<typeof createMockApiKeyService>;
@@ -36,14 +39,23 @@ function harness(
   edit: ReturnType<typeof mock>;
   defer: ReturnType<typeof mock>;
   modal: ReturnType<typeof mock>;
+  fetchMember: ReturnType<typeof mock>;
   run: () => Promise<void>;
 } {
   const keys = createMockApiKeyService();
   const settings = createMockSettingsService();
-  settings.getGuildSettings = mock(async () => createMockGuildSettings({ adminRoleId: null }));
+  settings.getGuildSettings = mock(async () =>
+    createMockGuildSettings({ adminRoleId: options.adminRoleId ?? null }),
+  );
   const reply = mock(async () => {});
   const edit = mock(async () => {});
   const modal = mock(async () => {});
+  const fetchMember = mock(async () => ({
+    permissions: new PermissionsBitField(
+      options.callbackAuthorized === false ? 0n : PermissionFlagsBits.ManageGuild,
+    ),
+    roles: { cache: new Map(options.adminRoleId ? [[options.adminRoleId, {}]] : []) },
+  }));
   const interaction = {
     commandName: options.command ?? "connect",
     guildId: options.dm ? null : "guild",
@@ -51,17 +63,12 @@ function harness(
     memberPermissions: new PermissionsBitField(
       options.authorized ? PermissionFlagsBits.ManageGuild : 0n,
     ),
-    member: { roles: [] },
+    member: { roles: options.adminRoleId ? [options.adminRoleId] : [] },
     client: {
       guilds: {
         fetch: mock(async () => ({
           members: {
-            fetch: mock(async () => ({
-              permissions: new PermissionsBitField(
-                options.callbackAuthorized === false ? 0n : PermissionFlagsBits.ManageGuild,
-              ),
-              roles: { cache: new Map() },
-            })),
+            fetch: fetchMember,
           },
         })),
       },
@@ -91,6 +98,7 @@ function harness(
     edit,
     defer,
     modal,
+    fetchMember,
     run: () => createConnectHandler(keys, settings)(typed),
   };
 }
@@ -156,6 +164,7 @@ describe("OpenRouter connection UI", () => {
     const hooks = start.mock.calls[0]?.[2] as ConnectionHooks;
     expect(await hooks.authorize()).toBe(true);
     expect(h.interaction.client.guilds.fetch).toHaveBeenCalledWith("guild");
+    expect(h.fetchMember).toHaveBeenCalledWith({ user: "actor", force: true, cache: false });
     await hooks.report("connected");
     expect(output(h.edit)).toContain("接続しました");
     expect(output(h.edit)).toContain("入出力ログ");
@@ -171,6 +180,16 @@ describe("OpenRouter connection UI", () => {
     const hooks = (h.keys.startConnection as ReturnType<typeof mock>).mock
       .calls[0]?.[2] as ConnectionHooks;
     expect(await hooks.authorize()).toBe(false);
+  });
+  test("guild callback authorizes a member with only the configured admin role", async () => {
+    const h = harness("guild", { adminRoleId: "admin-role", callbackAuthorized: false });
+    Object.assign(h.keys, { connectionMode: "callback" });
+    await h.run();
+    expect(h.keys.startConnection).toHaveBeenCalledTimes(1);
+    const hooks = (h.keys.startConnection as ReturnType<typeof mock>).mock
+      .calls[0]?.[2] as ConnectionHooks;
+    expect(await hooks.authorize()).toBe(true);
+    expect(h.fetchMember).toHaveBeenCalledWith({ user: "actor", force: true, cache: false });
   });
   test.each(["connected", "disconnected", "unreadable"] as const)(
     "status exposes only the guild %s label",
@@ -251,6 +270,7 @@ describe("OpenRouter connection UI", () => {
     const h = harness("guild", { kind: "modal", authorized: true });
     h.keys.completeConnection = mock(async () => {
       expect(h.defer).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+      return "connected" as const;
     });
     await h.run();
     expect(h.keys.completeConnection).toHaveBeenCalledWith(
@@ -259,6 +279,74 @@ describe("OpenRouter connection UI", () => {
       "code-fixture",
     );
   });
+  test("a second modal submission shows processing without suggesting a new connection", async () => {
+    const h = harness("user", { kind: "modal" });
+    h.keys.completeConnection = mock(async () => "processing" as const);
+    await h.run();
+    expect(output(h.edit)).toContain("処理中です。結果をお待ちください。");
+    expect(output(h.edit)).not.toContain("/connect");
+    expect(output(h.edit)).not.toContain("接続しました");
+  });
+  test.each([true, false])(
+    "modal failure offers code reentry only with pending=%s",
+    async (pending) => {
+      const h = harness("user", { kind: "modal" });
+      h.keys.hasPendingConnection = mock(() => pending);
+      h.keys.completeConnection = mock(async () => {
+        throw new OAuthError();
+      });
+      await h.run();
+      expect(output(h.edit)).toContain(
+        pending
+          ? "コードを確認して同じメッセージの「コードを入力」から入力し直すか、`/connect` からやり直してください。"
+          : "接続できませんでした。`/connect` からやり直してください。",
+      );
+      expect(output(h.edit).includes("コードを入力")).toBe(pending);
+    },
+  );
+  test("callback failure keeps the instruction to start a new connection", async () => {
+    const h = harness("user");
+    Object.assign(h.keys, { connectionMode: "callback" });
+    await h.run();
+    const hooks = (h.keys.startConnection as ReturnType<typeof mock>).mock
+      .calls[0]?.[2] as ConnectionHooks;
+    await hooks.report("failed");
+    expect(output(h.edit)).toContain("接続できませんでした。`/connect` からやり直してください。");
+    expect(output(h.edit)).not.toContain("コードを入力");
+  });
+  test.each(["button", "modal"] as const)(
+    "%s notification failure resolves and logs safe metadata",
+    async (kind) => {
+      const h = harness("user", { kind });
+      const fail = async (): Promise<never> => {
+        throw Object.assign(new Error("secret-message key code state verifier"), {
+          name: "secret-name",
+        });
+      };
+      h.keys.hasPendingConnection = mock(() => true);
+      if (kind === "button") {
+        h.modal.mockImplementation(fail);
+        h.reply.mockImplementation(fail);
+      } else {
+        h.keys.completeConnection = mock(fail);
+        h.edit.mockImplementation(fail);
+      }
+      const logs = spyOn(logger, "warn").mockImplementation(() => {});
+      try {
+        await expect(h.run()).resolves.toBeUndefined();
+        expect(logs.mock.calls).toEqual([
+          ["OpenRouter connection operation failed", { stage: "interaction", errorType: "Error" }],
+          [
+            "Failed to report the OpenRouter connection failure",
+            { stage: "report", errorType: "Error" },
+          ],
+        ]);
+        expect(JSON.stringify(logs.mock.calls)).not.toContain("secret");
+      } finally {
+        logs.mockRestore();
+      }
+    },
+  );
   test("disconnect DM uses the saved hash and keeps instructions to delete the remote key", async () => {
     const h = harness("user", { command: "disconnect", dm: true });
     h.keys.disconnect = mock(() => ({ removed: true, keyHash: "hash-fixture" }));

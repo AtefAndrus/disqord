@@ -62,6 +62,7 @@ export function createConnectHandler(
 ): (interaction: ConnectInteraction) => Promise<void> {
   return async (interaction): Promise<void> => {
     const isCommand = interaction.isChatInputCommand();
+    let modalTarget: ConnectionTarget | undefined;
     if (isCommand) metrics.increment(`command.${interaction.commandName}`);
     const notice = async (text: string, failed = false): Promise<void> => {
       const container = (failed ? buildErrorContainer : buildSuccessNoticeContainer)(
@@ -145,11 +146,16 @@ export function createConnectHandler(
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       if (interaction.isModalSubmit()) {
-        await apiKeys.completeConnection(
+        modalTarget = target;
+        const result = await apiKeys.completeConnection(
           interaction.user.id,
           target,
           interaction.fields.getTextInputValue("code").trim(),
         );
+        if (result === "processing") {
+          await notice("処理中です。結果をお待ちください。");
+          return;
+        }
         await notice(
           "OpenRouter アカウントを接続しました。接続し直す前のキーは OpenRouter に残るので、不要なら [キー設定](https://openrouter.ai/keys) で削除してください。",
         );
@@ -216,12 +222,21 @@ export function createConnectHandler(
         stage: "interaction",
         errorType: error instanceof Error ? "Error" : typeof error,
       });
-      await notice(
-        error instanceof AppError
-          ? error.userMessage
-          : "接続の操作に失敗しました。`/connect` からやり直してください。",
-        true,
-      );
+      try {
+        await notice(
+          modalTarget && apiKeys.hasPendingConnection(interaction.user.id, modalTarget)
+            ? "接続できませんでした。コードを確認して同じメッセージの「コードを入力」から入力し直すか、`/connect` からやり直してください。"
+            : error instanceof AppError
+              ? error.userMessage
+              : "接続の操作に失敗しました。`/connect` からやり直してください。",
+          true,
+        );
+      } catch (replyError) {
+        logger.warn("Failed to report the OpenRouter connection failure", {
+          stage: "report",
+          errorType: replyError instanceof Error ? "Error" : typeof replyError,
+        });
+      }
     }
   };
 }

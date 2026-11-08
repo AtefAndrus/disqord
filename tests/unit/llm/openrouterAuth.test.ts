@@ -13,7 +13,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 describe("OpenRouter OAuth", () => {
-  test.each(["exchange", "verify"] as const)(
+  test.each(["exchange", "key_info"] as const)(
     "%s failures log stage, status and safe error type only",
     async (stage) => {
       const logs = spyOn(logger, "warn").mockImplementation(() => {});

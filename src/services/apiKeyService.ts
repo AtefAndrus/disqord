@@ -27,7 +27,11 @@ export interface IApiKeyService {
   clientFor(resolved: ResolvedApiKey): OpenRouterClient;
   startConnection(actorId: string, target: ConnectionTarget, hooks: ConnectionHooks): string;
   hasPendingConnection(actorId: string, target: ConnectionTarget): boolean;
-  completeConnection(actorId: string, target: ConnectionTarget, code: string): Promise<void>;
+  completeConnection(
+    actorId: string,
+    target: ConnectionTarget,
+    code: string,
+  ): Promise<"connected" | "processing">;
   completeCallback(state: string | null, code: string | null): Promise<CallbackOutcome>;
   disconnect(target: ConnectionTarget): { removed: boolean; keyHash: string | null };
   getConnection(target: ConnectionTarget): ConnectionStatus;
@@ -133,19 +137,19 @@ export class ApiKeyService implements IApiKeyService {
     const pending = this.pending.get(targetId(target));
     return pending?.actorId === actorId && !pending.processing;
   }
-  async completeConnection(actorId: string, target: ConnectionTarget, code: string): Promise<void> {
+  async completeConnection(
+    actorId: string,
+    target: ConnectionTarget,
+    code: string,
+  ): Promise<"connected" | "processing"> {
     this.prune();
     const pending = this.pending.get(targetId(target));
-    if (
-      !pending ||
-      pending.actorId !== actorId ||
-      pending.processing ||
-      this.connectionMode !== "paste" ||
-      !code.trim()
-    )
+    if (!pending || pending.actorId !== actorId || this.connectionMode !== "paste" || !code.trim())
       throw new OAuthError();
+    if (pending.processing) return "processing";
     pending.processing = true;
     await this.complete(pending, code);
+    return "connected";
   }
   private async complete(pending: PendingConnection, code: string): Promise<void> {
     const id = targetId(pending.target);

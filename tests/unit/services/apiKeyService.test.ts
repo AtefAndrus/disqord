@@ -129,6 +129,37 @@ describe("ApiKeyService", () => {
     expect(service.hasPendingConnection("u", user)).toBe(false);
     await expect(service.completeConnection("u", user, "code-fixture")).rejects.toThrow();
   });
+  test("concurrent paste submissions exchange once and report processing for the second", async () => {
+    const exchange = Promise.withResolvers<Response>();
+    const fetch = mockExchange();
+    fetch.mockImplementationOnce(() => exchange.promise);
+    service.startConnection("u", user, hooks());
+    const first = service.completeConnection("u", user, "code-fixture");
+    try {
+      await expect(service.completeConnection("u", user, "code-fixture")).resolves.toBe(
+        "processing",
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(repo.find("u", "user")).toBeNull();
+    } finally {
+      exchange.resolve(Response.json({ key: "connected-fixture" }));
+      await first;
+    }
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(service.getConnection(user).status).toBe("connected");
+  });
+  test("does not save when the pending connection expires during exchange", async () => {
+    const exchange = Promise.withResolvers<Response>();
+    const fetch = mockExchange();
+    fetch.mockImplementationOnce(() => exchange.promise);
+    service.startConnection("u", user, hooks());
+    const completion = service.completeConnection("u", user, "code-fixture");
+    now += 15 * 60_000;
+    exchange.resolve(Response.json({ key: "connected-fixture" }));
+    await expect(completion).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(repo.find("u", "user")).toBeNull();
+  });
   test.each(["exchange", "verify"])(
     "paste retains the same pending request after %s failure",
     async (stage) => {

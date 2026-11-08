@@ -368,7 +368,7 @@ interface IApiKeyService {
    * pending の code_verifier で交換し、検証してから保存する。成功時に pending を消す。失敗は OAuthError。
    * 交換と検証の後、保存の直前に pending が同じエントリのままであることを確認し、違えば保存しない。
    */
-  completeConnection(actorId: string, target: ConnectionTarget, code: string): Promise<void>;
+  completeConnection(actorId: string, target: ConnectionTarget, code: string): Promise<"connected" | "processing">;
 
   /**
    * 対象の pending をすべて無効にし、行を消す。行が無ければ removed は false。
@@ -398,6 +398,9 @@ interface ConnectionHooks {
 
 type CallbackOutcome = "connected" | "invalid" | "already_used" | "failed";
 ```
+
+貼り付け接続の処理中に同じ pending へ再送信すると、`completeConnection` は `processing` を返し、Modal の返信に「処理中です。結果をお待ちください。」を表示する。
+貼り付け接続に失敗して pending が残っている場合は、同じメッセージの「コードを入力」から入力し直すか、`/connect` からやり直すよう案内する。
 
 ```typescript
 // src/services/cryptoService.ts

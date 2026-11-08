@@ -158,7 +158,7 @@ export function createMockApiKeyService(
     clientFor: mock(() => client as import("../../src/llm/openrouter").OpenRouterClient),
     startConnection: mock(() => "https://openrouter.ai/auth"),
     hasPendingConnection: mock(() => false),
-    completeConnection: mock(async () => {}),
+    completeConnection: mock(async () => "connected" as const),
     completeCallback: mock(async () => "invalid" as const),
     disconnect: mock(() => ({ removed: false, keyHash: null })),
     getConnection: mock(() => ({ status: "disconnected" as const })),

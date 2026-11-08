@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { ApiKeyRequiredError } from "../../../src/errors";
+import { ApiKeyRequiredError, WebSearchFailedError } from "../../../src/errors";
 import { type IDecisionsClient, OpenRouterClient } from "../../../src/llm/openrouter";
 import { ToolRegistry } from "../../../src/llm/tools/registry";
 import { ChatService } from "../../../src/services/chatService";
@@ -131,6 +131,52 @@ describe("BYOK payment", () => {
       chat.generateScheduledResponse(job, new AbortController().signal),
     ).rejects.toBeInstanceOf(ApiKeyRequiredError);
     expect(guildClient.chat).toHaveBeenCalledTimes(2);
+  });
+
+  test("scheduled search failure retries with the guild payer without calling the default client", async () => {
+    const defaultClient = createMockLLMClient();
+    const guildClient = createMockLLMClient();
+    guildClient.chat = mock(async () => ({
+      choices: [{ message: { role: "assistant" as const, content: "guild reply" } }],
+    })).mockImplementationOnce(async () => {
+      throw new WebSearchFailedError("search fixture failed");
+    });
+    const settings = createMockSettingsService();
+    settings.getGuildSettings = mock(async () =>
+      createMockGuildSettings({ freeModelsOnly: false, webSearchEnabled: true }),
+    );
+    const keys = createMockApiKeyService(guildClient);
+    keys.resolveForGuild = mock(() => ({ key: "guild-fixture", source: "guild" as const }));
+    const chat = new ChatService(
+      defaultClient,
+      settings,
+      new ToolRegistry(),
+      "perplexity",
+      createMockTweetService(),
+      new ModelService(defaultClient),
+      keys,
+    );
+    const job = {
+      guildId: "g",
+      prompt: "fixture",
+      silent: false,
+      webSearch: true,
+    } as import("../../../src/db/repositories/cronRepository").CronJob;
+    const signal = new AbortController().signal;
+    const result = await chat.generateScheduledResponse(job, signal);
+    expect(result).toMatchObject({ text: "guild reply", webSearchSkipped: true });
+    expect(guildClient.chat).toHaveBeenCalledTimes(2);
+    expect(guildClient.chat).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ tools: expect.any(Array) }),
+      signal,
+    );
+    expect(guildClient.chat).toHaveBeenNthCalledWith(
+      2,
+      expect.not.objectContaining({ tools: expect.anything() }),
+      signal,
+    );
+    expect(defaultClient.chat).not.toHaveBeenCalled();
   });
 
   test("streaming generation uses the selected client and records user key source", async () => {

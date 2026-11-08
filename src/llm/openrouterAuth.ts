@@ -86,7 +86,7 @@ export async function getKeyInfo(key: string): Promise<KeyInfo> {
     return body.data as KeyInfo;
   } catch (error) {
     logger.warn("OpenRouter connection request failed", {
-      stage: "verify",
+      stage: "key_info",
       status: error instanceof OAuthError ? error.statusCode : undefined,
       errorType:
         error instanceof OAuthError

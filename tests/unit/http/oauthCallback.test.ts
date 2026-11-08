@@ -114,6 +114,23 @@ describe("OAuth callback", () => {
       expect(service.getConnection(guild).status).toBe("disconnected");
     },
   );
+  test("disconnect during callback authorization prevents exchange", async () => {
+    const entered = Promise.withResolvers<void>();
+    const authorization = Promise.withResolvers<boolean>();
+    const hooks = makeHooks();
+    hooks.authorize = mock(async () => {
+      entered.resolve();
+      return authorization.promise;
+    });
+    const state = begin(guild, hooks);
+    const completion = service.completeCallback(state, "fixture");
+    await entered.promise;
+    service.disconnect(guild);
+    authorization.resolve(true);
+    expect(await completion).toBe("failed");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(service.getConnection(guild).status).toBe("disconnected");
+  });
   test("exchange failure consumes state and never saves", async () => {
     const state = begin();
     fetch.mockImplementation(async () => new Response("", { status: 403 }));
