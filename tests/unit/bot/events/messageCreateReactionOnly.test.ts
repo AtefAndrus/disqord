@@ -61,6 +61,7 @@ function setup(generate: Generate, options: { isClosing?: () => boolean } = {}) 
     generateChatResponse,
   } as unknown as IChatService;
   const replyRecordService = records();
+  const modelService = { getModelName: mock(async () => "model") } as unknown as IModelService;
   const handler = createMessageCreateHandler(
     chatService,
     {
@@ -68,11 +69,11 @@ function setup(generate: Generate, options: { isClosing?: () => boolean } = {}) 
         createMockGuildSettings({ historyEnabled: false, discordToolsEnabled: true }),
       ),
     } as unknown as ISettingsService,
-    { getModelName: mock(async () => "model") } as unknown as IModelService,
+    modelService,
     createMockApiKeyService(),
     { replyRecordService },
   );
-  return { handler, message, send, page, generateChatResponse, replyRecordService };
+  return { handler, message, send, page, generateChatResponse, replyRecordService, modelService };
 }
 
 const reactionOnly = {
@@ -156,6 +157,50 @@ describe("a reply that is only a reaction", () => {
     const { handler, message, generateChatResponse } = setup(async () => reactionOnly);
     await handler(message);
     await handler(message);
+    expect(generateChatResponse).toHaveBeenCalledTimes(1);
+  });
+
+  test("the same message arriving during the first one's generation is not processed either", async () => {
+    let finish = (): void => {};
+    const generating = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const fixture = setup(async () => {
+      await generating;
+      return reactionOnly;
+    });
+    const { handler, message, generateChatResponse, replyRecordService } = fixture;
+    let exists = false;
+    replyRecordService.createPending = mock(async () => {
+      if (exists) return false;
+      exists = true;
+      return true;
+    });
+    replyRecordService.findByTrigger = mock(() =>
+      exists ? ({ triggerMsgId: "trigger" } as never) : null,
+    );
+    replyRecordService.deletePendingWithoutPages = mock(async () => {
+      exists = false;
+      return true;
+    });
+    let releaseSecond = (): void => {};
+    const heldBack = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    const first = handler(message);
+    await Bun.sleep(1);
+    // The second event is past the handler's first checks when the first one ends and deletes
+    // its record, so only the check next to createPending can stop it.
+    fixture.modelService.getModelName = mock(async () => {
+      await heldBack;
+      return "model";
+    });
+    const second = handler(message);
+    await Bun.sleep(1);
+    finish();
+    await first;
+    releaseSecond();
+    await second;
     expect(generateChatResponse).toHaveBeenCalledTimes(1);
   });
 

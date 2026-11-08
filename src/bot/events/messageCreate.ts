@@ -276,8 +276,6 @@ export function createMessageCreateHandler(
   const answeredWithReaction = new Set<string>();
 
   return async function onMessageCreate(message: Message): Promise<void> {
-    if (answeredWithReaction.has(message.id)) return;
-
     // Bots are ignored, with one exception: the e2e tester bot, so that
     // `bun run e2e` can drive the real message path. This bot's own messages
     // stay ignored even if the tester id is misconfigured to its own id,
@@ -442,6 +440,9 @@ export function createMessageCreateHandler(
     const guildId = message.guild.id;
     const rawMessage = toRawDiscordMessage(message);
     let replyRecordCreated = false;
+    // Next to createPending, with no await in between: a repeated event can already be past any
+    // earlier check when the first one ends and deletes its record.
+    if (answeredWithReaction.has(message.id)) return;
     if (options.replyRecordService) {
       replyRecordCreated = await options.replyRecordService.createPending({
         triggerMsgId: message.id,
@@ -698,6 +699,12 @@ export function createMessageCreateHandler(
       if (result.reaction !== undefined && updater.text.trim().length === 0) {
         updater.markFinalized();
         for (const botMessage of updater.messages) await deleteMessage(botMessage);
+        // Before the record goes, so that a repeated event always meets one or the other.
+        answeredWithReaction.add(message.id);
+        setTimeout(
+          () => answeredWithReaction.delete(message.id),
+          REACTION_ONLY_REMEMBER_MS,
+        ).unref();
         if (replyRecordCreated) {
           // `completed` with no pages would read as a reply the window cannot confirm, and list_pins
           // would skip the message; without a record, or `failed`, it reads as an unanswered message.
@@ -708,11 +715,6 @@ export function createMessageCreateHandler(
               await options.replyRecordService?.saveGenerations(message.id, generations);
           }
         }
-        answeredWithReaction.add(message.id);
-        setTimeout(
-          () => answeredWithReaction.delete(message.id),
-          REACTION_ONLY_REMEMBER_MS,
-        ).unref();
         logger.info("Reaction-only reply", {
           guildId: message.guild.id,
           messageId: message.id,
