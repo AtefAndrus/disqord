@@ -435,7 +435,7 @@ interface IApiKeyRepository {
 
 - すべて本人にだけ見える Ephemeral で返す。
 - `/connect guild` と `/disconnect guild` は Guild の外では使えない旨を返す。`/connect user`、`/disconnect user`、`/connect status` は DM でも動く。
-- `/connect` の案内には次を書く。キーは Bot の運営者のサーバーに暗号化して保存すること、利用額は OpenRouter 側のキー上限で抑えられること。`/connect user` には、メンションした返答がそのサーバーの管理者が選んだモデルで自分のクレジットから支払われること、自動応答と定期実行には使われないことを添える。`/connect user` と `/connect guild` のどちらにも、OpenRouter の入出力ログを有効にしていると、そのアカウントの持ち主（組織の workspace なら組織の管理者も）が入力と出力を読めることを添える。認可ページのリンクを他人に渡さないことも書く（Risks を参照）。
+- `/connect` の案内には次を書く。キーは Bot の運営者のサーバーに暗号化して保存すること、利用額は OpenRouter 側のキー上限で抑えられること。`/connect user` には、接続がこの Bot のいるすべてのサーバーで使われること、メンションした返答がそのサーバーの管理者が選んだモデルで自分のクレジットから支払われること、自動応答と定期実行には使われないことを添える。`/connect user` と `/connect guild` のどちらにも、OpenRouter の入出力ログを有効にしていると、そのアカウントの持ち主（組織の workspace なら組織の管理者も）が入力と出力を読めることを添える。認可ページのリンクを他人に渡さないことも書く（Risks を参照）。
 - 公開コールバックのときは「コードを入力」ボタンを出さず、認可ページのリンクだけを出す。
 - `/disconnect` の返答には、Bot の保存分を消したことと、OpenRouter 上のキーは残るので不要なら設定ページ（`https://openrouter.ai/keys/<hash>`、復号できなかった行ではキー一覧の `https://openrouter.ai/keys`）で削除することを書く。接続し直すと古いキーも同じく OpenRouter に残る。
 
