@@ -123,7 +123,7 @@ OpenRouter の経路にも同じ処理が入るので、拒否の文が空の応
     ブラウザで auth.openai.com を開いて承認
     code を token に交換
     資格情報ファイルを書く
-  kubectl cp で /app/data/ の取り込み用の名前へ写す ──>  （動いている bot はこのファイルを読まない）
+  kubectl exec -i で取り込み用の名前へ写す ─────────>  （動いている bot はこのファイルを読まない）
   Pod を削除して起動し直す ─────────────────────────>  起動時に取り込み用のファイルを検証し、
                                                         資格情報ファイルへ rename して読み込む
                                                         期限の手前で refresh し、ファイルを置き換える
@@ -135,6 +135,7 @@ OpenRouter の経路にも同じ処理が入るので、拒否の文が空の応
 - 発行済みの `client_id` とホスト ID は、受け取った時点で資格情報とは別の登録情報としてローカルに保存する。コードの交換が `invalid_grant` になった場合や下の検証に通らなかった場合も、登録そのものは成立しているので、次は新規登録ではなく、この `client_id` での再認証から始める。
 - 交換の後、ID token の署名（OpenAI の JWKS）、issuer、audience（発行済みの `client_id`）、有効期限、`nonce` を検証し、返った scope に `chatgpt.tokens.use.direct` があることを確認する。docs は「A valid ID token alone does not authorize ChatGPT plan usage」と書いている。署名から `nonce` までのどれかが満たされなければファイルを書かない。検証は通ったのに scope に `chatgpt.tokens.use.direct` が無いとき（プランの利用への同意が断られたときを含む）は、サインインの結果とは別の失敗として扱い、ファイルを書かずに同意が足りないことを表示する。再び試すときは、保存済みの `client_id` と、`chatgpt.tokens.use.direct` を含む全部の scope で OAuth をやり直し、同意の画面を出すために `prompt=consent` を付ける。docs は通常の再認証では同意を強制しないよう求め、`force_reconsent=true` は OpenAI が導入を確認した後に使うとしているので、`prompt=consent` を付けるのはこの再試行のときだけにする。最初に検証を通った ID token の `sub` は、登録情報にも保存する。再認証では、登録情報に `sub` があるときだけ、ID token の `sub` がそれと同じことを確認する。初回の交換が失敗した後の再認証のように `sub` がまだ無いときは、検証を通った ID token の `sub` を登録情報に保存する。
 - ファイルには、発行済みの `client_id`、`access_token`、`refresh_token`、`id_token`、`sub`、付与された scope、access token の期限、ホスト ID を書く。
+- Pod へ写すときは `kubectl cp` を使わない。`kubectl cp` はコンテナの中の `tar` を使うが、実行イメージは distroless で `tar` もシェルも持たない。代わりに、イメージにある bun に標準入力を書かせ、権限を 600 にする（`kubectl exec -i disqord-0 -n personal -- bun -e 'const p = "/app/data/<取り込み用の名前>"; await Bun.write(p, await Bun.stdin.arrayBuffer()); require("fs").chmodSync(p, 0o600)' < <資格情報ファイル>`）。
 - 取り込みは起動時だけ行う。動いている bot は取り込み用のファイルを見ないので、写した後に古い bot が refresh の結果を保存しても、資格情報ファイルが上書きされるだけで取り込み用のファイルは残る。起動時の取り込みは、ファイルの権限が 600 であること、上の検証で保存した項目がそろっていることを確認してから rename する。満たさないファイルは取り込まずにログに残し、今の資格情報ファイルを使う。
 - bot は access token の期限（サンプルでは `expires_in: 3600`）の手前で `https://auth.openai.com/api/accounts/oauth/token` に refresh grant を送る。プロセス内の同時の更新は 1 つの Promise にまとめ、新しいトークンを一時ファイルに書いてから rename で置き換える。
 - refresh の結果が分からない場合がある。サーバーがトークンを更新した後で応答が届かなかった場合と、新しいトークンを受け取ってから保存する前にプロセスが終わった場合で、どちらも手元には古い refresh token しか残らない。古い refresh token を送り直すと、サーバーが更新を済ませていれば `refresh_token_reused` で拒否される。そのため、結果が分からない refresh の後は古い refresh token で 1 回だけ送り直し、`refresh_token_reused` などの終端のエラーなら「資格情報が使えない」として無効にする。登録情報（`client_id`、ホスト ID、`sub`）は残し、スクリプトでの再認証を求める。

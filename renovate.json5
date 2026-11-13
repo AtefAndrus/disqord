@@ -37,14 +37,13 @@
   semanticCommits: "enabled",
   labels: ["dependencies"],
   customManagers: [
-    // GitHub Actions の run 内で使う actionlint コンテナのタグと digest を同時に更新する。
+    // GitHub Actions の run 内で使うコンテナ (actionlint、trivy) のタグと digest を同時に更新する。
     {
       customType: "regex",
       managerFilePatterns: ["/^\\.github/workflows/.+\\.ya?ml$/"],
       matchStrings: [
-        "docker\\.io/rhysd/actionlint:(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})",
+        "docker\\.io/(?<depName>rhysd/actionlint|aquasec/trivy):(?<currentValue>\\d+\\.\\d+\\.\\d+)@(?<currentDigest>sha256:[a-f0-9]{64})",
       ],
-      depNameTemplate: "rhysd/actionlint",
       datasourceTemplate: "docker",
     },
   ],
@@ -89,6 +88,14 @@
       matchUpdateTypes: ["pin"],
       groupName: "Pin Dependencies",
       groupSlug: "pin-dependencies",
+    },
+    // package.json の overrides は推移的な依存を修正版へ引き上げるためだけにあり、版は依存元が宣言する
+    // 範囲 (discord.js 14 の undici ^6 など) に収まっていなければならない。major を上げると範囲を外れた版を
+    // 依存元へ押し込むので、major の更新 PR は出さない。依存元が次の major に移ったら手で上げる
+    {
+      matchDepTypes: ["overrides"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
     },
     // zizmor は action と CLI コンテナが揃った時だけ専用 PR で更新（Decisions 参照）
     {
