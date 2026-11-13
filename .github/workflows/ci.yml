@@ -39,17 +39,24 @@ jobs:
       # (pin だけ別グループへ回る経路もある)。package.json の宣言ではなく bun.lock の
       # 解決結果を見るのは、レンジ指定のままでも実際に入る版を検査するため。
       #
+      # Dockerfile には依存を取得する slim と実行する distroless の 2 つの FROM があり、
+      # 本番の bun を決めるのは distroless 側なので、すべての FROM oven/bun を比べる。
+      # 1 つでも 3 要素にマッチしない FROM があれば、その時点で落とす。
+      #
       # 限界: Dockerfile はタグ文字列しか見ていない。digest は独立に固定されており、
       # 別バージョンの有効な digest を付けてもこの検査と docker build は通る。
       # タグと digest の対応まで検証するにはレジストリ照会が要るため、ここでは扱わない。
       - name: bun version drift check (mise SSOT)
         run: |
           mise_v=$(sed -nE 's/^bun[[:space:]]*=[[:space:]]*"([0-9]+\.[0-9]+\.[0-9]+)"[[:space:]]*$/\1/p' mise.toml)
-          docker_v=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+\.[0-9]+)-slim@.*#\1#p' Dockerfile | head -n1)
+          from_count=$(grep -cE '^FROM oven/bun:' Dockerfile || true)
+          docker_vs=$(sed -nE 's#^FROM oven/bun:([0-9]+\.[0-9]+\.[0-9]+)-(slim|distroless)@.*#\1#p' Dockerfile)
+          matched=$(printf '%s' "$docker_vs" | grep -c . || true)
+          docker_v=$(printf '%s\n' "$docker_vs" | sort -u | paste -sd ' ' -)
           types_v=$(sed -nE 's/^[[:space:]]*"bun-types": \["bun-types@([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' bun.lock | head -n1)
-          echo "mise=$mise_v dockerfile=$docker_v bun-types=$types_v"
-          if [ -z "$mise_v" ] || [ -z "$docker_v" ]; then
-            echo "::error::bun version must be pinned to an exact patch in both mise.toml and Dockerfile (mise=$mise_v dockerfile=$docker_v)"; exit 1
+          echo "mise=$mise_v dockerfile=$docker_v ($matched of $from_count FROM lines) bun-types=$types_v"
+          if [ -z "$mise_v" ] || [ "$from_count" -eq 0 ] || [ "$matched" -ne "$from_count" ]; then
+            echo "::error::bun version must be pinned to an exact patch in mise.toml and every FROM oven/bun in Dockerfile (mise=$mise_v dockerfile=$docker_v)"; exit 1
           fi
           if [ -z "$types_v" ]; then
             echo "::error::could not read the resolved bun-types version from bun.lock"; exit 1
@@ -133,3 +140,25 @@ jobs:
         with:
           persist-credentials: false
       - run: docker build -t disqord:ci .
+      # 本番イメージに入る OS パッケージと node_modules のうち、修正版のある脆弱性を警告する。
+      # Renovate は直接依存しか動かさず (rangeStrategy: pin、lockFileMaintenance 無効)、
+      # GitHub の依存グラフは package.json の直接依存しか持たず (bun.lock の推移的な依存が SBOM に無い)、
+      # Dependabot alerts と Renovate の vulnerabilityAlerts もそれを拾えないので、ここが唯一の検出経路になる。
+      # 修正版の無いものは手の打ちようがないので出さない。落とさないのは lock-age と同じく、
+      # 修正版の公開や Renovate のクールダウンを待つ間、無関係な PR まで止めないため。
+      # 脆弱性 DB の取得の失敗のように trivy 自体が動かなかったときも、同じ理由で警告に留める。
+      # trivy-action ではなくコンテナを digest で固定して使うのは、actionlint と同じく
+      # 実行するバイナリをタグの付け替えから切り離すため
+      - name: Scan the image for fixable vulnerabilities
+        run: |
+          docker save disqord:ci -o "$RUNNER_TEMP/image.tar"
+          if ! docker run --rm -v "$RUNNER_TEMP:/scan" \
+            docker.io/aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+            image --quiet --input /scan/image.tar --scanners vuln --ignore-unfixed \
+            --format json --output /scan/trivy.json; then
+            echo "::warning title=trivy::could not scan the image; see the log above"; exit 0
+          fi
+          jq -r '.Results[]? | .Target as $t | .Vulnerabilities[]?
+            | "::warning title=\(.VulnerabilityID) (\(.Severity))::\(.PkgName) \(.InstalledVersion) is fixed in \(.FixedVersion) (\(.PkgPath // $t))"' \
+            "$RUNNER_TEMP/trivy.json"
+          echo "fixable vulnerabilities: $(jq '[.Results[]? | .Vulnerabilities[]?] | length' "$RUNNER_TEMP/trivy.json")"
