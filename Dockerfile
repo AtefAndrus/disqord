@@ -1,5 +1,5 @@
-# 依存の取得は slim で行い、実行は distroless で行う。distroless にはシェルも apt も無く、
-# bun install の RUN を実行できないため、取得だけを別ステージに分ける。
+# 依存の取得は slim で行い、実行は distroless で行う。取得を別ステージに分けるのは、
+# .npmrc や bun のキャッシュを実行イメージに残さず、node_modules だけを複製するため。
 # 2 つの FROM の bun は同じ patch にする (CI の drift check が両方を mise.toml と比べる)
 FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 AS install
 RUN mkdir -p /temp/prod /temp/data
@@ -23,7 +23,7 @@ COPY --from=install --chown=1000:1000 /temp/prod/node_modules node_modules
 COPY --chown=1000:1000 src ./src
 COPY --chown=1000:1000 package.json CHANGELOG.md ./
 
-# SQLite の置き場 (volume のマウント先)。シェルが無く RUN mkdir を使えないので、空のディレクトリを複製して作る
+# SQLite の置き場 (volume のマウント先)。シェルも mkdir も無いので、空のディレクトリを複製して作る
 COPY --from=install --chown=1000:1000 /temp/data /app/data
 
 ENV NODE_ENV=production

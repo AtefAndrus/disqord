@@ -89,9 +89,11 @@
       groupName: "Pin Dependencies",
       groupSlug: "pin-dependencies",
     },
-    // package.json の overrides は推移的な依存を修正版へ引き上げるためだけにあり、版は依存元が宣言する
-    // 範囲 (discord.js 14 の undici ^6 など) に収まっていなければならない。major を上げると範囲を外れた版を
-    // 依存元へ押し込むので、major の更新 PR は出さない。依存元が次の major に移ったら手で上げる
+    // package.json の overrides は推移的な依存を修正版へ引き上げるためだけにあり、依存元の宣言によらず
+    // 全員にその版を入れる (@discordjs/rest 2.6.0 が exact に宣言する undici 6.21.3 も 6.29.1 になる)。
+    // 依存元が書かれた対象と同じ major の中なら互換が保たれるが、major を上げると discord.js 14 の
+    // undici ^6 のような依存元の前提を外れた版を押し込むので、major の更新 PR は出さない。
+    // このルールは major を止めるだけで、範囲との整合は確かめない。依存元が次の major に移ったら手で上げる
     {
       matchDepTypes: ["overrides"],
       matchUpdateTypes: ["major"],
