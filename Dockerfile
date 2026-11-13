@@ -9,11 +9,12 @@ COPY package.json bun.lock .npmrc /temp/prod/
 # --ignore-scripts: prepare (lefthook install) は dev 用 hook 設定で、本番イメージでは不要かつ devDependency 不在で失敗する
 RUN cd /temp/prod && bun install --frozen-lockfile --production --ignore-scripts
 
-# 実行イメージは bun と libc、CA 証明書、tzdata だけを持つ distroless にする。
+# 実行イメージは distroless にする。Debian のパッケージは libc6、CA 証明書、tzdata、netbase などの
+# 7 個 (1.4.4-distroless の /var/lib/dpkg/status.d) で、シェルもコマンドも持たない。
 # slim は bot が一度も呼ばない util-linux や apt などの Debian パッケージを 80 個含み (1.4.4-slim の dpkg-query -W)、
 # その脆弱性が修正されないまま残るうえ、侵入された場合に sh や apt を足場として使われる。
 # bot はプロセスを起動せず (src に child_process も Bun.spawn も無い)、bun:sqlite は
-# SQLite を bun に同梱しているので、OS のパッケージを必要としない
+# SQLite を bun に同梱しているので、シェルやコマンド、OS の SQLite ライブラリを必要としない
 FROM oven/bun:1.4.4-distroless@sha256:153a951ae40106e125898103e6e990ee0f38e6aee7f561029e26cf9fbed23470 AS release
 WORKDIR /app
 
