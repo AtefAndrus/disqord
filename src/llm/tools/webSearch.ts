@@ -54,9 +54,10 @@ const WORKSPACE_ENGINE_NOTE =
  * OpenRouter forwards `max_uses` to a provider's native search only for
  * Anthropic, and other native providers ignore it (WebSearchServerToolConfig
  * in openapi.json). `auto` uses native search when the model's provider has
- * it and Exa otherwise, and `native` falls back to Exa. When a workspace admin
- * has set an engine list on OpenRouter's Server Tools page, `auto` runs the
- * workspace's default engine and `native` its fallback engine instead (the
+ * it and Exa otherwise, and `native` falls back to Exa on a model without
+ * native search. When a workspace admin has set an engine list on
+ * OpenRouter's Server Tools page, `auto` runs the workspace's default engine
+ * and that `native` fallback runs the workspace's fallback engine instead (the
  * guide's Workspace settings section), so either can end up on Firecrawl.
  *
  * Firecrawl runs on an OpenRouter-managed key and is charged to the OpenRouter
