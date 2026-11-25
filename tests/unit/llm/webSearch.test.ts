@@ -257,10 +257,25 @@ describe("formatSearchResultLinks", () => {
 
 describe("describeSearchBilling", () => {
   test("上限が効かない native 検索と、料金の高い Firecrawl をそれぞれ伝える", () => {
-    expect(describeSearchBilling("perplexity")).toContain("1応答あたり最大4回");
     expect(describeSearchBilling("perplexity")).not.toContain("効きません");
+    for (const engine of [
+      "perplexity",
+      "exa",
+      "parallel",
+      "native",
+      "auto",
+      "firecrawl",
+    ] as const) {
+      expect(describeSearchBilling(engine)).toContain(
+        "検索はモデルへのリクエスト1回あたり最大4回です。",
+      );
+      expect(describeSearchBilling(engine)).toContain(
+        "1応答の検索はその分だけ増えることがあります",
+      );
+      expect(describeSearchBilling(engine)).not.toContain("1応答あたり");
+    }
     expect(describeSearchBilling("native")).toContain(
-      "Anthropic 以外のモデルの native 検索にはこの上限が効きません",
+      "Anthropic 以外のモデルの native 検索には、この上限が効きません",
     );
     expect(describeSearchBilling("auto")).toContain("native 検索を使う場合");
     expect(describeSearchBilling("firecrawl")).toContain(
