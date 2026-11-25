@@ -9,7 +9,7 @@ export type WebSearchEngine = AppConfig["webSearchEngine"];
  * 2026-09-22, one run each with caps of 2, 3, and 5 got every fact right
  * only with 5 on the package question and with 3 and 5 on the runtime
  * question. Four is a choice between those caps, not a measured optimum. At
- * Perplexity's $0.005 per search it caps search charges at $0.02 per reply.
+ * Perplexity's $0.005 per search it caps search charges at $0.02 per request.
  */
 export const MAX_SEARCHES = 4;
 const RESULTS_PER_SEARCH = 5;
@@ -48,6 +48,7 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
 
 const WORKSPACE_ENGINE_NOTE =
   "OpenRouter のワークスペース設定で別のエンジンが使われる場合は、そのエンジンの料金がかかります。";
+const SEARCH_LIMIT_NOTE = `検索はモデルへのリクエスト1回あたり最大${MAX_SEARCHES}回です。過去の発言の読み込みなどほかのツールを使う応答はリクエストを複数回送るので、1応答の検索はその分だけ増えることがあります。`;
 
 /**
  * How searches are capped and billed, shown when enabling web search in the config panel.
@@ -67,20 +68,23 @@ const WORKSPACE_ENGINE_NOTE =
  * says "BYOK (your key)" for Firecrawl; the text is followed rather than that
  * cell, because the Web Fetch guide's table lists Firecrawl as server-side.
  * With five results a search costs more than nine times Exa's and thirteen
- * times Perplexity's, so its message states the per-search price. No
- * per-reply total is given, because `max_uses` caps one request and the tool
- * loop resends the tool on every turn.
+ * times Perplexity's, so its message states the per-search price.
+ *
+ * The cap is stated per request, not per reply: `max_uses` caps one request,
+ * and the tool loop resends the tool on every turn after a client tool call.
+ * No per-reply figure is given, because whether a server tool runs on the
+ * final `tool_choice: "none"` turn is not documented.
  */
 export function describeSearchBilling(engine: WebSearchEngine): string {
   switch (engine) {
     case "native":
-      return `検索の費用は OpenRouter の残高から引かれます。${WORKSPACE_ENGINE_NOTE}1応答あたり最大${MAX_SEARCHES}回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。`;
+      return `検索の費用は OpenRouter の残高から引かれます。${WORKSPACE_ENGINE_NOTE}${SEARCH_LIMIT_NOTE}Anthropic 以外のモデルの native 検索には、この上限が効きません。`;
     case "auto":
-      return `検索の費用は OpenRouter の残高から引かれます。${WORKSPACE_ENGINE_NOTE}1応答あたり最大${MAX_SEARCHES}回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。`;
+      return `検索の費用は OpenRouter の残高から引かれます。${WORKSPACE_ENGINE_NOTE}${SEARCH_LIMIT_NOTE}モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。`;
     case "firecrawl":
-      return `検索の費用は OpenRouter の残高から引かれます（1応答あたり最大${MAX_SEARCHES}回）。Firecrawl は検索1回で結果が${RESULTS_PER_SEARCH}件返ると $${FIRECRAWL_COST_PER_SEARCH.toFixed(4)} かかります（既定の Perplexity は1回 $0.005）。`;
+      return `検索の費用は OpenRouter の残高から引かれます。${SEARCH_LIMIT_NOTE}Firecrawl は検索1回で結果が${RESULTS_PER_SEARCH}件返ると $${FIRECRAWL_COST_PER_SEARCH.toFixed(4)} かかります（既定の Perplexity は1回 $0.005）。`;
     default:
-      return `検索の費用は OpenRouter の残高から引かれます（1応答あたり最大${MAX_SEARCHES}回）。`;
+      return `検索の費用は OpenRouter の残高から引かれます。${SEARCH_LIMIT_NOTE}`;
   }
 }
 
