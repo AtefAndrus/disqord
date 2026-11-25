@@ -13,6 +13,8 @@ export type WebSearchEngine = AppConfig["webSearchEngine"];
  */
 export const MAX_SEARCHES = 4;
 const RESULTS_PER_SEARCH = 5;
+/** OpenRouter's Firecrawl rate: $0.005 per search plus $0.0125 per result. */
+const FIRECRAWL_COST_PER_SEARCH = 0.005 + RESULTS_PER_SEARCH * 0.0125;
 
 /**
  * `openrouter:web_search` as sent on every turn when a guild enables web search.
@@ -49,17 +51,25 @@ export function buildWebSearchServerTool(engine: WebSearchEngine): ServerTool {
  * OpenRouter forwards `max_uses` to a provider's native search only for
  * Anthropic, and other native providers ignore it (WebSearchServerToolConfig
  * in openapi.json). `auto` uses native search when the model's provider has
- * it and Exa otherwise. Firecrawl bills the operator's own Firecrawl key
- * rather than the OpenRouter balance.
+ * it and Exa otherwise.
+ *
+ * Firecrawl runs on an OpenRouter-managed key and is charged to the OpenRouter
+ * balance at $0.005 per search plus $0.0125 per result (the Firecrawl section
+ * and the Pricing table of the web search guide, and the web search plugin
+ * guide, read 2026-11-26). The same guide's Engine Capabilities table still
+ * says "BYOK (your key)" for Firecrawl; the text is followed rather than that
+ * cell, because the Web Fetch guide's table lists Firecrawl as server-side.
+ * With five results per search that is the costliest engine by far, so its
+ * message states the per-reply ceiling.
  */
 export function describeSearchBilling(engine: WebSearchEngine): string {
   switch (engine) {
     case "native":
-      return `検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大${MAX_SEARCHES}回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。`;
+      return `検索の費用は OpenRouter の残高から引かれます。1応答あたり最大${MAX_SEARCHES}回ですが、Anthropic 以外のモデルの native 検索にはこの上限が効きません。`;
     case "auto":
-      return `検索の費用は OpenRouter の残高から引かれます（OpenRouter のワークスペース設定で Firecrawl に切り替わる場合は Firecrawl のキーに課金）。1応答あたり最大${MAX_SEARCHES}回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。`;
+      return `検索の費用は OpenRouter の残高から引かれます。1応答あたり最大${MAX_SEARCHES}回ですが、モデルが native 検索を使う場合、Anthropic 以外ではこの上限が効きません。`;
     case "firecrawl":
-      return `検索の費用は OpenRouter ではなく、OpenRouter に登録した Firecrawl のキーに課金されます（1応答あたり最大${MAX_SEARCHES}回）。`;
+      return `検索の費用は OpenRouter の残高から引かれます（1応答あたり最大${MAX_SEARCHES}回）。Firecrawl は検索1回で結果が${RESULTS_PER_SEARCH}件返ると $${FIRECRAWL_COST_PER_SEARCH.toFixed(4)} かかり、1応答で最大 $${(FIRECRAWL_COST_PER_SEARCH * MAX_SEARCHES).toFixed(2)} になります。`;
     default:
       return `検索の費用は OpenRouter の残高から引かれます（1応答あたり最大${MAX_SEARCHES}回）。`;
   }
