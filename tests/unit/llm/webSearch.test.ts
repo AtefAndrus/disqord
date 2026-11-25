@@ -256,13 +256,26 @@ describe("formatSearchResultLinks", () => {
 });
 
 describe("describeSearchBilling", () => {
-  test("上限が効かない native 検索と、課金先の違う Firecrawl をそれぞれ伝える", () => {
+  test("上限が効かない native 検索と、料金の高い Firecrawl をそれぞれ伝える", () => {
     expect(describeSearchBilling("perplexity")).toContain("1応答あたり最大4回");
     expect(describeSearchBilling("perplexity")).not.toContain("効きません");
     expect(describeSearchBilling("native")).toContain(
       "Anthropic 以外のモデルの native 検索にはこの上限が効きません",
     );
     expect(describeSearchBilling("auto")).toContain("native 検索を使う場合");
-    expect(describeSearchBilling("firecrawl")).toContain("Firecrawl のキーに課金");
+    expect(describeSearchBilling("firecrawl")).toContain(
+      "検索1回で結果が5件返ると $0.0675 かかります",
+    );
+    for (const engine of ["native", "auto", "firecrawl"] as const) {
+      expect(describeSearchBilling(engine)).toStartWith(
+        "検索の費用は OpenRouter の残高から引かれます",
+      );
+      expect(describeSearchBilling(engine)).not.toContain("のキーに課金");
+    }
+    for (const engine of ["native", "auto"] as const) {
+      expect(describeSearchBilling(engine)).toContain(
+        "ワークスペース設定で別のエンジンが使われる場合は、そのエンジンの料金がかかります",
+      );
+    }
   });
 });
