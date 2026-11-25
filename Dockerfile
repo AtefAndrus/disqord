@@ -1,7 +1,7 @@
 # 依存の取得は slim で行い、実行は distroless で行う。取得を別ステージに分けるのは、
 # .npmrc や bun のキャッシュを実行イメージに残さず、node_modules だけを複製するため。
 # 2 つの FROM の bun は同じ patch にする (CI の drift check が両方を mise.toml と比べる)
-FROM oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4 AS install
+FROM oven/bun:1.4.5-slim@sha256:b780593f3e10918cbdaec3d5a08d52224b9198069a65eb47812085c2ec007643 AS install
 RUN mkdir -p /temp/prod /temp/data
 # .npmrc も渡す。bun.lock は取得元を持たないので、これが無いと本番イメージのビルドだけが
 # Takumi Guard を経由せず既定レジストリから取得することになる
@@ -15,7 +15,7 @@ RUN cd /temp/prod && bun install --frozen-lockfile --production --ignore-scripts
 # その脆弱性が修正されないまま残るうえ、侵入された場合に sh や apt を足場として使われる。
 # bot はプロセスを起動せず (src に child_process も Bun.spawn も無い)、bun:sqlite は
 # SQLite を bun に同梱しているので、シェルやコマンド、OS の SQLite ライブラリを必要としない
-FROM oven/bun:1.4.4-distroless@sha256:153a951ae40106e125898103e6e990ee0f38e6aee7f561029e26cf9fbed23470 AS release
+FROM oven/bun:1.4.5-distroless@sha256:3a210956422ad81cf7532e1fc1f2eb9275d6ef4c2337a9d25d530f798e80726a AS release
 WORKDIR /app
 
 # distroless の /etc/passwd に bun ユーザは無いので、slim の bun ユーザと同じ uid / gid を数値で指定する。
